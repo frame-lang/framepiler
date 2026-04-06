@@ -1,0 +1,62 @@
+name: Bug Report
+description: Report a bug in the Frame transpiler
+labels: ["bug", "status:needs-triage"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Frame version
+      description: "Output of framec --version"
+      placeholder: "4.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target language
+      options:
+        - Python
+        - TypeScript
+        - JavaScript
+        - C
+        - C++
+        - C#
+        - Java
+        - Rust
+        - Go
+        - Kotlin
+        - Swift
+        - PHP
+        - Ruby
+        - Lua
+        - Erlang
+        - Dart
+        - GDScript
+        - GraphViz
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Frame input (.frm file)
+      description: Minimal reproduction
+      render: frame
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected output
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How to trigger this bug

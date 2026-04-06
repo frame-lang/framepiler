@@ -1,0 +1,17 @@
+# Build artifacts
+target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python cache (from test harnesses)
+__pycache__/
+*.pyc
+*.pyo

@@ -1,0 +1,41 @@
+[package]
+name = "framec"
+version.workspace = true
+authors = ["Mark Truluck <mark@frame-lang.org>"]
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Frame language transpiler — state machines that generate production code"
+keywords = ["state-machine", "transpiler", "code-generation", "frame", "finite-automata"]
+categories = ["compilers", "development-tools"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "framec"
+path = "src/main.rs"
+
+[dependencies]
+chrono = "0.4"
+clap = { version = "4.5" }
+convert_case = "0.6"
+downcast-rs = "1.2.0"
+exitcode = "1.1.2"
+serde = { version = "1.0", features = ["derive", "serde_derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+wasm-bindgen = "0.2.92"
+indoc = "2.0"
+colored = "2.0"
+petgraph = "0.6"
+regex = "1.10"
+toml = "0.9.5"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

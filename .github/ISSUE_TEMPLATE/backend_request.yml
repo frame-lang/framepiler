@@ -1,0 +1,26 @@
+name: Backend Request
+description: Request a new language backend
+labels: ["enhancement", "help wanted"]
+body:
+  - type: input
+    id: language
+    attributes:
+      label: Target language
+      placeholder: "e.g., Zig, Haskell, Elixir"
+    validations:
+      required: true
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: Why do you need this backend?
+    validations:
+      required: true
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you contribute to this backend?
+      options:
+        - "Yes"
+        - "Maybe with guidance"
+        - "No"

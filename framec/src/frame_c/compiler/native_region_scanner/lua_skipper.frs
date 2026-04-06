@@ -1,0 +1,184 @@
+@@target rust
+
+// Lua syntax skipper — Frame-generated state machine.
+//
+// Handles:
+//   -- line comments
+//   --[[ ]] block comments (with [=[ ]=] nesting)
+//   "..." and '...' strings
+//   [[...]] and [=[...]=] long strings
+//
+// Helpers used:
+//   skip_simple_string (for "..." and '...')
+
+@@system LuaSyntaxSkipperFsm {
+    interface:
+        do_skip_comment()
+        do_skip_string()
+        do_find_line_end()
+        do_balanced_paren_end()
+
+    machine:
+        $Init {
+            do_skip_comment() { -> $SkipComment }
+            do_skip_string() { -> $SkipString }
+            do_find_line_end() { -> $FindLineEnd }
+            do_balanced_paren_end() { -> $BalancedParenEnd }
+        }
+
+        $SkipComment {
+            $>() {
+                let i = self.pos;
+                let end = self.end;
+                let bytes = &self.bytes;
+
+                // Must start with --
+                if i + 1 >= end || bytes[i] != b'-' || bytes[i + 1] != b'-' {
+                    self.success = 0;
+                    return
+                }
+
+                // Check for block comment --[[ or --[=[
+                if i + 3 < end && bytes[i + 2] == b'[' {
+                    // Count = signs
+                    let mut level = 0usize;
+                    let mut j = i + 3;
+                    while j < end && bytes[j] == b'=' {
+                        level += 1;
+                        j += 1;
+                    }
+                    if j < end && bytes[j] == b'[' {
+                        // Block comment: find matching ]=*]
+                        j += 1;
+                        while j < end {
+                            if bytes[j] == b']' {
+                                let mut k = j + 1;
+                                let mut matched = 0usize;
+                                while k < end && bytes[k] == b'=' && matched < level {
+                                    matched += 1;
+                                    k += 1;
+                                }
+                                if matched == level && k < end && bytes[k] == b']' {
+                                    self.result_pos = k + 1;
+                                    self.success = 1;
+                                    return
+                                }
+                            }
+                            j += 1;
+                        }
+                        // Unterminated block comment
+                        self.result_pos = end;
+                        self.success = 1;
+                        return
+                    }
+                }
+
+                // Line comment: skip to end of line
+                let mut j = i + 2;
+                while j < end && bytes[j] != b'\n' {
+                    j += 1;
+                }
+                self.result_pos = j;
+                self.success = 1;
+            }
+        }
+
+        $SkipString {
+            $>() {
+                let i = self.pos;
+                let end = self.end;
+                let bytes = &self.bytes;
+
+                // Long strings: [[ ]] or [=[ ]=]
+                if bytes[i] == b'[' {
+                    let mut level = 0usize;
+                    let mut j = i + 1;
+                    while j < end && bytes[j] == b'=' {
+                        level += 1;
+                        j += 1;
+                    }
+                    if j < end && bytes[j] == b'[' {
+                        // Long string: find matching ]=*]
+                        j += 1;
+                        while j < end {
+                            if bytes[j] == b']' {
+                                let mut k = j + 1;
+                                let mut matched = 0usize;
+                                while k < end && bytes[k] == b'=' && matched < level {
+                                    matched += 1;
+                                    k += 1;
+                                }
+                                if matched == level && k < end && bytes[k] == b']' {
+                                    self.result_pos = k + 1;
+                                    self.success = 1;
+                                    return
+                                }
+                            }
+                            j += 1;
+                        }
+                        self.result_pos = end;
+                        self.success = 1;
+                        return
+                    }
+                }
+
+                // Simple strings: "..." or '...'
+                if let Some(j) = skip_simple_string(&self.bytes, self.pos, self.end) {
+                    self.result_pos = j;
+                    self.success = 1;
+                    return
+                }
+
+                self.success = 0;
+            }
+        }
+
+        $FindLineEnd {
+            $>() {
+                let mut j = self.pos;
+                let end = self.end;
+                let bytes = &self.bytes;
+                let mut in_string: Option<u8> = None;
+
+                while j < end {
+                    let b = bytes[j];
+
+                    if b == b'\n' { break; }
+
+                    if let Some(q) = in_string {
+                        if b == b'\\' && j + 1 < end {
+                            j += 2;
+                            continue;
+                        }
+                        if b == q { in_string = None; }
+                        j += 1;
+                        continue;
+                    }
+
+                    // Line comment
+                    if b == b'-' && j + 1 < end && bytes[j + 1] == b'-' { break; }
+                    if b == b'\'' || b == b'"' { in_string = Some(b); }
+                    j += 1;
+                }
+                self.result_pos = j;
+            }
+        }
+
+        $BalancedParenEnd {
+            $>() {
+                if let Some(j) = balanced_paren_end_c_like(&self.bytes, self.pos, self.end) {
+                    self.result_pos = j;
+                    self.success = 1;
+                    return
+                }
+                self.success = 0;
+            }
+        }
+
+    domain:
+        bytes: Vec<u8> = Vec::new()
+        pos: usize = 0
+        end: usize = 0
+        result_pos: usize = 0
+        success: usize = 1
+}

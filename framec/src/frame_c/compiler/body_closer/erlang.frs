@@ -1,0 +1,80 @@
+@@target rust
+
+// Erlang body closer — Frame-generated FSM for brace matching.
+// Erlang has % line comments, "..." strings, '...' quoted atoms.
+// No block comments.
+
+@@system ErlangBodyCloserFsm {
+    interface:
+        scan()
+
+    machine:
+        $Init {
+            scan() { -> $Scanning }
+        }
+
+        $Scanning {
+            $>() {
+                let bytes = &self.bytes;
+                let end = self.end;
+                let mut i = self.pos;
+                let mut depth = self.depth;
+
+                while i < end {
+                    let b = bytes[i];
+                    match b {
+                        b'{' => { depth += 1; i += 1; }
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                self.pos = i;
+                                self.depth = 0;
+                                self.success = 1;
+                                return
+                            }
+                            i += 1;
+                        }
+                        b'%' => {
+                            // Line comment — skip to newline
+                            i += 1;
+                            while i < end && bytes[i] != b'\n' {
+                                i += 1;
+                            }
+                        }
+                        b'"' => {
+                            // String — skip to closing quote
+                            i += 1;
+                            while i < end {
+                                if bytes[i] == b'\\' { i += 2; continue; }
+                                if bytes[i] == b'"' { i += 1; break; }
+                                i += 1;
+                            }
+                        }
+                        b'\'' => {
+                            // Quoted atom — skip to closing quote
+                            i += 1;
+                            while i < end {
+                                if bytes[i] == b'\\' { i += 2; continue; }
+                                if bytes[i] == b'\'' { i += 1; break; }
+                                i += 1;
+                            }
+                        }
+                        _ => { i += 1; }
+                    }
+                }
+                // Reached end without matching — unmatched brace
+                self.pos = i;
+                self.depth = depth;
+                self.error_kind = 3;
+                self.success = 0;
+            }
+        }
+
+    domain:
+        bytes: Vec<u8> = Vec::new()
+        pos: usize = 0
+        end: usize = 0
+        depth: i32 = 1
+        success: usize = 1
+        error_kind: usize = 0
+}
