@@ -12,8 +12,10 @@
 #![allow(dead_code)]
 #![allow(non_snake_case)]
 #![allow(unused_variables)]
+#![allow(unused_assignments)]
 
 include!("erlang_skipper.gen.rs");
+include!("erlang_scope_scanner.gen.rs");
 
 use super::*;
 use super::unified::*;
@@ -63,6 +65,19 @@ impl SyntaxSkipper for ErlangSkipper {
         fsm.pos = i;
         fsm.end = end;
         fsm.do_balanced_paren_end();
+        if fsm.success != 0 { Some(fsm.result_pos) } else { None }
+    }
+
+    fn skip_nested_scope(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // Only trigger on `f` (start of `fun` keyword)
+        if i + 3 > end || bytes[i] != b'f' || bytes[i + 1] != b'u' || bytes[i + 2] != b'n' {
+            return None;
+        }
+        let mut fsm = ErlangScopeScannerFsm::new();
+        fsm.bytes = bytes[..end].to_vec();
+        fsm.pos = i;
+        fsm.end = end;
+        fsm.do_scan();
         if fsm.success != 0 { Some(fsm.result_pos) } else { None }
     }
 

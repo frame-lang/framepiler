@@ -660,12 +660,8 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     all_fields.push("    frame_context_stack = []".to_string());
     all_fields.push("    frame_return_val = undefined".to_string());
 
-    if all_fields.is_empty() {
-        code.push_str("    placeholder__ = undefined\n");
-    } else {
-        code.push_str(&all_fields.join(",\n"));
-        code.push('\n');
-    }
+    code.push_str(&all_fields.join(",\n"));
+    code.push('\n');
     code.push_str("}).\n\n");
 
     // start_link/0
@@ -957,28 +953,88 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     } else {
                         // Check if @@:return was used (sets __ReturnVal)
                         let has_return_val = processed.iter().any(|l| l.contains("__ReturnVal"));
-                        let reply_val = if has_return_val { "__ReturnVal" } else { "ok" };
-                        // For case blocks: wrap `__ReturnVal = case ... end` to avoid
-                        // Erlang's "variable unsafe in 'case'" error. Instead of pre-initializing
-                        // __ReturnVal and rebinding in branches, we hoist the assignment to wrap
-                        // the entire case expression.
+                        let has_transition = processed.iter().any(|l| l.trim().starts_with("frame_transition__("));
                         let has_case = processed.iter().any(|l| l.trim().starts_with("case ") || l.contains(" case "));
-                        if has_return_val && has_case {
-                            // Rewrite: move __ReturnVal assignments inside case branches
-                            // into the case expression itself:
-                            //   __ReturnVal = case X of true -> Val1; false -> Val2 end
+                        let reply_val = if has_return_val { "__ReturnVal" } else { "ok" };
+
+                        if has_case && has_transition {
+                            // Case block with transitions in some arms.
+                            // Each arm must evaluate to a gen_statem return tuple:
+                            //   - Arms with frame_transition__() already produce {next_state,...}
+                            //   - Arms without need {keep_state, Data, [{reply, From, ReturnVal}]}
+                            // The case expression IS the handler return — no trailing {keep_state,...}
+                            let mut rewritten = Vec::new();
+                            let mut in_case = false;
+                            let mut arm_has_transition = false;
+                            let mut arm_return_val: Option<String> = None;
+
+                            for line in &processed {
+                                let trimmed = line.trim();
+
+                                if trimmed.starts_with("case ") {
+                                    in_case = true;
+                                    arm_has_transition = false;
+                                    arm_return_val = None;
+                                    rewritten.push(line.clone());
+                                    continue;
+                                }
+
+                                if in_case && (trimmed.starts_with("true ->") || trimmed.starts_with("; false") || trimmed.starts_with("; _")) {
+                                    // Entering a new arm — flush previous arm's keep_state if needed
+                                    if trimmed.starts_with("; ") && !arm_has_transition {
+                                        // Previous arm had no transition — inject keep_state
+                                        let rv = arm_return_val.as_deref().unwrap_or("ok");
+                                        rewritten.push(format!("        {{keep_state, {}, [{{reply, From, {}}}]}}", final_data, rv));
+                                    }
+                                    arm_has_transition = false;
+                                    arm_return_val = None;
+                                    rewritten.push(line.clone());
+                                    continue;
+                                }
+
+                                if in_case && trimmed.starts_with("__ReturnVal = ") {
+                                    let val = trimmed.trim_start_matches("__ReturnVal = ").trim_end_matches(',');
+                                    arm_return_val = Some(val.to_string());
+                                    // Don't emit the assignment — embed the value in the reply tuple
+                                    continue;
+                                }
+
+                                if in_case && trimmed.starts_with("frame_transition__(") {
+                                    arm_has_transition = true;
+                                    // Emit the transition call — it produces the arm's return tuple
+                                    rewritten.push(line.clone());
+                                    continue;
+                                }
+
+                                if in_case && (trimmed == "end" || trimmed == "end,") {
+                                    // Last arm ending — inject keep_state if no transition
+                                    if !arm_has_transition {
+                                        let rv = arm_return_val.as_deref().unwrap_or("ok");
+                                        rewritten.push(format!("        {{keep_state, {}, [{{reply, From, {}}}]}}", final_data, rv));
+                                    }
+                                    rewritten.push(format!("    end"));
+                                    in_case = false;
+                                    continue;
+                                }
+
+                                rewritten.push(line.clone());
+                            }
+
+                            erlang_smart_join(&rewritten, &mut code);
+                            // The case expression is the handler return — just terminate the clause
+                            code.push_str(";\n");
+                        } else if has_return_val && has_case {
+                            // Case block with __ReturnVal but no transitions — hoist assignment
                             let mut rewritten = Vec::new();
                             let mut in_case = false;
                             let mut hoisted = false;
                             for line in &processed {
                                 let trimmed = line.trim();
                                 if trimmed.starts_with("case ") && !hoisted {
-                                    // Start of case — prepend __ReturnVal =
                                     rewritten.push(format!("    __ReturnVal = {}", trimmed));
                                     in_case = true;
                                     hoisted = true;
                                 } else if in_case && trimmed.starts_with("__ReturnVal = ") {
-                                    // Inside case branch — strip the __ReturnVal = prefix, emit just the value
                                     let val = trimmed.trim_start_matches("__ReturnVal = ");
                                     rewritten.push(format!("    {}", val));
                                 } else if in_case && (trimmed == "end" || trimmed == "end,") {

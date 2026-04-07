@@ -56,6 +56,14 @@ pub trait SyntaxSkipper {
     /// Try to find matching close paren, respecting language-specific string syntax.
     /// Returns Some(position after ')') if balanced, None otherwise.
     fn balanced_paren_end(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize>;
+
+    /// Try to skip a nested function scope (closure/lambda) starting at position i.
+    /// Returns Some(position after scope end) if a nested scope was found and skipped.
+    /// Used to detect closures that would trap Frame statement return values.
+    /// Default: None (no nested scope detection).
+    fn skip_nested_scope(&self, _bytes: &[u8], _i: usize, _end: usize) -> Option<usize> {
+        None
+    }
 }
 
 /// Unified scanner that works with any language via the SyntaxSkipper trait
@@ -78,6 +86,38 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
 
     while i < end {
         let b = bytes[i];
+
+        // ===== NESTED SCOPE DETECTION =====
+        // Skip closures/lambdas that would trap Frame statement return values.
+        // Frame statements inside nested scopes are rejected with E407.
+        if let Some(scope_end) = skipper.skip_nested_scope(bytes, i, end) {
+            // Check if the skipped scope contains any Frame statement patterns
+            let scope_bytes = &bytes[i..scope_end];
+            let has_frame_stmt = scope_bytes.windows(3).any(|w| {
+                // -> $ (transition)
+                (w[0] == b'-' && w[1] == b'>' && w[2] == b' ')
+                // => $ (forward)
+                || (w[0] == b'=' && w[1] == b'>' && w[2] == b' ')
+            }) || scope_bytes.windows(5).any(|w| {
+                // push$
+                (w[0] == b'p' && w[1] == b'u' && w[2] == b's' && w[3] == b'h' && w[4] == b'$')
+                // pop$ (as standalone, not -> pop$)
+                || (w[0] == b' ' && w[1] == b'p' && w[2] == b'o' && w[3] == b'p' && w[4] == b'$')
+            });
+
+            if has_frame_stmt {
+                return Err(ScanError {
+                    kind: ScanErrorKind::UnterminatedProtected,
+                    message: "E407: Frame statement (transition, forward, push, pop) inside nested function scope. \
+                              Frame control-flow statements must be directly in event handler scope, \
+                              not inside closures or nested functions.".to_string(),
+                });
+            }
+
+            // No Frame statements — skip the scope as native text
+            i = scope_end;
+            continue;
+        }
 
         // ===== FRAME STATEMENT DETECTION =====
         // Frame statements (-> $, => $, push$, pop$) contain $ which makes them

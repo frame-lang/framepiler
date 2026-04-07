@@ -215,6 +215,22 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         }
     }
 
+    // Erlang: one module per file — reject multi-system files
+    if matches!(config.target, TargetLanguage::Erlang) && system_asts.len() > 1 {
+        let names: Vec<&str> = system_asts.iter().map(|s| s.name.as_str()).collect();
+        return Ok(CompileResult {
+            code: String::new(),
+            errors: vec![CompileError::new("E406",
+                &format!(
+                    "Erlang requires one module per file, but this file contains {} systems: {}. \
+                     Split into separate files (one @@system per file).",
+                    system_asts.len(), names.join(", ")
+                ))],
+            warnings: vec![],
+            source_map: None,
+        });
+    }
+
     // Build a shared arcanum containing ALL systems so they can reference each other
     let module_ast = FrameAst::Module(ModuleAst {
         name: String::new(),

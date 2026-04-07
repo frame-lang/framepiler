@@ -1,0 +1,193 @@
+@@target rust
+
+// Erlang scope scanner — detects `fun(...) -> ... end` closures.
+//
+// Erlang reuses `end` to close: fun, case, if, receive, begin, try.
+// This FSM tracks a depth counter for all block-opening keywords so that
+// only the `end` matching our `fun` terminates the scan.
+//
+// Skips % line comments and "..." / '...' string/atom literals.
+//
+// Usage: set bytes/pos/end, call do_scan(). On success, result_pos
+// points to the byte after the matching `end`.
+//
+// Does NOT match `fun Module:Function/Arity` (function references —
+// no closure scope, safe for Frame statements).
+
+@@system ErlangScopeScannerFsm {
+    interface:
+        do_scan()
+
+    machine:
+        $Init {
+            do_scan() { -> $CheckFun }
+        }
+
+        $CheckFun {
+            $>() {
+                // Must start with `fun` keyword followed by ( or whitespace
+                if self.pos + 3 > self.end {
+                    self.success = 0;
+                    return
+                }
+                if self.bytes[self.pos] != b'f'
+                    || self.bytes[self.pos + 1] != b'u'
+                    || self.bytes[self.pos + 2] != b'n' {
+                    self.success = 0;
+                    return
+                }
+                // Check that `fun` is a word boundary (not part of `function` etc.)
+                let after = self.pos + 3;
+                if after < self.end && (self.bytes[after].is_ascii_alphanumeric() || self.bytes[after] == b'_') {
+                    self.success = 0;
+                    return
+                }
+                // Skip whitespace after `fun`
+                let mut j = after;
+                while j < self.end && (self.bytes[j] == b' ' || self.bytes[j] == b'\t' || self.bytes[j] == b'\n') {
+                    j += 1;
+                }
+                // Check for Module:Function/Arity pattern (function reference, not closure)
+                // Function references have an uppercase letter or atom after `fun`
+                // followed by `:` — e.g., `fun io:format/2`
+                if j < self.end && self.bytes[j].is_ascii_uppercase() {
+                    // Could be a function reference — check for `:` after the module name
+                    let mut k = j;
+                    while k < self.end && (self.bytes[k].is_ascii_alphanumeric() || self.bytes[k] == b'_') {
+                        k += 1;
+                    }
+                    if k < self.end && self.bytes[k] == b':' {
+                        // This is `fun Module:Function/Arity` — not a closure
+                        self.success = 0;
+                        return
+                    }
+                }
+                // It's a closure: fun(...) -> ... end
+                self.depth = 1;
+                self.pos = after;
+                -> $ScanBody
+            }
+        }
+
+        $ScanBody {
+            $>() {
+                let mut i = self.pos;
+                while i < self.end {
+                    let b = self.bytes[i];
+
+                    // Skip % line comments
+                    if b == b'%' {
+                        while i < self.end && self.bytes[i] != b'\n' {
+                            i += 1;
+                        }
+                        continue
+                    }
+
+                    // Skip "..." strings
+                    if b == b'"' {
+                        i += 1;
+                        while i < self.end {
+                            if self.bytes[i] == b'\\' { i += 2; continue }
+                            if self.bytes[i] == b'"' { i += 1; break }
+                            i += 1;
+                        }
+                        continue
+                    }
+
+                    // Skip '...' quoted atoms
+                    if b == b'\'' {
+                        i += 1;
+                        while i < self.end {
+                            if self.bytes[i] == b'\\' { i += 2; continue }
+                            if self.bytes[i] == b'\'' { i += 1; break }
+                            i += 1;
+                        }
+                        continue
+                    }
+
+                    // Check for block-opening keywords (increase depth)
+                    // fun, case, if, receive, begin, try
+                    if b == b'f' && i + 3 <= self.end
+                        && self.bytes[i + 1] == b'u' && self.bytes[i + 2] == b'n'
+                        && (i + 3 >= self.end || !self.bytes[i + 3].is_ascii_alphanumeric() && self.bytes[i + 3] != b'_') {
+                        self.depth += 1;
+                        i += 3;
+                        continue
+                    }
+                    if b == b'c' && i + 4 <= self.end
+                        && self.bytes[i + 1] == b'a' && self.bytes[i + 2] == b's' && self.bytes[i + 3] == b'e'
+                        && (i + 4 >= self.end || !self.bytes[i + 4].is_ascii_alphanumeric() && self.bytes[i + 4] != b'_') {
+                        self.depth += 1;
+                        i += 4;
+                        continue
+                    }
+                    if b == b'i' && i + 2 <= self.end
+                        && self.bytes[i + 1] == b'f'
+                        && (i + 2 >= self.end || !self.bytes[i + 2].is_ascii_alphanumeric() && self.bytes[i + 2] != b'_') {
+                        self.depth += 1;
+                        i += 2;
+                        continue
+                    }
+                    if b == b'r' && i + 7 <= self.end
+                        && self.bytes[i + 1] == b'e' && self.bytes[i + 2] == b'c'
+                        && self.bytes[i + 3] == b'e' && self.bytes[i + 4] == b'i'
+                        && self.bytes[i + 5] == b'v' && self.bytes[i + 6] == b'e'
+                        && (i + 7 >= self.end || !self.bytes[i + 7].is_ascii_alphanumeric() && self.bytes[i + 7] != b'_') {
+                        self.depth += 1;
+                        i += 7;
+                        continue
+                    }
+                    if b == b'b' && i + 5 <= self.end
+                        && self.bytes[i + 1] == b'e' && self.bytes[i + 2] == b'g'
+                        && self.bytes[i + 3] == b'i' && self.bytes[i + 4] == b'n'
+                        && (i + 5 >= self.end || !self.bytes[i + 5].is_ascii_alphanumeric() && self.bytes[i + 5] != b'_') {
+                        self.depth += 1;
+                        i += 5;
+                        continue
+                    }
+                    if b == b't' && i + 3 <= self.end
+                        && self.bytes[i + 1] == b'r' && self.bytes[i + 2] == b'y'
+                        && (i + 3 >= self.end || !self.bytes[i + 3].is_ascii_alphanumeric() && self.bytes[i + 3] != b'_') {
+                        self.depth += 1;
+                        i += 3;
+                        continue
+                    }
+
+                    // Check for `end` keyword (decrease depth)
+                    if b == b'e' && i + 3 <= self.end
+                        && self.bytes[i + 1] == b'n' && self.bytes[i + 2] == b'd'
+                        && (i + 3 >= self.end || !self.bytes[i + 3].is_ascii_alphanumeric() && self.bytes[i + 3] != b'_') {
+                        self.depth -= 1;
+                        if self.depth == 0 {
+                            // Found the matching `end` for our `fun`
+                            self.result_pos = i + 3;
+                            self.success = 1;
+                            return
+                        }
+                        i += 3;
+                        continue
+                    }
+
+                    // Skip identifiers (avoid false keyword matches mid-word)
+                    if b.is_ascii_alphabetic() || b == b'_' {
+                        while i < self.end && (self.bytes[i].is_ascii_alphanumeric() || self.bytes[i] == b'_') {
+                            i += 1;
+                        }
+                        continue
+                    }
+
+                    i += 1;
+                }
+                // Ran out of bytes without finding matching `end`
+                self.success = 0;
+            }
+        }
+
+    domain:
+        bytes: Vec<u8> = Vec::new()
+        pos: usize = 0
+        end: usize = 0
+        result_pos: usize = 0
+        success: usize = 0
+        depth: i32 = 0
+}

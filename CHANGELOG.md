@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Added
 
 - Frame V4 transpiler with the Oceans Model — native code passes through unchanged, `@@system` blocks expand into full state machine implementations
-- 9 stable language backends: Python, TypeScript, JavaScript, C, C++, C#, Java, Rust, Go
+- 9 core language backends: Python, TypeScript, JavaScript, C, C++, C#, Java, Rust, Go
 - 8 experimental backends: Kotlin, Swift, PHP, Ruby, Lua, Erlang, Dart, GDScript
 - GraphViz DOT output for state chart visualization
 - Hierarchical state machine (HSM) support with explicit parent forwarding

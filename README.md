@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Version](https://img.shields.io/badge/version-4.0.0-green)
 
-The **Frame language transpiler**. Frame is a domain-specific language for specifying state machines that transpiles to production code in multiple target languages. You write `@@system` blocks inside your native source files, and the transpiler expands them into full state machine implementations. All native code passes through unchanged — your native compiler handles everything outside the `@@system` blocks.
+The **framepiler** — Frame's transpiler. Frame is a domain-specific language for specifying state machines that transpiles to production code in multiple target languages. You write `@@system` blocks inside your native source files, and the framepiler expands them into full state machine implementations. All native code passes through unchanged — your native compiler handles everything outside the `@@system` blocks.
 
 ## Quick Start
 
@@ -41,7 +41,7 @@ framec hello.fpy
 
 ## Supported Languages
 
-### Stable
+### Core
 
 | Language | Target Name | Extension |
 |---|---|---|
@@ -84,13 +84,13 @@ framec -l graphviz myfile.frm | dot -Tpng -o chart.png
 framec --help
 ```
 
-## VS Code Extension
-
-The Frame VS Code extension provides syntax highlighting, transpile-on-save, and a state chart viewer. *(Coming soon)*
-
 ## Documentation
 
-- [The Frame User Guide](docs/user_guide/README.md) — learn Frame from scratch
+- [Getting Started](docs/frame_getting_started.md) — learn Frame from scratch
+- [Language Reference](docs/frame_language.md) — complete Frame language reference
+- [Cookbook](docs/frame_cookbook.md) — 20 recipes for real-world patterns
+- [Runtime Architecture](docs/frame_runtime.md) — how generated code works
+- [Framepiler Design](docs/framepiler_design.md) — transpiler internals
 - [Contributing](CONTRIBUTING.md) — build from source, run tests, submit PRs
 - [Changelog](CHANGELOG.md) — release history
 

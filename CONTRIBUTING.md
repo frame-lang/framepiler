@@ -19,7 +19,14 @@ cargo build
 ### Running Tests
 
 ```bash
+# Unit tests (in this repo)
 cargo test
+
+# Integration tests (17 languages, in separate repo)
+# See docs/contributing/testing.md for full guide
+cd /path/to/framepiler_test_env/docker
+make test              # All languages
+make test-python       # Single language
 ```
 
 ### Code Quality
@@ -35,7 +42,7 @@ cargo fmt --check              # Consistent formatting
 
 ```
 framepiler/
-├── framec/                    # The transpiler
+├── framec/                    # The framepiler
 │   ├── src/
 │   │   ├── main.rs           # CLI entry point
 │   │   ├── lib.rs            # Library + WASM entry point
@@ -50,8 +57,11 @@ framepiler/
 │   │           └── validation/
 │   └── build.rs              # Version injection
 ├── docs/
-│   ├── user_guide/           # The Frame User Guide
-│   └── contributing/         # Contributor deep-dives
+│   ├── frame_getting_started.md  # Tutorial
+│   ├── frame_language.md         # Language reference
+│   ├── frame_runtime.md          # Runtime architecture
+│   ├── framepiler_design.md      # Transpiler internals
+│   └── contributing/             # Contributor deep-dives
 └── .github/                  # CI, issue templates
 ```
 

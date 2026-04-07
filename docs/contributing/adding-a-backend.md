@@ -78,7 +78,7 @@ The backend must emit code that implements Frame's runtime semantics:
 
 Register your language in:
 
-- `framec/src/frame_c/driver.rs` — add a target language enum variant and metadata (name, extension, stable/experimental)
+- `framec/src/frame_c/driver.rs` — add a target language enum variant and metadata (name, extension, core/experimental)
 - `framec/src/frame_c/cli.rs` — add CLI flag support
 
 ## Step 6: Tests

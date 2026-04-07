@@ -10,9 +10,9 @@ Frame's compilation model treats native code as pass-through. A Frame source fil
 2. **System blocks** — one or more `@@system { ... }` specifications
 3. **Epilog** — native code after the last system block
 
-The transpiler parses and expands only the system blocks. The prolog and epilog are passed through verbatim. The final output is the reassembly of: prolog + expanded systems + epilog.
+The framepiler parses and expands only the system blocks. The prolog and epilog are passed through verbatim. The final output is the reassembly of: prolog + expanded systems + epilog.
 
-This is the "Oceans Model" — native code is the ocean, system blocks are islands. The transpiler only touches the islands.
+This is the "Oceans Model" — native code is the ocean, system blocks are islands. The framepiler only touches the islands.
 
 ## Compilation Pipeline
 
@@ -116,7 +116,7 @@ Location: `framec/src/frame_c/compiler/` (assembler modules)
 
 ## Runtime Architecture
 
-The transpiler generates a self-contained class (or struct) for each `@@system` block. The generated code implements these runtime concepts:
+The framepiler generates a self-contained class (or struct) for each `@@system` block. The generated code implements these runtime concepts:
 
 ### Compartment
 
