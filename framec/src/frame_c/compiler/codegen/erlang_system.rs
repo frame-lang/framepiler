@@ -89,6 +89,25 @@ fn erlang_rewrite_native_classified_full(line: &str, action_names: &[String], in
     ErlangRewrite::Plain(l.replace("self.", &format!("{}#data.", data_var)))
 }
 
+/// Capitalize a parameter name for Erlang, avoiding collisions with gen_statem reserved names.
+/// "data" → "Data_Arg" (not "Data" which collides with the gen_statem state data variable)
+/// "from" → "From_Arg" (not "From" which collides with the gen_statem caller reference)
+fn erlang_safe_capitalize(name: &str) -> String {
+    let capitalized = {
+        let mut chars = name.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        }
+    };
+    // Reserved gen_statem variable names
+    if matches!(capitalized.as_str(), "Data" | "From" | "State" | "OldState" | "Pid") {
+        format!("{}_Arg", capitalized)
+    } else {
+        capitalized
+    }
+}
+
 /// Capitalize handler parameter names in a line of code.
 /// Erlang variables must start with uppercase — `n` → `N`, `name` → `Name`
 fn erlang_capitalize_params(line: &str, param_names: &[(&str, String)]) -> String {
@@ -105,7 +124,7 @@ fn erlang_capitalize_params(line: &str, param_names: &[(&str, String)]) -> Strin
         while i < result.len() {
             if result[i..].starts_with(original) {
                 // Check word boundaries
-                let before_ok = i == 0 || !result.as_bytes()[i-1].is_ascii_alphanumeric() && result.as_bytes()[i-1] != b'_';
+                let before_ok = i == 0 || !result.as_bytes()[i-1].is_ascii_alphanumeric() && result.as_bytes()[i-1] != b'_' && result.as_bytes()[i-1] != b'#';
                 let after_ok = i + orig_len >= result.len() || !result.as_bytes()[i + orig_len].is_ascii_alphanumeric() && result.as_bytes()[i + orig_len] != b'_';
                 if before_ok && after_ok {
                     new_result.push_str(capitalized);
@@ -573,6 +592,234 @@ fn erlang_nest_early_exits(lines: &[&str]) -> String {
     output_lines.join("\n")
 }
 
+/// Expand @@SystemName() in Erlang domain initializers
+fn expand_tagged_in_domain_erlang(text: &str) -> String {
+    // Simple pattern: @@Name(args) → name:start_link(args)
+    let mut result = text.to_string();
+    while let Some(pos) = result.find("@@") {
+        let after = pos + 2;
+        if after < result.len() && result.as_bytes()[after].is_ascii_uppercase() {
+            let name_end = result[after..].find(|c: char| !c.is_ascii_alphanumeric() && c != '_').map(|p| after + p).unwrap_or(result.len());
+            let name = &result[after..name_end];
+            let snake = to_snake_case(name);
+            if name_end < result.len() && result.as_bytes()[name_end] == b'(' {
+                result = format!("{}{}:start_link({}", &result[..pos], snake, &result[name_end + 1..]);
+            } else {
+                result = format!("{}{}{}", &result[..pos], snake, &result[name_end..]);
+            }
+        } else {
+            break;
+        }
+    }
+    result
+}
+
+// ============================================================================
+// Case Arm Analysis — structural classification for mixed conditional handlers
+// ============================================================================
+
+/// Information about a single arm in a case...end block
+struct CaseArmInfo {
+    /// Index of the arm header line (e.g., "true ->" or "; false ->") in processed lines
+    header_idx: usize,
+    /// Line indices of body content (after header, before next arm or end)
+    body_start: usize,
+    body_end: usize,
+    /// Whether this arm contains a frame_transition__() call
+    has_transition: bool,
+    /// The __ReturnVal expression if one was assigned in this arm
+    return_val: Option<String>,
+    /// The last DataN variable in this arm (for {keep_state, DataN, ...})
+    final_data_var: Option<String>,
+}
+
+/// Classification of a case block's arm behaviors
+enum CaseBlockClassification {
+    /// All arms have frame_transition__() — case is terminal, use as handler return
+    AllTerminal,
+    /// No arms have frame_transition__() — hoist __ReturnVal, append {keep_state,...}
+    NoTerminal,
+    /// Mixed: some arms transition, some don't — per-arm rewrite needed
+    Mixed,
+}
+
+/// Analyze a case block in processed handler lines.
+/// Returns (classification, arms, case_start_line, case_end_line).
+/// Only analyzes the first top-level case block found.
+fn analyze_case_arms(processed: &[String]) -> Option<(CaseBlockClassification, Vec<CaseArmInfo>, usize, usize)> {
+    let mut case_start = None;
+    let mut case_end = None;
+    let mut depth = 0i32;
+    let mut arms: Vec<CaseArmInfo> = Vec::new();
+    let mut current_arm: Option<CaseArmInfo> = None;
+
+    for (idx, line) in processed.iter().enumerate() {
+        let t = line.trim();
+
+        // Track case block depth
+        if (t.starts_with("case ") || t.starts_with("case(")) && t.ends_with(" of") {
+            depth += 1;
+            if depth == 1 && case_start.is_none() {
+                case_start = Some(idx);
+            }
+            continue;
+        }
+
+        if t == "end" || t == "end," {
+            if depth == 1 {
+                // Close current arm
+                if let Some(mut arm) = current_arm.take() {
+                    arm.body_end = idx;
+                    arms.push(arm);
+                }
+                case_end = Some(idx);
+            }
+            depth = (depth - 1).max(0);
+            continue;
+        }
+
+        // Only analyze top-level arms (depth == 1)
+        if depth != 1 {
+            // Still track content for current arm at nested depths
+            if let Some(ref mut arm) = current_arm {
+                if t.starts_with("frame_transition__(") { arm.has_transition = true; }
+                if t.starts_with("__ReturnVal = ") {
+                    let val = t.trim_start_matches("__ReturnVal = ").trim_end_matches(',').to_string();
+                    arm.return_val = Some(val);
+                }
+                // Track DataN variable assignments
+                if t.starts_with("Data") && t.contains(" = ") && !t.contains("#data") {
+                    if let Some(eq_pos) = t.find(" = ") {
+                        let var = t[..eq_pos].trim().to_string();
+                        if var.starts_with("Data") && var[4..].chars().all(|c| c.is_ascii_digit()) {
+                            arm.final_data_var = Some(var);
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Arm boundary detection at depth 1
+        let is_arm_header = t.starts_with("true ->") || t.starts_with("; false") || t.starts_with("; _");
+        if is_arm_header {
+            // Close previous arm
+            if let Some(mut arm) = current_arm.take() {
+                arm.body_end = idx;
+                arms.push(arm);
+            }
+            // Start new arm
+            current_arm = Some(CaseArmInfo {
+                header_idx: idx,
+                body_start: idx + 1,
+                body_end: idx + 1, // updated when arm closes
+                has_transition: false,
+                return_val: None,
+                final_data_var: None,
+            });
+            continue;
+        }
+
+        // Content within current arm
+        if let Some(ref mut arm) = current_arm {
+            if t.starts_with("frame_transition__(") { arm.has_transition = true; }
+            if t.starts_with("__ReturnVal = ") {
+                let val = t.trim_start_matches("__ReturnVal = ").trim_end_matches(',').to_string();
+                arm.return_val = Some(val);
+            }
+            if t.starts_with("Data") && t.contains(" = ") && !t.contains("#data") {
+                if let Some(eq_pos) = t.find(" = ") {
+                    let var = t[..eq_pos].trim().to_string();
+                    if var.starts_with("Data") && var[4..].chars().all(|c| c.is_ascii_digit()) {
+                        arm.final_data_var = Some(var);
+                    }
+                }
+            }
+        }
+    }
+
+    let case_start = case_start?;
+    let case_end = case_end?;
+    if arms.is_empty() { return None; }
+
+    // Classify
+    let all_terminal = arms.iter().all(|a| a.has_transition);
+    let none_terminal = arms.iter().all(|a| !a.has_transition);
+    let classification = if all_terminal {
+        CaseBlockClassification::AllTerminal
+    } else if none_terminal {
+        CaseBlockClassification::NoTerminal
+    } else {
+        CaseBlockClassification::Mixed
+    };
+
+    Some((classification, arms, case_start, case_end))
+}
+
+/// Rewrite a case block with mixed arms so each arm produces a gen_statem return tuple.
+fn rewrite_mixed_case_arms(
+    processed: &[String],
+    arms: &[CaseArmInfo],
+    case_start: usize,
+    case_end: usize,
+    default_data: &str,
+) -> Vec<String> {
+    let mut result = Vec::new();
+
+    // Emit lines before case block
+    for i in 0..case_start {
+        result.push(processed[i].clone());
+    }
+
+    // Emit case header
+    result.push(processed[case_start].clone());
+
+    // Emit each arm
+    for arm in arms {
+        // Emit arm header — strip any inline content after "->"
+        // (e.g., "; false -> ok" becomes "; false ->")
+        let header = &processed[arm.header_idx];
+        let clean_header = if let Some(arrow_pos) = header.find("->") {
+            let after_arrow = &header[arrow_pos + 2..].trim();
+            if after_arrow.is_empty() {
+                header.clone()
+            } else {
+                header[..arrow_pos + 2].to_string()
+            }
+        } else {
+            header.clone()
+        };
+        result.push(clean_header);
+
+        // Emit arm body lines, filtering as needed
+        for i in arm.body_start..arm.body_end {
+            let t = processed[i].trim();
+
+            if t.starts_with("__ReturnVal = ") {
+                // In transition arms, drop (transition replies ok)
+                // In non-transition arms, capture but don't emit (used in injected tuple)
+                continue;
+            }
+
+            result.push(processed[i].clone());
+        }
+
+        // For non-transition arms, inject the gen_statem return tuple
+        if !arm.has_transition {
+            let data = arm.final_data_var.as_deref().unwrap_or(default_data);
+            let reply = arm.return_val.as_deref().unwrap_or("ok");
+            result.push(format!("        {{keep_state, {}, [{{reply, From, {}}}]}}", data, reply));
+        }
+    }
+
+    // Emit end
+    result.push("    end".to_string());
+
+    result
+}
+
+// ============================================================================
+
 pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, source: &[u8]) -> CodegenNode {
     let sys = &system.name;
     let module_name = to_snake_case(sys);
@@ -625,11 +872,31 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     code.push_str("\n-record(data, {\n");
     let mut all_fields: Vec<String> = Vec::new();
 
-    // Domain vars
+    // Domain vars — strip type annotations for Erlang record syntax
+    // "name: type = value" → "name = value"
     for var in &system.domain {
         if let Some(ref raw) = var.raw_code {
             let trimmed = raw.trim();
-            all_fields.push(format!("    {}", trimmed));
+            // Strip ": type" between name and "="
+            let field_str = if let Some(colon_pos) = trimmed.find(':') {
+                if let Some(eq_pos) = trimmed.find('=') {
+                    if colon_pos < eq_pos {
+                        let name = trimmed[..colon_pos].trim();
+                        let value = trimmed[eq_pos..].trim(); // includes "= value"
+                        format!("{} {}", name, value)
+                    } else {
+                        trimmed.to_string()
+                    }
+                } else {
+                    // Has type annotation but no initializer — just use name
+                    trimmed[..colon_pos].trim().to_string() + " = undefined"
+                }
+            } else {
+                trimmed.to_string()
+            };
+            // Expand @@SystemName() in domain initializers
+            let field_str = expand_tagged_in_domain_erlang(&field_str);
+            all_fields.push(format!("    {}", field_str));
         } else {
             all_fields.push(format!("    {} = undefined", var.name));
         }
@@ -670,13 +937,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     // Interface functions — public API
     for method in &system.interface {
         let params: Vec<String> = method.params.iter()
-            .map(|p| {
-                let mut chars = p.name.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                }
-            })
+            .map(|p| erlang_safe_capitalize(&p.name))
             .collect();
         let all_params = {
             let mut p = vec!["Pid".to_string()];
@@ -711,13 +972,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
             if let Some(ref enter) = state.enter {
                 // Extract enter params from frame_enter_args
                 for (i, p) in enter.params.iter().enumerate() {
-                    let var_name = {
-                        let mut chars = p.name.chars();
-                        match chars.next() {
-                            None => String::new(),
-                            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                        }
-                    };
+                    let var_name = erlang_safe_capitalize(&p.name);
                     code.push_str(&format!("    {} = maps:get(<<\"{}\">>, Data#data.frame_enter_args, undefined),\n", var_name, i));
                 }
                 // Use splicer for proper $.var expansion
@@ -742,23 +997,44 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 if !enter_body.trim().is_empty() {
                     let enter_params: Vec<(&str, String)> = enter.params.iter()
                         .map(|p| {
-                            let cap = {
-                                let mut chars = p.name.chars();
-                                match chars.next() {
-                                    None => String::new(),
-                                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                                }
-                            };
+                            let cap = erlang_safe_capitalize(&p.name);
                             (p.name.as_str(), cap)
                         })
                         .collect();
                     let lines: Vec<&str> = enter_body.lines().collect();
                     let (processed, final_data) = erlang_process_body_lines_with_params(&lines, &action_names, "Data", &enter_params);
                     if !processed.is_empty() {
-                        erlang_smart_join(&processed, &mut code);
-                        code.push_str(",\n");
+                        // Check if enter handler contains a transition
+                        let has_enter_transition = processed.iter().any(|l| l.trim().starts_with("frame_transition__("));
+                        if has_enter_transition {
+                            // Enter handlers can't use frame_transition__ (no From).
+                            // Convert to {next_state, TargetState, Data} directly.
+                            let mut enter_lines = Vec::new();
+                            for line in &processed {
+                                let t = line.trim();
+                                if t.starts_with("frame_transition__(") {
+                                    // Parse: frame_transition__(target, Data, ..., From)
+                                    // Extract target state name
+                                    let inner = t.trim_start_matches("frame_transition__(").trim_end_matches(')');
+                                    let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+                                    if !parts.is_empty() {
+                                        let target = parts[0];
+                                        enter_lines.push(format!("    {{next_state, {}, {}}}", target, final_data));
+                                    }
+                                } else {
+                                    enter_lines.push(line.clone());
+                                }
+                            }
+                            erlang_smart_join(&enter_lines, &mut code);
+                        } else {
+                            erlang_smart_join(&processed, &mut code);
+                            code.push_str(",\n");
+                            code.push_str(&format!("    {{keep_state, {}}}", final_data));
+                        }
+                    } else {
+                        code.push_str(&format!("    {{keep_state, {}}}", final_data));
                     }
-                    code.push_str(&format!("    {{keep_state, {}}};\n", final_data));
+                    code.push_str(";\n");
                 } else {
                     code.push_str("    {keep_state, Data};\n");
                 }
@@ -797,13 +1073,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     event_atom.clone()
                 } else {
                     let param_names: Vec<String> = handler.params.iter()
-                        .map(|p| {
-                            let mut chars = p.name.chars();
-                            match chars.next() {
-                                None => String::new(),
-                                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                            }
-                        })
+                        .map(|p| erlang_safe_capitalize(&p.name))
                         .collect();
                     format!("{{{}, {}}}", event_atom, param_names.join(", "))
                 };
@@ -835,13 +1105,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 // Post-process: rewrite self.X, capitalize params, thread Data
                 let handler_params: Vec<(&str, String)> = handler.params.iter()
                     .map(|p| {
-                        let capitalized = {
-                            let mut chars = p.name.chars();
-                            match chars.next() {
-                                None => String::new(),
-                                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                            }
-                        };
+                        let capitalized = erlang_safe_capitalize(&p.name);
                         (p.name.as_str(), capitalized)
                     })
                     .collect();
@@ -864,77 +1128,54 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                         &lines, &action_names, &interface_names, "Data", &handler_params
                     );
                     if !processed.is_empty() {
-                        // Drop unreachable code after terminal statements.
-                        // Terminal = forward call, frame_transition__, {next_state,}, {keep_state,}
-                        // Code before the terminal is emitted; code after is unreachable and dropped.
-                        let is_terminal = |l: &str| -> bool {
-                            let t = l.trim();
-                            t.contains("({call, From},") ||
-                            t.starts_with("frame_transition__(") ||
-                            t.starts_with("{next_state,") ||
-                            t.starts_with("{keep_state,")
-                        };
-
-                        // Find the first terminal line (outside case blocks).
-                        // A case block is itself terminal if ALL branches contain terminals.
-                        let mut case_depth = 0i32;
-                        let mut terminal_idx: Option<usize> = None;
-                        let mut case_all_branches_terminal = false;
-                        let mut branch_has_terminal = false;
-                        let mut all_branches_ok = true;
-                        for (idx, line) in processed.iter().enumerate() {
-                            let t = line.trim();
-                            if t.contains("case ") && t.ends_with(" of") {
-                                case_depth += 1;
-                                if case_depth == 1 {
-                                    // Reset branch tracking for top-level case
-                                    all_branches_ok = true;
-                                    branch_has_terminal = false;
+                        // Use structured case arm analysis when a case block exists
+                        if let Some((classification, arms, case_start, case_end)) = analyze_case_arms(&processed) {
+                            match classification {
+                                CaseBlockClassification::AllTerminal => {
+                                    // All arms have transitions — case is terminal, use as handler return
+                                    let emit_lines = &processed[..=case_end];
+                                    erlang_smart_join(emit_lines, &mut code);
+                                    if code.trim_end().ends_with("end,") {
+                                        if let Some(pos) = code.rfind("end,") {
+                                            code.replace_range(pos + 3..pos + 4, "");
+                                        }
+                                    }
+                                }
+                                CaseBlockClassification::Mixed => {
+                                    // Some arms transition, some don't — per-arm rewrite
+                                    let rewritten = rewrite_mixed_case_arms(
+                                        &processed, &arms, case_start, case_end, &_final_data
+                                    );
+                                    erlang_smart_join(&rewritten, &mut code);
+                                }
+                                CaseBlockClassification::NoTerminal => {
+                                    // No transitions in case — shouldn't be in has_return_tuple branch
+                                    // but handle gracefully: emit all lines
+                                    erlang_smart_join(&processed, &mut code);
                                 }
                             }
-                            // Track terminals inside case branches (depth 1 only)
-                            if case_depth == 1 && is_terminal(t) {
-                                branch_has_terminal = true;
-                            }
-                            // Branch separator — check if previous branch had a terminal
-                            if case_depth == 1 && t.starts_with("; false") {
-                                if !branch_has_terminal { all_branches_ok = false; }
-                                branch_has_terminal = false;
-                            }
-                            if t == "end" || t == "end," {
-                                if case_depth == 1 {
-                                    // Closing top-level case — check last branch
-                                    if !branch_has_terminal { all_branches_ok = false; }
-                                    case_all_branches_terminal = all_branches_ok;
-                                }
-                                case_depth = (case_depth - 1).max(0);
-                            }
-                            // Terminal at top level: either a direct terminal or end of all-terminal case
-                            if case_depth == 0 {
-                                if is_terminal(t) {
-                                    terminal_idx = Some(idx);
-                                    break;
-                                }
-                                if (t == "end" || t == "end,") && case_all_branches_terminal {
-                                    terminal_idx = Some(idx);
-                                    break;
-                                }
-                            }
-                        }
-
-                        let emit_lines = if let Some(tidx) = terminal_idx {
-                            &processed[..=tidx]
                         } else {
-                            &processed[..]
-                        };
-
-                        // Join lines with Erlang-aware comma/newline logic
-                        erlang_smart_join(emit_lines, &mut code);
-                        // Strip trailing comma from last line if it's a terminal `end,`
-                        if code.trim_end().ends_with("end,") {
-                            if let Some(pos) = code.rfind("end,") {
-                                code.replace_range(pos + 3..pos + 4, "");
+                            // No case block — use existing terminal detection for linear handlers
+                            let is_terminal = |l: &str| -> bool {
+                                let t = l.trim();
+                                t.contains("({call, From},") ||
+                                t.starts_with("frame_transition__(") ||
+                                t.starts_with("{next_state,") ||
+                                t.starts_with("{keep_state,")
+                            };
+                            let mut terminal_idx: Option<usize> = None;
+                            for (idx, line) in processed.iter().enumerate() {
+                                if is_terminal(line.trim()) {
+                                    terminal_idx = Some(idx);
+                                    break;
+                                }
                             }
+                            let emit_lines = if let Some(tidx) = terminal_idx {
+                                &processed[..=tidx]
+                            } else {
+                                &processed[..]
+                            };
+                            erlang_smart_join(emit_lines, &mut code);
                         }
                     }
                     // Ensure clause terminator is on its own line (not hidden by % comment)
@@ -1100,13 +1341,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
 
                 // Extract exit params
                 for (i, p) in exit.params.iter().enumerate() {
-                    let var_name = {
-                        let mut chars = p.name.chars();
-                        match chars.next() {
-                            None => String::new(),
-                            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                        }
-                    };
+                    let var_name = erlang_safe_capitalize(&p.name);
                     code.push_str(&format!("    {} = maps:get(<<\"{}\">>, Data#data.frame_exit_args, undefined),\n", var_name, i));
                 }
 
@@ -1130,13 +1365,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
 
                 let exit_params: Vec<(&str, String)> = exit.params.iter()
                     .map(|p| {
-                        let cap = {
-                            let mut chars = p.name.chars();
-                            match chars.next() {
-                                None => String::new(),
-                                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                            }
-                        };
+                        let cap = erlang_safe_capitalize(&p.name);
                         (p.name.as_str(), cap)
                     })
                     .collect();
@@ -1192,13 +1421,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     for action in &system.actions {
         code.push_str(&format!("{}(", action.name));
         let params: Vec<String> = action.params.iter()
-            .map(|p| {
-                let mut chars = p.name.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                }
-            })
+            .map(|p| erlang_safe_capitalize(&p.name))
             .collect();
         // Actions receive Data as first param
         let mut all_params = vec!["Data".to_string()];
@@ -1218,13 +1441,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
             // Build param name mappings for capitalization
             let act_params: Vec<(&str, String)> = action.params.iter()
                 .map(|p| {
-                    let cap = {
-                        let mut chars = p.name.chars();
-                        match chars.next() {
-                            None => String::new(),
-                            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                        }
-                    };
+                    let cap = erlang_safe_capitalize(&p.name);
                     (p.name.as_str(), cap)
                 })
                 .collect();
@@ -1245,13 +1462,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     for op in &system.operations {
         code.push_str(&format!("{}(", op.name));
         let params: Vec<String> = op.params.iter()
-            .map(|p| {
-                let mut chars = p.name.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                }
-            })
+            .map(|p| erlang_safe_capitalize(&p.name))
             .collect();
         if !op.is_static {
             let mut all_params = vec!["Data".to_string()];
@@ -1274,13 +1485,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
             // Build param name mappings for capitalization
             let op_params: Vec<(&str, String)> = op.params.iter()
                 .map(|p| {
-                    let cap = {
-                        let mut chars = p.name.chars();
-                        match chars.next() {
-                            None => String::new(),
-                            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                        }
-                    };
+                    let cap = erlang_safe_capitalize(&p.name);
                     (p.name.as_str(), cap)
                 })
                 .collect();
