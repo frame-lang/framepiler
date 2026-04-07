@@ -124,7 +124,9 @@ fn erlang_capitalize_params(line: &str, param_names: &[(&str, String)]) -> Strin
         while i < result.len() {
             if result[i..].starts_with(original) {
                 // Check word boundaries
-                let before_ok = i == 0 || !result.as_bytes()[i-1].is_ascii_alphanumeric() && result.as_bytes()[i-1] != b'_' && result.as_bytes()[i-1] != b'#';
+                // Don't capitalize identifiers inside record access patterns (#record.field)
+                let prev_byte = result.as_bytes()[i.saturating_sub(1)];
+                let before_ok = i == 0 || !prev_byte.is_ascii_alphanumeric() && prev_byte != b'_' && prev_byte != b'#' && prev_byte != b'.';
                 let after_ok = i + orig_len >= result.len() || !result.as_bytes()[i + orig_len].is_ascii_alphanumeric() && result.as_bytes()[i + orig_len] != b'_';
                 if before_ok && after_ok {
                     new_result.push_str(capitalized);
