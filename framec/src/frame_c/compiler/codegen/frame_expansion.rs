@@ -1887,6 +1887,31 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 }
             }
         }
+        FrameSegmentKind::ReturnStatement => {
+            // Native return keyword detected in handler body.
+            // Extract expression after "return" (if any).
+            let after_return = segment_text.trim()
+                .strip_prefix("return").unwrap_or("")
+                .trim().trim_end_matches(';').trim();
+
+            if after_return.is_empty() {
+                // Bare `return` — valid, exits the handler. Pass through as native.
+                format!("{}return", indent_str)
+            } else if after_return.starts_with("@@:") || after_return.starts_with("@@(") {
+                // E408: `return @@:<anything>` — combining native return with Frame context
+                eprintln!("E408: Cannot combine `return` with Frame context syntax `{}`. \
+                    Use `@@:(expr)` to set the return value, then `return` on a separate line.",
+                    after_return);
+                String::new()
+            } else {
+                // W415: `return <expr>` in event handler — value is silently lost
+                eprintln!("W415: `return {}` in event handler '{}' — the return value is lost. \
+                    Use `@@:({})` to set the return value, or bare `return` to exit.",
+                    after_return, ctx.event_name, after_return);
+                // Pass through as native — it compiles but doesn't do what the user expects
+                format!("{}{}", indent_str, segment_text.trim())
+            }
+        }
     }
 }
 

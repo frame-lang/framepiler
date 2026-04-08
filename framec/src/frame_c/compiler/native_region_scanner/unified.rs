@@ -120,9 +120,9 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
         }
 
         // ===== FRAME STATEMENT DETECTION =====
-        // Frame statements (-> $, => $, push$, pop$) contain $ which makes them
-        // unambiguous — detectable at any position.
-        if matches!(b, b'-' | b'=' | b'(' | b'p') {
+        // Frame statements (-> $, => $, push$, pop$, return) are detected at any position.
+        // Closures are already skipped by skip_nested_scope() above.
+        if matches!(b, b'-' | b'=' | b'(' | b'p' | b'r') {
             if let Some((_new_i, kind)) = match_frame_statement(skipper, bytes, i, end) {
                 // Calculate indent (count whitespace from start of current line)
                 let mut line_start = i;
@@ -394,6 +394,25 @@ fn match_frame_statement<S: SyntaxSkipper>(
         && bytes[pos + 3] == b'$'
     {
         return Some((pos + 4, FrameSegmentKind::StackPop));
+    }
+
+    // Return statement: return <expr>?
+    // Detected by keyword + word boundary (space, newline, semicolon, or EOF after "return")
+    // Closures are already skipped by skip_nested_scope(), so this is at handler scope.
+    if b == b'r' && pos + 5 < end
+        && bytes[pos + 1] == b'e'
+        && bytes[pos + 2] == b't'
+        && bytes[pos + 3] == b'u'
+        && bytes[pos + 4] == b'r'
+        && bytes[pos + 5] == b'n'
+    {
+        // Word boundary check: next char must not be alphanumeric or _
+        let after = pos + 6;
+        let is_word_boundary = after >= end
+            || (!bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_');
+        if is_word_boundary {
+            return Some((after, FrameSegmentKind::ReturnStatement));
+        }
     }
 
     None

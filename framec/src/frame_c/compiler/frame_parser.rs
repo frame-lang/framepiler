@@ -1751,8 +1751,9 @@ impl FrameParser {
             FrameSegmentKind::ContextData |
             FrameSegmentKind::ContextDataAssign |
             FrameSegmentKind::ContextParams |
-            FrameSegmentKind::TaggedInstantiation => {
-                Err(ParseError::Expected("Context/tagged syntax handled by splicer".to_string()))
+            FrameSegmentKind::TaggedInstantiation |
+            FrameSegmentKind::ReturnStatement => {
+                Err(ParseError::Expected("Context/tagged/return syntax handled by splicer".to_string()))
             }
         }
     }

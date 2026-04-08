@@ -15,6 +15,7 @@ pub enum FrameSegmentKind {
     ContextParams,         // @@:params[key] - explicit parameter access
     ContextReturnExpr,     // @@:(expr) - set context return value (concise form)
     TaggedInstantiation,   // @@SystemName() - validated system instantiation
+    ReturnStatement,       // return <expr>? - native return keyword in handler body
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
