@@ -1039,9 +1039,11 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                         // Check if enter handler contains a transition
                         let has_enter_transition = processed.iter().any(|l| l.trim().starts_with("frame_transition__("));
                         if has_enter_transition {
-                            // Enter handlers can't return {next_state,...} in gen_statem.
-                            // Use internal event to defer the transition:
-                            //   {keep_state, Data, [{next_event, internal, {frame_transition, Target, Data}}]}
+                            // Enter handlers can't return {next_state,...} in gen_statem state_enter mode,
+                            // and {next_event,...} actions are forbidden from a state enter call.
+                            // Defer the transition via a zero-delay state_timeout, which IS allowed
+                            // from enter callbacks and is dispatched as a normal event afterward:
+                            //   {keep_state, Data, [{state_timeout, 0, {frame_enter_transition, Target}}]}
                             let mut enter_lines = Vec::new();
                             for line in &processed {
                                 let t = line.trim();
@@ -1051,7 +1053,7 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                                     if !parts.is_empty() {
                                         let target = parts[0];
                                         enter_lines.push(format!(
-                                            "    {{keep_state, {}, [{{next_event, internal, {{frame_enter_transition, {}}}}}]}}",
+                                            "    {{keep_state, {}, [{{state_timeout, 0, {{frame_enter_transition, {}}}}}]}}",
                                             final_data, target
                                         ));
                                     }
@@ -1331,12 +1333,12 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 }
             }
 
-            // Internal event handler for deferred enter-handler transitions
+            // State-timeout handler for deferred enter-handler transitions.
             // When an enter handler calls -> $State, we defer via:
-            //   {keep_state, Data, [{next_event, internal, {frame_enter_transition, Target}}]}
-            // This clause processes that internal event.
+            //   {keep_state, Data, [{state_timeout, 0, {frame_enter_transition, Target}}]}
+            // This clause processes the resulting state_timeout event.
             code.push_str(&format!(
-                "{}(internal, {{frame_enter_transition, Target}}, Data) ->\n    {{next_state, Target, Data}};\n",
+                "{}(state_timeout, {{frame_enter_transition, Target}}, Data) ->\n    {{next_state, Target, Data}};\n",
                 state_name
             ));
 
