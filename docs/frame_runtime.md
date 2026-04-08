@@ -299,14 +299,15 @@ def get_status(self) -> str:
 self._context_stack[-1]._return = value
 ```
 
-### Return Sugar
+### Setting Return Values
 
-`return expression` in handlers generates:
+`@@:return = expression` (or `@@:(expression)`) in handlers generates:
 
 ```python
 self._context_stack[-1]._return = expression
-return
 ```
+
+Note: `return expr` in handlers is a native return that exits the dispatch method — the value is NOT set on the context stack. The framepiler emits W415 warning for this pattern.
 
 ### Last Writer Wins
 

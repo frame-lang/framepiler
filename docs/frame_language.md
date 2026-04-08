@@ -256,7 +256,7 @@ actions:
 
 **Cannot access (E401):** `-> $State`, `=> $^`, `push$`, `pop$`, `$.varName`
 
-Actions have no state context. `return` in actions is the native language return (not Frame return sugar).
+Actions have no state context. `return` in actions is the native language return.
 
 ---
 
@@ -278,7 +278,7 @@ operations:
 - **Static operations** have no `self`/`this` access
 - **Non-static operations** can access domain variables and `@@:return`
 - Same Frame statement restrictions as actions (E401)
-- `return` is the native language return (not Frame return sugar)
+- `return` is the native language return
 
 ---
 
@@ -373,14 +373,15 @@ $.counter = <expr>      // write
 
 See [System Context](#system-context) for full semantics.
 
-**Return sugar** (event handlers only):
+**`return` is always native.** It exits the current function — it does NOT set `@@:return`. In event handlers, `return expr` silently loses the value (W415 warning). Use `@@:(expr)` to set the return value, then bare `return` to exit.
 
-| Context | `return <expr>` meaning |
-|---------|------------------------|
-| Event/enter/exit handler | `@@:return = expr; return` (sugar) |
-| Action or operation | Native function return (no sugar) |
-
-Bare `return` (no expression) is always native in all contexts.
+| Syntax | Effect |
+|--------|--------|
+| `@@:(expr)` | Set return value (concise) |
+| `@@:return = expr` | Set return value (explicit) |
+| `return` | Exit the handler (native — valid everywhere) |
+| `return expr` | Native return — in handlers, value is lost (W415) |
+| `return @@:(expr)` | Error E408 — cannot combine |
 
 ---
 
@@ -603,7 +604,7 @@ The framepiler expands this to the appropriate native constructor and validates 
 | `-> pop$` | Transition to popped state |
 | `push$` | Push to state stack |
 | `pop$` | Pop from state stack |
-| `return <expr>` | Return sugar (handlers only) |
+| `return` | Native return (exits handler/action/operation) |
 
 ### Context
 

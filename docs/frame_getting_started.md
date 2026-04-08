@@ -341,7 +341,7 @@ A system's power comes from having multiple states, each responding to the same 
                 -> $On
             }
             status(): str {
-                return "off"
+                @@:return = "off"
             }
         }
 
@@ -350,7 +350,7 @@ A system's power comes from having multiple states, each responding to the same 
                 -> $Off
             }
             status(): str {
-                return "on"
+                @@:return = "on"
             }
         }
 }
@@ -396,7 +396,7 @@ Inside a handler, `return` sets the return value:
 
 ```
 status(): str {
-    return "off"
+    @@:return = "off"
 }
 ```
 
@@ -418,7 +418,7 @@ Here's a turnstile — locked until you insert a coin, then it lets one person t
                 -> $Unlocked
             }
             push(): str {
-                return "locked - insert coin"
+                @@:return = "locked - insert coin"
             }
         }
 
@@ -428,7 +428,7 @@ Here's a turnstile — locked until you insert a coin, then it lets one person t
             }
             push(): str {
                 -> $Locked
-                return "welcome"
+                @@:return = "welcome"
             }
         }
 }
@@ -441,7 +441,7 @@ if __name__ == '__main__':
     print(t.push())    # "locked - insert coin"
 ```
 
-Notice that a handler can both transition and return a value. The transition is *deferred* — it happens after the handler finishes, so `return "welcome"` executes before the system moves to `$Locked`.
+Notice that a handler can both transition and set a return value. The transition is *deferred* — it happens after the handler finishes, so `@@:return = "welcome"` sets the value before the system moves to `$Locked`.
 
 ### Deferred Transitions
 
@@ -554,7 +554,7 @@ $Counting {
 }
 ```
 
-The `return` in a handler is Frame sugar — it sets the return value and exits the handler. If the current state doesn't handle the event, the caller gets the default value (`0` in this case).
+The `@@:return = expr` syntax sets the return value on the context stack. If the current state doesn't handle the event, the caller gets the default value (`0` in this case). Note: bare `return` in handlers exits the dispatch method but does NOT set the return value — always use `@@:return =` or `@@:(expr)` to set return values.
 
 ### Multiple Parameters and Returns
 
@@ -613,7 +613,7 @@ The real power shows when different states handle the same event differently:
                 -> $Playing
             }
             get_state(): str {
-                return "stopped"
+                @@:return = "stopped"
             }
         }
 
@@ -623,7 +623,7 @@ The real power shows when different states handle the same event differently:
                 -> $Paused
             }
             get_state(): str {
-                return "playing"
+                @@:return = "playing"
             }
         }
 
@@ -637,7 +637,7 @@ The real power shows when different states handle the same event differently:
                 -> $Stopped
             }
             get_state(): str {
-                return "paused"
+                @@:return = "paused"
             }
         }
 }
@@ -897,7 +897,7 @@ You can pass arguments to a state during transition:
                     -> $Page("Profile", "/profile")
             }
             get_title(): str {
-                return "Home"
+                @@:return = "Home"
             }
         }
 
@@ -1141,7 +1141,7 @@ The critical difference from a normal transition: **state variables are restored
                 -> $Searching
             }
             get_mode(): str {
-                return "editing"
+                @@:return = "editing"
             }
         }
 
@@ -1155,7 +1155,7 @@ The critical difference from a normal transition: **state variables are restored
                 -> pop$   # Back to $Editing with buffer intact
             }
             get_mode(): str {
-                return "searching"
+                @@:return = "searching"
             }
         }
 }
@@ -1200,19 +1200,19 @@ Imagine a media player where every state needs to handle `get_status()` and `eme
 ```
 $Playing {
     pause()     { -> $Paused }
-    get_status(): str { return "playing" }
+    get_status(): str { @@:return = "playing" }
     emergency_stop() { cleanup(); -> $Stopped }
 }
 
 $Paused {
     play()      { -> $Playing }
-    get_status(): str { return "paused" }
+    get_status(): str { @@:return = "paused" }
     emergency_stop() { cleanup(); -> $Stopped }
 }
 
 $Buffering {
     ready()     { -> $Playing }
-    get_status(): str { return "buffering" }
+    get_status(): str { @@:return = "buffering" }
     emergency_stop() { cleanup(); -> $Stopped }
 }
 ```
@@ -1246,7 +1246,7 @@ Declare a parent with `=> $ParentState` after the state name:
                 -> $Paused
             }
             get_status(): str {
-                return "playing"
+                @@:return = "playing"
             }
         }
 
@@ -1255,7 +1255,7 @@ Declare a parent with `=> $ParentState` after the state name:
                 -> $Playing
             }
             get_status(): str {
-                return "paused"
+                @@:return = "paused"
             }
         }
 
@@ -1264,7 +1264,7 @@ Declare a parent with `=> $ParentState` after the state name:
                 -> $Playing
             }
             get_status(): str {
-                return "stopped"
+                @@:return = "stopped"
             }
         }
 }
@@ -1282,7 +1282,7 @@ $Playing => $Active {
         -> $Paused
     }
     get_status(): str {
-        return "playing"
+        @@:return = "playing"
     }
     => $^    # Forward everything else to $Active
 }
@@ -1358,7 +1358,7 @@ $Child => $Parent {
                 -> $Off
             }
             get_info(): str {
-                return "appliance"
+                @@:return = "appliance"
             }
         }
 
@@ -1368,7 +1368,7 @@ $Child => $Parent {
                 -> $Idle
             }
             get_info(): str {
-                return "off"
+                @@:return = "off"
             }
         }
 
@@ -1378,7 +1378,7 @@ $Child => $Parent {
                     -> $Turbo
             }
             get_info(): str {
-                return "idle"
+                @@:return = "idle"
             }
             => $^
         }
@@ -1389,7 +1389,7 @@ $Child => $Parent {
                     -> $Idle
             }
             get_info(): str {
-                return "turbo"
+                @@:return = "turbo"
             }
             => $^
         }
@@ -1570,7 +1570,7 @@ calculate(a, b): int = 0 {
 }
 ```
 
-The `return expr` syntax in handlers is sugar for `@@:return = expr` followed by an implicit return.
+`@@:return = expr` sets the return value. The concise form `@@:(expr)` does the same thing. In handlers, `return` is always native — it exits the dispatch method but does NOT set the return value.
 
 #### Call-Scoped Data
 
