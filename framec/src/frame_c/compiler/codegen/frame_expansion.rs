@@ -190,38 +190,39 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             // Check for pop-transition: -> pop$
             if segment_text.contains("pop$") {
                 // Pop-transition: pop state from stack and transition to it
+                // Includes return to exit handler (code after -> pop$ is unreachable)
                 match lang {
                     TargetLanguage::Python3 => format!(
-                        "{}__saved = self._state_stack.pop()\n{}self.__transition(__saved)",
-                        indent_str, indent_str
+                        "{}__saved = self._state_stack.pop()\n{}self.__transition(__saved)\n{}return",
+                        indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::GDScript => format!(
-                        "{}var __saved = self._state_stack.pop_back()\n{}self.__transition(__saved)",
-                        indent_str, indent_str
+                        "{}var __saved = self._state_stack.pop_back()\n{}self.__transition(__saved)\n{}return",
+                        indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::TypeScript => format!(
-                        "{}const __saved = this._state_stack.pop()!;\n{}this.__transition(__saved);",
-                        indent_str, indent_str
+                        "{}const __saved = this._state_stack.pop()!;\n{}this.__transition(__saved);\n{}return;",
+                        indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::Dart => format!(
-                        "{}final __saved = this._state_stack.removeLast();\n{}this.__transition(__saved);",
-                        indent_str, indent_str
+                        "{}final __saved = this._state_stack.removeLast();\n{}this.__transition(__saved);\n{}return;",
+                        indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::JavaScript => format!(
-                        "{}const __saved = this._state_stack.pop();\n{}this.__transition(__saved);",
-                        indent_str, indent_str
+                        "{}const __saved = this._state_stack.pop();\n{}this.__transition(__saved);\n{}return;",
+                        indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::Rust => format!(
                         "{}let __popped = self._state_stack.pop().unwrap();\n{}self.__transition(__popped);\n{}return;",
                         indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::C => format!(
-                        "{}{}_Compartment* __saved = ({}_Compartment*){}_FrameVec_pop(self->_state_stack);\n{}{}_transition(self, __saved);",
-                        indent_str, ctx.system_name, ctx.system_name, ctx.system_name, indent_str, ctx.system_name
+                        "{}{}_Compartment* __saved = ({}_Compartment*){}_FrameVec_pop(self->_state_stack);\n{}{}_transition(self, __saved);\n{}return;",
+                        indent_str, ctx.system_name, ctx.system_name, ctx.system_name, indent_str, ctx.system_name, indent_str
                     ),
                     TargetLanguage::Cpp => format!(
-                        "{}auto __saved = std::move(_state_stack.back()); _state_stack.pop_back();\n{}__transition(std::move(__saved));",
-                        indent_str, indent_str
+                        "{}auto __saved = std::move(_state_stack.back()); _state_stack.pop_back();\n{}__transition(std::move(__saved));\n{}return;",
+                        indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::Java => format!(
                         "{}var __saved = _state_stack.remove(_state_stack.size() - 1);\n{}__transition(__saved);\n{}return;",
@@ -252,8 +253,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::Lua => format!(
-                        "{}local __saved = table.remove(self._state_stack)\n{}self:__transition(__saved)",
-                        indent_str, indent_str
+                        "{}local __saved = table.remove(self._state_stack)\n{}self:__transition(__saved)\n{}return",
+                        indent_str, indent_str, indent_str
                     ),
                     TargetLanguage::Erlang => {
                         format!("{}[__PoppedState | __RestStack] = Data#data.frame_stack,\n{}{{next_state, __PoppedState, Data#data{{frame_stack = __RestStack}}, [{{reply, From, ok}}]}}",
@@ -1258,76 +1259,27 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             }
         }
         FrameSegmentKind::StackPop => {
-            // Restore compartment from stack - use __transition to go through kernel
-            // (exit current, swap to popped compartment, enter restored state)
+            // Standalone pop$ — pop the top of the stack and discard it.
+            // No transition. For transitioning to the popped state, use -> pop$.
             match lang {
-                TargetLanguage::Python3 => format!(
-                    "{}self.__transition(self._state_stack.pop())\n{}return",
-                    indent_str, indent_str
-                ),
-                TargetLanguage::GDScript => format!(
-                    "{}self.__transition(self._state_stack.pop_back())\n{}return",
-                    indent_str, indent_str
-                ),
-                TargetLanguage::TypeScript => format!(
-                    "{}this.__transition(this._state_stack.pop()!);\n{}return;",
-                    indent_str, indent_str
-                ),
-                TargetLanguage::Dart => format!(
-                    "{}this.__transition(this._state_stack.removeLast());\n{}return;",
-                    indent_str, indent_str
-                ),
-                TargetLanguage::JavaScript => format!(
-                    "{}this.__transition(this._state_stack.pop());\n{}return;",
-                    indent_str, indent_str
-                ),
-                // Rust: pop compartment to local first, then transition (avoids borrow conflict)
-                TargetLanguage::Rust => {
-                    format!("{}let __popped = self._state_stack.pop().unwrap();\n{}self.__transition(__popped);\n{}return;",
-                        indent_str, indent_str, indent_str)
-                }
-                TargetLanguage::C => {
-                    format!("{}{}_transition(self, ({}_Compartment*){}_FrameVec_pop(self->_state_stack));\n{}return;",
-                        indent_str, ctx.system_name, ctx.system_name, ctx.system_name, indent_str)
-                }
-                TargetLanguage::Cpp => format!(
-                    "{}auto __popped = std::move(_state_stack.back()); _state_stack.pop_back();\n{}__transition(std::move(__popped));\n{}return;",
-                    indent_str, indent_str, indent_str
-                ),
-                TargetLanguage::Java => format!(
-                    "{}var __popped = _state_stack.remove(_state_stack.size() - 1);\n{}__transition(__popped);\n{}return;",
-                    indent_str, indent_str, indent_str
-                ),
-                TargetLanguage::Kotlin => format!(
-                    "{}val __popped = _state_stack.removeAt(_state_stack.size - 1)\n{}__transition(__popped)\n{}return",
-                    indent_str, indent_str, indent_str
-                ),
-                TargetLanguage::Swift => format!(
-                    "{}let __popped = _state_stack.removeLast()\n{}__transition(__popped)\n{}return",
-                    indent_str, indent_str, indent_str
-                ),
-                TargetLanguage::CSharp => format!(
-                    "{}var __popped = _state_stack[_state_stack.Count - 1]; _state_stack.RemoveAt(_state_stack.Count - 1);\n{}__transition(__popped);\n{}return;",
-                    indent_str, indent_str, indent_str
-                ),
-                TargetLanguage::Go => format!(
-                    "{}__popped := s._state_stack[len(s._state_stack)-1]\n{}s._state_stack = s._state_stack[:len(s._state_stack)-1]\n{}s.__transition(__popped)\n{}return",
-                    indent_str, indent_str, indent_str, indent_str
-                ),
-                TargetLanguage::Php => format!(
-                    "{}$__popped = array_pop($this->_state_stack);\n{}$this->__transition($__popped);\n{}return;",
-                    indent_str, indent_str, indent_str
-                ),
-                TargetLanguage::Ruby => format!(
-                    "{}__popped = @_state_stack.pop\n{}__transition(__popped)\n{}return",
-                    indent_str, indent_str, indent_str
-                ),
-                TargetLanguage::Lua => format!(
-                    "{}local __popped = table.remove(self._state_stack)\n{}self:__transition(__popped)\n{}return",
-                    indent_str, indent_str, indent_str
-                ),
+                TargetLanguage::Python3 => format!("{}self._state_stack.pop()", indent_str),
+                TargetLanguage::GDScript => format!("{}self._state_stack.pop_back()", indent_str),
+                TargetLanguage::TypeScript => format!("{}this._state_stack.pop();", indent_str),
+                TargetLanguage::JavaScript => format!("{}this._state_stack.pop();", indent_str),
+                TargetLanguage::Dart => format!("{}this._state_stack.removeLast();", indent_str),
+                TargetLanguage::Rust => format!("{}self._state_stack.pop();", indent_str),
+                TargetLanguage::C => format!("{}{}_FrameVec_pop(self->_state_stack);", indent_str, ctx.system_name),
+                TargetLanguage::Cpp => format!("{}_state_stack.pop_back();", indent_str),
+                TargetLanguage::Java => format!("{}_state_stack.remove(_state_stack.size() - 1);", indent_str),
+                TargetLanguage::Kotlin => format!("{}_state_stack.removeAt(_state_stack.size - 1)", indent_str),
+                TargetLanguage::Swift => format!("{}_state_stack.removeLast()", indent_str),
+                TargetLanguage::CSharp => format!("{}_state_stack.RemoveAt(_state_stack.Count - 1);", indent_str),
+                TargetLanguage::Go => format!("{}s._state_stack = s._state_stack[:len(s._state_stack)-1]", indent_str),
+                TargetLanguage::Php => format!("{}array_pop($this->_state_stack);", indent_str),
+                TargetLanguage::Ruby => format!("{}@_state_stack.pop", indent_str),
+                TargetLanguage::Lua => format!("{}table.remove(self._state_stack)", indent_str),
                 TargetLanguage::Erlang => {
-                    format!("{}[__PoppedState | __RestStack] = Data#data.frame_stack\n{}{{next_state, __PoppedState, Data#data{{frame_stack = __RestStack}}, [{{reply, From, ok}}]}}",
+                    format!("{}[_ | __RestStack] = self.frame_stack,\n{}self.frame_stack = __RestStack",
                         indent_str, indent_str)
                 }
                 TargetLanguage::Graphviz => unreachable!(),

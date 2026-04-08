@@ -321,9 +321,9 @@ fn match_frame_statement<S: SyntaxSkipper>(
             }
         }
 
-        // Check for -> pop$ (pop transition)
+        // Check for -> pop$ (pop transition — this IS a transition, not standalone pop)
         if k + 3 < end && bytes[k] == b'p' && bytes[k + 1] == b'o' && bytes[k + 2] == b'p' && bytes[k + 3] == b'$' {
-            return Some((k + 4, FrameSegmentKind::StackPop));
+            return Some((k + 4, FrameSegmentKind::Transition));
         }
 
         // Check for optional enter args: -> (args) $State

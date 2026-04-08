@@ -158,7 +158,7 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
     let mut data_var = initial_data.to_string();
     let mut data_gen = 0;
     // Stack to save data_var at case branch boundaries
-    let mut case_data_stack: Vec<String> = Vec::new();
+    let mut case_data_stack: Vec<(String, usize)> = Vec::new();
 
     // Pre-process: split lines with inline % comments so the comment
     // can't eat trailing syntax (commas, semicolons, record close braces).
@@ -218,16 +218,19 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
            is_forward_call;
         if is_structural {
             // Track case branch boundaries for Data variable scoping
+            // Both data_var AND data_gen are saved/restored so that both arms
+            // produce the same DataN sequence (e.g., both arms end with Data2).
             if l.starts_with("true ->") {
-                // Entering true branch — save current data_var
-                case_data_stack.push(data_var.clone());
-            } else if l.starts_with("; false") {
-                // Entering false branch — restore data_var from before true branch
-                if let Some(saved) = case_data_stack.last() {
-                    data_var = saved.clone();
+                // Entering true branch — save current data_var and data_gen
+                case_data_stack.push((data_var.clone(), data_gen));
+            } else if l.starts_with("; false") || l.starts_with("; _") {
+                // Entering alternate branch — restore data_var and data_gen from before true branch
+                if let Some(&(ref saved_var, saved_gen)) = case_data_stack.last() {
+                    data_var = saved_var.clone();
+                    data_gen = saved_gen;
                 }
             } else if l == "end" || l == "end," {
-                // Exiting case block — pop the saved data_var
+                // Exiting case block — pop the saved state
                 case_data_stack.pop();
             }
 
