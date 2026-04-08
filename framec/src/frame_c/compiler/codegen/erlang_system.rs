@@ -236,11 +236,37 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
 
             // Rewrite self.action() calls and self.field access in structural lines
             let mut rewritten = l.clone();
+            let mut action_extracted = false;
             for action in action_names {
                 let pattern = format!("self.{}(", action);
                 if rewritten.contains(&pattern) {
-                    rewritten = rewritten.replace(&pattern, &format!("{}({}, ", action, data_var));
-                    rewritten = rewritten.replace(&format!("({}, )", data_var), &format!("({})", data_var));
+                    // Check if this is a case header with an action call in the condition
+                    // e.g., "case (self.validate(self.item)) of" → extract action call
+                    if rewritten.starts_with("case ") && rewritten.ends_with(" of") {
+                        let call_replaced = rewritten.replace(&pattern, &format!("{}({}, ", action, data_var));
+                        let call_replaced = call_replaced.replace(&format!("({}, )", data_var), &format!("({})", data_var));
+                        // Extract the action call from "case (action_call) of"
+                        if let Some(paren_start) = call_replaced.find('(') {
+                            if let Some(of_pos) = call_replaced.rfind(") of") {
+                                let action_expr = call_replaced[paren_start + 1..of_pos]
+                                    .replace("self.", &format!("{}#data.", data_var));
+                                // Emit the action call as a separate line, bind result
+                                data_gen += 1;
+                                let new_var = format!("Data{}", data_gen);
+                                let result_var = format!("__ActionResult{}", data_gen);
+                                result.push(format!("    {{{}, {}}} = {}", new_var, result_var, action_expr));
+                                data_var = new_var;
+                                // Replace case condition with the result variable
+                                rewritten = format!("case ({}) of", result_var);
+                                action_extracted = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !action_extracted {
+                        rewritten = rewritten.replace(&pattern, &format!("{}({}, ", action, data_var));
+                        rewritten = rewritten.replace(&format!("({}, )", data_var), &format!("({})", data_var));
+                    }
                 }
             }
             rewritten = rewritten.replace("self.", &format!("{}#data.", data_var));
@@ -266,7 +292,8 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
             ErlangRewrite::ActionCall(call) => {
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
-                result.push(format!("    {} = {}", new_var, call));
+                // Actions return {Data, ReturnValue} — destructure the tuple
+                result.push(format!("    {{{}, __ActionResult{}}} = {}", new_var, data_gen, call));
                 data_var = new_var;
             }
             ErlangRewrite::RecordUpdate { field, value } => {
@@ -1012,19 +1039,21 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                         // Check if enter handler contains a transition
                         let has_enter_transition = processed.iter().any(|l| l.trim().starts_with("frame_transition__("));
                         if has_enter_transition {
-                            // Enter handlers can't use frame_transition__ (no From).
-                            // Convert to {next_state, TargetState, Data} directly.
+                            // Enter handlers can't return {next_state,...} in gen_statem.
+                            // Use internal event to defer the transition:
+                            //   {keep_state, Data, [{next_event, internal, {frame_transition, Target, Data}}]}
                             let mut enter_lines = Vec::new();
                             for line in &processed {
                                 let t = line.trim();
                                 if t.starts_with("frame_transition__(") {
-                                    // Parse: frame_transition__(target, Data, ..., From)
-                                    // Extract target state name
                                     let inner = t.trim_start_matches("frame_transition__(").trim_end_matches(')');
                                     let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
                                     if !parts.is_empty() {
                                         let target = parts[0];
-                                        enter_lines.push(format!("    {{next_state, {}, {}}}", target, final_data));
+                                        enter_lines.push(format!(
+                                            "    {{keep_state, {}, [{{next_event, internal, {{frame_enter_transition, {}}}}}]}}",
+                                            final_data, target
+                                        ));
                                     }
                                 } else {
                                     enter_lines.push(line.clone());
@@ -1302,6 +1331,15 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 }
             }
 
+            // Internal event handler for deferred enter-handler transitions
+            // When an enter handler calls -> $State, we defer via:
+            //   {keep_state, Data, [{next_event, internal, {frame_enter_transition, Target}}]}
+            // This clause processes that internal event.
+            code.push_str(&format!(
+                "{}(internal, {{frame_enter_transition, Target}}, Data) ->\n    {{next_state, Target, Data}};\n",
+                state_name
+            ));
+
             // Default catch-all for unhandled events in this state
             // HSM: if state has a parent, forward unhandled call events to parent
             if let Some(ref parent) = state.parent {
@@ -1453,11 +1491,31 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
             let lines: Vec<&str> = inner.lines().collect();
             let (processed, final_data) = erlang_process_body_lines_with_params(&lines, &action_names, "Data", &act_params);
             if processed.is_empty() {
-                code.push_str("    Data");
+                // No body — return {Data, ok}
+                code.push_str("    {Data, ok}");
             } else {
-                erlang_smart_join(&processed, &mut code);
-                code.push_str(",\n");
-                code.push_str(&format!("    {}", final_data));
+                // Check if last processed line is a value expression (not a Data assignment)
+                let last_line = processed.last().map(|l| l.trim().to_string()).unwrap_or_default();
+                let last_is_value = !last_line.starts_with("Data")
+                    && !last_line.starts_with("__")
+                    && !last_line.is_empty()
+                    && !last_line.starts_with("{")
+                    && !last_line.starts_with("ok");
+
+                if last_is_value && processed.len() > 0 {
+                    // Last expression is the return value — emit body up to last line,
+                    // then return {FinalData, LastExpr}
+                    let body_lines = &processed[..processed.len() - 1];
+                    if !body_lines.is_empty() {
+                        erlang_smart_join(body_lines, &mut code);
+                        code.push_str(",\n");
+                    }
+                    code.push_str(&format!("    {{{}, {}}}", final_data, last_line));
+                } else {
+                    erlang_smart_join(&processed, &mut code);
+                    code.push_str(",\n");
+                    code.push_str(&format!("    {{{}, ok}}", final_data));
+                }
             }
         }
         code.push_str(".\n\n");
