@@ -1603,24 +1603,26 @@ pub fn parse_system_header_params(
         // Each iteration parses one parameter.
         let param_start = i;
 
-        // Detect $(name) or $>(name).
-        let is_state_param;
+        // Detect $(name) (state arg), $>(name) (enter arg), or bare name (domain).
+        // Both `$(...)` and `$>(...)` are valid in the system header context;
+        // the parser is at the top level inside `(` ... `)` and never inside a
+        // state body, so neither sigil clashes with state-level enter handlers.
+        let kind: ParamKind;
         let name;
         if source[i] == b'$' {
-            if i + 1 < end && source[i + 1] == b'>' {
+            // Distinguish $(...) from $>(...) by the byte after `$`.
+            let is_enter = i + 1 < end && source[i + 1] == b'>';
+            let sigil_open_pos = if is_enter { i + 2 } else { i + 1 };
+            if sigil_open_pos >= end || source[sigil_open_pos] != b'(' {
                 return Err(ParseError {
-                    message: "$>() enter-param syntax is not yet supported in @@system headers"
-                        .to_string(),
-                    span: Span::new(i, end),
+                    message: format!(
+                        "expected '(' after '{}' in system header param",
+                        if is_enter { "$>" } else { "$" }
+                    ),
+                    span: Span::new(i, sigil_open_pos),
                 });
             }
-            if i + 1 >= end || source[i + 1] != b'(' {
-                return Err(ParseError {
-                    message: "expected '(' after '$' in system header param".to_string(),
-                    span: Span::new(i, i + 1),
-                });
-            }
-            i += 2; // past `$(`
+            i = sigil_open_pos + 1; // past `$(` or `$>(`
             skip_ws(&mut i);
             let name_start = i;
             while i < end && is_ident_cont(source[i]) {
@@ -1628,7 +1630,10 @@ pub fn parse_system_header_params(
             }
             if name_start == i || !is_ident_start(source[name_start]) {
                 return Err(ParseError {
-                    message: "expected identifier after '$('".to_string(),
+                    message: format!(
+                        "expected identifier after '{}('",
+                        if is_enter { "$>" } else { "$" }
+                    ),
                     span: Span::new(name_start, i),
                 });
             }
@@ -1638,12 +1643,15 @@ pub fn parse_system_header_params(
             skip_ws(&mut i);
             if i >= end || source[i] != b')' {
                 return Err(ParseError {
-                    message: "expected ')' to close '$(' state-param".to_string(),
+                    message: format!(
+                        "expected ')' to close '{}(' param",
+                        if is_enter { "$>" } else { "$" }
+                    ),
                     span: Span::new(i, i.saturating_add(1)),
                 });
             }
             i += 1; // past `)`
-            is_state_param = true;
+            kind = if is_enter { ParamKind::EnterArg } else { ParamKind::StateArg };
         } else if is_ident_start(source[i]) {
             let name_start = i;
             while i < end && is_ident_cont(source[i]) {
@@ -1652,7 +1660,7 @@ pub fn parse_system_header_params(
             name = std::str::from_utf8(&source[name_start..i])
                 .unwrap_or("")
                 .to_string();
-            is_state_param = false;
+            kind = ParamKind::Domain;
         } else {
             return Err(ParseError {
                 message: format!(
@@ -1743,7 +1751,7 @@ pub fn parse_system_header_params(
             name,
             param_type,
             default,
-            is_state_param,
+            kind,
             span: Span::new(param_start, i),
         });
 

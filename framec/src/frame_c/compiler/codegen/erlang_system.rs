@@ -89,6 +89,68 @@ fn erlang_rewrite_native_classified_full(line: &str, action_names: &[String], in
     ErlangRewrite::Plain(l.replace("self.", &format!("{}#data.", data_var)))
 }
 
+/// Word-boundary string substitution. Replaces `needle` with `replacement`
+/// only when `needle` appears as a complete identifier (surrounded by
+/// non-word chars or string boundaries). Used to substitute Frame param
+/// names with their capitalized Erlang variable names in domain field
+/// initializer expressions.
+fn replace_word(haystack: &str, needle: &str, replacement: &str) -> String {
+    if needle.is_empty() {
+        return haystack.to_string();
+    }
+    let bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let n = bytes.len();
+    let m = needle_bytes.len();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut out = String::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        if i + m <= n && bytes[i..i + m] == *needle_bytes {
+            let prev_ok = i == 0 || !is_word(bytes[i - 1]);
+            let next_ok = i + m == n || !is_word(bytes[i + m]);
+            if prev_ok && next_ok {
+                out.push_str(replacement);
+                i += m;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Word-boundary substring search. Returns true iff `needle` appears in
+/// `haystack` as a complete identifier (surrounded by non-word chars or
+/// string boundaries). Used to detect whether a domain field's raw
+/// initializer references a system param by name.
+fn raw_contains_word(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let n = bytes.len();
+    let m = needle_bytes.len();
+    if m > n {
+        return false;
+    }
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut i = 0;
+    while i + m <= n {
+        if bytes[i..i + m] == *needle_bytes {
+            let prev_ok = i == 0 || !is_word(bytes[i - 1]);
+            let next_ok = i + m == n || !is_word(bytes[i + m]);
+            if prev_ok && next_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Capitalize a parameter name for Erlang, avoiding collisions with gen_statem reserved names.
 /// "data" → "Data_Arg" (not "Data" which collides with the gen_statem state data variable)
 /// "from" → "From_Arg" (not "From" which collides with the gen_statem caller reference)
@@ -880,9 +942,20 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     // State name conversion: $MyState -> my_state
     let state_atom = |name: &str| -> String { to_snake_case(name) };
 
+    // System params (header parameters): used to thread constructor
+    // arguments through start_link/N → init/1 → the #data{} record
+    // literal so domain fields can reference parameters by name and
+    // state params land in frame_state_args.
+    let sys_params = &system.params;
+    let sys_param_arity = sys_params.len();
+    let sys_param_vars: Vec<String> = sys_params
+        .iter()
+        .map(|p| erlang_safe_capitalize(&p.name))
+        .collect();
+
     // Exports — API functions
     let mut api_exports = Vec::new();
-    api_exports.push("start_link/0".to_string());
+    api_exports.push(format!("start_link/{}", sys_param_arity));
     for method in &system.interface {
         let arity = method.params.len() + 1; // +1 for Pid
         api_exports.push(format!("{}/{}", to_snake_case(&method.name), arity));
@@ -904,8 +977,22 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     code.push_str("\n-record(data, {\n");
     let mut all_fields: Vec<String> = Vec::new();
 
+    // Helper: does this raw domain initializer reference any system param?
+    // If so, the record default must be neutral (`undefined`) and the real
+    // value is bound in init/N — record defaults can't see init/N's variables.
+    let raw_references_param = |raw: &str| -> bool {
+        for p in sys_params {
+            if raw_contains_word(raw, &p.name) {
+                return true;
+            }
+        }
+        false
+    };
+
     // Domain vars — strip type annotations for Erlang record syntax
     // "name: type = value" → "name = value"
+    // For initializers that reference a system param, emit a neutral
+    // default and let init/N populate the field via the record literal.
     for var in &system.domain {
         if let Some(ref raw) = var.raw_code {
             let trimmed = raw.trim();
@@ -925,6 +1012,18 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 }
             } else {
                 trimmed.to_string()
+            };
+            // If the field references a header param, replace the
+            // initializer with `= undefined` for the record default.
+            // The real value is set in init/N.
+            let field_str = if raw_references_param(&field_str) {
+                if let Some(eq_pos) = field_str.find('=') {
+                    format!("{} = undefined", field_str[..eq_pos].trim())
+                } else {
+                    format!("{} = undefined", field_str.trim())
+                }
+            } else {
+                field_str
             };
             // Expand @@SystemName() in domain initializers
             let field_str = expand_tagged_in_domain_erlang(&field_str);
@@ -963,8 +1062,18 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     code.push('\n');
     code.push_str("}).\n\n");
 
-    // start_link/0
-    code.push_str(&format!("start_link() ->\n    gen_statem:start_link(?MODULE, [], []).\n\n"));
+    // start_link/N — system params become positional args, threaded
+    // through to init/1 as a list.
+    let start_link_args = sys_param_vars.join(", ");
+    let start_link_list = if sys_param_vars.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[{}]", sys_param_vars.join(", "))
+    };
+    code.push_str(&format!(
+        "start_link({}) ->\n    gen_statem:start_link(?MODULE, {}, []).\n\n",
+        start_link_args, start_link_list
+    ));
 
     // Interface functions — public API
     for method in &system.interface {
@@ -991,8 +1100,96 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     // callback_mode/0
     code.push_str("callback_mode() -> [state_functions, state_enter].\n\n");
 
-    // init/1
-    code.push_str(&format!("init([]) ->\n    {{ok, {}, #data{{}}}}.\n\n", first_state));
+    // init/1 — receive system params via the list passed to gen_statem,
+    // bind them as Erlang variables, then build the #data{} record literal
+    // overriding fields that reference params and populating frame_state_args
+    // for any $(...) state params declared in the system header.
+    let init_pattern = if sys_param_vars.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[{}]", sys_param_vars.join(", "))
+    };
+    let mut record_overrides: Vec<String> = Vec::new();
+    // Domain field overrides for fields that reference params.
+    for var in &system.domain {
+        if let Some(ref raw) = var.raw_code {
+            let trimmed = raw.trim();
+            // Strip ": type" between name and "=" so we get the bare init expr
+            let (field_name, init_expr_opt) = if let Some(colon_pos) = trimmed.find(':') {
+                if let Some(eq_pos) = trimmed.find('=') {
+                    if colon_pos < eq_pos {
+                        (
+                            trimmed[..colon_pos].trim().to_string(),
+                            Some(trimmed[eq_pos + 1..].trim().to_string()),
+                        )
+                    } else {
+                        (trimmed.to_string(), None)
+                    }
+                } else {
+                    (trimmed[..colon_pos].trim().to_string(), None)
+                }
+            } else if let Some(eq_pos) = trimmed.find('=') {
+                (
+                    trimmed[..eq_pos].trim().to_string(),
+                    Some(trimmed[eq_pos + 1..].trim().to_string()),
+                )
+            } else {
+                (trimmed.to_string(), None)
+            };
+            if let Some(init_expr) = init_expr_opt {
+                if raw_references_param(&init_expr) {
+                    // Substitute bare param identifiers with their capitalized
+                    // Erlang variable names, then emit the record override.
+                    let mut substituted = init_expr.clone();
+                    for p in sys_params {
+                        let cap = erlang_safe_capitalize(&p.name);
+                        substituted = replace_word(&substituted, &p.name, &cap);
+                    }
+                    record_overrides.push(format!("{} = {}", field_name, substituted));
+                }
+            }
+        }
+    }
+    // State-param overrides go into frame_state_args as a binary-keyed map,
+    // and enter-param overrides go into frame_enter_args the same way.
+    use crate::frame_c::compiler::frame_ast::ParamKind;
+    let state_param_entries: Vec<String> = sys_params
+        .iter()
+        .filter(|p| matches!(p.kind, ParamKind::StateArg))
+        .map(|p| {
+            let cap = erlang_safe_capitalize(&p.name);
+            format!("<<\"{}\">> => {}", p.name, cap)
+        })
+        .collect();
+    if !state_param_entries.is_empty() {
+        record_overrides.push(format!(
+            "frame_state_args = #{{{}}}",
+            state_param_entries.join(", ")
+        ));
+    }
+    let enter_param_entries: Vec<String> = sys_params
+        .iter()
+        .filter(|p| matches!(p.kind, ParamKind::EnterArg))
+        .map(|p| {
+            let cap = erlang_safe_capitalize(&p.name);
+            format!("<<\"{}\">> => {}", p.name, cap)
+        })
+        .collect();
+    if !enter_param_entries.is_empty() {
+        record_overrides.push(format!(
+            "frame_enter_args = #{{{}}}",
+            enter_param_entries.join(", ")
+        ));
+    }
+    let record_literal = if record_overrides.is_empty() {
+        "#data{}".to_string()
+    } else {
+        format!("#data{{{}}}", record_overrides.join(", "))
+    };
+    code.push_str(&format!(
+        "init({}) ->\n    {{ok, {}, {}}}.\n\n",
+        init_pattern, first_state, record_literal
+    ));
 
     // State functions — one per state
     if let Some(ref machine) = system.machine {
@@ -1017,6 +1214,8 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     use_sv_comp: false,
                     state_var_types: std::collections::HashMap::new(),
                     state_param_names: std::collections::HashMap::new(),
+                    state_enter_param_names: std::collections::HashMap::new(),
+                    state_exit_param_names: std::collections::HashMap::new(),
                 };
                 let enter_span = crate::frame_c::compiler::ast::Span {
                     start: enter.body.span.start,
@@ -1117,6 +1316,18 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
 
                 code.push_str(&format!("{}({{call, From}}, {}, Data) ->\n", state_name, call_pattern));
 
+                // State params: bind frame_state_args[name] to a local
+                // Erlang variable so handler bodies can read state params
+                // by their declared name. Mirrors the Python dispatch
+                // preamble that prepends `name = compartment.state_args[name]`.
+                for sp in &state.params {
+                    let cap = erlang_safe_capitalize(&sp.name);
+                    code.push_str(&format!(
+                        "    {} = maps:get(<<\"{}\">>, Data#data.frame_state_args, undefined),\n",
+                        cap, sp.name
+                    ));
+                }
+
                 // Use splice_handler_body_from_span for proper Frame statement expansion
                 let handler_ctx = HandlerContext {
                     system_name: sys.to_string(),
@@ -1127,6 +1338,8 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     use_sv_comp: false,
                     state_var_types: std::collections::HashMap::new(),
                     state_param_names: std::collections::HashMap::new(),
+                    state_enter_param_names: std::collections::HashMap::new(),
+                    state_exit_param_names: std::collections::HashMap::new(),
                 };
                 // Convert frame_ast::Span to ast::Span
                 let body_span = crate::frame_c::compiler::ast::Span {
@@ -1140,12 +1353,19 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 // Transform if/else { } blocks to Erlang case/of/end
                 let spliced_body = erlang_transform_blocks(&raw_spliced);
 
-                // Post-process: rewrite self.X, capitalize params, thread Data
+                // Post-process: rewrite self.X, capitalize params, thread Data.
+                // Include both handler params AND state params (declared via
+                // `$Start(x: int)`) so the body can reference state-args
+                // bound at the top of the clause by their declared name.
                 let handler_params: Vec<(&str, String)> = handler.params.iter()
                     .map(|p| {
                         let capitalized = erlang_safe_capitalize(&p.name);
                         (p.name.as_str(), capitalized)
                     })
+                    .chain(state.params.iter().map(|sp| {
+                        let capitalized = erlang_safe_capitalize(&sp.name);
+                        (sp.name.as_str(), capitalized)
+                    }))
                     .collect();
 
                 // Check if the spliced body contains a gen_statem return tuple, forward, or frame_transition
@@ -1402,6 +1622,8 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     use_sv_comp: false,
                     state_var_types: std::collections::HashMap::new(),
                     state_param_names: std::collections::HashMap::new(),
+                    state_enter_param_names: std::collections::HashMap::new(),
+                    state_exit_param_names: std::collections::HashMap::new(),
                 };
                 let exit_span = crate::frame_c::compiler::ast::Span {
                     start: exit.body.span.start,

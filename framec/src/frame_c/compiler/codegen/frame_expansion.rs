@@ -53,6 +53,34 @@ fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> 
         .unwrap_or_else(|| i.to_string())
 }
 
+/// Resolve the storage key for a positional enter-arg in a transition.
+///
+/// Mirror of `resolve_state_arg_key` for enter args. The enter handler
+/// dispatch now reads `__e._parameters[name]`, so transition codegen
+/// must write `enter_args[name]` instead of the legacy positional
+/// integer key. Falls back to the integer index when the target state
+/// has no declared enter handler params at this position.
+fn resolve_enter_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> String {
+    ctx.state_enter_param_names
+        .get(target_state)
+        .and_then(|names| names.get(i))
+        .cloned()
+        .unwrap_or_else(|| i.to_string())
+}
+
+/// Resolve the storage key for a positional exit-arg in a transition.
+///
+/// Exit args belong to the SOURCE state of the transition (the state
+/// being exited), not the target. Look up the source state's exit
+/// handler param at index `i` and return its declared name.
+fn resolve_exit_arg_key(i: usize, ctx: &HandlerContext) -> String {
+    ctx.state_exit_param_names
+        .get(&ctx.state_name)
+        .and_then(|names| names.get(i))
+        .cloned()
+        .unwrap_or_else(|| i.to_string())
+}
+
 /// Splice handler body from a span (used by Arcanum-based generation)
 pub(crate) fn splice_handler_body_from_span(span: &crate::frame_c::compiler::ast::Span, source: &[u8], lang: TargetLanguage, ctx: &HandlerContext) -> String {
     // Ensure span is within bounds
@@ -297,10 +325,18 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Store exit_args in CURRENT compartment before creating new one
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
-                        // Use string keys for consistency with parameter unpacking
+                        // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            code.push_str(&format!("{}self.__compartment.exit_args = {{str(i): v for i, v in enumerate(({},))}}\n", indent_str, exit));
+                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            if !args.is_empty() {
+                                let entries: Vec<String> = args.iter().enumerate()
+                                    .map(|(i, a)| {
+                                        let key = resolve_exit_arg_key(i, ctx);
+                                        format!("\"{}\": {}", key, a)
+                                    })
+                                    .collect();
+                                code.push_str(&format!("{}self.__compartment.exit_args = {{{}}}\n", indent_str, entries.join(", ")));
+                            }
                         }
 
                         // Create new compartment with parent_compartment for HSM support
@@ -328,10 +364,24 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
-                        // Use string keys for consistency with parameter unpacking
+                        // Set enter_args if present (named keys, mirrors state_args)
                         if let Some(ref enter) = enter_str {
-                            code.push_str(&format!("{}__compartment.enter_args = {{str(i): v for i, v in enumerate(({},))}}\n", indent_str, enter));
+                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            if !args.is_empty() {
+                                let entries: Vec<String> = args.iter().enumerate()
+                                    .map(|(i, a)| {
+                                        if let Some(eq_pos) = a.find('=') {
+                                            let name = a[..eq_pos].trim();
+                                            let value = a[eq_pos + 1..].trim();
+                                            format!("\"{}\": {}", name, value)
+                                        } else {
+                                            let key = resolve_enter_arg_key(i, &target, ctx);
+                                            format!("\"{}\": {}", key, a)
+                                        }
+                                    })
+                                    .collect();
+                                code.push_str(&format!("{}__compartment.enter_args = {{{}}}\n", indent_str, entries.join(", ")));
+                            }
                         }
 
                         // Call __transition and return to exit the handler
@@ -342,11 +392,14 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // GDScript: .new() constructor, no keyword args, no dict comprehension
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             let entries: Vec<String> = args.iter().enumerate()
-                                .map(|(i, a)| format!("\"{}\": {}", i, a))
+                                .map(|(i, a)| {
+                                    let key = resolve_exit_arg_key(i, ctx);
+                                    format!("\"{}\": {}", key, a)
+                                })
                                 .collect();
                             code.push_str(&format!("{}self.__compartment.exit_args = {{{}}}\n", indent_str, entries.join(", ")));
                         }
@@ -374,13 +427,24 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys, mirrors state_args)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
-                            let entries: Vec<String> = args.iter().enumerate()
-                                .map(|(i, a)| format!("\"{}\": {}", i, a))
-                                .collect();
-                            code.push_str(&format!("{}__compartment.enter_args = {{{}}}\n", indent_str, entries.join(", ")));
+                            if !args.is_empty() {
+                                let entries: Vec<String> = args.iter().enumerate()
+                                    .map(|(i, a)| {
+                                        if let Some(eq_pos) = a.find('=') {
+                                            let name = a[..eq_pos].trim();
+                                            let value = a[eq_pos + 1..].trim();
+                                            format!("\"{}\": {}", name, value)
+                                        } else {
+                                            let key = resolve_enter_arg_key(i, &target, ctx);
+                                            format!("\"{}\": {}", key, a)
+                                        }
+                                    })
+                                    .collect();
+                                code.push_str(&format!("{}__compartment.enter_args = {{{}}}\n", indent_str, entries.join(", ")));
+                            }
                         }
 
                         // Call __transition and return
@@ -391,9 +455,18 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Create compartment, set fields, call __transition
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            code.push_str(&format!("{}this.__compartment.exit_args = Object.fromEntries([{}].map((v, i) => [String(i), v]));\n", indent_str, exit));
+                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            if !args.is_empty() {
+                                let entries: Vec<String> = args.iter().enumerate()
+                                    .map(|(i, a)| {
+                                        let key = resolve_exit_arg_key(i, ctx);
+                                        format!("\"{}\": {}", key, a)
+                                    })
+                                    .collect();
+                                code.push_str(&format!("{}this.__compartment.exit_args = {{{}}};\n", indent_str, entries.join(", ")));
+                            }
                         }
 
                         // Create new compartment with parent_compartment for HSM support
@@ -421,9 +494,24 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys, mirrors state_args)
                         if let Some(ref enter) = enter_str {
-                            code.push_str(&format!("{}__compartment.enter_args = Object.fromEntries([{}].map((v, i) => [String(i), v]));\n", indent_str, enter));
+                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            if !args.is_empty() {
+                                let entries: Vec<String> = args.iter().enumerate()
+                                    .map(|(i, a)| {
+                                        if let Some(eq_pos) = a.find('=') {
+                                            let name = a[..eq_pos].trim();
+                                            let value = a[eq_pos + 1..].trim();
+                                            format!("\"{}\": {}", name, value)
+                                        } else {
+                                            let key = resolve_enter_arg_key(i, &target, ctx);
+                                            format!("\"{}\": {}", key, a)
+                                        }
+                                    })
+                                    .collect();
+                                code.push_str(&format!("{}__compartment.enter_args = {{{}}};\n", indent_str, entries.join(", ")));
+                            }
                         }
 
                         // Call __transition and return to exit the handler
@@ -434,11 +522,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Create compartment, set fields, call __transition
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}this.__compartment.exit_args[\"{}\"] = {};\n", indent_str, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}this.__compartment.exit_args[\"{}\"] = {};\n", indent_str, key, arg));
                             }
                         }
 
@@ -465,11 +554,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {};\n", indent_str, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {};\n", indent_str, key, arg));
                             }
                         }
 
@@ -481,11 +571,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Rust uses compartment-based transition with enter/exit args
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, key, arg));
                             }
                         }
 
@@ -493,11 +584,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         code.push_str(&format!("{}let mut __compartment = {}Compartment::new(\"{}\");\n", indent_str, ctx.system_name, target));
                         code.push_str(&format!("{}__compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));\n", indent_str));
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, key, arg));
                             }
                         }
 
@@ -509,11 +601,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // C: Create compartment and call transition
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present (split by comma for positional args)
+                        // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}{}_FrameDict_set(self->__compartment->exit_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}{}_FrameDict_set(self->__compartment->exit_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, key, arg));
                             }
                         }
 
@@ -532,11 +625,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present (split by comma for positional args)
+                        // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}{}_FrameDict_set(__compartment->enter_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}{}_FrameDict_set(__compartment->enter_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, key, arg));
                             }
                         }
 
@@ -548,12 +642,13 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // C++: Create unique_ptr compartment, set fields, call __transition
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let wrapped = cpp_wrap_any_arg(arg);
-                                code.push_str(&format!("{}__compartment->exit_args[\"{}\"] = std::any({});\n", indent_str, i, wrapped));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}__compartment->exit_args[\"{}\"] = std::any({});\n", indent_str, key, wrapped));
                             }
                         }
 
@@ -578,12 +673,13 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let wrapped = cpp_wrap_any_arg(arg);
-                                code.push_str(&format!("{}__new_compartment->enter_args[\"{}\"] = std::any({});\n", indent_str, i, wrapped));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__new_compartment->enter_args[\"{}\"] = std::any({});\n", indent_str, key, wrapped));
                             }
                         }
 
@@ -595,11 +691,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Java: Create compartment, set fields, call __transition
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.exit_args.put(\"{}\", {});\n", indent_str, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}__compartment.exit_args.put(\"{}\", {});\n", indent_str, key, arg));
                             }
                         }
 
@@ -624,11 +721,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.enter_args.put(\"{}\", {});\n", indent_str, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__compartment.enter_args.put(\"{}\", {});\n", indent_str, key, arg));
                             }
                         }
 
@@ -643,7 +741,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.exit_args[\"{}\"] = {}\n", indent_str, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}__compartment.exit_args[\"{}\"] = {}\n", indent_str, key, arg));
                             }
                         }
 
@@ -669,7 +768,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, key, arg));
                             }
                         }
 
@@ -680,11 +780,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Swift: no `new`, no semicolons, `let`, `nil`
                         let mut code = String::new();
 
-                        // Store exit_args on CURRENT compartment before creating new one
+                        // Store exit_args on CURRENT compartment (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}self.__compartment.exit_args[\"{}\"] = {}\n", indent_str, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}self.__compartment.exit_args[\"{}\"] = {}\n", indent_str, key, arg));
                             }
                         }
 
@@ -710,7 +811,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, key, arg));
                             }
                         }
 
@@ -721,11 +823,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // C#: Create compartment, set fields, call __transition
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.exit_args[\"{}\"] = {};\n", indent_str, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}__compartment.exit_args[\"{}\"] = {};\n", indent_str, key, arg));
                             }
                         }
 
@@ -750,11 +853,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__new_compartment.enter_args[\"{}\"] = {};\n", indent_str, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__new_compartment.enter_args[\"{}\"] = {};\n", indent_str, key, arg));
                             }
                         }
 
@@ -766,11 +870,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Go: Create compartment, set fields, call __transition
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}s.__compartment.exitArgs[\"{}\"] = {}\n", indent_str, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}s.__compartment.exitArgs[\"{}\"] = {}\n", indent_str, key, arg));
                             }
                         }
 
@@ -795,11 +900,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}__compartment.enterArgs[\"{}\"] = {}\n", indent_str, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__compartment.enterArgs[\"{}\"] = {}\n", indent_str, key, arg));
                             }
                         }
 
@@ -810,11 +916,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     TargetLanguage::Php => {
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment if present
+                        // Store exit_args in current compartment (named keys)
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}$this->__compartment->exit_args[\"{}\"] = {};\n", indent_str, i, arg));
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}$this->__compartment->exit_args[\"{}\"] = {};\n", indent_str, key, arg));
                             }
                         }
 
@@ -840,11 +947,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             }
                         }
 
-                        // Set enter_args if present
+                        // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}$__compartment->enter_args[\"{}\"] = {};\n", indent_str, i, arg));
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}$__compartment->enter_args[\"{}\"] = {};\n", indent_str, key, arg));
                             }
                         }
 
@@ -853,7 +961,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                     TargetLanguage::Ruby => {
                         let mut code = String::new();
-                        if let Some(ref exit) = exit_str { for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { code.push_str(&format!("{}@__compartment.exit_args[\"{}\"] = {}\n", indent_str, i, arg)); } }
+                        if let Some(ref exit) = exit_str {
+                            for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}@__compartment.exit_args[\"{}\"] = {}\n", indent_str, key, arg));
+                            }
+                        }
                         code.push_str(&format!("{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n", indent_str, ctx.system_name, target));
                         if let Some(ref state) = state_str {
                             for (i, a) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
@@ -865,14 +978,24 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                 }
                             }
                         }
-                        if let Some(ref enter) = enter_str { for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, i, arg)); } }
+                        if let Some(ref enter) = enter_str {
+                            for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, key, arg));
+                            }
+                        }
                         code.push_str(&format!("{}__transition(__compartment)\n{}return", indent_str, indent_str));
                         code
                     }
                     TargetLanguage::Lua => {
                         // TODO: Lua-specific transition — follows Python pattern
                         let mut code = String::new();
-                        if let Some(ref exit) = exit_str { for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { code.push_str(&format!("{}self.__compartment.exit_args[\"{}\"] = {}\n", indent_str, i, arg)); } }
+                        if let Some(ref exit) = exit_str {
+                            for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                                let key = resolve_exit_arg_key(i, ctx);
+                                code.push_str(&format!("{}self.__compartment.exit_args[\"{}\"] = {}\n", indent_str, key, arg));
+                            }
+                        }
                         code.push_str(&format!("{}local __compartment = {}.new(\"{}\")\n", indent_str, format!("{}Compartment", ctx.system_name), target));
                         if let Some(ref state) = state_str {
                             for (i, a) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
@@ -884,7 +1007,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                 }
                             }
                         }
-                        if let Some(ref enter) = enter_str { for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, i, arg)); } }
+                        if let Some(ref enter) = enter_str {
+                            for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                                let key = resolve_enter_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, key, arg));
+                            }
+                        }
                         code.push_str(&format!("{}self:__transition(__compartment)\n{}return", indent_str, indent_str));
                         code
                     }

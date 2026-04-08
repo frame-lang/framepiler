@@ -352,17 +352,23 @@ impl FrameParser {
         while !self.peek_char(')') {
             self.skip_whitespace();
 
-            // Handle $(...) state parameter syntax - e.g., $(color)
-            let (name, is_state_param) = if self.peek_string("$(") {
+            // Handle $(name), $>(name), or bare name.
+            // $(name) → state param; $>(name) → enter param; bare → domain.
+            let (name, kind) = if self.peek_string("$>(") {
+                self.cursor += 3; // Skip "$>("
+                let inner_name = self.parse_identifier()?;
+                self.expect_char(')')?;
+                (inner_name, ParamKind::EnterArg)
+            } else if self.peek_string("$(") {
                 self.cursor += 2; // Skip "$("
                 let inner_name = self.parse_identifier()?;
                 self.expect_char(')')?;
-                (inner_name, true)
+                (inner_name, ParamKind::StateArg)
             } else {
-                (self.parse_identifier()?, false)
+                (self.parse_identifier()?, ParamKind::Domain)
             };
             self.skip_whitespace();
-            
+
             // Parse optional type
             let param_type = if self.peek_char(':') {
                 self.cursor += 1;
@@ -371,7 +377,7 @@ impl FrameParser {
             } else {
                 Type::Unknown
             };
-            
+
             // Parse optional default
             let default = if self.peek_char('=') {
                 self.cursor += 1;
@@ -380,15 +386,15 @@ impl FrameParser {
             } else {
                 None
             };
-            
+
             params.push(SystemParam {
                 name,
                 param_type,
                 default,
-                is_state_param,
+                kind,
                 span: Span::new(self.cursor, self.cursor),
             });
-            
+
             if self.peek_char(',') {
                 self.cursor += 1;
             }

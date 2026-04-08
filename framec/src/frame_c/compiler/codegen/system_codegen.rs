@@ -917,18 +917,34 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                             CodegenNode::null(),
                         ));
-                        // System state params: bind into start state's state_args.
-                        // The constructor receives params via system.params; for each
-                        // is_state_param=true entry, write into compartment.state_args
-                        // so the state's dispatch function can read it.
-                        let state_param_inits: String = system.params.iter()
-                            .filter(|p| p.is_state_param)
-                            .map(|p| format!("self.__compartment.state_args[\"{}\"] = {}", p.name, p.name))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if !state_param_inits.is_empty() {
+                        // System state and enter params: bind into start state's
+                        // state_args / enter_args. The constructor receives params
+                        // via system.params; each StateArg/EnterArg entry writes
+                        // into the corresponding compartment dict so the state's
+                        // dispatch (state_args) and enter handler (enter_args) can
+                        // read them. Domain params are handled by the domain field
+                        // initializer loop above and aren't touched here.
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "self.__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "self.__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
                             body.push(CodegenNode::NativeBlock {
-                                code: state_param_inits,
+                                code: compartment_inits.join("\n"),
                                 span: None,
                             });
                         }
@@ -1552,15 +1568,18 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 TargetLanguage::Graphviz => unreachable!(),
             }
 
-            // Send $> (enter) event via __kernel - language-specific
+            // Send $> (enter) event via __kernel - language-specific.
+            // The enter_args of the start state's compartment carry any
+            // header-declared enter params; pass them through so the
+            // start state's $>(name: type) handler can read them.
             let init_event_code = match syntax.language {
                 TargetLanguage::Python3 => format!(
-                    r#"__frame_event = {}("$>", None)
+                    r#"__frame_event = {}("$>", self.__compartment.enter_args)
 self.__kernel(__frame_event)"#,
                     event_class
                 ),
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!(
-                    r#"const __frame_event = new {}("$>", null);
+                    r#"const __frame_event = new {}("$>", this.__compartment.enter_args);
 this.__kernel(__frame_event);"#,
                     event_class
                 ),

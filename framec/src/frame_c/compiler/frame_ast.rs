@@ -115,14 +115,32 @@ pub struct SystemAst {
     pub section_order: Vec<SystemSectionKind>,
 }
 
+/// Which group a system header parameter belongs to.
+///
+/// The Frame language allows three groups of system parameters:
+///   - Domain (bare `name`): becomes a constructor argument that is in
+///     scope when the domain field initializers run.
+///   - StateArg (`$(name)`): lands in the start state's
+///     `compartment.state_args[name]` and is bound as a local at the
+///     top of the state dispatch function.
+///   - EnterArg (`$>(name)`): lands in the start state's
+///     `compartment.enter_args[name]` and is bound by the existing
+///     enter-handler dispatch code on the start state's `$>(name)` handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamKind {
+    Domain,
+    StateArg,
+    EnterArg,
+}
+
 /// System parameter (for parameterized systems)
 #[derive(Debug, Clone)]
 pub struct SystemParam {
     pub name: String,
     pub param_type: Type,
     pub default: Option<String>,
-    /// Whether this is a state parameter (uses $() syntax to pass to initial state)
-    pub is_state_param: bool,
+    /// Which group this param belongs to (domain, state-arg, or enter-arg).
+    pub kind: ParamKind,
     pub span: Span,
 }
 

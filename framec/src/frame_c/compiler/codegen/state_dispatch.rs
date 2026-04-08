@@ -63,6 +63,37 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
         .iter()
         .map(|s| (s.name.clone(), s.params.iter().map(|p| p.name.clone()).collect()))
         .collect();
+    // Mirror for enter handler params: maps target state name to its
+    // declared `$>(name: type)` enter handler param names. Lets transition
+    // codegen write enter_args by name instead of by positional index.
+    let state_enter_param_names: std::collections::HashMap<String, Vec<String>> = machine
+        .states
+        .iter()
+        .map(|s| {
+            let enter_params: Vec<String> = s
+                .enter
+                .as_ref()
+                .map(|e| e.params.iter().map(|p| p.name.clone()).collect())
+                .unwrap_or_default();
+            (s.name.clone(), enter_params)
+        })
+        .collect();
+    // Mirror for exit handler params: maps source state name to its
+    // declared `<$(name: type)` exit handler param names. Lets transition
+    // codegen write exit_args by name. Note this is keyed by the *source*
+    // state of a transition (the one we're leaving), not the target.
+    let state_exit_param_names: std::collections::HashMap<String, Vec<String>> = machine
+        .states
+        .iter()
+        .map(|s| {
+            let exit_params: Vec<String> = s
+                .exit
+                .as_ref()
+                .map(|e| e.params.iter().map(|p| p.name.clone()).collect())
+                .unwrap_or_default();
+            (s.name.clone(), exit_params)
+        })
+        .collect();
 
     // Generate one _state_{StateName} dispatch method per state for ALL languages
     for state_entry in arcanum.get_enhanced_states(system_name) {
@@ -87,6 +118,8 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
             state_vars,
             state_params,
             &state_param_names,
+            &state_enter_param_names,
+            &state_exit_param_names,
             source,
             lang,
             has_state_vars,
@@ -130,6 +163,8 @@ pub(crate) fn generate_state_method(
     state_vars: &[StateVarAst],
     state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     source: &[u8],
     lang: TargetLanguage,
     _has_state_vars: bool,
@@ -161,6 +196,8 @@ pub(crate) fn generate_state_method(
         use_sv_comp: !state_vars.is_empty(),
         state_var_types,
         state_param_names: state_param_names.clone(),
+        state_enter_param_names: state_enter_param_names.clone(),
+        state_exit_param_names: state_exit_param_names.clone(),
     };
 
     // Generate the dispatch body based on __e._message / __e.message
@@ -329,18 +366,15 @@ while __sv_comp is not None and __sv_comp.state != "{}":
             }
         }
 
-        // Generate parameter unpacking if handler has params
-        // For enter/exit handlers, use positional indices (transition args are positional)
-        // For other handlers, use parameter names as keys (matching interface method generation)
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
-        for (i, param) in handler.params.iter().enumerate() {
-            if is_lifecycle_handler {
-                // Lifecycle handlers receive positional args from transition
-                code.push_str(&format!("    {} = __e._parameters[\"{}\"]\n", param.name, i));
-            } else {
-                // Interface handlers receive named args
-                code.push_str(&format!("    {} = __e._parameters[\"{}\"]\n", param.name, param.name));
-            }
+        // Generate parameter unpacking if handler has params.
+        // All param dictionaries (enter_args, exit_args, interface call args)
+        // are now keyed by the declared parameter name. Both lifecycle handlers
+        // and interface handlers use the name-key form. The transition codegen
+        // and the system constructor both write under the name; this read side
+        // matches.
+        let _is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        for param in handler.params.iter() {
+            code.push_str(&format!("    {} = __e._parameters[\"{}\"]\n", param.name, param.name));
         }
 
         // Emit handler default return value if present
@@ -467,14 +501,12 @@ while __sv_comp != null and __sv_comp.state != "{}":
             }
         }
 
-        // Generate parameter unpacking - GDScript needs `var` for declarations
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
-        for (i, param) in handler.params.iter().enumerate() {
-            if is_lifecycle_handler {
-                code.push_str(&format!("    var {} = __e._parameters[\"{}\"]\n", param.name, i));
-            } else {
-                code.push_str(&format!("    var {} = __e._parameters[\"{}\"]\n", param.name, param.name));
-            }
+        // Generate parameter unpacking — all params (lifecycle and interface)
+        // are now keyed by declared name; the write side stores under the
+        // declared name for both transition-passed and constructor-passed args.
+        let _is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        for param in handler.params.iter() {
+            code.push_str(&format!("    var {} = __e._parameters[\"{}\"]\n", param.name, param.name));
         }
 
         // Emit handler default return value if present
@@ -608,15 +640,11 @@ pub(crate) fn generate_typescript_state_dispatch(
         // For enter/exit handlers, use positional indices (transition args are positional)
         // For other handlers, use parameter names as keys (matching interface method generation)
         let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
-        for (i, param) in handler.params.iter().enumerate() {
-            if is_lifecycle_handler {
-                // Lifecycle handlers receive positional args from transition
-                code.push_str(&format!("    const {} = __e._parameters?.[\"{}\"];\n", param.name, i));
-            } else {
-                // Interface handlers receive named args
-                code.push_str(&format!("    const {} = __e._parameters?.[\"{}\"];\n", param.name, param.name));
-            }
+        // All params keyed by declared name (lifecycle and interface)
+        for param in handler.params.iter() {
+            code.push_str(&format!("    const {} = __e._parameters?.[\"{}\"];\n", param.name, param.name));
         }
+        let _ = is_lifecycle_handler;
 
         // Emit handler default return value if present
         let return_init_code = emit_handler_return_init(handler, lang, "    ", &ctx.system_name);
@@ -744,13 +772,11 @@ pub(crate) fn generate_dart_state_dispatch(
 
         // Generate parameter unpacking
         let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
-        for (i, param) in handler.params.iter().enumerate() {
-            if is_lifecycle_handler {
-                code.push_str(&format!("    final {} = __e._parameters?[\"{}\"];\n", param.name, i));
-            } else {
-                code.push_str(&format!("    final {} = __e._parameters?[\"{}\"];\n", param.name, param.name));
-            }
+        // All params keyed by declared name (lifecycle and interface)
+        for param in handler.params.iter() {
+            code.push_str(&format!("    final {} = __e._parameters?[\"{}\"];\n", param.name, param.name));
         }
+        let _ = is_lifecycle_handler;
 
         // Emit handler default return value if present
         let return_init_code = emit_handler_return_init(handler, lang, "    ", &ctx.system_name);
@@ -866,13 +892,11 @@ pub(crate) fn generate_php_state_dispatch(
 
         // Parameter unpacking
         let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
-        for (i, param) in handler.params.iter().enumerate() {
-            if is_lifecycle_handler {
-                code.push_str(&format!("    ${} = $__e->_parameters[\"{}\"] ?? null;\n", param.name, i));
-            } else {
-                code.push_str(&format!("    ${} = $__e->_parameters[\"{}\"] ?? null;\n", param.name, param.name));
-            }
+        // All params keyed by declared name (lifecycle and interface)
+        for param in handler.params.iter() {
+            code.push_str(&format!("    ${} = $__e->_parameters[\"{}\"] ?? null;\n", param.name, param.name));
         }
+        let _ = is_lifecycle_handler;
 
         // Emit handler default return value if present
         let return_init_code = emit_handler_return_init(handler, TargetLanguage::Php, "    ", &ctx.system_name);
@@ -988,14 +1012,14 @@ pub(crate) fn generate_ruby_state_dispatch(
 
         // Parameter unpacking (no type casts — dynamic typing)
         let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
-        for (i, param) in handler.params.iter().enumerate() {
+        for param in handler.params.iter() {
             if is_lifecycle_handler {
                 let args_source = if event == "$>" || event == "enter" {
                     "@__compartment.enter_args"
                 } else {
                     "@__compartment.exit_args"
                 };
-                code.push_str(&format!("    {} = {}[\"{}\"]\n", param.name, args_source, i));
+                code.push_str(&format!("    {} = {}[\"{}\"]\n", param.name, args_source, param.name));
             } else {
                 code.push_str(&format!("    {} = __e._parameters[\"{}\"]\n", param.name, param.name));
             }
@@ -1119,11 +1143,10 @@ pub(crate) fn generate_cpp_state_dispatch(
             let param_type = param.symbol_type.as_ref()
                 .map(|s| cpp_map_type(s))
                 .unwrap_or_else(|| "std::any".to_string());
-            let key = if is_lifecycle_handler {
-                format!("{}", i)
-            } else {
-                param.name.clone()
-            };
+            // Both lifecycle and interface handlers now read by declared
+            // param name. The transition codegen and constructor write
+            // under the name; this read side matches.
+            let key = param.name.clone();
             if is_lifecycle_handler {
                 // Enter/exit handlers get args from compartment
                 let args_source = if event == "$>" || event == "enter" {
@@ -1268,11 +1291,10 @@ pub(crate) fn generate_java_state_dispatch(
             let param_type = param.symbol_type.as_ref()
                 .map(|s| java_map_type(s))
                 .unwrap_or_else(|| "Object".to_string());
-            let key = if is_lifecycle_handler {
-                format!("{}", i)
-            } else {
-                param.name.clone()
-            };
+            // Both lifecycle and interface handlers now read by declared
+            // param name. The transition codegen and constructor write
+            // under the name; this read side matches.
+            let key = param.name.clone();
             if is_lifecycle_handler {
                 let args_source = if event == "$>" || event == "enter" {
                     "__compartment.enter_args"
@@ -1408,11 +1430,10 @@ pub(crate) fn generate_kotlin_state_dispatch(
             let param_type = param.symbol_type.as_ref()
                 .map(|s| kotlin_map_type(s))
                 .unwrap_or_else(|| "Any?".to_string());
-            let key = if is_lifecycle_handler {
-                format!("{}", i)
-            } else {
-                param.name.clone()
-            };
+            // Both lifecycle and interface handlers now read by declared
+            // param name. The transition codegen and constructor write
+            // under the name; this read side matches.
+            let key = param.name.clone();
             if is_lifecycle_handler {
                 let args_source = if event == "$>" || event == "enter" {
                     "__compartment.enter_args"
@@ -1546,11 +1567,10 @@ pub(crate) fn generate_swift_state_dispatch(
             let param_type = param.symbol_type.as_ref()
                 .map(|s| swift_map_type(s))
                 .unwrap_or_else(|| "Any".to_string());
-            let key = if is_lifecycle_handler {
-                format!("{}", i)
-            } else {
-                param.name.clone()
-            };
+            // Both lifecycle and interface handlers now read by declared
+            // param name. The transition codegen and constructor write
+            // under the name; this read side matches.
+            let key = param.name.clone();
             if is_lifecycle_handler {
                 let args_source = if event == "$>" || event == "enter" {
                     "__compartment.enter_args"
@@ -1685,11 +1705,10 @@ pub(crate) fn generate_go_state_dispatch(
             let param_type = param.symbol_type.as_ref()
                 .map(|s| go_map_type(s))
                 .unwrap_or_else(|| "any".to_string());
-            let key = if is_lifecycle_handler {
-                format!("{}", i)
-            } else {
-                param.name.clone()
-            };
+            // Both lifecycle and interface handlers now read by declared
+            // param name. The transition codegen and constructor write
+            // under the name; this read side matches.
+            let key = param.name.clone();
             if is_lifecycle_handler {
                 let args_source = if event == "$>" || event == "enter" {
                     "s.__compartment.enterArgs"
@@ -1834,11 +1853,10 @@ pub(crate) fn generate_csharp_state_dispatch(
             let param_type = param.symbol_type.as_ref()
                 .map(|s| csharp_map_type(s))
                 .unwrap_or_else(|| "object".to_string());
-            let key = if is_lifecycle_handler {
-                format!("{}", i)
-            } else {
-                param.name.clone()
-            };
+            // Both lifecycle and interface handlers now read by declared
+            // param name. The transition codegen and constructor write
+            // under the name; this read side matches.
+            let key = param.name.clone();
             if is_lifecycle_handler {
                 let args_source = if event == "$>" || event == "enter" {
                     "__compartment.enter_args"
@@ -1989,7 +2007,7 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
         // For enter/exit handlers, use positional indices (transition args are positional)
         // For other handlers, use parameter names as keys (matching interface method generation)
         let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
-        for (i, param) in handler.params.iter().enumerate() {
+        for param in handler.params.iter() {
             let param_type = param.symbol_type.as_ref().map(|s| s.as_str()).unwrap_or("int");
             let c_type = match param_type {
                 "int" | "i32" | "i64" => "int",
@@ -1999,16 +2017,11 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
                 _ => "void*",
             };
             let cast = if c_type == "int" || c_type == "bool" { "(intptr_t)" } else { "" };
-            if is_lifecycle_handler {
-                // Lifecycle handlers receive positional args from transition
-                code.push_str(&format!("    {} {} = ({}){}{}_FrameDict_get(__e->_parameters, \"{}\");\n",
-                    c_type, param.name, c_type, cast, system_name, i));
-            } else {
-                // Interface handlers receive named args
-                code.push_str(&format!("    {} {} = ({}){}{}_FrameDict_get(__e->_parameters, \"{}\");\n",
-                    c_type, param.name, c_type, cast, system_name, param.name));
-            }
+            // All params (lifecycle and interface) keyed by declared name.
+            code.push_str(&format!("    {} {} = ({}){}{}_FrameDict_get(__e->_parameters, \"{}\");\n",
+                c_type, param.name, c_type, cast, system_name, param.name));
         }
+        let _ = is_lifecycle_handler;
 
         // Emit handler default return value if present
         let return_init_code = emit_handler_return_init(handler, TargetLanguage::C, "    ", &ctx.system_name);
@@ -2416,6 +2429,8 @@ pub(crate) fn generate_handler_from_arcanum(
         use_sv_comp: false, // Handler-specific methods don't have __sv_comp preamble
         state_var_types: std::collections::HashMap::new(),
         state_param_names: std::collections::HashMap::new(),
+        state_enter_param_names: std::collections::HashMap::new(),
+        state_exit_param_names: std::collections::HashMap::new(),
     };
 
     // Emit handler default return value if present

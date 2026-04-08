@@ -24,6 +24,17 @@ pub(crate) struct HandlerContext {
     /// (`-> $S(42)`) into named writes (`state_args["the_param_name"] = 42`),
     /// matching the named convention used by the state dispatch reader.
     pub state_param_names: std::collections::HashMap<String, Vec<String>>,
+    /// Map from state name to its enter handler's declared param names.
+    /// Used by transition codegen to convert positional enter args
+    /// (`-> "1, 2" $S`) into named writes (`enter_args["the_param_name"] = 1`),
+    /// matching the named convention used by enter-handler binding code.
+    pub state_enter_param_names: std::collections::HashMap<String, Vec<String>>,
+    /// Map from state name to its exit handler's declared param names.
+    /// Used by transition codegen to convert positional exit args
+    /// (`("a", b) -> $S`) into named writes
+    /// (`exit_args["the_param_name"] = ...`), matching the named
+    /// convention the dispatch reader uses for exit handlers.
+    pub state_exit_param_names: std::collections::HashMap<String, Vec<String>>,
 }
 
 
