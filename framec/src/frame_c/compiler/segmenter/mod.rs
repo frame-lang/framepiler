@@ -81,6 +81,9 @@ pub enum Segment {
         outer_span: Span,
         /// Span of just the system body (between { and }, exclusive of braces)
         body_span: Span,
+        /// Span of the optional header parameter list (between `(` and `)`,
+        /// exclusive of the parens). `None` if the header had no `(...)`.
+        header_params_span: Option<Span>,
         /// System name extracted during segmentation
         name: String,
     },
@@ -272,11 +275,55 @@ pub fn segment<S: SyntaxSkipper>(
                         continue;
                     }
                     _ if kind == PragmaKind::Other && is_system_pragma(source, i) => {
-                        // @@system Name { ... }
+                        // @@system Name(optional params) { ... }
                         let (system_name, name_end) = extract_system_name(source, i);
 
+                        // After the name we may have an optional parameter list `(...)`.
+                        // Skip whitespace, and if `(` is next, capture the span between
+                        // the parens (exclusive of the parens themselves) so the pipeline
+                        // parser can re-lex it later.
+                        let mut after_name = name_end;
+                        while after_name < n
+                            && (source[after_name] == b' ' || source[after_name] == b'\t')
+                        {
+                            after_name += 1;
+                        }
+                        let header_params_span = if after_name < n && source[after_name] == b'(' {
+                            // Walk to the matching close paren. Frame param lists are
+                            // shallow — depth-tracked plain scan suffices because the
+                            // surrounding system body has not started yet.
+                            let inner_start = after_name + 1;
+                            let mut depth: i32 = 1;
+                            let mut k = inner_start;
+                            while k < n {
+                                let b = source[k];
+                                if b == b'(' {
+                                    depth += 1;
+                                } else if b == b')' {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                } else if b == b'\n' {
+                                    // Param lists must stay on one line in current grammar;
+                                    // bail and let downstream parse errors flag the issue.
+                                    break;
+                                }
+                                k += 1;
+                            }
+                            if k < n && source[k] == b')' {
+                                let span = Span { start: inner_start, end: k };
+                                after_name = k + 1;
+                                Some(span)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
                         // Find the opening brace
-                        let mut brace_pos = name_end;
+                        let mut brace_pos = after_name;
                         while brace_pos < n && source[brace_pos] != b'{' && source[brace_pos] != b'\n' {
                             brace_pos += 1;
                         }
@@ -313,6 +360,7 @@ pub fn segment<S: SyntaxSkipper>(
                         segments.push(Segment::System {
                             outer_span: Span { start: pragma_start, end: outer_end },
                             body_span: Span { start: body_start, end: body_end },
+                            header_params_span,
                             name: system_name,
                         });
 

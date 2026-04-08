@@ -917,6 +917,21 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                             CodegenNode::null(),
                         ));
+                        // System state params: bind into start state's state_args.
+                        // The constructor receives params via system.params; for each
+                        // is_state_param=true entry, write into compartment.state_args
+                        // so the state's dispatch function can read it.
+                        let state_param_inits: String = system.params.iter()
+                            .filter(|p| p.is_state_param)
+                            .map(|p| format!("self.__compartment.state_args[\"{}\"] = {}", p.name, p.name))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !state_param_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: state_param_inits,
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
@@ -1660,7 +1675,11 @@ self._context_stack.pop_back()"#,
     // Params from system params
     let params: Vec<Param> = system.params.iter().map(|p| {
         let type_str = type_to_string(&p.param_type);
-        Param::new(&p.name).with_type(&type_str)
+        let mut param = Param::new(&p.name).with_type(&type_str);
+        if let Some(ref def) = p.default {
+            param = param.with_default(CodegenNode::Ident(def.clone()));
+        }
+        param
     }).collect();
 
     CodegenNode::Constructor {

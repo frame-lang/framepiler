@@ -37,6 +37,22 @@ use super::codegen_utils::{
 };
 
 
+/// Resolve the storage key for a positional state-arg in a transition.
+///
+/// State args used to be stored under the integer index as a string key
+/// (`"0"`, `"1"`, ...). The dispatch reader now expects them under the
+/// declared param name. When the target state is known and has declared
+/// params at this index, return the param name; otherwise fall back to
+/// the integer index for backwards compatibility (e.g. transitions to
+/// states without declared params).
+fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> String {
+    ctx.state_param_names
+        .get(target_state)
+        .and_then(|names| names.get(i))
+        .cloned()
+        .unwrap_or_else(|| i.to_string())
+}
+
 /// Splice handler body from a span (used by Arcanum-based generation)
 pub(crate) fn splice_handler_body_from_span(span: &crate::frame_c::compiler::ast::Span, source: &[u8], lang: TargetLanguage, ctx: &HandlerContext) -> String {
     // Ensure span is within bounds
@@ -302,8 +318,9 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                             let value = a[eq_pos + 1..].trim();
                                             format!("\"{}\": {}", name, value)
                                         } else {
-                                            // Positional argument - use index as key
-                                            format!("\"{}\": {}", i, a)
+                                            // Positional argument - resolve to declared param name
+                                            let key = resolve_state_arg_key(i, &target, ctx);
+                                            format!("\"{}\": {}", key, a)
                                         }
                                     })
                                     .collect();
@@ -348,7 +365,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                             let value = a[eq_pos + 1..].trim();
                                             format!("\"{}\": {}", name, value)
                                         } else {
-                                            format!("\"{}\": {}", i, a)
+                                            let key = resolve_state_arg_key(i, &target, ctx);
+                                            format!("\"{}\": {}", key, a)
                                         }
                                     })
                                     .collect();
@@ -393,8 +411,9 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                             let value = a[eq_pos + 1..].trim();
                                             format!("\"{}\": {}", name, value)
                                         } else {
-                                            // Positional argument - use index as key
-                                            format!("\"{}\": {}", i, a)
+                                            // Positional argument - resolve to declared param name
+                                            let key = resolve_state_arg_key(i, &target, ctx);
+                                            format!("\"{}\": {}", key, a)
                                         }
                                     })
                                     .collect();
@@ -437,7 +456,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                             let value = a[eq_pos + 1..].trim();
                                             format!("\"{}\": {}", name, value)
                                         } else {
-                                            format!("\"{}\": {}", i, a)
+                                            let key = resolve_state_arg_key(i, &target, ctx);
+                                            format!("\"{}\": {}", key, a)
                                         }
                                     })
                                     .collect();
@@ -507,7 +527,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         if let Some(ref state) = state_str {
                             let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                code.push_str(&format!("{}{}_FrameDict_set(__compartment->state_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, i, arg));
+                                let key = resolve_state_arg_key(i, &target, ctx);
+                                code.push_str(&format!("{}{}_FrameDict_set(__compartment->state_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, key, arg));
                             }
                         }
 
@@ -550,7 +571,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         let value = a[eq_pos + 1..].trim();
                                         code.push_str(&format!("{}__new_compartment->state_args[\"{}\"] = std::any({});\n", indent_str, name, value));
                                     } else {
-                                        code.push_str(&format!("{}__new_compartment->state_args[\"{}\"] = std::any({});\n", indent_str, i, a));
+                                        let key = resolve_state_arg_key(i, &target, ctx);
+                                        code.push_str(&format!("{}__new_compartment->state_args[\"{}\"] = std::any({});\n", indent_str, key, a));
                                     }
                                 }
                             }
@@ -595,7 +617,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         let value = a[eq_pos + 1..].trim();
                                         code.push_str(&format!("{}__compartment.state_args.put(\"{}\", {});\n", indent_str, name, value));
                                     } else {
-                                        code.push_str(&format!("{}__compartment.state_args.put(\"{}\", {});\n", indent_str, i, a));
+                                        let key = resolve_state_arg_key(i, &target, ctx);
+                                        code.push_str(&format!("{}__compartment.state_args.put(\"{}\", {});\n", indent_str, key, a));
                                     }
                                 }
                             }
@@ -636,7 +659,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         let value = a[eq_pos + 1..].trim();
                                         code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, name, value));
                                     } else {
-                                        code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, i, a));
+                                        let key = resolve_state_arg_key(i, &target, ctx);
+                                        code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, key, a));
                                     }
                                 }
                             }
@@ -676,7 +700,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         let value = a[eq_pos + 1..].trim();
                                         code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, name, value));
                                     } else {
-                                        code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, i, a));
+                                        let key = resolve_state_arg_key(i, &target, ctx);
+                                        code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, key, a));
                                     }
                                 }
                             }
@@ -718,7 +743,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         let value = a[eq_pos + 1..].trim();
                                         code.push_str(&format!("{}__new_compartment.state_args[\"{}\"] = {};\n", indent_str, name, value));
                                     } else {
-                                        code.push_str(&format!("{}__new_compartment.state_args[\"{}\"] = {};\n", indent_str, i, a));
+                                        let key = resolve_state_arg_key(i, &target, ctx);
+                                        code.push_str(&format!("{}__new_compartment.state_args[\"{}\"] = {};\n", indent_str, key, a));
                                     }
                                 }
                             }
@@ -762,7 +788,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         let value = a[eq_pos + 1..].trim();
                                         code.push_str(&format!("{}__compartment.stateArgs[\"{}\"] = {}\n", indent_str, name, value));
                                     } else {
-                                        code.push_str(&format!("{}__compartment.stateArgs[\"{}\"] = {}\n", indent_str, i, a));
+                                        let key = resolve_state_arg_key(i, &target, ctx);
+                                        code.push_str(&format!("{}__compartment.stateArgs[\"{}\"] = {}\n", indent_str, key, a));
                                     }
                                 }
                             }
@@ -804,7 +831,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                             let value = a[eq_pos + 1..].trim();
                                             format!("\"{}\" => {}", name, value)
                                         } else {
-                                            format!("\"{}\" => {}", i, a)
+                                            let key = resolve_state_arg_key(i, &target, ctx);
+                                            format!("\"{}\" => {}", key, a)
                                         }
                                     })
                                     .collect();
@@ -827,7 +855,16 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         let mut code = String::new();
                         if let Some(ref exit) = exit_str { for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { code.push_str(&format!("{}@__compartment.exit_args[\"{}\"] = {}\n", indent_str, i, arg)); } }
                         code.push_str(&format!("{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n", indent_str, ctx.system_name, target));
-                        if let Some(ref state) = state_str { for (i, a) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { if let Some(eq_pos) = a.find('=') { code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, a[..eq_pos].trim(), a[eq_pos+1..].trim())); } else { code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, i, a)); } } }
+                        if let Some(ref state) = state_str {
+                            for (i, a) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                                if let Some(eq_pos) = a.find('=') {
+                                    code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, a[..eq_pos].trim(), a[eq_pos+1..].trim()));
+                                } else {
+                                    let key = resolve_state_arg_key(i, &target, ctx);
+                                    code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, key, a));
+                                }
+                            }
+                        }
                         if let Some(ref enter) = enter_str { for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, i, arg)); } }
                         code.push_str(&format!("{}__transition(__compartment)\n{}return", indent_str, indent_str));
                         code
@@ -837,7 +874,16 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         let mut code = String::new();
                         if let Some(ref exit) = exit_str { for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { code.push_str(&format!("{}self.__compartment.exit_args[\"{}\"] = {}\n", indent_str, i, arg)); } }
                         code.push_str(&format!("{}local __compartment = {}.new(\"{}\")\n", indent_str, format!("{}Compartment", ctx.system_name), target));
-                        if let Some(ref state) = state_str { for (i, a) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { if let Some(eq_pos) = a.find('=') { code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, a[..eq_pos].trim(), a[eq_pos+1..].trim())); } else { code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, i, a)); } } }
+                        if let Some(ref state) = state_str {
+                            for (i, a) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                                if let Some(eq_pos) = a.find('=') {
+                                    code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, a[..eq_pos].trim(), a[eq_pos+1..].trim()));
+                                } else {
+                                    let key = resolve_state_arg_key(i, &target, ctx);
+                                    code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, key, a));
+                                }
+                            }
+                        }
                         if let Some(ref enter) = enter_str { for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() { code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, i, arg)); } }
                         code.push_str(&format!("{}self:__transition(__compartment)\n{}return", indent_str, indent_str));
                         code

@@ -177,7 +177,7 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
     // Pass 1: Parse all systems into ASTs
     let mut system_asts: Vec<crate::frame_c::compiler::frame_ast::SystemAst> = Vec::new();
     for segment in &source_map.segments {
-        if let Segment::System { name, body_span, .. } = segment {
+        if let Segment::System { name, body_span, header_params_span, .. } = segment {
             let ast_body_span = AstSpan::new(body_span.start, body_span.end);
 
             let mut system_ast = match pipeline_parser::parse_system(
@@ -194,6 +194,28 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
                     });
                 }
             };
+
+            // Parse the optional header parameter list and attach to the
+            // freshly-built SystemAst. This is the bridge between the
+            // segmenter (which captured the span) and the codegen (which
+            // reads system.params to build constructors).
+            if let Some(hp_span) = header_params_span {
+                let ast_hp_span = AstSpan::new(hp_span.start, hp_span.end);
+                match pipeline_parser::parse_system_header_params(
+                    &source_map.source, ast_hp_span,
+                ) {
+                    Ok(params) => system_ast.params = params,
+                    Err(e) => {
+                        return Ok(CompileResult {
+                            code: String::new(),
+                            errors: vec![CompileError::new("E002",
+                                &format!("Parse error in system '{}' header params: {}", name, e))],
+                            warnings: vec![],
+                            source_map: None,
+                        });
+                    }
+                }
+            }
 
             if has_persist {
                 system_ast.persist_attr = Some(crate::frame_c::compiler::frame_ast::PersistAttr {

@@ -19,6 +19,11 @@ pub(crate) struct HandlerContext {
     pub use_sv_comp: bool,
     /// State variable types for type-aware expansion (e.g., C++ std::any_cast<Type>)
     pub state_var_types: std::collections::HashMap<String, String>,
+    /// Map from state name to its declared param names (in declaration order).
+    /// Used by transition codegen to convert positional state args
+    /// (`-> $S(42)`) into named writes (`state_args["the_param_name"] = 42`),
+    /// matching the named convention used by the state dispatch reader.
+    pub state_param_names: std::collections::HashMap<String, Vec<String>>,
 }
 
 

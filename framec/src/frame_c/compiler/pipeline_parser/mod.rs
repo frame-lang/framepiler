@@ -1560,6 +1560,213 @@ pub fn parse_system(
     parser.parse_system(name)
 }
 
+/// Parse a system's header parameter list — the contents between `(` and `)`
+/// in `@@system Name(...) { ... }`.
+///
+/// The header parameter list is captured by the segmenter as a span pointing
+/// at the bytes between the parens (exclusive). It's NOT part of the system
+/// body, so it doesn't go through the body lexer. Parameters can be:
+///
+///   - `name`                       — untyped domain param
+///   - `name: type`                 — typed domain param
+///   - `name: type = default`       — typed domain param with default
+///   - `$(name)`                    — untyped start state param
+///   - `$(name): type`              — typed start state param
+///   - `$(name): type = default`    — typed start state param with default
+///
+/// Multiple params are comma-separated. Whitespace around tokens is ignored.
+/// `$>(name)` (start enter param) is NOT yet supported and produces an error
+/// directing the user to file a follow-up.
+pub fn parse_system_header_params(
+    source: &[u8],
+    span: Span,
+) -> Result<Vec<SystemParam>, ParseError> {
+    let mut params = Vec::new();
+    let mut i = span.start;
+    let end = span.end;
+
+    let is_ident_start = |b: u8| b.is_ascii_alphabetic() || b == b'_';
+    let is_ident_cont = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+
+    let skip_ws = |i: &mut usize| {
+        while *i < end && (source[*i] == b' ' || source[*i] == b'\t') {
+            *i += 1;
+        }
+    };
+
+    loop {
+        skip_ws(&mut i);
+        if i >= end {
+            break;
+        }
+
+        // Each iteration parses one parameter.
+        let param_start = i;
+
+        // Detect $(name) or $>(name).
+        let is_state_param;
+        let name;
+        if source[i] == b'$' {
+            if i + 1 < end && source[i + 1] == b'>' {
+                return Err(ParseError {
+                    message: "$>() enter-param syntax is not yet supported in @@system headers"
+                        .to_string(),
+                    span: Span::new(i, end),
+                });
+            }
+            if i + 1 >= end || source[i + 1] != b'(' {
+                return Err(ParseError {
+                    message: "expected '(' after '$' in system header param".to_string(),
+                    span: Span::new(i, i + 1),
+                });
+            }
+            i += 2; // past `$(`
+            skip_ws(&mut i);
+            let name_start = i;
+            while i < end && is_ident_cont(source[i]) {
+                i += 1;
+            }
+            if name_start == i || !is_ident_start(source[name_start]) {
+                return Err(ParseError {
+                    message: "expected identifier after '$('".to_string(),
+                    span: Span::new(name_start, i),
+                });
+            }
+            name = std::str::from_utf8(&source[name_start..i])
+                .unwrap_or("")
+                .to_string();
+            skip_ws(&mut i);
+            if i >= end || source[i] != b')' {
+                return Err(ParseError {
+                    message: "expected ')' to close '$(' state-param".to_string(),
+                    span: Span::new(i, i.saturating_add(1)),
+                });
+            }
+            i += 1; // past `)`
+            is_state_param = true;
+        } else if is_ident_start(source[i]) {
+            let name_start = i;
+            while i < end && is_ident_cont(source[i]) {
+                i += 1;
+            }
+            name = std::str::from_utf8(&source[name_start..i])
+                .unwrap_or("")
+                .to_string();
+            is_state_param = false;
+        } else {
+            return Err(ParseError {
+                message: format!(
+                    "unexpected character '{}' in system header parameter list",
+                    source[i] as char
+                ),
+                span: Span::new(i, i + 1),
+            });
+        }
+
+        // Optional `: type`
+        skip_ws(&mut i);
+        let param_type = if i < end && source[i] == b':' {
+            i += 1; // past `:`
+            skip_ws(&mut i);
+            let type_start = i;
+            // Type runs until `=`, `,`, `)`, or end. Whitespace is part of the
+            // type only inside angle brackets / parens (e.g. `Map<str, int>`).
+            let mut depth: i32 = 0;
+            while i < end {
+                let b = source[i];
+                if depth == 0 && (b == b',' || b == b'=') {
+                    break;
+                }
+                if b == b'<' || b == b'(' || b == b'[' {
+                    depth += 1;
+                } else if b == b'>' || b == b')' || b == b']' {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                i += 1;
+            }
+            let type_text = std::str::from_utf8(&source[type_start..i])
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if type_text.is_empty() {
+                return Err(ParseError {
+                    message: "expected type after ':'".to_string(),
+                    span: Span::new(type_start, i),
+                });
+            }
+            Type::Custom(type_text)
+        } else {
+            Type::Unknown
+        };
+
+        // Optional `= default`
+        skip_ws(&mut i);
+        let default = if i < end && source[i] == b'=' {
+            i += 1; // past `=`
+            skip_ws(&mut i);
+            let def_start = i;
+            // Default runs until `,` or end (paren is the segmenter's outer
+            // boundary, not present in this span).
+            let mut depth: i32 = 0;
+            while i < end {
+                let b = source[i];
+                if depth == 0 && b == b',' {
+                    break;
+                }
+                if b == b'(' || b == b'[' || b == b'{' {
+                    depth += 1;
+                } else if b == b')' || b == b']' || b == b'}' {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                i += 1;
+            }
+            let def_text = std::str::from_utf8(&source[def_start..i])
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if def_text.is_empty() {
+                None
+            } else {
+                Some(def_text)
+            }
+        } else {
+            None
+        };
+
+        params.push(SystemParam {
+            name,
+            param_type,
+            default,
+            is_state_param,
+            span: Span::new(param_start, i),
+        });
+
+        skip_ws(&mut i);
+        if i < end && source[i] == b',' {
+            i += 1;
+            continue;
+        }
+        if i >= end {
+            break;
+        }
+        return Err(ParseError {
+            message: format!(
+                "expected ',' or end of header param list, got '{}'",
+                source[i] as char
+            ),
+            span: Span::new(i, i + 1),
+        });
+    }
+
+    Ok(params)
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

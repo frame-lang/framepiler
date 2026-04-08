@@ -52,11 +52,28 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
     // Collect all defined system names for @@System() validation
     let defined_systems: std::collections::HashSet<String> = arcanum.systems.keys().cloned().collect();
 
+    // Build state→param-names lookup so transition codegen can convert
+    // positional state args (`-> $S(42)`) into named writes
+    // (`state_args["the_param_name"] = 42`). This is the canonical map —
+    // both the constructor's start-state population and the transition
+    // emit sites read from it (or use the same name convention) so that
+    // the state dispatch reader can use a single named lookup.
+    let state_param_names: std::collections::HashMap<String, Vec<String>> = machine
+        .states
+        .iter()
+        .map(|s| (s.name.clone(), s.params.iter().map(|p| p.name.clone()).collect()))
+        .collect();
+
     // Generate one _state_{StateName} dispatch method per state for ALL languages
     for state_entry in arcanum.get_enhanced_states(system_name) {
         // Find state variables and default_forward for this state from the machine AST
         let state_ast = machine.states.iter().find(|s| s.name == state_entry.name);
         let state_vars = state_ast.map(|s| &s.state_vars[..]).unwrap_or(&[]);
+        // State params (e.g. `$Start(x: int)`) — needed so the dispatch can
+        // bind compartment.state_args[name] to a local at the top of the
+        // function before any handler runs.
+        let state_params: &[crate::frame_c::compiler::frame_ast::StateParam] =
+            state_ast.map(|s| &s.params[..]).unwrap_or(&[]);
         // V4: Enable default_forward ONLY if explicitly set with `=> $^` in state body
         // Having a parent (HSM) does NOT imply auto-forwarding
         let has_explicit_forward = state_ast.map(|s| s.default_forward).unwrap_or(false);
@@ -68,6 +85,8 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
             state_entry.parent.as_deref(),
             &state_entry.handlers,
             state_vars,
+            state_params,
+            &state_param_names,
             source,
             lang,
             has_state_vars,
@@ -109,6 +128,8 @@ pub(crate) fn generate_state_method(
     parent_state: Option<&str>,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
     source: &[u8],
     lang: TargetLanguage,
     _has_state_vars: bool,
@@ -139,11 +160,12 @@ pub(crate) fn generate_state_method(
         defined_systems: defined_systems.clone(),
         use_sv_comp: !state_vars.is_empty(),
         state_var_types,
+        state_param_names: state_param_names.clone(),
     };
 
     // Generate the dispatch body based on __e._message / __e.message
     let body_code = match lang {
-        TargetLanguage::Python3 => generate_python_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
+        TargetLanguage::Python3 => generate_python_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::GDScript => generate_gdscript_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => generate_typescript_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward, lang),
         TargetLanguage::Dart => generate_dart_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
@@ -216,6 +238,7 @@ pub(crate) fn generate_python_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -223,6 +246,18 @@ pub(crate) fn generate_python_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a local at the
+    // top of the dispatch so handler bodies can read them by bare name.
+    // All write sites (constructor for the start state, transition
+    // codegen for both named and positional transitions) now store under
+    // the declared param name, so a single named lookup is sufficient.
+    for sp in state_params {
+        code.push_str(&format!(
+            "{name} = self.__compartment.state_args.get(\"{name}\")\n",
+            name = sp.name
+        ));
+    }
 
     // HSM Compartment Navigation: When this handler accesses state vars, we need to ensure
     // we're accessing the correct compartment. If this handler was invoked via forwarding
@@ -2380,6 +2415,7 @@ pub(crate) fn generate_handler_from_arcanum(
         defined_systems: defined_systems.clone(),
         use_sv_comp: false, // Handler-specific methods don't have __sv_comp preamble
         state_var_types: std::collections::HashMap::new(),
+        state_param_names: std::collections::HashMap::new(),
     };
 
     // Emit handler default return value if present

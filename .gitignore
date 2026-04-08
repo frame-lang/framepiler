@@ -15,3 +15,6 @@ Thumbs.db
 __pycache__/
 *.pyc
 *.pyo
+
+# Local scratch space for in-progress design work — never committed
+_scratch/
