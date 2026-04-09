@@ -41,8 +41,49 @@ impl LanguageBackend for KotlinBackend {
                     format!(" : {}()", base_classes[0])
                 };
 
+                // Kotlin uses a primary constructor declared on the class
+                // header. We extract the parameter list from the first
+                // Constructor codegen node in `methods` and emit them as
+                // `class Robot(val x: Int, val name: String)`. The system
+                // params are then in scope inside the `init {}` block that
+                // the Constructor case will emit. Without this, system
+                // params declared in the AST would be invisible to the
+                // init body and the call site `Robot(42)` would fail to
+                // compile (no matching constructor).
+                let primary_params = methods
+                    .iter()
+                    .find_map(|m| match m {
+                        CodegenNode::Constructor { params, .. } => Some(params.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                let primary_ctor = if primary_params.is_empty() {
+                    String::new()
+                } else {
+                    // Bare params (no `val`/`var`) so Kotlin doesn't
+                    // auto-synthesize a property of the same name —
+                    // domain fields with the same name (e.g.
+                    // `name: str = name`) would otherwise collide with
+                    // the auto-property. The bare param is in scope only
+                    // inside the `init {}` block, which is exactly where
+                    // domain field assignment happens.
+                    let params_str = primary_params
+                        .iter()
+                        .map(|p| {
+                            let type_ann = self.map_type(
+                                p.type_annotation
+                                    .as_ref()
+                                    .unwrap_or(&"Any?".to_string()),
+                            );
+                            format!("{}: {}", p.name, type_ann)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("({})", params_str)
+                };
+
                 // Kotlin: public by default, no access modifier needed
-                result.push_str(&format!("{}{}class {}{} {{\n", ctx.get_indent(), abstract_kw, name, extends));
+                result.push_str(&format!("{}{}class {}{}{} {{\n", ctx.get_indent(), abstract_kw, name, primary_ctor, extends));
                 ctx.push_indent();
 
                 for field in fields {
@@ -51,11 +92,33 @@ impl LanguageBackend for KotlinBackend {
                         let trimmed = raw_code.trim();
                         let needs_var = !trimmed.starts_with("var ") && !trimmed.starts_with("val ");
                         let var_prefix = if needs_var { "var " } else { "" };
+                        // Kotlin requires every property to be initialized
+                        // or marked abstract. If the synthesized raw_code
+                        // has a colon-typed declaration but no `=` (the
+                        // init was stripped because it referenced a system
+                        // param), append a type-appropriate default
+                        // placeholder. The constructor's init block will
+                        // overwrite it with the real value.
+                        let raw_code_with_default =
+                            if !trimmed.contains('=') && trimmed.contains(':') {
+                                let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
+                                let type_part = parts.get(1).map(|s| s.trim()).unwrap_or("");
+                                let default = match type_part {
+                                    "Int" | "Long" | "Short" | "Byte" => "0",
+                                    "Float" | "Double" => "0.0",
+                                    "Boolean" => "false",
+                                    "String" => "\"\"",
+                                    _ => "null",
+                                };
+                                format!("{} = {}", trimmed, default)
+                            } else {
+                                raw_code.clone()
+                            };
                         let vis = self.emit_visibility_kotlin(field.visibility);
                         if vis.is_empty() {
-                            result.push_str(&format!("{}{}{}\n", ctx.get_indent(), var_prefix, raw_code));
+                            result.push_str(&format!("{}{}{}\n", ctx.get_indent(), var_prefix, raw_code_with_default));
                         } else {
-                            result.push_str(&format!("{}{} {}{}\n", ctx.get_indent(), vis, var_prefix, raw_code));
+                            result.push_str(&format!("{}{} {}{}\n", ctx.get_indent(), vis, var_prefix, raw_code_with_default));
                         }
                     } else {
                         let vis = self.emit_visibility_kotlin(field.visibility);

@@ -56,6 +56,47 @@ use crate::frame_c::compiler::native_region_scanner::{
 use super::ast::*;
 use super::backend::get_backend;
 
+/// True iff the init expression text contains any of the supplied param
+/// names as a whole word (identifier-boundary match). Used to detect the
+/// name-collision case `balance: int = balance` where a domain field
+/// initializer references a constructor parameter — only then do we
+/// move init out of the field declaration into the constructor body for
+/// the strict-init OO backends. Literal initializers (`mutableListOf<>()`,
+/// `0`, `-1`) stay at field-decl scope so type inference still works.
+fn init_references_param(init_text: &str, params: &[String]) -> bool {
+    if params.is_empty() || init_text.is_empty() {
+        return false;
+    }
+    let bytes = init_text.as_bytes();
+    for p in params {
+        let pb = p.as_bytes();
+        if pb.is_empty() {
+            continue;
+        }
+        let mut i = 0usize;
+        while i + pb.len() <= bytes.len() {
+            if let Some(found) = bytes[i..]
+                .windows(pb.len())
+                .position(|w| w == pb)
+            {
+                let start = i + found;
+                let end = start + pb.len();
+                let prev_ok = start == 0
+                    || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
+                let next_ok = end == bytes.len()
+                    || !(bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
+                if prev_ok && next_ok {
+                    return true;
+                }
+                i = end;
+            } else {
+                break;
+            }
+        }
+    }
+    false
+}
+
 /// Generate a complete CodegenNode for a Frame system
 ///
 /// # Arguments
@@ -468,26 +509,40 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
     fn synthesize_field_raw(
         var: &crate::frame_c::compiler::frame_ast::DomainVar,
         lang: TargetLanguage,
+        sys_param_names: &[String],
     ) -> String {
         let type_text = match &var.var_type {
             Type::Custom(s) => s.clone(),
             Type::Unknown => String::new(),
         };
-        // C++, Go, and Java omit the inline initializer at field-
-        // declaration time: all three move domain init into the
-        // constructor (or factory function) body. C++ would synthesize
-        // `int balance = balance;` at class scope — UB because the RHS
-        // reads the field before it's initialized. Go struct declarations
-        // can't have inline initializers at all. Java would compile but
-        // the RHS `balance` would resolve to the field itself (zero/null),
-        // not the constructor parameter — name-collision bug. For all
-        // three, the constructor body emits the assignment with an
-        // explicit `this.`/`this->`/`s.` prefix on the LHS so the field
-        // and the parameter are unambiguous.
-        let init_suffix = if matches!(
+        // Go and C never permit field-level initializers on struct
+        // declarations, so any domain field init MUST move to the
+        // factory function body. Strip unconditionally for those.
+        //
+        // For the OO languages with constructors (C++, Java, Swift,
+        // Kotlin, C#, Dart), only strip the field-level init when the
+        // init expression references a system parameter — that's the
+        // name-collision case `int balance = balance;` where the RHS at
+        // field-declaration scope resolves to the field itself rather
+        // than the constructor parameter. For literal initializers
+        // (`var log = mutableListOf<String>()`, `int count = 0`), we
+        // leave the init at field-declaration scope so type inference
+        // still works (Kotlin in particular needs the init for `var log`
+        // with no explicit type).
+        let init_text = var.initializer_text.as_deref().unwrap_or("");
+        let strip_unconditionally = matches!(lang, TargetLanguage::Go | TargetLanguage::C);
+        let strip_collision = matches!(
             lang,
-            TargetLanguage::Cpp | TargetLanguage::Go | TargetLanguage::Java
-        ) {
+            TargetLanguage::Cpp
+                | TargetLanguage::Java
+                | TargetLanguage::Swift
+                | TargetLanguage::Kotlin
+                | TargetLanguage::CSharp
+                | TargetLanguage::Dart
+        ) && init_references_param(init_text, sys_param_names);
+        let strip_init = strip_unconditionally || strip_collision;
+
+        let init_suffix = if strip_init {
             String::new()
         } else {
             match &var.initializer_text {
@@ -550,7 +605,8 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         // C-family backends. Init is omitted entirely if not present, so
         // raw_code remains a faithful representation of what the user
         // would have written.
-        let synthesised_raw = synthesize_field_raw(domain_var, syntax.language);
+        let sys_param_names: Vec<String> = system.params.iter().map(|p| p.name.clone()).collect();
+        let synthesised_raw = synthesize_field_raw(domain_var, syntax.language, &sys_param_names);
         let expanded_code = expand_tagged_in_domain(&synthesised_raw, syntax.language);
 
         let mut field = Field::new(&domain_var.name)
@@ -692,54 +748,54 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
     }
 
     // Initialize domain variables
+    let sys_param_names_for_init: Vec<String> =
+        system.params.iter().map(|p| p.name.clone()).collect();
     for domain_var in &system.domain {
-        // C has no field-level initializers on struct declarations, so
-        // every domain var with an initializer must be assigned in the
-        // constructor body — this is the universal-rule emission for the
-        // C-family. We emit from the structured slots (`initializer_text`)
-        // rather than parsing raw_code, so the initializer expression
-        // (which may legally reference a constructor parameter of the
-        // same name, e.g. `balance = balance`) lands as
-        // `self->balance = balance;` and the LHS/RHS scopes stay
-        // unambiguous.
+        // For the strict-init OO backends (C++, Java, Swift, Kotlin, C#,
+        // Dart), `synthesize_field_raw` only strips the field-level init
+        // when the init expression references a system parameter. We
+        // mirror that decision here: emit the constructor-body assignment
+        // ONLY when the init was stripped, otherwise the field-decl init
+        // already handles initialization and a duplicate would either be
+        // redundant (literal init) or invalid (some langs reject double
+        // assignment of `val`/`final`/etc).
+        //
+        // C and Go are different — neither has any field-level init at
+        // all (C: no struct field defaults; Go: no struct field defaults
+        // outside literals), so they always emit constructor-body init.
+        let init_text_opt = domain_var.initializer_text.clone();
+        let init_refs_param = init_text_opt
+            .as_deref()
+            .map(|t| init_references_param(t, &sys_param_names_for_init))
+            .unwrap_or(false);
+        // C: factory-function body init. Always emit when there's an init.
         if matches!(syntax.language, TargetLanguage::C) {
-            if let Some(ref init_text) = domain_var.initializer_text {
+            if let Some(ref init_text) = init_text_opt {
                 let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::C);
                 body.push(CodegenNode::NativeBlock {
                     code: format!("self->{} = {};", domain_var.name, init_expanded),
                     span: None,
                 });
             }
-            // No raw_code fallback for C — the structured slots are
-            // canonical, and a domain var with no initializer just leaves
-            // the struct field at whatever malloc gave us. (The existing
-            // calloc-zeroing assumption is preserved by callers; when this
-            // matters we'll surface it as an explicit zero init.)
             continue;
         }
-        // C++ uses the same constructor-body init pattern as C: every
-        // domain var with an initializer becomes `this->name = init;`
-        // in the constructor body. The field-level init has been
-        // stripped by `synthesize_field_raw` for C++, so the constructor
-        // body is the only place initialization happens. This makes
-        // `balance: int = balance` legal — the LHS resolves to the
-        // class member, the RHS to the constructor parameter, and the
-        // two scopes are unambiguous.
+        // C++ — only emit constructor-body init when the field-level init
+        // was stripped (i.e., the init references a constructor param).
         if matches!(syntax.language, TargetLanguage::Cpp) {
-            if let Some(ref init_text) = domain_var.initializer_text {
-                let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Cpp);
-                body.push(CodegenNode::NativeBlock {
-                    code: format!("this->{} = {};", domain_var.name, init_expanded),
-                    span: None,
-                });
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Cpp);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("this->{} = {};", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
             }
             continue;
         }
-        // Go: factory-function init. `s.field = init` in the NewX() body.
-        // Go struct field declarations can't carry inline initializers,
-        // so this is the only place domain init happens for Go.
+        // Go: factory-function body init. Always emit (no field-level init).
         if matches!(syntax.language, TargetLanguage::Go) {
-            if let Some(ref init_text) = domain_var.initializer_text {
+            if let Some(ref init_text) = init_text_opt {
                 let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Go);
                 body.push(CodegenNode::NativeBlock {
                     code: format!("s.{} = {}", domain_var.name, init_expanded),
@@ -748,21 +804,69 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             }
             continue;
         }
-        // Java: constructor body init. `this.field = init;` Java class
-        // field declarations CAN have inline initializers, but a domain
-        // init that references a constructor parameter (e.g.,
-        // `balance: int = balance`) creates a name-collision: at field
-        // scope `balance` resolves to the field itself, which is the
-        // wrong value. We move all domain init into the constructor
-        // body so the LHS is `this.balance` (the field) and the RHS is
-        // `balance` (the parameter), unambiguously.
+        // Java — only emit constructor-body init when the field-level init
+        // was stripped.
         if matches!(syntax.language, TargetLanguage::Java) {
-            if let Some(ref init_text) = domain_var.initializer_text {
-                let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Java);
-                body.push(CodegenNode::NativeBlock {
-                    code: format!("this.{} = {};", domain_var.name, init_expanded),
-                    span: None,
-                });
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Java);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("this.{} = {};", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+            }
+            continue;
+        }
+        // Swift — only emit constructor-body init when stripped.
+        if matches!(syntax.language, TargetLanguage::Swift) {
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Swift);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("self.{} = {}", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+            }
+            continue;
+        }
+        // Kotlin — only emit constructor-body init when stripped.
+        if matches!(syntax.language, TargetLanguage::Kotlin) {
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Kotlin);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("this.{} = {}", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+            }
+            continue;
+        }
+        // C# — only emit constructor-body init when stripped.
+        if matches!(syntax.language, TargetLanguage::CSharp) {
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::CSharp);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("this.{} = {};", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+            }
+            continue;
+        }
+        // Dart — only emit constructor-body init when stripped.
+        if matches!(syntax.language, TargetLanguage::Dart) {
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Dart);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("this.{} = {};", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
             }
             continue;
         }
@@ -1184,6 +1288,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("this.__next_compartment = null;");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.state_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.enter_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1201,6 +1324,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                             CodegenNode::null(),
                         ));
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "this.__compartment.state_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "this.__compartment.enter_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Php => {
@@ -1235,6 +1384,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("$this->__next_compartment = null;");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\n$this->__compartment->state_args[\"{}\"] = ${};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\n$this->__compartment->enter_args[\"{}\"] = ${};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1251,6 +1419,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                             CodegenNode::null(),
                         ));
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "$this->__compartment->state_args[\"{}\"] = ${};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "$this->__compartment->enter_args[\"{}\"] = ${};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Ruby => {
@@ -1285,6 +1479,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("@__next_compartment = nil");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\n@__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\n@__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1301,6 +1514,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                             CodegenNode::null(),
                         ));
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "@__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "@__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Cpp => {
@@ -1562,6 +1801,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("this.__next_compartment = null");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1574,6 +1832,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             ),
                             span: None,
                         });
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Swift => {
@@ -1618,6 +1902,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("self.__next_compartment = nil");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nself.__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nself.__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1630,6 +1933,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             ),
                             span: None,
                         });
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::CSharp => {
@@ -1676,6 +2005,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("this.__next_compartment = null;");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.state_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.enter_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1689,6 +2037,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             ),
                             span: None,
                         });
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "__compartment.state_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "__compartment.enter_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Go => {
@@ -1826,6 +2200,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("this.__next_compartment = null;");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.state_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.enter_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1843,6 +2236,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                             CodegenNode::null(),
                         ));
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "this.__compartment.state_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "this.__compartment.enter_args[\"{}\"] = {};",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::GDScript => {
@@ -1878,6 +2297,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("self.__next_compartment = null");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nself.__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nself.__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1894,9 +2332,36 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                             CodegenNode::null(),
                         ));
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "self.__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "self.__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 // Dynamic languages and remaining: New expression
+                // (Lua, Erlang, Kotlin — all routed here)
                 TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
                     | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang | TargetLanguage::Kotlin
                     | TargetLanguage::Lua => {
@@ -1911,6 +2376,39 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                         CodegenNode::null(),
                     ));
+
+                    // System state and enter params (Lua path — Lua's
+                    // compartment has state_args/enter_args dicts the same
+                    // way Python does). Erlang and Kotlin have their own
+                    // dispatch routes upstream (Erlang via gen_statem,
+                    // Kotlin via the explicit branch above), so for these
+                    // the population is a no-op.
+                    if matches!(syntax.language, TargetLanguage::Lua) {
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "self.__compartment.state_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "self.__compartment.enter_args[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
+                    }
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -2023,7 +2521,7 @@ self._context_stack[#self._context_stack] = nil"#,
                     event_class, system.name
                 ),
                 TargetLanguage::Dart => format!(
-                    "final __frame_event = {}(\"\\$>\", null);\nfinal __ctx = {}FrameContext(__frame_event, null);\n_context_stack.add(__ctx);\n__kernel(_context_stack[_context_stack.length - 1].event);\n_context_stack.removeLast();",
+                    "final __frame_event = {}(\"\\$>\", this.__compartment.enter_args);\nfinal __ctx = {}FrameContext(__frame_event, null);\n_context_stack.add(__ctx);\n__kernel(_context_stack[_context_stack.length - 1].event);\n_context_stack.removeLast();",
                     event_class, system.name
                 ),
                 TargetLanguage::GDScript => format!(

@@ -64,7 +64,24 @@ impl LanguageBackend for DartBackend {
                 // Fields
                 for field in fields {
                     if let Some(ref raw_code) = field.raw_code {
-                        result.push_str(&format!("{}{};\n", ctx.get_indent(), raw_code));
+                        // Dart non-nullable fields require either an
+                        // initializer, a `late` modifier, or assignment
+                        // in every constructor. When the synthesized
+                        // raw_code has a typed declaration without `=`
+                        // (the init was stripped because it referenced
+                        // a system param), prepend `late ` so the
+                        // constructor body's `this.field = init;` is the
+                        // legal initialization point.
+                        let trimmed = raw_code.trim();
+                        let needs_late = !trimmed.contains('=')
+                            && !trimmed.starts_with("late ")
+                            && !trimmed.starts_with("static ")
+                            && trimmed.contains(' ');
+                        if needs_late {
+                            result.push_str(&format!("{}late {};\n", ctx.get_indent(), raw_code));
+                        } else {
+                            result.push_str(&format!("{}{};\n", ctx.get_indent(), raw_code));
+                        }
                     } else {
                         let static_kw = if field.is_static { "static " } else { "" };
                         let converted_type = field.type_annotation.as_ref()

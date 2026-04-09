@@ -203,20 +203,20 @@ pub(crate) fn generate_state_method(
     // Generate the dispatch body based on __e._message / __e.message
     let body_code = match lang {
         TargetLanguage::Python3 => generate_python_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::GDScript => generate_gdscript_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
-        TargetLanguage::TypeScript | TargetLanguage::JavaScript => generate_typescript_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward, lang),
-        TargetLanguage::Dart => generate_dart_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
+        TargetLanguage::GDScript => generate_gdscript_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript => generate_typescript_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward, lang),
+        TargetLanguage::Dart => generate_dart_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Rust => generate_rust_state_dispatch(_system_name, state_name, handlers, state_vars, parent_state, default_forward),
         TargetLanguage::C => generate_c_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Cpp => generate_cpp_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Java => generate_java_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Kotlin => generate_kotlin_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
-        TargetLanguage::Swift => generate_swift_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
-        TargetLanguage::CSharp => generate_csharp_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
+        TargetLanguage::Kotlin => generate_kotlin_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
+        TargetLanguage::Swift => generate_swift_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
+        TargetLanguage::CSharp => generate_csharp_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Go => generate_go_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Php => generate_php_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
-        TargetLanguage::Ruby => generate_ruby_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
-        TargetLanguage::Lua => generate_lua_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
+        TargetLanguage::Php => generate_php_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
+        TargetLanguage::Ruby => generate_ruby_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
+        TargetLanguage::Lua => generate_lua_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
         TargetLanguage::Graphviz => unreachable!(),
     };
@@ -434,6 +434,7 @@ pub(crate) fn generate_gdscript_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -441,6 +442,15 @@ pub(crate) fn generate_gdscript_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a local at the
+    // top of the dispatch. GDScript is dynamically typed so no cast.
+    for sp in state_params {
+        code.push_str(&format!(
+            "var {0} = self.__compartment.state_args[\"{0}\"]\n",
+            sp.name
+        ));
+    }
 
     // HSM Compartment Navigation
     if !state_vars.is_empty() {
@@ -559,6 +569,7 @@ pub(crate) fn generate_typescript_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -567,6 +578,18 @@ pub(crate) fn generate_typescript_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a local. TypeScript
+    // and JavaScript are dynamically/structurally typed at runtime; the
+    // dict value comes back as `any` and the user can refine it in the
+    // handler body if needed.
+    for sp in state_params {
+        let type_ann = if matches!(lang, TargetLanguage::TypeScript) { ": any" } else { "" };
+        code.push_str(&format!(
+            "const {0}{1} = this.__compartment.state_args[\"{0}\"];\n",
+            sp.name, type_ann
+        ));
+    }
 
     // HSM Compartment Navigation: When this handler accesses state vars, we need to ensure
     // we're accessing the correct compartment. If this handler was invoked via forwarding
@@ -702,6 +725,7 @@ pub(crate) fn generate_dart_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -710,6 +734,26 @@ pub(crate) fn generate_dart_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a typed local
+    // via Dart `as` cast. Mirrors the Java/Kotlin preambles.
+    for sp in state_params {
+        let raw_type = match &sp.param_type {
+            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+            crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
+        };
+        let dart_type = match raw_type {
+            "int" | "i32" | "i64" => "int",
+            "float" | "f32" | "f64" | "double" => "double",
+            "bool" | "boolean" => "bool",
+            "str" | "string" | "String" => "String",
+            other => other,
+        };
+        code.push_str(&format!(
+            "{1} {0} = this.__compartment.state_args[\"{0}\"] as {1};\n",
+            sp.name, dart_type
+        ));
+    }
 
     // HSM Compartment Navigation
     if !state_vars.is_empty() {
@@ -825,6 +869,7 @@ pub(crate) fn generate_php_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -832,6 +877,14 @@ pub(crate) fn generate_php_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a PHP local.
+    for sp in state_params {
+        code.push_str(&format!(
+            "${0} = $this->__compartment->state_args[\"{0}\"];\n",
+            sp.name
+        ));
+    }
 
     // HSM: Navigate parent_compartment chain
     if !state_vars.is_empty() {
@@ -944,6 +997,7 @@ pub(crate) fn generate_ruby_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -951,6 +1005,14 @@ pub(crate) fn generate_ruby_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a Ruby local.
+    for sp in state_params {
+        code.push_str(&format!(
+            "{0} = @__compartment.state_args[\"{0}\"]\n",
+            sp.name
+        ));
+    }
 
     // HSM: Navigate parent_compartment chain
     if !state_vars.is_empty() {
@@ -1401,6 +1463,7 @@ pub(crate) fn generate_kotlin_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -1408,6 +1471,20 @@ pub(crate) fn generate_kotlin_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a typed local
+    // via Kotlin `as` cast. Mirrors the Java/Swift preambles.
+    for sp in state_params {
+        let raw_type = match &sp.param_type {
+            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+            crate::frame_c::compiler::frame_ast::Type::Unknown => "Int",
+        };
+        let kotlin_type = kotlin_map_type(raw_type);
+        code.push_str(&format!(
+            "val {0} = __compartment.state_args[\"{0}\"] as {1}\n",
+            sp.name, kotlin_type
+        ));
+    }
 
     // HSM Compartment Navigation — Kotlin uses == for structural equality
     if !state_vars.is_empty() {
@@ -1538,6 +1615,7 @@ pub(crate) fn generate_swift_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -1545,6 +1623,21 @@ pub(crate) fn generate_swift_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a typed local
+    // via Swift force-cast `as!`. Mirrors the Python/C/C++/Go/Java
+    // preambles. Values are stored as Any in the dictionary.
+    for sp in state_params {
+        let raw_type = match &sp.param_type {
+            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+            crate::frame_c::compiler::frame_ast::Type::Unknown => "Int",
+        };
+        let swift_type = swift_map_type(raw_type);
+        code.push_str(&format!(
+            "let {0} = __compartment.state_args[\"{0}\"] as! {1}\n",
+            sp.name, swift_type
+        ));
+    }
 
     // HSM Compartment Navigation — Swift uses == for comparison
     if !state_vars.is_empty() {
@@ -1846,6 +1939,7 @@ pub(crate) fn generate_csharp_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -1853,6 +1947,20 @@ pub(crate) fn generate_csharp_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a typed local
+    // via C# cast. Mirrors the Python/Java preambles.
+    for sp in state_params {
+        let raw_type = match &sp.param_type {
+            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+            crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
+        };
+        let cs_type = csharp_map_type(raw_type);
+        code.push_str(&format!(
+            "{1} {0} = ({1}) __compartment.state_args[\"{0}\"];\n",
+            sp.name, cs_type
+        ));
+    }
 
     // HSM Compartment Navigation
     if !state_vars.is_empty() {
@@ -2279,6 +2387,7 @@ pub(crate) fn generate_lua_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     _default_forward: bool,
@@ -2286,6 +2395,14 @@ pub(crate) fn generate_lua_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a Lua local.
+    for sp in state_params {
+        code.push_str(&format!(
+            "local {0} = self.__compartment.state_args[\"{0}\"]\n",
+            sp.name
+        ));
+    }
 
     // HSM Compartment Navigation for state var access
     if !state_vars.is_empty() {
