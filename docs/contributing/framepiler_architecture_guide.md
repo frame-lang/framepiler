@@ -125,11 +125,15 @@ The **compartment** is Frame's central data structure — a closure that capture
 | Field | Purpose |
 |-------|---------|
 | `state` | Current state identifier (string) |
-| `state_args` | Arguments passed via `-> $State(args)` |
+| `state_args` | Arguments passed via `-> $State(args)` OR via the system header `$(name: type)` for the start state. Keyed by the declared param name. |
 | `state_vars` | State variables declared with `$.varName` |
-| `enter_args` | Arguments for the `$>` enter handler |
+| `enter_args` | Arguments passed via `-> (args) $State` OR via the system header `$>(name: type)` for the start state. Keyed by the declared param name. |
 | `exit_args` | Arguments for the `<$` exit handler |
 | `forward_event` | Stashed event for `-> =>` forwarding |
+
+For state and enter args, **read sites and write sites both use the declared param name as the key, never a positional integer index.** This convention is enforced across all backends. The system constructor and the transition codegen both write under the name; the state dispatch and the enter handler binding both read by the name.
+
+Rust is the exception. It has no `state_args` HashMap on the compartment (the typed enum `StateContext` doesn't support type erasure cleanly). Instead, system header state and enter args are stored as typed `__sys_<name>: <type>` fields directly on the system struct, and the start state's handler bodies bind them as locals via a preamble. See `system_codegen.rs` and `state_dispatch.rs::generate_handler_from_arcanum` for the Rust-specific path.
 
 The state stack is a stack of compartments. When `push$` executes, the entire compartment is copied onto the stack. When `-> pop$` executes, the saved compartment is restored, preserving all state variables.
 
