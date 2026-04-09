@@ -8,6 +8,7 @@
 //! After parsing, the AST contains every Frame statement and every native code
 //! chunk — no further source scanning is needed.
 
+pub mod call_args;
 pub mod domain_native;
 
 use crate::frame_c::compiler::frame_ast::*;

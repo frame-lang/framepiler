@@ -404,8 +404,12 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
     }
 
     // Stage 7: Assemble final output (native pass-through + system substitution + tagged instantiations)
-    // Runtime imports are emitted first (before any native prolog) to fix import ordering
-    let code = match assembler::assemble(&source_map, &generated_systems, config.target, &runtime_imports) {
+    // Runtime imports are emitted first (before any native prolog) to fix import ordering.
+    // Pass each system's declared params so the assembler can resolve sigil-tagged
+    // call sites (`@@Robot($(10), $>(80), "R2D2")`) and substitute Frame defaults.
+    let system_params: Vec<(String, Vec<crate::frame_c::compiler::frame_ast::SystemParam>)> =
+        system_asts.iter().map(|s| (s.name.clone(), s.params.clone())).collect();
+    let code = match assembler::assemble(&source_map, &generated_systems, &system_params, config.target, &runtime_imports) {
         Ok(output) => output,
         Err(e) => {
             return Ok(CompileResult {

@@ -11,7 +11,12 @@
 //! 2. Post-process: expand `@@SystemName()` tagged instantiations in native regions
 //! 3. Return final assembled output
 
+use std::collections::HashMap;
 use std::collections::HashSet;
+use crate::frame_c::compiler::frame_ast::SystemParam;
+use crate::frame_c::compiler::pipeline_parser::call_args::{
+    parse_call_args, resolve_call, CallArgsError,
+};
 use crate::frame_c::compiler::segmenter::{SourceMap, Segment};
 use crate::frame_c::visitors::TargetLanguage;
 
@@ -40,11 +45,15 @@ impl std::error::Error for AssemblyError {}
 ///
 /// `source_map` — the segmented source from Stage 0
 /// `generated_systems` — Vec of (system_name, generated_code) from Stages 5-6
+/// `system_params` — Vec of (system_name, declared params) so the assembler
+///   can resolve `@@SystemName(args)` call sites against the declared shape
+///   (sigil checks, named lookup, default substitution).
 /// `lang` — target language for tagged instantiation expansion
 /// `runtime_imports` — imports required by generated code (emitted before any native code)
 pub fn assemble(
     source_map: &SourceMap,
     generated_systems: &[(String, String)],
+    system_params: &[(String, Vec<SystemParam>)],
     lang: TargetLanguage,
     runtime_imports: &[String],
 ) -> Result<String, AssemblyError> {
@@ -62,7 +71,7 @@ pub fn assemble(
     }
 
     // Build lookup for generated systems
-    let system_code: std::collections::HashMap<&str, &str> = generated_systems
+    let system_code: HashMap<&str, &str> = generated_systems
         .iter()
         .map(|(name, code)| (name.as_str(), code.as_str()))
         .collect();
@@ -70,6 +79,12 @@ pub fn assemble(
     let defined_system_names: HashSet<String> = generated_systems
         .iter()
         .map(|(name, _)| name.clone())
+        .collect();
+
+    // Build name → declared-params lookup for call-site resolution
+    let params_by_name: HashMap<&str, &[SystemParam]> = system_params
+        .iter()
+        .map(|(name, params)| (name.as_str(), params.as_slice()))
         .collect();
 
     // Walk segments in order
@@ -80,7 +95,7 @@ pub fn assemble(
                 let text = extract_text(source, span.start, span.end);
                 // Expand tagged instantiations (@@SystemName(args)) in native code
                 let expanded = expand_tagged_instantiations(
-                    &text, &defined_system_names, lang,
+                    &text, &defined_system_names, &params_by_name, lang,
                 )?;
                 output.push_str(&expanded);
             }
@@ -121,6 +136,30 @@ fn extract_text(source: &[u8], start: usize, end: usize) -> String {
     String::from_utf8_lossy(&source[start..end]).into_owned()
 }
 
+/// Render a `CallArgsError` as a human-readable assembly diagnostic.
+fn format_call_args_error(err: &CallArgsError) -> String {
+    match err {
+        CallArgsError::ParseError { message, position } => {
+            format!("parse error at {}: {}", position, message)
+        }
+        CallArgsError::MixedForms { message } => message.clone(),
+        CallArgsError::SigilsRequired { message } => message.clone(),
+        CallArgsError::PositionalMismatch { message } => message.clone(),
+        CallArgsError::UnknownNamedArg { name } => {
+            format!("unknown named argument '{}'", name)
+        }
+        CallArgsError::MissingArg { name } => {
+            format!("required parameter '{}' has no argument and no default", name)
+        }
+        CallArgsError::ExtraArgs { count } => {
+            format!("{} extra argument(s) supplied", count)
+        }
+        CallArgsError::DuplicateNamedArg { name } => {
+            format!("duplicate named argument '{}'", name)
+        }
+    }
+}
+
 // ============================================================================
 // Internal: Tagged Instantiation Expansion
 // ============================================================================
@@ -137,6 +176,7 @@ fn extract_text(source: &[u8], start: usize, end: usize) -> String {
 fn expand_tagged_instantiations(
     text: &str,
     defined_systems: &HashSet<String>,
+    params_by_name: &HashMap<&str, &[SystemParam]>,
     lang: TargetLanguage,
 ) -> Result<String, AssemblyError> {
     let bytes = text.as_bytes();
@@ -279,9 +319,35 @@ fn expand_tagged_instantiations(
 
                     if paren_depth == 0 {
                         if defined_systems.contains(name) {
-                            let args = std::str::from_utf8(&bytes[args_start..i - 1])
+                            let args_text = std::str::from_utf8(&bytes[args_start..i - 1])
                                 .unwrap_or("");
-                            let constructor = generate_constructor(name, args, lang);
+                            // Resolve the call against the system's declared
+                            // params: validate sigils/names, substitute Frame
+                            // defaults, produce a positional value list in
+                            // declaration order. If the system has no params
+                            // declared, fall back to passing the raw text
+                            // through (preserves zero-arg behavior).
+                            let resolved_args = match params_by_name.get(name) {
+                                Some(params) if !params.is_empty() => {
+                                    let parsed = parse_call_args(args_text)
+                                        .map_err(|e| AssemblyError {
+                                            message: format!(
+                                                "@@{}({}): {}",
+                                                name, args_text, format_call_args_error(&e)
+                                            ),
+                                        })?;
+                                    let values = resolve_call(&parsed, params)
+                                        .map_err(|e| AssemblyError {
+                                            message: format!(
+                                                "@@{}({}): {}",
+                                                name, args_text, format_call_args_error(&e)
+                                            ),
+                                        })?;
+                                    values.join(", ")
+                                }
+                                _ => args_text.to_string(),
+                            };
+                            let constructor = generate_constructor(name, &resolved_args, lang);
                             result.push_str(&constructor);
                             continue;
                         } else {
@@ -436,7 +502,7 @@ mod tests {
         let map = make_source_map(src, vec![
             Segment::Native { span: Span { start: 0, end: src.len() } },
         ]);
-        let result = assemble(&map, &[], TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]).unwrap();
         assert_eq!(result, src);
     }
 
@@ -458,7 +524,7 @@ mod tests {
             Segment::Native { span: Span { start: epilog_start, end: src.len() } },
         ]);
         let generated = vec![("Foo".to_string(), "class Foo:\n  pass\n".to_string())];
-        let result = assemble(&map, &generated, TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[]).unwrap();
         assert_eq!(result, "prolog\nclass Foo:\n  pass\nepilogue\n");
     }
 
@@ -473,15 +539,24 @@ mod tests {
             },
             Segment::Native { span: Span { start: 18, end: src.len() } },
         ]);
-        let result = assemble(&map, &[], TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]).unwrap();
         assert_eq!(result, "import os\n");
+    }
+
+    /// Helper that builds an empty params lookup. Most of these tests
+    /// exercise zero-arg or raw passthrough flows where the system has no
+    /// declared params and the assembler is expected to forward the
+    /// args text unchanged.
+    fn empty_params() -> HashMap<&'static str, &'static [SystemParam]> {
+        HashMap::new()
     }
 
     #[test]
     fn test_tagged_instantiation_python() {
         let src = "s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
-        let result = expand_tagged_instantiations(src, &systems, TargetLanguage::Python3).unwrap();
+        let params = empty_params();
+        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = Foo()\n");
     }
 
@@ -489,7 +564,8 @@ mod tests {
     fn test_tagged_instantiation_typescript() {
         let src = "let s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
-        let result = expand_tagged_instantiations(src, &systems, TargetLanguage::TypeScript).unwrap();
+        let params = empty_params();
+        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::TypeScript).unwrap();
         assert_eq!(result, "let s = new Foo()\n");
     }
 
@@ -497,7 +573,8 @@ mod tests {
     fn test_tagged_instantiation_rust() {
         let src = "let s = @@Foo();\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
-        let result = expand_tagged_instantiations(src, &systems, TargetLanguage::Rust).unwrap();
+        let params = empty_params();
+        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Rust).unwrap();
         assert_eq!(result, "let s = Foo::new();\n");
     }
 
@@ -505,7 +582,8 @@ mod tests {
     fn test_tagged_instantiation_c() {
         let src = "struct Foo* s = @@Foo();\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
-        let result = expand_tagged_instantiations(src, &systems, TargetLanguage::C).unwrap();
+        let params = empty_params();
+        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::C).unwrap();
         assert_eq!(result, "struct Foo* s = Foo_new();\n");
     }
 
@@ -513,7 +591,8 @@ mod tests {
     fn test_tagged_instantiation_with_args() {
         let src = "s = @@Foo(1, \"hello\")\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
-        let result = expand_tagged_instantiations(src, &systems, TargetLanguage::Python3).unwrap();
+        let params = empty_params();
+        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = Foo(1, \"hello\")\n");
     }
 
@@ -521,7 +600,8 @@ mod tests {
     fn test_tagged_instantiation_in_comment_not_expanded() {
         let src = "# s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
-        let result = expand_tagged_instantiations(src, &systems, TargetLanguage::Python3).unwrap();
+        let params = empty_params();
+        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "# s = @@Foo()\n");
     }
 
@@ -529,7 +609,8 @@ mod tests {
     fn test_tagged_instantiation_in_string_not_expanded() {
         let src = "s = \"@@Foo()\"\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
-        let result = expand_tagged_instantiations(src, &systems, TargetLanguage::Python3).unwrap();
+        let params = empty_params();
+        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = \"@@Foo()\"\n");
     }
 
@@ -567,7 +648,7 @@ mod tests {
             ("Alpha".to_string(), "class Alpha: pass\n".to_string()),
             ("Beta".to_string(), "class Beta: pass\n".to_string()),
         ];
-        let result = assemble(&map, &generated, TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[]).unwrap();
         assert!(result.contains("prolog\n"));
         assert!(result.contains("class Alpha: pass\n"));
         assert!(result.contains("\nnative_between\n"));
@@ -586,7 +667,7 @@ mod tests {
                 name: "Foo".to_string(),
             },
         ]);
-        let result = assemble(&map, &[], TargetLanguage::Python3, &[]);
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("Foo"));
     }
@@ -595,7 +676,8 @@ mod tests {
     fn test_undefined_tagged_instantiation_errors() {
         let src = "s = @@Unknown()\n";
         let systems: HashSet<String> = HashSet::new();
-        let result = expand_tagged_instantiations(src, &systems, TargetLanguage::Python3);
+        let params: HashMap<&str, &[SystemParam]> = HashMap::new();
+        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3);
         assert!(result.is_err());
     }
 
@@ -620,7 +702,7 @@ mod tests {
         let generated = vec![
             ("MySystem".to_string(), "class MySystem:\n  pass\n".to_string()),
         ];
-        let result = assemble(&map, &generated, TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[]).unwrap();
         assert_eq!(result, "s = MySystem()\nclass MySystem:\n  pass\n");
     }
 
@@ -640,7 +722,7 @@ mod tests {
         ]);
         let generated = vec![("Foo".to_string(), "class Foo:\n  pass\n".to_string())];
         let runtime_imports = vec!["from typing import Any".to_string()];
-        let result = assemble(&map, &generated, TargetLanguage::Python3, &runtime_imports).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &runtime_imports).unwrap();
         // Runtime imports should come first, then the native prolog, then system
         assert!(result.starts_with("from typing import Any\n"));
         assert!(result.contains("\nimport json\n"));
