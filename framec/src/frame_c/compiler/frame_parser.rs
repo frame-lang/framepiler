@@ -1521,22 +1521,54 @@ impl FrameParser {
             .trim()
             .to_string();
 
-        // Extract variable name for identification (first identifier in the line)
-        // This handles both "int x = 0" and "x: int = 0" styles
-        let name = self.extract_var_name_from_native(&raw_line);
+        // Parse the line into structured fields via the per-shape
+        // tokenizer dispatcher in the pipeline_parser module. The legacy
+        // FrameParser uses the frame_ast::TargetLanguage enum (8
+        // variants); map it to visitors::TargetLanguage for the dispatch
+        // call.
+        let visitor_lang = match self.target {
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Python3 =>
+                crate::frame_c::visitors::TargetLanguage::Python3,
+            crate::frame_c::compiler::frame_ast::TargetLanguage::TypeScript =>
+                crate::frame_c::visitors::TargetLanguage::TypeScript,
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Rust =>
+                crate::frame_c::visitors::TargetLanguage::Rust,
+            crate::frame_c::compiler::frame_ast::TargetLanguage::CSharp =>
+                crate::frame_c::visitors::TargetLanguage::CSharp,
+            crate::frame_c::compiler::frame_ast::TargetLanguage::C =>
+                crate::frame_c::visitors::TargetLanguage::C,
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Cpp =>
+                crate::frame_c::visitors::TargetLanguage::Cpp,
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Java =>
+                crate::frame_c::visitors::TargetLanguage::Java,
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Graphviz =>
+                crate::frame_c::visitors::TargetLanguage::Graphviz,
+        };
+
+        let parsed = crate::frame_c::compiler::pipeline_parser::domain_native::parse_domain_field(
+            &raw_line,
+            visitor_lang,
+        ).map_err(|e| ParseError::Expected(format!("malformed domain field: {:?}", e)))?;
 
         Ok(DomainVar {
-            name,
-            var_type: Type::Unknown,  // Not parsed for native
-            initializer: None,         // Not parsed for native
-            is_frame: false,           // V4: domain is always native
-            raw_code: Some(raw_line),  // Store native code for pass-through
+            name: parsed.name,
+            var_type: parsed.var_type,
+            initializer_text: parsed.init_text,
+            initializer: None,
+            is_frame: false,
+            raw_code: Some(raw_line),
             span: Span::new(start, self.cursor),
         })
     }
 
-    /// Extract variable name from native declaration line
-    /// Handles: "int x = 0", "x: int = 0", "let x = 0", "var x = 0", etc.
+    /// Extract variable name from native declaration line.
+    ///
+    /// **DEPRECATED:** the legacy heuristic name extractor. Kept for the
+    /// few remaining call sites that pre-date the structured domain field
+    /// parser. New code should use
+    /// `pipeline_parser::domain_native::parse_domain_field` which produces
+    /// the full structured `(name, type, init_text)` tuple.
+    #[allow(dead_code)]
     fn extract_var_name_from_native(&self, line: &str) -> String {
         let line = line.trim();
 

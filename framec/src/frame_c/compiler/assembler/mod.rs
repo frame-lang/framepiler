@@ -452,6 +452,7 @@ mod tests {
             Segment::System {
                 outer_span: Span { start: system_start, end: system_end },
                 body_span: Span { start: system_start + 16, end: system_end - 1 },
+                header_params_span: None,
                 name: "Foo".to_string(),
             },
             Segment::Native { span: Span { start: epilog_start, end: src.len() } },
@@ -549,12 +550,14 @@ mod tests {
             Segment::System {
                 outer_span: Span { start: s1_start, end: s1_end },
                 body_span: Span { start: s1_start + 2, end: s1_end - 2 },
+                header_params_span: None,
                 name: "Alpha".to_string(),
             },
             Segment::Native { span: Span { start: between_start, end: between_end } },
             Segment::System {
                 outer_span: Span { start: s2_start, end: s2_end },
                 body_span: Span { start: s2_start + 2, end: s2_end - 2 },
+                header_params_span: None,
                 name: "Beta".to_string(),
             },
             Segment::Native { span: Span { start: epilog_start, end: src.len() } },
@@ -579,6 +582,7 @@ mod tests {
             Segment::System {
                 outer_span: Span { start: 0, end: src.len() },
                 body_span: Span { start: 14, end: 15 },
+                header_params_span: None,
                 name: "Foo".to_string(),
             },
         ]);
@@ -608,6 +612,7 @@ mod tests {
             Segment::System {
                 outer_span: Span { start: native_end, end: full_src.len() },
                 body_span: Span { start: native_end + 20, end: full_src.len() - 1 },
+                header_params_span: None,
                 name: "MySystem".to_string(),
             },
         ]);
@@ -629,6 +634,7 @@ mod tests {
             Segment::System {
                 outer_span: Span { start: prolog_end, end: src.len() },
                 body_span: Span { start: prolog_end + 16, end: src.len() - 1 },
+                header_params_span: None,
                 name: "Foo".to_string(),
             },
         ]);

@@ -504,13 +504,39 @@ pub struct OperationBody {
 }
 
 /// Domain variable
+///
+/// Domain fields are written in the target language's native syntax
+/// (`int x = 5` for C, `var x: Int = 5` for Swift, `x = 5` for Erlang,
+/// etc.). The Frame compiler parses each declaration into structured
+/// fields via per-language tokenizers in `pipeline_parser::domain_native`,
+/// so codegen can consume `name`, `var_type`, and `initializer_text`
+/// without re-parsing the raw line.
 #[derive(Debug, Clone)]
 pub struct DomainVar {
+    /// Field identifier.
     pub name: String,
+    /// Field type, parsed from the native declaration.
+    /// `Type::Custom(s)` carries the user's verbatim type text (including
+    /// modifiers like `final` or `const`, generic parameters, pointer
+    /// markers, etc.). `Type::Unknown` for shapes that don't carry an
+    /// explicit type — e.g. an Erlang bare `name = value` declaration.
     pub var_type: Type,
+    /// Initializer expression as raw target-language text, captured from
+    /// the first top-level `=` to end of line. `None` if the field has
+    /// no initializer (e.g. `int last_output` in C). Frame doesn't
+    /// interpret this text — codegen emits it verbatim where the
+    /// constructor params are in scope.
+    pub initializer_text: Option<String>,
+    /// Original Frame `Expression` slot. Currently unused — domain init
+    /// expressions are target-language code, not Frame syntax. Kept for
+    /// possible future use if Frame ever wants to validate init
+    /// expressions structurally.
     pub initializer: Option<Expression>,
     pub is_frame: bool,  // true if Frame-managed, false if native
-    pub raw_code: Option<String>,  // Native code pass-through (V4: domain is native)
+    /// Original source line, kept for diagnostics and as a fallback for
+    /// any backend that hasn't migrated to consume the structured fields.
+    /// Codegen should prefer the structured fields where possible.
+    pub raw_code: Option<String>,
     pub span: Span,
 }
 

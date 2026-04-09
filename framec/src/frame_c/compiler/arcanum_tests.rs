@@ -245,6 +245,7 @@ mod tests {
         system.domain.push(DomainVar {
             name: "counter".to_string(),
             var_type: Type::Custom("int".into()),
+            initializer_text: None,
             initializer: None,
             is_frame: true,
             raw_code: None,
@@ -368,6 +369,7 @@ mod tests {
         system.domain.push(DomainVar {
             name: "counter".to_string(),
             var_type: Type::Custom("int".into()),
+            initializer_text: None,
             initializer: None,
             is_frame: true,
             raw_code: None,

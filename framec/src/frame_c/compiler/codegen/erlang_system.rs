@@ -989,48 +989,22 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
         false
     };
 
-    // Domain vars — strip type annotations for Erlang record syntax
-    // "name: type = value" → "name = value"
-    // For initializers that reference a system param, emit a neutral
-    // default and let init/N populate the field via the record literal.
+    // Domain vars — emit Erlang record fields from the structured
+    // (name, var_type, initializer_text) slots populated by the new
+    // domain_native parser. Erlang ignores the var_type entirely
+    // (record fields are dynamically typed in Erlang). The initializer
+    // text becomes the record field default — except when it references
+    // a system param, in which case we emit `undefined` and let init/N
+    // populate the real value via the record literal (Erlang record
+    // defaults are evaluated at compile time and can't see init/N's
+    // variables).
     for var in &system.domain {
-        if let Some(ref raw) = var.raw_code {
-            let trimmed = raw.trim();
-            // Strip ": type" between name and "="
-            let field_str = if let Some(colon_pos) = trimmed.find(':') {
-                if let Some(eq_pos) = trimmed.find('=') {
-                    if colon_pos < eq_pos {
-                        let name = trimmed[..colon_pos].trim();
-                        let value = trimmed[eq_pos..].trim(); // includes "= value"
-                        format!("{} {}", name, value)
-                    } else {
-                        trimmed.to_string()
-                    }
-                } else {
-                    // Has type annotation but no initializer — just use name
-                    trimmed[..colon_pos].trim().to_string() + " = undefined"
-                }
-            } else {
-                trimmed.to_string()
-            };
-            // If the field references a header param, replace the
-            // initializer with `= undefined` for the record default.
-            // The real value is set in init/N.
-            let field_str = if raw_references_param(&field_str) {
-                if let Some(eq_pos) = field_str.find('=') {
-                    format!("{} = undefined", field_str[..eq_pos].trim())
-                } else {
-                    format!("{} = undefined", field_str.trim())
-                }
-            } else {
-                field_str
-            };
-            // Expand @@SystemName() in domain initializers
-            let field_str = expand_tagged_in_domain_erlang(&field_str);
-            all_fields.push(format!("    {}", field_str));
-        } else {
-            all_fields.push(format!("    {} = undefined", var.name));
-        }
+        let init_for_record = match &var.initializer_text {
+            Some(init) if raw_references_param(init) => "undefined".to_string(),
+            Some(init) => expand_tagged_in_domain_erlang(init),
+            None => "undefined".to_string(),
+        };
+        all_fields.push(format!("    {} = {}", var.name, init_for_record));
     }
 
     // State variables — prefixed with sv_StateName_ to avoid collisions
@@ -1110,43 +1084,21 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
         format!("[{}]", sys_param_vars.join(", "))
     };
     let mut record_overrides: Vec<String> = Vec::new();
-    // Domain field overrides for fields that reference params.
+    // Domain field overrides for fields whose initializer references a
+    // header param. The structured `initializer_text` slot is the
+    // canonical source — no more `.find(':')` cascade on raw_code.
     for var in &system.domain {
-        if let Some(ref raw) = var.raw_code {
-            let trimmed = raw.trim();
-            // Strip ": type" between name and "=" so we get the bare init expr
-            let (field_name, init_expr_opt) = if let Some(colon_pos) = trimmed.find(':') {
-                if let Some(eq_pos) = trimmed.find('=') {
-                    if colon_pos < eq_pos {
-                        (
-                            trimmed[..colon_pos].trim().to_string(),
-                            Some(trimmed[eq_pos + 1..].trim().to_string()),
-                        )
-                    } else {
-                        (trimmed.to_string(), None)
-                    }
-                } else {
-                    (trimmed[..colon_pos].trim().to_string(), None)
+        if let Some(init_expr) = &var.initializer_text {
+            if raw_references_param(init_expr) {
+                // Substitute bare param identifiers with their
+                // capitalized Erlang variable names, then emit the
+                // record override.
+                let mut substituted = init_expr.clone();
+                for p in sys_params {
+                    let cap = erlang_safe_capitalize(&p.name);
+                    substituted = replace_word(&substituted, &p.name, &cap);
                 }
-            } else if let Some(eq_pos) = trimmed.find('=') {
-                (
-                    trimmed[..eq_pos].trim().to_string(),
-                    Some(trimmed[eq_pos + 1..].trim().to_string()),
-                )
-            } else {
-                (trimmed.to_string(), None)
-            };
-            if let Some(init_expr) = init_expr_opt {
-                if raw_references_param(&init_expr) {
-                    // Substitute bare param identifiers with their capitalized
-                    // Erlang variable names, then emit the record override.
-                    let mut substituted = init_expr.clone();
-                    for p in sys_params {
-                        let cap = erlang_safe_capitalize(&p.name);
-                        substituted = replace_word(&substituted, &p.name, &cap);
-                    }
-                    record_overrides.push(format!("{} = {}", field_name, substituted));
-                }
+                record_overrides.push(format!("{} = {}", var.name, substituted));
             }
         }
     }

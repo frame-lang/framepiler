@@ -160,6 +160,7 @@ pub struct Lexer<'a> {
     native_end: usize,    // end of current native block (NativeAware mode only)
     mode: LexerMode,
     skipper: Box<dyn SyntaxSkipper>,
+    lang: TargetLanguage,
     pending: VecDeque<Spanned>,
 }
 
@@ -178,8 +179,16 @@ impl<'a> Lexer<'a> {
             native_end: 0,
             mode: LexerMode::Structural,
             skipper,
+            lang,
             pending: VecDeque::new(),
         }
+    }
+
+    /// Target language this lexer was constructed for. Used by the
+    /// parser when it needs to dispatch language-aware sub-parsers
+    /// (e.g. the domain field tokenizer).
+    pub fn lang(&self) -> TargetLanguage {
+        self.lang
     }
 
     /// Get the next token.

@@ -461,38 +461,95 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         .with_visibility(Visibility::Private)
         .with_type(&context_stack_type));
 
-    // Domain variables (V4: native code pass-through for most languages, C needs parsed types)
-    for domain_var in &system.domain {
-        // For V4, var_type is Unknown - extract actual type from raw_code for C compatibility
-        let type_str = if domain_var.var_type == Type::Unknown && domain_var.raw_code.is_some() {
-            // Extract type from native declaration (e.g., "char* last" -> "char*")
-            extract_type_from_raw_domain(&domain_var.raw_code, &domain_var.name)
-        } else {
-            type_to_string(&domain_var.var_type)
+    /// Render a `DomainVar`'s structured fields back to a single source
+    /// line in whichever shape the target language's emit_field expects.
+    /// Used as a transitional bridge while per-backend emitters still
+    /// consume raw_code rather than the structured slots directly.
+    fn synthesize_field_raw(
+        var: &crate::frame_c::compiler::frame_ast::DomainVar,
+        lang: TargetLanguage,
+    ) -> String {
+        let type_text = match &var.var_type {
+            Type::Custom(s) => s.clone(),
+            Type::Unknown => String::new(),
         };
-
-        if let Some(ref raw_code) = domain_var.raw_code {
-            // V4: Pass through native code verbatim for Python/TypeScript/Rust
-            // But also include type annotation for C backend which needs it
-            // Expand @@SystemName() tagged instantiations in domain initializers
-            let expanded_code = expand_tagged_in_domain(raw_code, syntax.language);
-            let field = Field::new(&domain_var.name)
-                .with_visibility(Visibility::Public)
-                .with_type(&type_str)
-                .with_raw_code(&expanded_code);
-            fields.push(field);
-        } else {
-            // Domain vars are public so generated FSMs can be driven externally
-            let mut field = Field::new(&domain_var.name)
-                .with_visibility(Visibility::Public)
-                .with_type(&type_str);
-
-            if let Some(ref init) = &domain_var.initializer {
-                field = field.with_initializer(convert_expression(init));
+        let init_suffix = match &var.initializer_text {
+            Some(t) => format!(" = {}", t),
+            None => String::new(),
+        };
+        // GoStyle: `<name> <type>[ = <init>]`. Go's emit_field expects
+        // this exact shape — name first, then type, no colon.
+        if matches!(lang, TargetLanguage::Go) {
+            if type_text.is_empty() {
+                return format!("{}{}", var.name, init_suffix);
             }
-
-            fields.push(field);
+            return format!("{} {}{}", var.name, type_text, init_suffix);
         }
+        // TypeFirst-shaped languages: `<type> <name>[ = <init>]`
+        let type_first = matches!(
+            lang,
+            TargetLanguage::C
+                | TargetLanguage::Cpp
+                | TargetLanguage::Java
+                | TargetLanguage::CSharp
+                | TargetLanguage::Dart
+        );
+        if type_first && !type_text.is_empty() {
+            format!("{} {}{}", type_text, var.name, init_suffix)
+        } else if !type_text.is_empty() {
+            // AnnotatedName: `<name>: <type>[ = <init>]`
+            format!("{}: {}{}", var.name, type_text, init_suffix)
+        } else {
+            // BareName / unknown type: `<name>[ = <init>]`
+            format!("{}{}", var.name, init_suffix)
+        }
+    }
+
+    // Domain variables.
+    //
+    // The pipeline parser's domain_native module produces structured
+    // (name, var_type, initializer_text) tuples for every field. We
+    // build a Field codegen node from those structured slots — no more
+    // string surgery on raw_code.
+    //
+    // For each backend's `emit_field` we currently still pass raw_code
+    // for backwards compat (existing emitters fall back to it). The raw
+    // code is now SYNTHESISED from the structured fields rather than
+    // taken from the source line, so the per-backend emitter sees a
+    // canonical form. Future backend cleanups can drop raw_code in
+    // favor of the structured slots.
+    for domain_var in &system.domain {
+        let type_str = type_to_string(&domain_var.var_type);
+
+        // Build a synthesised raw_code line from the structured fields
+        // for the backends that still consume raw_code at the field
+        // declaration site. The shape varies per backend:
+        //   - C / C++ / Java / etc. (TypeFirst):  `<type> <name> = <init>`
+        //   - Python / TS / Rust / etc.:           `<name>: <type> = <init>`
+        //   - Erlang (BareName):                   `<name> = <init>`
+        // For now we hand back the AnnotatedName form (`<name>: <type> = <init>`)
+        // for languages that historically used it, and TypeFirst for the
+        // C-family backends. Init is omitted entirely if not present, so
+        // raw_code remains a faithful representation of what the user
+        // would have written.
+        let synthesised_raw = synthesize_field_raw(domain_var, syntax.language);
+        let expanded_code = expand_tagged_in_domain(&synthesised_raw, syntax.language);
+
+        let mut field = Field::new(&domain_var.name)
+            .with_visibility(Visibility::Public)
+            .with_type(&type_str)
+            .with_raw_code(&expanded_code);
+
+        // Also populate the structured initializer slot when the field
+        // has an init expression and the legacy Expression form is
+        // present (always None today; reserved for a future Frame
+        // expression parser that handles domain init expressions
+        // structurally).
+        if let Some(ref init) = &domain_var.initializer {
+            field = field.with_initializer(convert_expression(init));
+        }
+
+        fields.push(field);
     }
 
     // Rust state vars now live on compartment.state_context (StateContext enum)
@@ -3023,6 +3080,7 @@ use crate::frame_c::compiler::codegen::codegen_utils::{
         system.domain.push(DomainVar {
             name: "counter".to_string(),
             var_type: Type::Custom("int".into()),
+            initializer_text: Some("0".to_string()),
             initializer: Some(Expression::Literal(Literal::Int(0))),
             is_frame: false,
             raw_code: None,

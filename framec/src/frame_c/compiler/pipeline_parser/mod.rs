@@ -8,6 +8,8 @@
 //! After parsing, the AST contains every Frame statement and every native code
 //! chunk — no further source scanning is needed.
 
+pub mod domain_native;
+
 use crate::frame_c::compiler::frame_ast::*;
 use crate::frame_c::compiler::lexer::{Lexer, Token, Spanned, LexError};
 use crate::frame_c::visitors::TargetLanguage;
@@ -1039,15 +1041,18 @@ impl<'a> Parser<'a> {
     // Domain Section
     // ========================================================================
 
-    /// Parse the domain section as native code pass-through.
+    /// Parse the domain section.
     ///
-    /// Domain blocks are strictly native code — no Frame syntax. Each line is
-    /// captured verbatim, with only the variable name extracted (first identifier
-    /// on the line) so codegen can generate `self.name = ...` assignments.
+    /// Each line is a native target-language field declaration. The
+    /// `domain_native` module's per-shape tokenizers parse each line
+    /// into structured `(name, type, init_text)` and the result is
+    /// stored on `DomainVar`. Codegen reads the structured fields
+    /// directly — no string surgery on raw source text downstream.
     fn parse_domain(&mut self) -> Result<Vec<DomainVar>, ParseError> {
         let mut vars = Vec::new();
         let src = self.lexer.source();
         let mut pos = self.lexer.cursor();
+        let lang = self.lexer.lang();
 
         // Skip initial whitespace/newlines after `domain:`
         while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t' || src[pos] == b'\n' || src[pos] == b'\r') {
@@ -1114,20 +1119,28 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Extract variable name from the native declaration.
-            // For C-style (`int count = 0`): name is second identifier
-            // For Python/TS/Rust-style (`count: int = 0` or `count = 0`): name is first identifier
-            let name = Self::extract_domain_var_name(&raw_line);
-
-            let start_offset = content_start;
-            vars.push(DomainVar {
-                name,
-                var_type: Type::Unknown,
-                initializer: None,
-                is_frame: false,
-                raw_code: Some(raw_line),
-                span: Span::new(start_offset, pos),
-            });
+            // Parse the line into structured fields via the per-shape
+            // tokenizer dispatcher. The dispatcher tries the language's
+            // preferred shapes in priority order until one matches.
+            match domain_native::parse_domain_field(&raw_line, lang) {
+                Ok(parsed) => {
+                    vars.push(DomainVar {
+                        name: parsed.name,
+                        var_type: parsed.var_type,
+                        initializer_text: parsed.init_text,
+                        initializer: None,
+                        is_frame: false,
+                        raw_code: Some(raw_line),
+                        span: Span::new(content_start, pos),
+                    });
+                }
+                Err(e) => {
+                    return Err(ParseError {
+                        message: format!("malformed domain field: {:?}", e),
+                        span: Span::new(content_start, pos),
+                    });
+                }
+            }
         }
 
         self.lexer.set_cursor(pos);
@@ -1142,93 +1155,6 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(vars)
-    }
-
-    /// Extract the variable name from a native domain declaration line.
-    ///
-    /// Handles multiple declaration styles:
-    /// - Python/TS/Rust: `name = value`, `name: type = value` → name is first ident
-    /// - C: `int name = value`, `char* name = value` → name is after the type
-    fn extract_domain_var_name(line: &str) -> String {
-        let bytes = line.as_bytes();
-        let mut pos = 0;
-
-        // Skip leading whitespace
-        while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
-            pos += 1;
-        }
-
-        // Read first identifier
-        let first_start = pos;
-        while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-            pos += 1;
-        }
-        let first_ident = &line[first_start..pos];
-
-        // Skip namespace qualifiers (e.g., std::string → skip past std::)
-        while pos + 1 < bytes.len() && bytes[pos] == b':' && bytes[pos + 1] == b':' {
-            pos += 2; // skip ::
-            // Read the next identifier (e.g., "string" in "std::string")
-            while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-                pos += 1;
-            }
-        }
-
-        // Skip angle-bracket templates (e.g., vector<int>)
-        if pos < bytes.len() && bytes[pos] == b'<' {
-            let mut depth = 1;
-            pos += 1;
-            while pos < bytes.len() && depth > 0 {
-                if bytes[pos] == b'<' { depth += 1; }
-                if bytes[pos] == b'>' { depth -= 1; }
-                pos += 1;
-            }
-        }
-
-        // Skip whitespace and pointer stars/refs after type
-        while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t' || bytes[pos] == b'*' || bytes[pos] == b'&') {
-            pos += 1;
-        }
-
-        // Check what follows: if it's another identifier (not `:`, `=`, or end),
-        // this is C-style where first_ident is the type and the next ident is the name
-        if pos < bytes.len() && (bytes[pos].is_ascii_alphabetic() || bytes[pos] == b'_') {
-            let peek = bytes[pos];
-            // Verify the first ident looks like a C type keyword
-            if !matches!(first_ident, "" | "var") && peek != b':' && peek != b'=' {
-                let name_start = pos;
-                while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-                    pos += 1;
-                }
-                // After this second ident, check if we see `=`, `;`, `[`, or end-of-line
-                // to confirm it's truly C-style `type name`
-                let mut check = pos;
-                while check < bytes.len() && (bytes[check] == b' ' || bytes[check] == b'\t') {
-                    check += 1;
-                }
-                if check >= bytes.len() || matches!(bytes[check], b'=' | b';' | b'[' | b'\n') {
-                    return line[name_start..pos].to_string();
-                }
-            }
-        }
-
-        // If first_ident is "var" (GDScript/JS style), the actual name is the next identifier
-        if first_ident == "var" {
-            // Skip whitespace after "var"
-            while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
-                pos += 1;
-            }
-            let name_start = pos;
-            while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
-                pos += 1;
-            }
-            if pos > name_start {
-                return line[name_start..pos].to_string();
-            }
-        }
-
-        // Default: first identifier is the variable name (Python/TS/Rust style)
-        first_ident.to_string()
     }
 
     // ========================================================================
