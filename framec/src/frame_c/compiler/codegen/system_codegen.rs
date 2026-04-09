@@ -473,9 +473,22 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             Type::Custom(s) => s.clone(),
             Type::Unknown => String::new(),
         };
-        let init_suffix = match &var.initializer_text {
-            Some(t) => format!(" = {}", t),
-            None => String::new(),
+        // C++ omits the inline initializer at field-declaration time:
+        // a domain field whose init expression references a constructor
+        // parameter of the same name (e.g., `balance: int = balance`)
+        // would synthesize to `int balance = balance;` at class scope,
+        // which is undefined behavior because the right-hand side reads
+        // the field itself before it's been initialized. We move all
+        // domain init into the constructor body for C++ (the same shape
+        // the C backend uses), where the constructor parameter is in
+        // scope and the assignment becomes unambiguous.
+        let init_suffix = if matches!(lang, TargetLanguage::Cpp) {
+            String::new()
+        } else {
+            match &var.initializer_text {
+                Some(t) => format!(" = {}", t),
+                None => String::new(),
+            }
         };
         // GoStyle: `<name> <type>[ = <init>]`. Go's emit_field expects
         // this exact shape — name first, then type, no colon.
@@ -697,6 +710,24 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             // the struct field at whatever malloc gave us. (The existing
             // calloc-zeroing assumption is preserved by callers; when this
             // matters we'll surface it as an explicit zero init.)
+            continue;
+        }
+        // C++ uses the same constructor-body init pattern as C: every
+        // domain var with an initializer becomes `this->name = init;`
+        // in the constructor body. The field-level init has been
+        // stripped by `synthesize_field_raw` for C++, so the constructor
+        // body is the only place initialization happens. This makes
+        // `balance: int = balance` legal — the LHS resolves to the
+        // class member, the RHS to the constructor parameter, and the
+        // two scopes are unambiguous.
+        if matches!(syntax.language, TargetLanguage::Cpp) {
+            if let Some(ref init_text) = domain_var.initializer_text {
+                let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Cpp);
+                body.push(CodegenNode::NativeBlock {
+                    code: format!("this->{} = {};", domain_var.name, init_expanded),
+                    span: None,
+                });
+            }
             continue;
         }
         if let Some(ref raw_code) = domain_var.raw_code {
@@ -1277,6 +1308,36 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             prev_comp_expr
                         ));
 
+                        // System state and enter params: bind into the start
+                        // state's state_args / enter_args dicts. Mirrors the
+                        // Python and C constructor populations — every
+                        // ParamKind::StateArg lands in `state_args[name]`,
+                        // every ParamKind::EnterArg in `enter_args[name]`.
+                        // Values are wrapped in std::any so the dispatch
+                        // reader (which uses std::any_cast<Type>) round-trips
+                        // them correctly. cpp_wrap_any_arg promotes string
+                        // literals to std::string so any_cast<std::string>
+                        // works on the read side.
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    let wrapped = cpp_wrap_any_arg(&p.name);
+                                    hsm_init_code.push_str(&format!(
+                                        "__compartment->state_args[\"{}\"] = std::any({});\n",
+                                        p.name, wrapped
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    let wrapped = cpp_wrap_any_arg(&p.name);
+                                    hsm_init_code.push_str(&format!(
+                                        "__compartment->enter_args[\"{}\"] = std::any({});\n",
+                                        p.name, wrapped
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1289,6 +1350,34 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             ),
                             span: None,
                         });
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    let wrapped = cpp_wrap_any_arg(&p.name);
+                                    compartment_inits.push(format!(
+                                        "__compartment->state_args[\"{}\"] = std::any({});",
+                                        p.name, wrapped
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    let wrapped = cpp_wrap_any_arg(&p.name);
+                                    compartment_inits.push(format!(
+                                        "__compartment->enter_args[\"{}\"] = std::any({});",
+                                        p.name, wrapped
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Java => {

@@ -208,7 +208,7 @@ pub(crate) fn generate_state_method(
         TargetLanguage::Dart => generate_dart_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Rust => generate_rust_state_dispatch(_system_name, state_name, handlers, state_vars, parent_state, default_forward),
         TargetLanguage::C => generate_c_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Cpp => generate_cpp_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
+        TargetLanguage::Cpp => generate_cpp_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Java => generate_java_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Kotlin => generate_kotlin_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Swift => generate_swift_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
@@ -1071,6 +1071,7 @@ pub(crate) fn generate_cpp_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -1078,6 +1079,23 @@ pub(crate) fn generate_cpp_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment->state_args[name] to a typed local
+    // at the top of the dispatch so handler bodies can read them by bare
+    // name. Mirrors the Python and C preambles. The values were stored as
+    // std::any in the constructor (or by the transition codegen), so we
+    // pull them out via std::any_cast<Type> here.
+    for sp in state_params {
+        let raw_type = match &sp.param_type {
+            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+            crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
+        };
+        let cpp_type = cpp_map_type(raw_type);
+        code.push_str(&format!(
+            "auto {0} = std::any_cast<{1}>(__compartment->state_args[\"{0}\"]);\n",
+            sp.name, cpp_type
+        ));
+    }
 
     // HSM: Navigate parent_compartment chain to find this state's compartment
     // When forwarded from a child, __compartment points to the child's compartment

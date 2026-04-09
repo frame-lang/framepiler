@@ -380,10 +380,23 @@ return __result;"#,
             }
             TargetLanguage::Cpp => {
                 let context_class = format!("{}FrameContext", system.name);
-                let has_return = method.return_type.is_some() || method.return_init.is_some();
-                let return_type_str = method.return_type.as_ref()
+                // Map the Frame return type to its C++ equivalent BEFORE
+                // any further use. Without this `: str` returns leak into
+                // `std::any_cast<str>` (undefined identifier) and `: void`
+                // returns leak into `std::any_cast<void>` (which is a
+                // template substitution failure). The mapper translates
+                // `str`/`string`/`String` to `std::string`, `bool`/`boolean`
+                // to `bool`, etc.
+                let raw_return_type = method.return_type.as_ref()
                     .map(|t| type_to_string(t))
                     .unwrap_or_else(|| "void".to_string());
+                let return_type_str = cpp_map_type(&raw_return_type);
+                // A method with `: void` declared has no value to extract
+                // from the return slot — treat it as no-return for the
+                // any_cast/return path. The context still needs to be
+                // pushed so the handler can run, but we never read back.
+                let returns_value = (method.return_type.is_some() || method.return_init.is_some())
+                    && return_type_str != "void";
 
                 let mut code = String::new();
 
@@ -407,7 +420,7 @@ return __result;"#,
                         init.clone()
                     };
                     code.push_str(&format!("{} __ctx(std::move(__e), std::any({}));\n", context_class, init_wrapped));
-                } else if has_return && return_type_str != "void" {
+                } else if returns_value {
                     code.push_str(&format!("{} __ctx(std::move(__e), std::any({}()));\n", context_class, return_type_str));
                 } else {
                     code.push_str(&format!("{} __ctx(std::move(__e));\n", context_class));
@@ -416,7 +429,7 @@ return __result;"#,
                 code.push_str("_context_stack.push_back(std::move(__ctx));\n");
                 code.push_str("__kernel(_context_stack.back()._event);\n");
 
-                if has_return {
+                if returns_value {
                     code.push_str(&format!("auto __result = std::any_cast<{}>(std::move(_context_stack.back()._return));\n", return_type_str));
                     code.push_str("_context_stack.pop_back();\n");
                     code.push_str("return __result;");
