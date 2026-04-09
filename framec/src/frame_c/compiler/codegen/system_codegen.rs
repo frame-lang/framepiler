@@ -473,17 +473,21 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             Type::Custom(s) => s.clone(),
             Type::Unknown => String::new(),
         };
-        // C++ and Go omit the inline initializer at field-declaration
-        // time: both languages move all domain init into the constructor
-        // body (factory function for Go). C++ would synthesize
+        // C++, Go, and Java omit the inline initializer at field-
+        // declaration time: all three move domain init into the
+        // constructor (or factory function) body. C++ would synthesize
         // `int balance = balance;` at class scope — UB because the RHS
         // reads the field before it's initialized. Go struct declarations
-        // can't have inline initializers at all (`balance int = balance`
-        // is a compile error). For both, the constructor/factory body
-        // emits `this->balance = balance;` / `s.balance = balance`
-        // where the LHS resolves to the struct field and the RHS to
-        // the parameter.
-        let init_suffix = if matches!(lang, TargetLanguage::Cpp | TargetLanguage::Go) {
+        // can't have inline initializers at all. Java would compile but
+        // the RHS `balance` would resolve to the field itself (zero/null),
+        // not the constructor parameter — name-collision bug. For all
+        // three, the constructor body emits the assignment with an
+        // explicit `this.`/`this->`/`s.` prefix on the LHS so the field
+        // and the parameter are unambiguous.
+        let init_suffix = if matches!(
+            lang,
+            TargetLanguage::Cpp | TargetLanguage::Go | TargetLanguage::Java
+        ) {
             String::new()
         } else {
             match &var.initializer_text {
@@ -739,6 +743,24 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Go);
                 body.push(CodegenNode::NativeBlock {
                     code: format!("s.{} = {}", domain_var.name, init_expanded),
+                    span: None,
+                });
+            }
+            continue;
+        }
+        // Java: constructor body init. `this.field = init;` Java class
+        // field declarations CAN have inline initializers, but a domain
+        // init that references a constructor parameter (e.g.,
+        // `balance: int = balance`) creates a name-collision: at field
+        // scope `balance` resolves to the field itself, which is the
+        // wrong value. We move all domain init into the constructor
+        // body so the LHS is `this.balance` (the field) and the RHS is
+        // `balance` (the parameter), unambiguously.
+        if matches!(syntax.language, TargetLanguage::Java) {
+            if let Some(ref init_text) = domain_var.initializer_text {
+                let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Java);
+                body.push(CodegenNode::NativeBlock {
+                    code: format!("this.{} = {};", domain_var.name, init_expanded),
                     span: None,
                 });
             }
@@ -1438,6 +1460,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("this.__next_compartment = null;");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.state_args.put(\"{}\", {});",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\nthis.__compartment.enter_args.put(\"{}\", {});",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1451,6 +1492,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             ),
                             span: None,
                         });
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "__compartment.state_args.put(\"{}\", {});",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "__compartment.enter_args.put(\"{}\", {});",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Kotlin => {

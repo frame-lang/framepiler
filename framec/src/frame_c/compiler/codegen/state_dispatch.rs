@@ -209,7 +209,7 @@ pub(crate) fn generate_state_method(
         TargetLanguage::Rust => generate_rust_state_dispatch(_system_name, state_name, handlers, state_vars, parent_state, default_forward),
         TargetLanguage::C => generate_c_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Cpp => generate_cpp_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Java => generate_java_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
+        TargetLanguage::Java => generate_java_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Kotlin => generate_kotlin_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Swift => generate_swift_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::CSharp => generate_csharp_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
@@ -1236,6 +1236,7 @@ pub(crate) fn generate_java_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -1243,6 +1244,31 @@ pub(crate) fn generate_java_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a typed local
+    // via Java cast. Mirrors the Python/C/C++/Go preambles. Values are
+    // boxed Object in the HashMap, so the cast is on a boxed reference;
+    // Java auto-unboxes to the primitive on assignment to a primitive
+    // local.
+    for sp in state_params {
+        let raw_type = match &sp.param_type {
+            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+            crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
+        };
+        let java_type = java_map_type(raw_type);
+        let cast_type = match raw_type {
+            "int" | "i32" => "Integer",
+            "i64" => "Long",
+            "bool" | "boolean" => "Boolean",
+            "float" => "Float",
+            "double" | "f32" | "f64" => "Double",
+            _ => java_type.as_str(),
+        };
+        code.push_str(&format!(
+            "{0} {1} = ({2}) __compartment.state_args.get(\"{1}\");\n",
+            java_type, sp.name, cast_type
+        ));
+    }
 
     // HSM Compartment Navigation
     if !state_vars.is_empty() {
