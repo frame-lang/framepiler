@@ -520,15 +520,15 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         // factory function body. Strip unconditionally for those.
         //
         // For the OO languages with constructors (C++, Java, Swift,
-        // Kotlin, C#, Dart), only strip the field-level init when the
-        // init expression references a system parameter — that's the
-        // name-collision case `int balance = balance;` where the RHS at
-        // field-declaration scope resolves to the field itself rather
-        // than the constructor parameter. For literal initializers
-        // (`var log = mutableListOf<String>()`, `int count = 0`), we
-        // leave the init at field-declaration scope so type inference
-        // still works (Kotlin in particular needs the init for `var log`
-        // with no explicit type).
+        // Kotlin, C#, Dart, TypeScript), only strip the field-level
+        // init when the init expression references a system parameter —
+        // that's the name-collision case `name: string = name;` where
+        // the RHS at field-declaration scope resolves to the field
+        // itself rather than the constructor parameter. (TypeScript
+        // explicitly rejects this with TS2301 at compile time.) For
+        // literal initializers (`var log = mutableListOf<String>()`,
+        // `int count = 0`), we leave the init at field-declaration
+        // scope so type inference still works.
         let init_text = var.initializer_text.as_deref().unwrap_or("");
         let strip_unconditionally = matches!(lang, TargetLanguage::Go | TargetLanguage::C);
         let strip_collision = matches!(
@@ -539,6 +539,9 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
                 | TargetLanguage::Kotlin
                 | TargetLanguage::CSharp
                 | TargetLanguage::Dart
+                | TargetLanguage::TypeScript
+                | TargetLanguage::JavaScript
+                | TargetLanguage::Php
         ) && init_references_param(init_text, sys_param_names);
         let strip_init = strip_unconditionally || strip_collision;
 
@@ -870,6 +873,55 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             }
             continue;
         }
+        // TypeScript — only emit constructor-body init when stripped.
+        // TypeScript would otherwise reject `name: string = name` at class
+        // scope with TS2301 ("Initializer of instance member variable
+        // 'name' cannot reference identifier 'name' declared in the
+        // constructor.").
+        if matches!(syntax.language, TargetLanguage::TypeScript) {
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::TypeScript);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("this.{} = {};", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+            }
+            continue;
+        }
+        // JavaScript — same name-collision rule as TypeScript. JS class
+        // field initializers can't see constructor parameters either, so
+        // `name = name` at field scope reads the undeclared identifier.
+        if matches!(syntax.language, TargetLanguage::JavaScript) {
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::JavaScript);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("this.{} = {};", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+            }
+            continue;
+        }
+        // PHP — same collision rule. PHP rejects field initializers that
+        // reference variables ("Constant expression contains invalid
+        // operations"), so any init referencing a constructor param
+        // moves into the __construct body as `$this->name = $param;`.
+        if matches!(syntax.language, TargetLanguage::Php) {
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Php);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("$this->{} = {};", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+                continue;
+            }
+            // No collision — fall through to legacy raw_code branch.
+        }
         if let Some(ref raw_code) = domain_var.raw_code {
             // V4: Native code pass-through
             // Expand @@SystemName() tagged instantiations in domain initializers
@@ -944,6 +996,24 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                     code: format!("@{}", ruby_code),
                     span: None,
                 });
+            } else if matches!(syntax.language, TargetLanguage::Lua) {
+                // Lua: emit `self.<name> = <init>` in the constructor
+                // body. Lua tables don't have field declarations at all,
+                // so domain init MUST happen at construction time.
+                // Translate Frame's empty-list `[]` literal to Lua's
+                // `{}` table literal so domains like `log: list = []`
+                // produce valid Lua.
+                if let Some(ref init_text) = domain_var.initializer_text {
+                    let mut init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Lua);
+                    if init_expanded.trim() == "[]" {
+                        init_expanded = "{}".to_string();
+                    }
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("self.{} = {}", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+                continue;
             } else if matches!(syntax.language, TargetLanguage::Rust) {
                 // For Rust, extract initializer from raw_code (after '=')
                 let init_expr = raw_code.split_once('=')
@@ -2497,7 +2567,7 @@ _context_stack.removeLast()"#,
                     system.name, system.name
                 ),
                 TargetLanguage::Php => format!(
-                    r#"$__frame_event = new {}("$>", null);
+                    r#"$__frame_event = new {}("$>", $this->__compartment->enter_args);
 $__ctx = new {}FrameContext($__frame_event, null);
 $this->_context_stack[] = $__ctx;
 $this->__kernel($this->_context_stack[count($this->_context_stack) - 1]->_event);
@@ -2505,7 +2575,7 @@ array_pop($this->_context_stack);"#,
                     event_class, system.name
                 ),
                 TargetLanguage::Ruby => format!(
-                    r#"__frame_event = {}.new("$>")
+                    r#"__frame_event = {}.new("$>", @__compartment.enter_args)
 __ctx = {}FrameContext.new(__frame_event, nil)
 @_context_stack.push(__ctx)
 __kernel(@_context_stack[@_context_stack.length - 1]._event)
@@ -2513,7 +2583,7 @@ __kernel(@_context_stack[@_context_stack.length - 1]._event)
                     event_class, system.name
                 ),
                 TargetLanguage::Lua => format!(
-                    r#"local __frame_event = {}.new("$>", nil)
+                    r#"local __frame_event = {}.new("$>", self.__compartment.enter_args)
 local __ctx = {}FrameContext.new(__frame_event, nil)
 self._context_stack[#self._context_stack + 1] = __ctx
 self:__kernel(self._context_stack[#self._context_stack]._event)
@@ -2525,7 +2595,7 @@ self._context_stack[#self._context_stack] = nil"#,
                     event_class, system.name
                 ),
                 TargetLanguage::GDScript => format!(
-                    r#"var __frame_event = {}.new("$>", null)
+                    r#"var __frame_event = {}.new("$>", self.__compartment.enter_args)
 var __ctx = {}FrameContext.new(__frame_event, null)
 self._context_stack.append(__ctx)
 self.__kernel(self._context_stack[self._context_stack.size() - 1].event)

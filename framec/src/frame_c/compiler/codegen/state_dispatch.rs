@@ -2464,14 +2464,16 @@ pub(crate) fn generate_lua_state_dispatch(
             }
         }
 
-        // Parameter unpacking
-        let is_lifecycle = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
-        for (i, param) in handler.params.iter().enumerate() {
-            if is_lifecycle {
-                code.push_str(&format!("    local {} = __e._parameters[\"{}\"]\n", param.name, i));
-            } else {
-                code.push_str(&format!("    local {} = __e._parameters[\"{}\"]\n", param.name, param.name));
-            }
+        // Parameter unpacking — read by named key for both lifecycle
+        // (enter/exit) and interface handlers. The constructor and
+        // transition codegen both write under the declared param name,
+        // so the read side matches.
+        let _is_lifecycle = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        for param in handler.params.iter() {
+            code.push_str(&format!(
+                "    local {} = __e._parameters[\"{}\"]\n",
+                param.name, param.name
+            ));
         }
 
         // Emit handler default return value if present

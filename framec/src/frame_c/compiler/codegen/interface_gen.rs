@@ -680,9 +680,17 @@ return __result;"#,
                 };
 
                 if method.return_type.is_some() || method.return_init.is_some() {
+                    // Lua's block transformer treats `return` as terminal
+                    // and strips any token that follows it on the same
+                    // line. Emitting `local __ret = ...; pop; return __ret`
+                    // would have `return __ret` collapse to bare `return`,
+                    // discarding the value. Use `table.remove(...)._return`
+                    // as a single expression so the return statement has
+                    // the value embedded inline — no trailing token to
+                    // strip.
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "local __e = {}.new(\"{}\", {})\nlocal __ctx = {}.new(__e, nil){}\nself._context_stack[#self._context_stack + 1] = __ctx\nself:__kernel(__e)\nlocal __ret = self._context_stack[#self._context_stack]._return\nself._context_stack[#self._context_stack] = nil\nreturn __ret",
+                            "local __e = {}.new(\"{}\", {})\nlocal __ctx = {}.new(__e, nil){}\nself._context_stack[#self._context_stack + 1] = __ctx\nself:__kernel(__e)\nreturn table.remove(self._context_stack)._return",
                             event_class, method.name, params_code, context_class, default_init
                         ),
                         span: None,
