@@ -1529,14 +1529,20 @@ pub fn parse_system_header_params(
         // Each iteration parses one parameter.
         let param_start = i;
 
-        // Detect $(name) (state arg), $>(name) (enter arg), or bare name (domain).
+        // Detect `$(...)` (state arg), `$>(...)` (enter arg), or a bare
+        // identifier (domain). The sigils delimit a typed param body
+        // (`name: type [= default]`) inside their parens. Bare domain
+        // params use the same body shape directly at the top level.
+        //
         // Both `$(...)` and `$>(...)` are valid in the system header context;
         // the parser is at the top level inside `(` ... `)` and never inside a
         // state body, so neither sigil clashes with state-level enter handlers.
         let kind: ParamKind;
         let name;
+        let param_type;
+        let default;
         if source[i] == b'$' {
-            // Distinguish $(...) from $>(...) by the byte after `$`.
+            // Sigil branch: `$(name: type [= default])` or `$>(...)`.
             let is_enter = i + 1 < end && source[i + 1] == b'>';
             let sigil_open_pos = if is_enter { i + 2 } else { i + 1 };
             if sigil_open_pos >= end || source[sigil_open_pos] != b'(' {
@@ -1549,28 +1555,22 @@ pub fn parse_system_header_params(
                 });
             }
             i = sigil_open_pos + 1; // past `$(` or `$>(`
-            skip_ws(&mut i);
-            let name_start = i;
-            while i < end && is_ident_cont(source[i]) {
-                i += 1;
-            }
-            if name_start == i || !is_ident_start(source[name_start]) {
-                return Err(ParseError {
-                    message: format!(
-                        "expected identifier after '{}('",
-                        if is_enter { "$>" } else { "$" }
-                    ),
-                    span: Span::new(name_start, i),
-                });
-            }
-            name = std::str::from_utf8(&source[name_start..i])
-                .unwrap_or("")
-                .to_string();
+
+            // Parse the typed param body INSIDE the parens. The body
+            // shape is `name: type [= default]` and ends at the matching
+            // close paren `)`.
+            let body =
+                parse_typed_param_body(source, &mut i, end, /*close_at_paren=*/ true)?;
+            name = body.0;
+            param_type = body.1;
+            default = body.2;
+
+            // Expect closing `)`
             skip_ws(&mut i);
             if i >= end || source[i] != b')' {
                 return Err(ParseError {
                     message: format!(
-                        "expected ')' to close '{}(' param",
+                        "expected ')' to close '{}(' param body",
                         if is_enter { "$>" } else { "$" }
                     ),
                     span: Span::new(i, i.saturating_add(1)),
@@ -1579,13 +1579,13 @@ pub fn parse_system_header_params(
             i += 1; // past `)`
             kind = if is_enter { ParamKind::EnterArg } else { ParamKind::StateArg };
         } else if is_ident_start(source[i]) {
-            let name_start = i;
-            while i < end && is_ident_cont(source[i]) {
-                i += 1;
-            }
-            name = std::str::from_utf8(&source[name_start..i])
-                .unwrap_or("")
-                .to_string();
+            // Bare domain branch: `name: type [= default]` directly at
+            // the top level of the system header param list.
+            let body =
+                parse_typed_param_body(source, &mut i, end, /*close_at_paren=*/ false)?;
+            name = body.0;
+            param_type = body.1;
+            default = body.2;
             kind = ParamKind::Domain;
         } else {
             return Err(ParseError {
@@ -1596,82 +1596,6 @@ pub fn parse_system_header_params(
                 span: Span::new(i, i + 1),
             });
         }
-
-        // Optional `: type`
-        skip_ws(&mut i);
-        let param_type = if i < end && source[i] == b':' {
-            i += 1; // past `:`
-            skip_ws(&mut i);
-            let type_start = i;
-            // Type runs until `=`, `,`, `)`, or end. Whitespace is part of the
-            // type only inside angle brackets / parens (e.g. `Map<str, int>`).
-            let mut depth: i32 = 0;
-            while i < end {
-                let b = source[i];
-                if depth == 0 && (b == b',' || b == b'=') {
-                    break;
-                }
-                if b == b'<' || b == b'(' || b == b'[' {
-                    depth += 1;
-                } else if b == b'>' || b == b')' || b == b']' {
-                    if depth == 0 {
-                        break;
-                    }
-                    depth -= 1;
-                }
-                i += 1;
-            }
-            let type_text = std::str::from_utf8(&source[type_start..i])
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if type_text.is_empty() {
-                return Err(ParseError {
-                    message: "expected type after ':'".to_string(),
-                    span: Span::new(type_start, i),
-                });
-            }
-            Type::Custom(type_text)
-        } else {
-            Type::Unknown
-        };
-
-        // Optional `= default`
-        skip_ws(&mut i);
-        let default = if i < end && source[i] == b'=' {
-            i += 1; // past `=`
-            skip_ws(&mut i);
-            let def_start = i;
-            // Default runs until `,` or end (paren is the segmenter's outer
-            // boundary, not present in this span).
-            let mut depth: i32 = 0;
-            while i < end {
-                let b = source[i];
-                if depth == 0 && b == b',' {
-                    break;
-                }
-                if b == b'(' || b == b'[' || b == b'{' {
-                    depth += 1;
-                } else if b == b')' || b == b']' || b == b'}' {
-                    if depth == 0 {
-                        break;
-                    }
-                    depth -= 1;
-                }
-                i += 1;
-            }
-            let def_text = std::str::from_utf8(&source[def_start..i])
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if def_text.is_empty() {
-                None
-            } else {
-                Some(def_text)
-            }
-        } else {
-            None
-        };
 
         params.push(SystemParam {
             name,
@@ -1689,6 +1613,8 @@ pub fn parse_system_header_params(
         if i >= end {
             break;
         }
+        // For bare domain params, anything other than `,` or end is
+        // an error. Sigils should already have consumed their `)`.
         return Err(ParseError {
             message: format!(
                 "expected ',' or end of header param list, got '{}'",
@@ -1699,6 +1625,140 @@ pub fn parse_system_header_params(
     }
 
     Ok(params)
+}
+
+/// Parse a typed parameter body of shape `name: type [= default]`.
+///
+/// Used by `parse_system_header_params` for both sigil-wrapped params
+/// (`$(name: type)`, `$>(name: type)`) and bare domain params. The
+/// `close_at_paren` flag tells the parser whether the body terminates
+/// at a `)` (sigil context) or at `,` / end-of-input (bare context).
+///
+/// Returns `(name, var_type, default)`. The cursor is left positioned
+/// at the terminator (the `)` for sigil context, the `,` or end for
+/// bare context). The caller is responsible for consuming the terminator.
+fn parse_typed_param_body(
+    source: &[u8],
+    cursor: &mut usize,
+    end: usize,
+    close_at_paren: bool,
+) -> Result<(String, Type, Option<String>), ParseError> {
+    let is_ident_start = |b: u8| b.is_ascii_alphabetic() || b == b'_';
+    let is_ident_cont = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let skip_ws = |i: &mut usize| {
+        while *i < end && (source[*i] == b' ' || source[*i] == b'\t') {
+            *i += 1;
+        }
+    };
+
+    // Parse the name (identifier)
+    skip_ws(cursor);
+    let name_start = *cursor;
+    while *cursor < end && is_ident_cont(source[*cursor]) {
+        *cursor += 1;
+    }
+    if name_start == *cursor || !is_ident_start(source[name_start]) {
+        return Err(ParseError {
+            message: "expected identifier as parameter name".to_string(),
+            span: Span::new(name_start, *cursor),
+        });
+    }
+    let name = std::str::from_utf8(&source[name_start..*cursor])
+        .unwrap_or("")
+        .to_string();
+
+    // Optional `: type`
+    skip_ws(cursor);
+    let param_type = if *cursor < end && source[*cursor] == b':' {
+        *cursor += 1; // past `:`
+        skip_ws(cursor);
+        let type_start = *cursor;
+        // Type runs until terminator or `=`. Whitespace is part of the
+        // type only inside angle brackets / parens / brackets
+        // (e.g. `Map<str, int>`).
+        let mut depth: i32 = 0;
+        while *cursor < end {
+            let b = source[*cursor];
+            if depth == 0 && b == b'=' {
+                break;
+            }
+            if depth == 0 && !close_at_paren && b == b',' {
+                break;
+            }
+            if b == b'<' || b == b'(' || b == b'[' {
+                depth += 1;
+            } else if b == b'>' || b == b')' || b == b']' {
+                if depth == 0 {
+                    if close_at_paren && b == b')' {
+                        break;
+                    }
+                    if !close_at_paren && b == b')' {
+                        break;
+                    }
+                    break;
+                }
+                depth -= 1;
+            }
+            *cursor += 1;
+        }
+        let type_text = std::str::from_utf8(&source[type_start..*cursor])
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if type_text.is_empty() {
+            return Err(ParseError {
+                message: "expected type after ':'".to_string(),
+                span: Span::new(type_start, *cursor),
+            });
+        }
+        Type::Custom(type_text)
+    } else {
+        Type::Unknown
+    };
+
+    // Optional `= default`
+    skip_ws(cursor);
+    let default = if *cursor < end && source[*cursor] == b'=' {
+        *cursor += 1; // past `=`
+        skip_ws(cursor);
+        let def_start = *cursor;
+        // Default runs until terminator. Bracket depth is tracked so
+        // expressions like `make_default(1, 2)` or `[1, 2, 3]` survive.
+        let mut depth: i32 = 0;
+        while *cursor < end {
+            let b = source[*cursor];
+            if depth == 0 {
+                if close_at_paren && b == b')' {
+                    break;
+                }
+                if !close_at_paren && b == b',' {
+                    break;
+                }
+            }
+            if b == b'(' || b == b'[' || b == b'{' {
+                depth += 1;
+            } else if b == b')' || b == b']' || b == b'}' {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            *cursor += 1;
+        }
+        let def_text = std::str::from_utf8(&source[def_start..*cursor])
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if def_text.is_empty() {
+            None
+        } else {
+            Some(def_text)
+        }
+    } else {
+        None
+    };
+
+    Ok((name, param_type, default))
 }
 
 // ============================================================================
