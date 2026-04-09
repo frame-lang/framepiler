@@ -255,18 +255,78 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         8 => FrameSegmentKind::ContextReturnExpr,
                         _ => FrameSegmentKind::ContextReturn, // shouldn't happen
                     };
+                    let mut seg_end = parser.result_end;
+
+                    // For `@@:(expr) return;` on the same source line,
+                    // consume the trailing whitespace + `return` + optional `;`
+                    // as part of the ContextReturnExpr segment. Without
+                    // this the splicer leaves them as separate native
+                    // text on the same line as the assignment, which
+                    // most languages reject ("two statements on one
+                    // line"). The expansion will emit both pieces with
+                    // proper indentation.
+                    if kind == FrameSegmentKind::ContextReturnExpr {
+                        let mut p = seg_end;
+                        // Skip trailing inline whitespace.
+                        while p < end && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                            p += 1;
+                        }
+                        // Match `return` as a whole word.
+                        if p + 6 <= end && &bytes[p..p + 6] == b"return" {
+                            let after_return = p + 6;
+                            // Make sure `return` is a whole word (not
+                            // followed by an identifier character).
+                            let is_word_boundary = after_return >= end
+                                || !(bytes[after_return].is_ascii_alphanumeric()
+                                    || bytes[after_return] == b'_');
+                            if is_word_boundary {
+                                let mut q = after_return;
+                                // Skip whitespace after `return`.
+                                while q < end && (bytes[q] == b' ' || bytes[q] == b'\t') {
+                                    q += 1;
+                                }
+                                // Optional trailing `;`.
+                                if q < end && bytes[q] == b';' {
+                                    q += 1;
+                                }
+                                seg_end = q;
+                            }
+                        }
+                    }
+
+                    // Compute indent ONLY for ContextReturnExpr because
+                    // its expansion uses it to indent the trailing
+                    // `return` statement (the one introduced when the
+                    // scanner consumed `@@:(expr) return;` as a single
+                    // segment). All other @@ segments leave indent at 0
+                    // because their expansions emit a single statement
+                    // and the splicer's leading native text already
+                    // carries the correct indentation.
+                    let computed_indent = if kind == FrameSegmentKind::ContextReturnExpr {
+                        let mut line_start = ctx_start;
+                        while line_start > open_brace_index + 1
+                            && bytes[line_start - 1] != b'\n'
+                        {
+                            line_start -= 1;
+                        }
+                        ctx_start - line_start
+                    } else {
+                        0
+                    };
+
                     regions.push(Region::FrameSegment {
-                        span: RegionSpan { start: ctx_start, end: parser.result_end },
+                        span: RegionSpan { start: ctx_start, end: seg_end },
                         kind,
-                        indent: 0,
+                        indent: computed_indent,
                     });
+                    i = seg_end;
                 } else {
                     // No match — treat as native text
                     regions.push(Region::NativeText {
                         span: RegionSpan { start: ctx_start, end: parser.result_end }
                     });
+                    i = parser.result_end;
                 }
-                i = parser.result_end;
                 seg_start = i;
                 // parser is destroyed here (state manager pattern)
             }

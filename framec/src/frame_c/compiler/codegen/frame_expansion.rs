@@ -1804,44 +1804,98 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             }
         }
         FrameSegmentKind::ContextReturnExpr => {
-            // @@:(expr) - set context return value (concise form)
-            // Extract expression from between @@:( and )
+            // @@:(expr) - set context return value (concise form).
+            // The scanner extends the segment span to consume any
+            // trailing whitespace + `return` + `;` on the same source
+            // line, so when `@@:(expr) return;` appears as a single
+            // line in the source, this expansion emits BOTH the
+            // assignment to the return slot AND the native return
+            // statement on separate lines, properly indented.
+            //
+            // Detect whether the scanner consumed a trailing `return`
+            // by looking for the bare `return` keyword in segment_text
+            // outside of the `@@:(...)` expression.
             let trimmed = segment_text.trim();
-            // Find @@:( and extract everything between ( and final )
-            let expr = if let Some(start) = trimmed.find("@@:(") {
-                let inner_start = start + 4; // after "@@:("
-                let inner = &trimmed[inner_start..];
-                // Remove trailing ) — the parser already balanced parens
-                if inner.ends_with(')') {
-                    &inner[..inner.len() - 1]
-                } else {
-                    inner
+            // Find the closing paren of @@:( so we can split the
+            // segment into the expression part and the trailing
+            // (optional) `return` keyword.
+            let (expr, has_native_return) = if let Some(start) = trimmed.find("@@:(") {
+                let after_open = start + 4;
+                // Find matching close paren — paren depth aware so a
+                // function call inside the expression doesn't fool us.
+                let bytes = trimmed.as_bytes();
+                let mut depth = 1i32;
+                let mut p = after_open;
+                while p < bytes.len() && depth > 0 {
+                    match bytes[p] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    if depth > 0 {
+                        p += 1;
+                    }
                 }
+                let expr_str = trimmed[after_open..p].to_string();
+                let after_close = if p < bytes.len() { p + 1 } else { p };
+                let tail = trimmed[after_close..].trim();
+                let has_ret = tail.starts_with("return")
+                    && (tail.len() == 6
+                        || tail.as_bytes()[6].is_ascii_whitespace()
+                        || tail.as_bytes()[6] == b';');
+                (expr_str, has_ret)
             } else {
-                trimmed
+                (trimmed.to_string(), false)
             };
             let expanded_expr = expand_state_vars_in_expr(expr.trim(), lang, ctx);
-            match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._context_stack[-1]._return = {}", indent_str, expanded_expr),
-                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._return = {};", indent_str, expanded_expr),
-                TargetLanguage::C => format!("{}{}_CTX(self)->_return = (void*)(intptr_t)({});", indent_str, ctx.system_name, expanded_expr),
+            // The assignment line uses an empty indent prefix because
+            // the splicer always copies the source's leading whitespace
+            // as native text immediately before the segment expansion.
+            // Adding indent_str here would double the indent. The
+            // appended return line (when has_native_return is true)
+            // does need indent because it's on a new line introduced by
+            // the expansion itself.
+            let assignment = match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1]._return = {}", expanded_expr),
+                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1]._return = {};", expanded_expr),
+                TargetLanguage::C => format!("{}_CTX(self)->_return = (void*)(intptr_t)({});", ctx.system_name, expanded_expr),
                 TargetLanguage::Rust => {
-                    format!("{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", indent_str, expanded_expr, indent_str)
+                    format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", expanded_expr, indent_str)
                 }
-                TargetLanguage::Cpp => format!("{}_context_stack.back()._return = std::any({});", indent_str, expanded_expr),
-                TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._return = {};", indent_str, expanded_expr),
-                TargetLanguage::Kotlin => format!("{}_context_stack[_context_stack.size - 1]._return = {}", indent_str, expanded_expr),
-                TargetLanguage::Swift => format!("{}_context_stack[_context_stack.count - 1]._return = {}", indent_str, expanded_expr),
-                TargetLanguage::CSharp => format!("{}_context_stack[_context_stack.Count - 1]._return = {};", indent_str, expanded_expr),
-                TargetLanguage::Go => format!("{}s._context_stack[len(s._context_stack)-1]._return = {}", indent_str, expanded_expr),
-                TargetLanguage::Php => format!("{}$this->_context_stack[count($this->_context_stack) - 1]->_return = {};", indent_str, expanded_expr),
-                TargetLanguage::Ruby => format!("{}@_context_stack[@_context_stack.length - 1]._return = {}", indent_str, expanded_expr),
-                TargetLanguage::Lua => format!("{}self._context_stack[#self._context_stack]._return = {}", indent_str, expanded_expr),
+                TargetLanguage::Cpp => format!("_context_stack.back()._return = std::any({});", expanded_expr),
+                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._return = {};", expanded_expr),
+                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._return = {}", expanded_expr),
+                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._return = {}", expanded_expr),
+                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._return = {};", expanded_expr),
+                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._return = {}", expanded_expr),
+                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_return = {};", expanded_expr),
+                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._return = {}", expanded_expr),
+                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._return = {}", expanded_expr),
                 TargetLanguage::Erlang => {
                     let erl_expr = expanded_expr.replace("self.", "Data#data.");
-                    format!("{}__ReturnVal = {}", indent_str, erl_expr)
+                    format!("__ReturnVal = {}", erl_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
+            };
+            if has_native_return {
+                // Append a `return` statement on its own line at the
+                // same indent as the assignment. The indent comes from
+                // the segment's `indent` field, which the scanner sets
+                // to the column position of the segment in the source.
+                // The newline puts us at column 0, then indent_str
+                // fills in the source's leading whitespace.
+                let ret_line = match lang {
+                    TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Lua | TargetLanguage::Ruby => format!("{}return", indent_str),
+                    TargetLanguage::Erlang => String::new(), // Erlang has no native return statement
+                    _ => format!("{}return;", indent_str),
+                };
+                if ret_line.is_empty() {
+                    assignment
+                } else {
+                    format!("{}\n{}", assignment, ret_line)
+                }
+            } else {
+                assignment
             }
         }
         FrameSegmentKind::ContextEvent => {
