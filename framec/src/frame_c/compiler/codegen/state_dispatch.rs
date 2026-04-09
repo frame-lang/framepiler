@@ -207,7 +207,7 @@ pub(crate) fn generate_state_method(
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => generate_typescript_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward, lang),
         TargetLanguage::Dart => generate_dart_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Rust => generate_rust_state_dispatch(_system_name, state_name, handlers, state_vars, parent_state, default_forward),
-        TargetLanguage::C => generate_c_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
+        TargetLanguage::C => generate_c_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Cpp => generate_cpp_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Java => generate_java_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Kotlin => generate_kotlin_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
@@ -1919,6 +1919,7 @@ pub(crate) fn generate_c_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -1926,6 +1927,30 @@ pub(crate) fn generate_c_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.state_args[name] to a local at the
+    // top of the dispatch so handler bodies can read them by bare name.
+    // Mirrors the Python preamble: every declared state.params entry is
+    // pulled out of `compartment->state_args` (named key) and exposed
+    // as a typed local. Handler bodies can then write `x` instead of
+    // hand-rolling a `FrameDict_get` cast on every read.
+    for sp in state_params {
+        let type_str = match &sp.param_type {
+            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
+            crate::frame_c::compiler::frame_ast::Type::Unknown => "int".to_string(),
+        };
+        let (c_type, cast) = match type_str.as_str() {
+            "int" | "i32" | "i64" => ("int", "(intptr_t)"),
+            "bool" | "boolean" => ("bool", "(intptr_t)"),
+            "float" | "double" | "f32" | "f64" => ("double", "(intptr_t)"),
+            "str" | "string" | "String" => ("char*", ""),
+            _ => ("void*", ""),
+        };
+        code.push_str(&format!(
+            "{} {} = ({}){}{}_FrameDict_get(self->__compartment->state_args, \"{}\");\n",
+            c_type, sp.name, c_type, cast, system_name, sp.name
+        ));
+    }
 
     // HSM Compartment Navigation: When this handler accesses state vars, we need to ensure
     // we're accessing the correct compartment. If this handler was invoked via forwarding

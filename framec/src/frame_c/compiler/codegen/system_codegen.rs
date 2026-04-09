@@ -675,6 +675,30 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
 
     // Initialize domain variables
     for domain_var in &system.domain {
+        // C has no field-level initializers on struct declarations, so
+        // every domain var with an initializer must be assigned in the
+        // constructor body — this is the universal-rule emission for the
+        // C-family. We emit from the structured slots (`initializer_text`)
+        // rather than parsing raw_code, so the initializer expression
+        // (which may legally reference a constructor parameter of the
+        // same name, e.g. `balance = balance`) lands as
+        // `self->balance = balance;` and the LHS/RHS scopes stay
+        // unambiguous.
+        if matches!(syntax.language, TargetLanguage::C) {
+            if let Some(ref init_text) = domain_var.initializer_text {
+                let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::C);
+                body.push(CodegenNode::NativeBlock {
+                    code: format!("self->{} = {};", domain_var.name, init_expanded),
+                    span: None,
+                });
+            }
+            // No raw_code fallback for C — the structured slots are
+            // canonical, and a domain var with no initializer just leaves
+            // the struct field at whatever malloc gave us. (The existing
+            // calloc-zeroing assumption is preserved by callers; when this
+            // matters we'll surface it as an explicit zero init.)
+            continue;
+        }
         if let Some(ref raw_code) = domain_var.raw_code {
             // V4: Native code pass-through
             // Expand @@SystemName() tagged instantiations in domain initializers
@@ -906,6 +930,31 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("self->__next_compartment = NULL;");
 
+                        // System state and enter params: bind into start state's
+                        // state_args / enter_args. Mirrors the Python branch — every
+                        // ParamKind::StateArg lands in `state_args[name]` and every
+                        // ParamKind::EnterArg lands in `enter_args[name]`. The cast
+                        // `(void*)(intptr_t)(name)` matches the rest of the C
+                        // codegen's intptr-tagged void-pointer convention so the
+                        // dispatch reader (also intptr-cast) round-trips correctly.
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\n{}_FrameDict_set(self->__compartment->state_args, \"{}\", (void*)(intptr_t)({}));",
+                                        system.name, p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\n{}_FrameDict_set(self->__compartment->enter_args, \"{}\", (void*)(intptr_t)({}));",
+                                        system.name, p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -920,6 +969,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                             CodegenNode::null(),
                         ));
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "{}_FrameDict_set(self->__compartment->state_args, \"{}\", (void*)(intptr_t)({}));",
+                                        system.name, p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "{}_FrameDict_set(self->__compartment->enter_args, \"{}\", (void*)(intptr_t)({}));",
+                                        system.name, p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Python3 => {
@@ -1649,7 +1724,13 @@ self._context_stack.pop();"#,
                     event_class, system.name
                 ),
                 TargetLanguage::C => format!(
-                    r#"{}_FrameEvent* __frame_event = {}_FrameEvent_new("$>", NULL);
+                    // Pass the start state's enter_args dict as the event
+                    // _parameters so the start state's `$>(name: type)`
+                    // enter handler can read header-declared enter params
+                    // by name. For systems without enter params this is an
+                    // empty dict (still safe — nothing to read), so the
+                    // existing zero-arg start states are unaffected.
+                    r#"{}_FrameEvent* __frame_event = {}_FrameEvent_new("$>", self->__compartment->enter_args);
 {}_kernel(self, __frame_event);
 {}_FrameEvent_destroy(__frame_event);"#,
                     system.name, system.name, system.name, system.name

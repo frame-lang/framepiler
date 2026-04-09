@@ -163,7 +163,22 @@ impl LanguageBackend for CBackend {
 
             CodegenNode::Constructor { params, body, .. } => {
                 let class_name = system_name.clone();
-                let params_str = self.emit_params(params, ctx);
+                // Use the C type converter so Frame types like `str` become
+                // `char*`, `bool` becomes `bool`, etc. — `emit_params` would
+                // pass the raw Frame type through unchanged and break the
+                // generated function signature.
+                let params_str = if params.is_empty() {
+                    "void".to_string()
+                } else {
+                    params
+                        .iter()
+                        .map(|p| {
+                            let type_str = self.convert_type_to_c(&p.type_annotation, &class_name);
+                            format!("{} {}", type_str, p.name)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
 
                 let mut result = format!("{}{}* {}_new({}) {{\n", ctx.get_indent(), class_name, class_name, params_str);
                 ctx.push_indent();
