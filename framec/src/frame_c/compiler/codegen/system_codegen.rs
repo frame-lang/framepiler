@@ -632,6 +632,37 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
     // Rust state vars now live on compartment.state_context (StateContext enum)
     // No _sv_* struct fields needed
 
+    // Rust system header state/enter params: stash on the system struct
+    // as `__sys_<name>` typed fields. The constructor receives the
+    // system params via its signature (system_codegen.rs:1752 — params
+    // from system.params), assigns them into these synthetic fields,
+    // and the per-state dispatch reads them into bare locals via the
+    // binding preamble inserted by `generate_handler_from_arcanum`.
+    //
+    // Domain params are handled by the existing domain field path
+    // (the domain field IS the storage), so we skip them here.
+    //
+    // This is the Rust equivalent of the HashMap<String, Any>
+    // `state_args`/`enter_args` dict approach used by the dynamic
+    // backends — typed fields keep idiomatic Rust without inventing
+    // a new typed-enum variant per state.
+    if matches!(syntax.language, TargetLanguage::Rust) {
+        for p in &system.params {
+            match p.kind {
+                crate::frame_c::compiler::frame_ast::ParamKind::StateArg
+                | crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                    let type_str = type_to_string(&p.param_type);
+                    fields.push(
+                        Field::new(&format!("__sys_{}", p.name))
+                            .with_visibility(Visibility::Private)
+                            .with_type(&type_str),
+                    );
+                }
+                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+            }
+        }
+    }
+
     fields
 }
 
@@ -1042,6 +1073,29 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
 
     // Rust state vars now live on compartment.state_context — no _sv_ field init needed.
     // State vars are initialized when compartments are created (in transition codegen).
+
+    // Rust system header state/enter param fields: assign each
+    // synthetic `__sys_<name>` field from the constructor parameter
+    // of the same name. The Rust constructor emitter (rust.rs) sees
+    // these as `self.field = value` assignments and folds them into
+    // the struct literal.
+    if matches!(syntax.language, TargetLanguage::Rust) {
+        for p in &system.params {
+            match p.kind {
+                crate::frame_c::compiler::frame_ast::ParamKind::StateArg
+                | crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                    body.push(CodegenNode::assign(
+                        CodegenNode::field(
+                            CodegenNode::self_ref(),
+                            &format!("__sys_{}", p.name),
+                        ),
+                        CodegenNode::Ident(p.name.clone()),
+                    ));
+                }
+                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+            }
+        }
+    }
 
     // Set initial state (first state in machine)
     // All languages now use the kernel/router/compartment pattern

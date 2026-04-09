@@ -95,6 +95,15 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
         })
         .collect();
 
+    // Identify the start state (first state in the machine) so the
+    // Rust dispatch can switch on whether this state's lifecycle params
+    // are bound from system header (start) or from transitions (non-start).
+    let start_state_name_for_dispatch = machine
+        .states
+        .first()
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
+
     // Generate one _state_{StateName} dispatch method per state for ALL languages
     for state_entry in arcanum.get_enhanced_states(system_name) {
         // Find state variables and default_forward for this state from the machine AST
@@ -109,6 +118,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
         // Having a parent (HSM) does NOT imply auto-forwarding
         let has_explicit_forward = state_ast.map(|s| s.default_forward).unwrap_or(false);
         let default_forward = has_explicit_forward;
+        let is_start_state = state_entry.name == start_state_name_for_dispatch;
 
         let method = generate_state_method(
             system_name,
@@ -125,6 +135,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
             has_state_vars,
             default_forward,
             &defined_systems,
+            is_start_state,
         );
         methods.push(method);
     }
@@ -132,8 +143,35 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
     // For Rust: Also generate individual handler methods that the dispatch calls
     // (Python/TypeScript inline the handler code in the dispatch method)
     if matches!(lang, TargetLanguage::Rust) {
+        // The system header state and enter params are bound to the
+        // start state only — the constructor populates `self.__sys_<name>`
+        // for each system header param. For non-start states, params
+        // come from transitions (the existing pre-system-init mechanism)
+        // and are read from `__e.parameters` in the dispatch.
+        //
+        // We pass the start state's param names as `sys_param_locals`;
+        // every other state passes an empty slice and falls back to the
+        // existing extraction.
+        let start_state_name = machine
+            .states
+            .first()
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let start_state_param_names: Vec<String> = arcanum
+            .get_enhanced_states(system_name)
+            .iter()
+            .find(|s| s.name == start_state_name)
+            .map(|s| s.params.iter().map(|p| p.name.clone()).collect())
+            .unwrap_or_default();
         for state_entry in arcanum.get_enhanced_states(system_name) {
+            let is_start_state = state_entry.name == start_state_name;
             for (_event, handler_entry) in &state_entry.handlers {
+                let empty: Vec<String> = Vec::new();
+                let sys_param_locals = if is_start_state {
+                    &start_state_param_names
+                } else {
+                    &empty
+                };
                 let method = generate_handler_from_arcanum(
                     system_name,
                     &state_entry.name,
@@ -143,6 +181,8 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
                     lang,
                     has_state_vars,
                     &defined_systems,
+                    sys_param_locals,
+                    is_start_state,
                 );
                 methods.push(method);
             }
@@ -170,6 +210,7 @@ pub(crate) fn generate_state_method(
     _has_state_vars: bool,
     default_forward: bool,
     defined_systems: &std::collections::HashSet<String>,
+    is_start_state: bool,
 ) -> CodegenNode {
     // Use single underscore prefix to avoid Python name mangling
     // Python mangles __name to _ClassName__name, which breaks dynamic lookup
@@ -206,7 +247,7 @@ pub(crate) fn generate_state_method(
         TargetLanguage::GDScript => generate_gdscript_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => generate_typescript_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward, lang),
         TargetLanguage::Dart => generate_dart_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Rust => generate_rust_state_dispatch(_system_name, state_name, handlers, state_vars, parent_state, default_forward),
+        TargetLanguage::Rust => generate_rust_state_dispatch(_system_name, state_name, handlers, state_vars, parent_state, default_forward, is_start_state),
         TargetLanguage::C => generate_c_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Cpp => generate_cpp_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Java => generate_java_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
@@ -2275,6 +2316,7 @@ pub(crate) fn generate_rust_state_dispatch(
     state_vars: &[StateVarAst],
     parent_state: Option<&str>,
     default_forward: bool,
+    is_start_state: bool,
 ) -> String {
     let mut code = String::new();
     code.push_str("match __e.message.as_str() {\n");
@@ -2303,15 +2345,24 @@ pub(crate) fn generate_rust_state_dispatch(
             _ => format!("_s_{}_{}", state_name, event),
         };
 
-        // Handle enter/exit handlers with parameters specially - extract params from event
+        // Handle enter/exit handlers with parameters specially. For the
+        // start state's lifecycle handlers, the handler reads its params
+        // from `self.__sys_<name>` (populated by the constructor from
+        // system header params), so the dispatch doesn't extract or pass
+        // them. For non-start states, lifecycle params come from
+        // transition enter/exit args via the existing mechanism, so we
+        // restore the original extraction-and-pass-as-arg path.
         let is_lifecycle = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         if !handler.params.is_empty() && is_lifecycle {
-            // Extract parameters from event and call handler
+            if is_start_state {
+                code.push_str(&format!("    \"{}\" => {{ self.{}(__e); }}\n", message, handler_method));
+                continue;
+            }
+            // Non-start state: extract lifecycle params from event and
+            // pass them to the handler as before. (This is the
+            // pre-Rust-system-init pattern; not affected by the
+            // start-state-only system params rollout.)
             code.push_str(&format!("    \"{}\" => {{\n", message));
-
-            // State vars live on compartment.state_context — no init needed in enter handler
-
-            // Extract parameters and call handler
             for (i, param) in handler.params.iter().enumerate() {
                 code.push_str(&format!("        let {} = __e.parameters.get(\"{}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n", param.name, i));
             }
@@ -2596,6 +2647,8 @@ pub(crate) fn generate_handler_from_arcanum(
     lang: TargetLanguage,
     _has_state_vars: bool,
     defined_systems: &std::collections::HashSet<String>,
+    sys_param_locals: &[String],
+    is_start_state: bool,
 ) -> CodegenNode {
     // Build params from handler's parameter symbols
     // V4 uses native types, so we just pass them through as-is
@@ -2608,16 +2661,26 @@ pub(crate) fn generate_handler_from_arcanum(
         params.push(Param::new("__e").with_type(&event_type));
     }
 
-    // Add handler parameters
-    for p in &handler.params {
-        let type_str = p.symbol_type.as_deref().unwrap_or("Any");
-        // Clean up the type string (remove "Some(" prefix if present from debug format)
-        let clean_type = if type_str.starts_with("Some(") {
-            type_str.trim_start_matches("Some(").trim_end_matches(")")
-        } else {
-            type_str
-        };
-        params.push(Param::new(&p.name).with_type(clean_type));
+    // Add handler parameters — for Rust, the START STATE'S lifecycle
+    // handlers ($>, $<) bind their params from `self.__sys_<name>` in
+    // the body preamble (the constructor populates these from the
+    // system header params), so we drop them from the signature. For
+    // non-start state lifecycle handlers and all interface handlers,
+    // declared params stay in the signature.
+    let skip_handler_params = matches!(lang, TargetLanguage::Rust)
+        && (handler.is_enter || handler.is_exit)
+        && is_start_state;
+    if !skip_handler_params {
+        for p in &handler.params {
+            let type_str = p.symbol_type.as_deref().unwrap_or("Any");
+            // Clean up the type string (remove "Some(" prefix if present from debug format)
+            let clean_type = if type_str.starts_with("Some(") {
+                type_str.trim_start_matches("Some(").trim_end_matches(")")
+            } else {
+                type_str
+            };
+            params.push(Param::new(&p.name).with_type(clean_type));
+        }
     }
 
     // Determine method name based on handler type
@@ -2646,8 +2709,32 @@ pub(crate) fn generate_handler_from_arcanum(
     // Emit handler default return value if present
     let return_init_code = emit_handler_return_init(handler, lang, "", &ctx.system_name);
 
+    // Rust: bind state params (declared on the start state via
+    // `$Start(x: int)`) and start-state enter args (`$>(b: int)`) to
+    // bare locals at the top of the handler. The constructor populates
+    // `self.__sys_<name>` from the system header params for the start
+    // state only. Non-start states with their own state params remain
+    // unsupported in Rust (the existing limitation that
+    // 26_state_params.frs documents).
+    let mut sys_param_preamble = String::new();
+    if matches!(lang, TargetLanguage::Rust) && is_start_state {
+        for name in sys_param_locals {
+            sys_param_preamble.push_str(&format!("let {0} = self.__sys_{0}.clone();\n", name));
+        }
+        // Also bind any enter handler params from `self.__sys_<name>`.
+        if handler.is_enter {
+            for p in &handler.params {
+                sys_param_preamble.push_str(&format!(
+                    "let {0} = self.__sys_{0}.clone();\n",
+                    p.name
+                ));
+            }
+        }
+    }
+
     // Splice the handler body: preserve native code, expand Frame segments
-    let mut body_code = return_init_code;
+    let mut body_code = sys_param_preamble;
+    body_code.push_str(&return_init_code);
     body_code.push_str(&splice_handler_body_from_span(&handler.body_span, source, lang, &ctx));
 
     // Note: Rust handlers are now void (context stack pattern), no need to strip trailing semicolons
