@@ -473,16 +473,17 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             Type::Custom(s) => s.clone(),
             Type::Unknown => String::new(),
         };
-        // C++ omits the inline initializer at field-declaration time:
-        // a domain field whose init expression references a constructor
-        // parameter of the same name (e.g., `balance: int = balance`)
-        // would synthesize to `int balance = balance;` at class scope,
-        // which is undefined behavior because the right-hand side reads
-        // the field itself before it's been initialized. We move all
-        // domain init into the constructor body for C++ (the same shape
-        // the C backend uses), where the constructor parameter is in
-        // scope and the assignment becomes unambiguous.
-        let init_suffix = if matches!(lang, TargetLanguage::Cpp) {
+        // C++ and Go omit the inline initializer at field-declaration
+        // time: both languages move all domain init into the constructor
+        // body (factory function for Go). C++ would synthesize
+        // `int balance = balance;` at class scope — UB because the RHS
+        // reads the field before it's initialized. Go struct declarations
+        // can't have inline initializers at all (`balance int = balance`
+        // is a compile error). For both, the constructor/factory body
+        // emits `this->balance = balance;` / `s.balance = balance`
+        // where the LHS resolves to the struct field and the RHS to
+        // the parameter.
+        let init_suffix = if matches!(lang, TargetLanguage::Cpp | TargetLanguage::Go) {
             String::new()
         } else {
             match &var.initializer_text {
@@ -725,6 +726,19 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Cpp);
                 body.push(CodegenNode::NativeBlock {
                     code: format!("this->{} = {};", domain_var.name, init_expanded),
+                    span: None,
+                });
+            }
+            continue;
+        }
+        // Go: factory-function init. `s.field = init` in the NewX() body.
+        // Go struct field declarations can't carry inline initializers,
+        // so this is the only place domain init happens for Go.
+        if matches!(syntax.language, TargetLanguage::Go) {
+            if let Some(ref init_text) = domain_var.initializer_text {
+                let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Go);
+                body.push(CodegenNode::NativeBlock {
+                    code: format!("s.{} = {}", domain_var.name, init_expanded),
                     span: None,
                 });
             }
@@ -1651,6 +1665,25 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         ));
                         hsm_init_code.push_str("s.__next_compartment = nil");
 
+                        // System state and enter params (HSM path).
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\ns.__compartment.stateArgs[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    hsm_init_code.push_str(&format!(
+                                        "\ns.__compartment.enterArgs[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+
                         body.push(CodegenNode::NativeBlock {
                             code: hsm_init_code,
                             span: None,
@@ -1664,6 +1697,32 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             ),
                             span: None,
                         });
+
+                        // System state and enter params (non-HSM path).
+                        let mut compartment_inits: Vec<String> = Vec::new();
+                        for p in &system.params {
+                            match p.kind {
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                    compartment_inits.push(format!(
+                                        "s.__compartment.stateArgs[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                    compartment_inits.push(format!(
+                                        "s.__compartment.enterArgs[\"{}\"] = {}",
+                                        p.name, p.name
+                                    ));
+                                }
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            }
+                        }
+                        if !compartment_inits.is_empty() {
+                            body.push(CodegenNode::NativeBlock {
+                                code: compartment_inits.join("\n"),
+                                span: None,
+                            });
+                        }
                     }
                 }
                 TargetLanguage::Dart => {

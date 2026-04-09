@@ -213,7 +213,7 @@ pub(crate) fn generate_state_method(
         TargetLanguage::Kotlin => generate_kotlin_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Swift => generate_swift_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::CSharp => generate_csharp_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
-        TargetLanguage::Go => generate_go_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
+        TargetLanguage::Go => generate_go_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
         TargetLanguage::Php => generate_php_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Ruby => generate_ruby_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
         TargetLanguage::Lua => generate_lua_state_dispatch(_system_name, state_name, handlers, state_vars, source, &ctx, default_forward),
@@ -1650,6 +1650,7 @@ pub(crate) fn generate_go_state_dispatch(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
     default_forward: bool,
@@ -1657,6 +1658,27 @@ pub(crate) fn generate_go_state_dispatch(
     let mut code = String::new();
     let mut first = true;
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // State params: bind compartment.stateArgs[name] to a typed local
+    // via Go type assertion `val.(int)`.
+    for sp in state_params {
+        let raw_type = match &sp.param_type {
+            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+            crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
+        };
+        let go_type = go_map_type(raw_type);
+        if go_type == "any" {
+            code.push_str(&format!(
+                "{0} := s.__compartment.stateArgs[\"{0}\"]\n_ = {0}\n",
+                sp.name
+            ));
+        } else {
+            code.push_str(&format!(
+                "{0} := s.__compartment.stateArgs[\"{0}\"].({1})\n_ = {0}\n",
+                sp.name, go_type
+            ));
+        }
+    }
 
     // HSM Compartment Navigation
     if !state_vars.is_empty() {
