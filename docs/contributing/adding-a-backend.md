@@ -194,9 +194,9 @@ Port the 9 `.fpy` files in `framepiler_test_env/tests/common/positive/system_par
 | `sysparam_domain_bool` | single typed bool domain param |
 | `sysparam_domain_multi` | multiple mixed-type domain params |
 | `sysparam_domain_default` | typed domain param with default value |
-| `sysparam_state_single` | single state param via `$(name): type` |
+| `sysparam_state_single` | single state param via `$(name: type)` |
 | `sysparam_mixed` | domain param + state param in one header |
-| `sysparam_enter_single` | single enter param via `$>(name): type` |
+| `sysparam_enter_single` | single enter param via `$>(name: type)` |
 | `sysparam_enter_mixed` | all three groups in one header |
 
 ### Verification
@@ -297,9 +297,11 @@ Two questions were deliberately left open during the rollout:
 
 - **Q4 — default-value translation.** Defaults like `name: str = "hello"` are currently raw text pasted verbatim into the constructor signature. This works for integer literals everywhere, works for double-quoted strings in most languages, and may break for collection defaults (`[]`, `{}`) in some targets. If you hit this in your backend, surface it as a blocker — don't paper over.
 
-- **Q6 — call-site argument disambiguation across mixed groups.** The current rule is "flat positional in declaration order" — works in every language. The spec documents it, but if a future feature wants keyword arguments at the call site (`@@Robot(name="R2D2", x=7)`), this question reopens.
+- **Q6 — call-site argument disambiguation across mixed groups.** Closed in Phase 4.0. The call site uses sigil-tagged positional form (`@@Robot("R2D2", $(7))`) or named form (`@@Robot(name="R2D2", $(x=7))`). The two forms cannot be mixed within a single call. The Frame assembler routes each tagged arg into its declared group; defaults are substituted at the expansion site. See `pipeline_parser/call_args.rs` for the resolver and `frame_language.md#system-instantiation` for the user-facing spec.
 
 Q5 (the enter-param grammar question) is closed: context disambiguates, no clash exists.
+
+Q9 (default value handling) was decided during Phase 4.0: defaults are substituted by the Frame assembler at the tagged-instantiation expansion site, not by the target language's parameter-default mechanism. This makes defaults portable across all 17 backends — even ones that don't natively support default arguments — and lets default expressions use any valid call-scope expression in the target language.
 
 ### The 9 specialty tests and what they cover
 
@@ -312,9 +314,82 @@ A new backend MUST pass all 9 of these. They live in `framepiler_test_env/tests/
 | `sysparam_domain_bool` | single typed bool domain param |
 | `sysparam_domain_multi` | three params of mixed types in one header |
 | `sysparam_domain_default` | typed domain param with default value |
-| `sysparam_state_single` | single state param `$(x): int` |
+| `sysparam_state_single` | single state param `$(x: int)` |
 | `sysparam_mixed` | one domain + one state param |
-| `sysparam_enter_single` | single enter param `$>(b): int` |
+| `sysparam_enter_single` | single enter param `$>(b: int)` |
 | `sysparam_enter_mixed` | all three groups in one header |
 
 Two tests cover the "structural" cases that tend to break unimplemented backends — `sysparam_domain_default` (defaults) and `sysparam_enter_mixed` (mixed groups). If you're debugging a new backend, start with the simpler `_int` test and work up.
+
+### Per-language gotchas hit during the 17-language rollout
+
+The universal rule held everywhere, but each language had a few cliffs that took non-trivial digging to find. If you're adding a backend with similar idioms, pre-empt these.
+
+#### The name-collision rule (most strict-init OO languages)
+
+`balance: int = balance` at field-declaration scope is broken in **C++, Java, Swift, Kotlin, C#, Dart, TypeScript, JavaScript, and PHP**. In each, the field initializer either reads the uninitialized field (C++ — undefined behavior), reads the wrong scope (Java — silently zero), or is rejected by the compiler outright (TypeScript TS2301, PHP "Constant expression contains invalid operations"). For all of these, `synthesize_field_raw` strips the field-level initializer when it references a system param by name (`init_references_param` does the word-boundary scan), and the constructor body emits the explicit `this.field = field;` (or equivalent). Literal initializers (`int count = 0`) stay at field scope so type inference still works.
+
+C and Go are different — they have no field-level initializer at all. Strip unconditionally.
+
+#### Strict init rules (Kotlin, Dart, Rust)
+
+- **Kotlin** requires every property to have an initializer, a `late init` modifier, or be abstract. When the field-level init is stripped, append a type-appropriate default placeholder (`var name: String = ""`) so the constructor body can overwrite it. Kotlin also needs a primary constructor on the class header (`class Robot(x: Int)`) to bring the params into scope inside the `init {}` block — bare params (not `val`/`var`) so Kotlin doesn't auto-synthesize a property of the same name that would collide with a domain field.
+- **Dart** rejects non-nullable fields without an initializer. Prepend `late ` to the field declaration so the constructor body's `this.field = init;` becomes the legal initialization point.
+- **Rust** can't generate a HashMap-based `state_args` field on its compartment without breaking the existing typed serialize/deserialize logic. Instead, system header state and enter args are stored as typed `__sys_<name>: <type>` fields directly on the system struct. The handler body for the start state's handlers prepends `let <name> = self.__sys_<name>.clone();` so handler bodies read the params by bare name. Non-start state lifecycle params still go through the existing `__e.parameters` extraction (existing limitation, see TODOs).
+
+#### Reserved names
+
+- **GDScript**: `get` and `set` collide with `Object.get(StringName) -> Variant` and `Object.set(...)`. The user must rename interface methods that would generate these. Common workaround: use `get_value`, `set_value`. Frame should ideally validate this at compile time and surface a helpful error.
+- **TypeScript**: `Worker` collides with the built-in `Worker` web API class. `Buffer`, `Promise`, `Map`, etc. are similar. New backend tests should pick uncommon system names; the spec doesn't currently warn on these.
+
+#### `@@:(expr) return;` on one line is broken
+
+Several backends — Swift, Kotlin, Lua, GDScript — produce a syntax error when `@@:(expr)` and `return;` are on the same line, because the codegen joins them with no separator and the resulting `_return = X;return;` looks like one expression. The current workaround in tests is to put `return;` on a separate line. The codegen should add a newline or separator after `@@:(expr)` expansion. Filed as a TODO.
+
+#### Lua return-value extraction was broken pre-rollout
+
+Lua's `OutputBlockParser` (the Frame state machine that transforms generated brace-blocks into Lua's `if/then/end` shape) was treating `return X` as a terminal token and stripping the `X` part. Every interface method that returned a value was effectively returning nothing — but no existing test caught it because the Lua tests didn't actually assert the return values. The Phase 4 specialty tests caught it on day one. The fix walks forward from the `return` token and emits all subsequent text/identifier tokens until a newline before marking after-return state. Fix is in `output_block_parser.gen.rs` and is marked-up because the parser is generated from a `.frs` Frame source elsewhere — be careful when regenerating.
+
+The Lua `interface_gen.rs` was also rewritten to use `return table.remove(self._context_stack)._return` as a single expression, avoiding the need for a separate `local __ret = ...; return __ret` pattern that the (then-broken) parser would have stripped.
+
+#### Lua `[]` empty list literal
+
+The Frame source `log: list = []` generates Lua code that uses `[]`, which isn't valid Lua (Lua uses `{}`). The Lua domain init branch in `system_codegen.rs` translates `[]` → `{}` so domains like `log: list = []` produce valid output. Other languages that use bracket-style empty list literals are unaffected because Frame's `[]` is a literal copy from source — we only special-case it for Lua.
+
+#### C++ pre-existing return-type bugs
+
+`@@interface get_name(): str` produced `std::any_cast<str>` (undefined identifier) because the C++ interface_gen wasn't running the return type through `cpp_map_type`. Same for `: void` returns producing `std::any_cast<void>` (template substitution failure). Both were fixed in Phase 4.2 alongside the C++ rollout — these bugs existed before Phase 4 but no test exercised them.
+
+#### C constructor type mapping
+
+C's `emit_params` was passing the raw Frame type (`str`) into the generated constructor signature (`Robot_new(int x, str name)`). Fixed in Phase 4.1 by routing through `convert_type_to_c` so Frame `str` maps to `char*`, `bool` to `bool`, etc.
+
+#### Erlang's enter-args record literal pattern
+
+Erlang has no constructor and no compartment dict. The `init/1` callback builds a `#data{}` record literal. State args go into a binary-keyed map field `frame_state_args = #{<<"name">> => Value}`, enter args into `frame_enter_args`, and the state function clauses read them at the top of every clause with `Name = maps:get(<<"name">>, ...)`. Record-field defaults can't see `init/1`'s pattern variables (record defaults evaluate at compile time), so any field that references a param must use a neutral default in the record declaration (`value = undefined`) and the real value comes from the record literal in `init/1`. If your backend has a similarly structurally-different idiom, the same translation pattern works: identify where the constructor params are in scope, emit field assignments and compartment populations there, and make sure the dispatch reader uses the named keys.
+
+### TODOs surfaced by the rollout
+
+These are real defects or rough edges that the rollout uncovered but didn't fix because they were out-of-scope. Each is a candidate for a follow-up issue.
+
+1. **`@@:(expr) return;` on one line** — Several backends (Swift, Kotlin, Lua, GDScript, possibly more) generate syntactically invalid output when these two appear on the same source line. The codegen should always emit `@@:(expr)` and the following native return on separate lines, OR insert a `;` separator. Until then, all spec/example/test code must use two lines. Tracked in `_scratch/_NOTES.md`.
+
+2. **Rust state params on non-start states** — The existing `26_state_params.frs` test still uses a hardcoded `$.count = 42` workaround because Rust's typed enum-of-structs `StateContext` can't carry transition-supplied state args. System header state params on the start state work via the `__sys_<name>` field shortcut, but the general case (any state with `$X(name: type)` reached via `-> $X(value)`) needs the typed `XContext` struct to gain a `state_args: HashMap<String, Box<dyn Any>>` field or equivalent type-erasure path.
+
+3. **Rust non-start state enter handler params** — Lifecycle handlers on non-start states still go through positional-key extraction from `__e.parameters` (`__e.parameters.get("0")`, `.get("1")`, etc.), which is the pre-rollout pattern. They work for the existing HSM tests because the transition writer matches the pattern, but they don't follow the named-key convention used everywhere else. Should be migrated.
+
+4. **GDScript reserved-method validator** — `get`, `set`, `clone`, etc. collide silently with `Object` methods. Frame should detect interface methods that would override `Object` and emit a structured error at compile time, with a suggested rename.
+
+5. **TypeScript built-in collision check** — Same idea: `Worker`, `Buffer`, `Promise`, etc. are common web API names that will collide. A warning at compile time pointing to the conflict would save users the runtime debugging.
+
+6. **Lua dead code: `LuaBackend::transform_blocks`** — The local `LuaBackend::transform_blocks` in `backends/lua.rs` is dead code; the actual block transform happens via `block_transform::transform_blocks` (Frame state machine). The local should be removed to avoid confusing future contributors. Compiler warns about it as dead code already.
+
+7. **C `enter_args` for systems with no enter params** — The C kernel-init event currently passes `self->__compartment->enter_args` as the event `_parameters`. This is correct when there ARE enter params, and harmless when there aren't (the dispatch never reads from a non-existent key), but it does mean every C system pays the cost of indirecting through an empty `FrameDict_get` lookup at start time. Optimization, not correctness.
+
+8. **Field/param init when both have the same name and the user wants the field's value** — The codegen always prefers the constructor parameter on the RHS. There's no Frame syntax to say "use the literal field default instead, ignoring the constructor param of the same name." This is an extremely edge case but not technically supportable today.
+
+9. **Kotlin primary-constructor `val`/`var` decision** — Kotlin's primary constructor params currently use bare `name: Type` (no `val`/`var`). This means the params don't auto-promote to properties of the same name (which would collide with domain fields). It also means they're scoped only inside `init {}`, which is exactly where we use them. If a future feature needs to access constructor params outside `init {}`, this needs to change.
+
+10. **PHP `match` operator output for numbers** — PHP `bool` to-string yields `"1"` / `""`, not `"true"` / `"false"`. The `sysparam_domain_multi.fphp` test asserts `"alice/30/1"` to match. This is a documented PHP quirk, not a bug, but the doc should mention it for backend authors.
+
+11. **Cookbook/getting-started examples** — Both `frame_cookbook.md` and `frame_getting_started.md` predate Phase 4 and may still show the old `$(name): type` syntax in examples. They should be audited and updated.

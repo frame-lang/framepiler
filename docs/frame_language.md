@@ -106,19 +106,21 @@ Sections are optional but **must appear in the order shown**: operations → int
 
 ### System Parameters
 
-Three groups, all optional, in fixed positional order:
+Three groups, all optional, declared in any order. Each parameter is sigil-tagged according to its group, except domain params which are bare. Groups can be intermixed — declaration order at the header is the call order.
 
 ```
-@@system Name ( $(<state_params>) , $>(<enter_params>) , <domain_params> )
+@@system Name ( <param>, <param>, ... )
 ```
 
-| Group | Syntax | Target |
-|-------|--------|--------|
-| State params | `$(<param_list>)` | Start state's `compartment.state_args`, keyed by declared param name |
-| Enter params | `$>(<param_list>)` | Start state's `compartment.enter_args`, keyed by declared param name |
-| Domain params | bare `<param_list>` | Domain variable initializers — used as the right-hand side of the field's `= ...` initializer in the constructor scope |
+where each `<param>` is one of:
 
-Groups are positional. Omitting a group shifts later groups left.
+| Group | Declaration syntax | Target |
+|-------|--------------------|--------|
+| State arg | `$(name: type)` | Start state's `compartment.state_args`, keyed by declared param name |
+| Enter arg | `$>(name: type)` | Start state's `compartment.enter_args`, keyed by declared param name |
+| Domain arg | `name: type` (bare) | Domain variable initializer — used as the right-hand side of the field's `= ...` assignment in the constructor scope |
+
+Each param body has the same shape (`name: type` or `name: type = default`) regardless of group; only the sigil differs. The framepiler validates that state and enter args have matching declarations on the start state's `$Start(name: type)` and `$>(name: type)` handlers.
 
 #### Param syntax
 
@@ -159,10 +161,10 @@ The codegen prepends the language-appropriate self-reference (`self.`, `this.`, 
 
 #### State params
 
-`$(name): type` declares a parameter that lands in the start state's `compartment.state_args` map under the declared name. The start state must have a matching `$Start(name: type)` declaration so the dispatch function can bind the param to a local at the top of the state body:
+`$(name: type)` declares a parameter that lands in the start state's `compartment.state_args` map under the declared name. The start state must have a matching `$Start(name: type)` declaration so the dispatch function can bind the param to a local at the top of the state body:
 
 ```frame
-@@system Robot($(x): int, name: str) {
+@@system Robot(name: str, $(x: int)) {
     interface:
         describe(): str
 
@@ -175,17 +177,19 @@ The codegen prepends the language-appropriate self-reference (`self.`, `this.`, 
         name = name
 }
 
-r = @@Robot(7, "R2D2")          // x = 7 (state arg), name = "R2D2" (domain field)
+r = @@Robot("R2D2", $(7))       // name = "R2D2" (domain), x = 7 (state arg, sigil-tagged)
 ```
+
+Note the call site: state args are tagged with `$(...)` so the assembler can route them into `compartment.state_args`. See [System Instantiation](#system-instantiation) for the full call site form.
 
 State args are also written by transitions (`-> $Start(42)`). The codegen stores transition-passed args under the same declared param name, so the dispatch reads the param identically whether the state was entered via the system constructor or a transition.
 
 #### Enter params
 
-`$>(name): type` declares a parameter that lands in the start state's `compartment.enter_args` map under the declared name. The start state must have a matching `$>(name: type)` enter handler that reads the param:
+`$>(name: type)` declares a parameter that lands in the start state's `compartment.enter_args` map under the declared name. The start state must have a matching `$>(name: type)` enter handler that reads the param:
 
 ```frame
-@@system Worker($>(batch_size): int) {
+@@system Worker($>(batch_size: int)) {
     interface:
         run()
 
@@ -203,10 +207,10 @@ State args are also written by transitions (`-> $Start(42)`). The codegen stores
         size = 0
 }
 
-w = @@Worker(50)                // start state's enter handler sees batch_size = 50
+w = @@Worker($>(50))            // start state's enter handler sees batch_size = 50
 ```
 
-Enter args are also written by transitions that use the `-> "args" $State` form. As with state args, the codegen stores both transition-passed and constructor-passed enter args under the declared param name.
+The call site tags enter args with `$>(...)`, the same shape as the declaration. Enter args are also written by transitions that use the `-> "args" $State` form. As with state args, the codegen stores both transition-passed and constructor-passed enter args under the declared param name.
 
 ---
 
@@ -657,35 +661,67 @@ calc = @@Calculator()
 
 ### Passing system parameters
 
-When the system header declares parameters (see [System Parameters](#system-parameters)), the call site supplies them as **positional arguments in declaration order**. All three groups (`$(...)` state, `$>(...)` enter, bare domain) flow through one flat positional list — you don't tag them at the call site.
+When the system header declares parameters (see [System Parameters](#system-parameters)), the call site supplies them in one of two forms. **Within a single call, all arguments must use the same form** — mixing positional and named is rejected.
+
+#### Sigil-tagged positional form
+
+State and enter args at the call site are tagged with the same sigils used in the declaration. Domain args remain bare. Order at the call site must match declaration order.
 
 ```frame
-// Pure domain params
+// Pure domain params — no sigils needed
 @@system Counter(initial: int = 0) { ... }
 c = @@Counter(10)
 
-// Mixed: state param + domain param
-@@system Robot($(x): int, name: str) { ... }
-r = @@Robot(7, "R2D2")
+// Mixed: domain + state param
+@@system Robot(name: str, $(x: int)) { ... }
+r = @@Robot("R2D2", $(7))
 
 // Pure enter param
-@@system Worker($>(batch_size): int) { ... }
-w = @@Worker(50)
+@@system Worker($>(batch_size: int)) { ... }
+w = @@Worker($>(50))
 
-// All three groups in one header — declaration order is the call order
-@@system Service($(slot): int, $>(timeout): int, name: str) { ... }
-s = @@Service(0, 1000, "primary")
+// All three groups in one header
+@@system Service($(slot: int), $>(timeout: int), name: str) { ... }
+s = @@Service($(0), $>(1000), "primary")
 ```
 
-Parameters with default values may be omitted from the right of the call:
+#### Named form
+
+The named form omits ordering requirements and lets you supply args by declared name. Domain args use bare `name=value`; state and enter args wrap the assignment in their sigil.
+
+```frame
+@@system Robot(name: str, $(x: int)) { ... }
+r = @@Robot(name="R2D2", $(x=7))
+
+@@system Service($(slot: int), $>(timeout: int), name: str) { ... }
+s = @@Service($(slot=0), $>(timeout=1000), name="primary")
+```
+
+Named-form args may be supplied in any order. Defaults are filled in for any omitted params.
+
+#### Defaults are substituted at the call site
+
+Parameters with default values may be omitted from either form. The Frame assembler substitutes the declared default expression at the tagged-instantiation expansion site, so the target language never sees it as a constructor-default — it's a literal arg in the generated call.
 
 ```frame
 @@system Counter(initial: int = 0) { ... }
-c1 = @@Counter()         // initial = 0 (default)
-c2 = @@Counter(42)       // initial = 42
+c1 = @@Counter()         // expands to Counter(0)  — Frame substitutes the default
+c2 = @@Counter(42)       // expands to Counter(42)
 ```
 
-The framepiler validates that the system name exists, that the arity matches the number of declared header params (less any defaulted trailing params), and that state and enter params have matching declarations on the start state.
+This means default values can use any expression valid in the target language at *call* scope, not just at *parameter-default* scope. It's also why the call site for `@@Counter()` works in target languages that don't natively support default arguments (Java, C, Go, etc.).
+
+#### Validation
+
+The framepiler validates at the assembler stage:
+
+- The system name exists in this file.
+- Sigils on the call site match the declared groups (`$(...)` for state args, `$>(...)` for enter args, bare for domain).
+- All required (no-default) params are supplied.
+- Named args reference declared param names (no typos).
+- No duplicate named args.
+- No mixing positional and named within a single call.
+- State and enter args have matching declarations on the start state's `$Start(name: type)` and `$>(name: type)` handlers.
 
 ---
 
@@ -789,7 +825,7 @@ import logging
 }
 
 @@persist
-@@system OrderProcessor ($(order_type), $>(initial_data), max_retries) {
+@@system OrderProcessor ($(order_type: str), $>(initial_data: dict), max_retries: int) {
 
     operations:
         static version(): str {
@@ -864,6 +900,6 @@ import logging
 }
 
 if __name__ == '__main__':
-    proc = @@OrderProcessor("standard", {"source": "web"}, 5)
+    proc = @@OrderProcessor($("standard"), $>({"source": "web"}), 5)
     proc.submit({"item": "widget", "qty": 3})
 ```
