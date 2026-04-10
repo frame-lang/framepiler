@@ -337,6 +337,33 @@ C and Go are different — they have no field-level initializer at all. Strip un
 - **Dart** rejects non-nullable fields without an initializer. Prepend `late ` to the field declaration so the constructor body's `this.field = init;` becomes the legal initialization point.
 - **Rust** can't generate a HashMap-based `state_args` field on its compartment without breaking the existing typed serialize/deserialize logic. System header state and enter args for the start state are stored as typed `__sys_<name>: <type>` fields directly on the system struct, and the handler body for the start state's handlers prepends `let <name> = self.__sys_<name>.clone();` so handlers read the params by bare name. Non-start states with declared params use a separate path: the `XContext` struct gains a field per declared param (mapped to Rust-native types via `frame_type_to_rust_type`), the typed `StateContext::<State>(ref mut ctx)` variant is populated by the transition site, and the handler preamble binds each param via `if let StateContext::X(ref ctx) = self.__compartment.state_context { ctx.field.clone() }`. Non-start state lifecycle handlers read enter/exit params from `__e.parameters` by declared name (matching the named-key writes that the Phase 3 standardization sweep put in place).
 
+#### Type-aware init wrapping (Rust and C++)
+
+Rust's `Box<dyn Any>` and C++'s `std::any` require **exact type matching** on downcasts. Frame's portable string literal `""` is `&str` in Rust and `const char*` in C++ — neither matches the expected `String` / `std::string`. The framepiler **automatically wraps** string literals at every codegen site that stores a value in typed runtime storage:
+
+| Codegen path | Rust wrapping | C++ wrapping |
+|---|---|---|
+| `@@:(expr)` context return | `String::from("x")` in `Box::new()` | n/a (std::any handles it) |
+| `@@:return = expr` context return | same | n/a |
+| Interface return-init default | same | n/a |
+| State var XContext Default impl | `typed_init_expr()` → `String::from("")` | n/a (Rust only) |
+| State var read via StateContext match | `.clone()` for non-Copy types | n/a |
+| `@@:data["key"] = expr` | `String::from("x")` in `Box::new()` | n/a |
+| State args in transitions | n/a (Rust uses typed StateContext) | `cpp_wrap_any_arg()` → `std::string("x")` |
+| Enter/exit args in transitions | n/a | `cpp_wrap_any_arg()` |
+| State var init in dispatch | n/a | `cpp_wrap_any_arg()` |
+| `state_var_init_value` default | `String::new()` | `std::string()` |
+
+**The design principle**: users write Frame-portable expressions (`""`, `0`, `false`). The codegen wraps them. If the codegen can't determine the correct type, the user provides an explicit target-native cast — `"x".to_string()` for Rust, `std::string("x")` for C++. Frame passes native code through unchanged, so this escape hatch always works.
+
+**String literal detection**: the wrapping uses `starts_with('"') && ends_with('"')` to identify string literals. This correctly handles empty strings, escaped quotes, and multi-word strings. It does NOT detect computed strings (`format!("...")`) or variables — those are the user's responsibility.
+
+**Copy vs non-Copy clone**: when the Rust splicer reads a state variable via the `match &__sv_comp.state_context { ... }` pattern, it checks `ctx.state_var_types` to decide whether to add `.clone()`. Copy types (`i32`, `i64`, `bool`, `f64`, etc.) need no clone. Non-Copy types (`String`, or any unknown type) get `.clone()`.
+
+**When adding a new codegen path**: if your new code emits `Box::new(expr)` (Rust) or `std::any(expr)` (C++), check if the expression could be a string literal and wrap accordingly. Use the established patterns in `frame_expansion.rs` as a reference. The canonical utilities are `typed_init_expr()` and `cpp_wrap_any_arg()` in `codegen_utils.rs`.
+
+**Unit tests**: `codegen_utils::tests` (21 tests) and `frame_expansion::tests` (9 tests) cover all wrapping paths. Run `cargo test --release codegen_utils::tests frame_expansion::tests` to verify.
+
 #### Reserved names
 
 - **GDScript**: `get`, `set`, `call`, `free`, `connect`, `to_string`, etc. collide with `Object` methods that Frame's generated class would silently override. The framepiler now catches these at compile time and emits **E501** with a suggested rename (see `gdscript_reserved_method_rename` in `frame_validator.rs` for the full list). Common renames: `get` → `get_value`, `set` → `set_value`, `call` → `invoke`. The validator runs after the general semantic checks, so structural errors surface first.

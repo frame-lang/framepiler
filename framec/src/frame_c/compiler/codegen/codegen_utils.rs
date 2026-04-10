@@ -59,6 +59,9 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                     // Rust: `""` is `&str`, not `String`. The Default impl
                     // for typed XContext structs needs a `String` value.
                     TargetLanguage::Rust => "String::new()".to_string(),
+                    // C++: `""` is `const char*`, not `std::string`. Values
+                    // stored in `std::any("")` fail `std::any_cast<std::string>`.
+                    TargetLanguage::Cpp => "std::string()".to_string(),
                     _ => "\"\"".to_string(),
                 },
                 _ => match lang {
@@ -466,5 +469,150 @@ pub(crate) fn to_snake_case(s: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame_c::visitors::TargetLanguage;
+    use crate::frame_c::compiler::frame_ast::{Type, Expression, Literal};
+
+    // =========================================================
+    // state_var_init_value — type-correct defaults per language
+    // =========================================================
+
+    #[test]
+    fn test_state_var_init_string_rust() {
+        assert_eq!(state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Rust), "String::new()");
+        assert_eq!(state_var_init_value(&Type::Custom("string".into()), TargetLanguage::Rust), "String::new()");
+    }
+
+    #[test]
+    fn test_state_var_init_string_cpp() {
+        assert_eq!(state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Cpp), "std::string()");
+        assert_eq!(state_var_init_value(&Type::Custom("string".into()), TargetLanguage::Cpp), "std::string()");
+    }
+
+    #[test]
+    fn test_state_var_init_string_python() {
+        assert_eq!(state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Python3), "\"\"");
+    }
+
+    #[test]
+    fn test_state_var_init_int() {
+        assert_eq!(state_var_init_value(&Type::Custom("int".into()), TargetLanguage::Rust), "0");
+        assert_eq!(state_var_init_value(&Type::Custom("i64".into()), TargetLanguage::Cpp), "0");
+        assert_eq!(state_var_init_value(&Type::Custom("number".into()), TargetLanguage::Python3), "0");
+    }
+
+    #[test]
+    fn test_state_var_init_bool_python() {
+        assert_eq!(state_var_init_value(&Type::Custom("bool".into()), TargetLanguage::Python3), "False");
+    }
+
+    #[test]
+    fn test_state_var_init_bool_rust() {
+        assert_eq!(state_var_init_value(&Type::Custom("bool".into()), TargetLanguage::Rust), "false");
+    }
+
+    #[test]
+    fn test_state_var_init_unknown_rust() {
+        assert_eq!(state_var_init_value(&Type::Unknown, TargetLanguage::Rust), "None");
+    }
+
+    #[test]
+    fn test_state_var_init_unknown_python() {
+        assert_eq!(state_var_init_value(&Type::Unknown, TargetLanguage::Python3), "None");
+    }
+
+    // =========================================================
+    // typed_init_expr — type-aware wrapping for init expressions
+    // =========================================================
+
+    #[test]
+    fn test_typed_init_expr_rust_string_literal() {
+        let expr = Expression::Literal(Literal::String("hello".into()));
+        let result = typed_init_expr(&expr, &Type::Custom("str".into()), TargetLanguage::Rust);
+        assert_eq!(result, "String::from(\"hello\")");
+    }
+
+    #[test]
+    fn test_typed_init_expr_cpp_string_literal() {
+        let expr = Expression::Literal(Literal::String("hello".into()));
+        let result = typed_init_expr(&expr, &Type::Custom("str".into()), TargetLanguage::Cpp);
+        assert_eq!(result, "std::string(\"hello\")");
+    }
+
+    #[test]
+    fn test_typed_init_expr_rust_int_fallback_for_string() {
+        // Parser produced Integer(0) for unparseable String::new()
+        let expr = Expression::Literal(Literal::Int(0));
+        let result = typed_init_expr(&expr, &Type::Custom("str".into()), TargetLanguage::Rust);
+        assert_eq!(result, "String::new()");
+    }
+
+    #[test]
+    fn test_typed_init_expr_python_string_no_wrap() {
+        let expr = Expression::Literal(Literal::String("hello".into()));
+        let result = typed_init_expr(&expr, &Type::Custom("str".into()), TargetLanguage::Python3);
+        assert_eq!(result, "\"hello\"", "Python should not wrap string literals");
+    }
+
+    #[test]
+    fn test_typed_init_expr_rust_int_for_int_no_wrap() {
+        let expr = Expression::Literal(Literal::Int(42));
+        let result = typed_init_expr(&expr, &Type::Custom("int".into()), TargetLanguage::Rust);
+        assert_eq!(result, "42", "Int-typed int literal should not be wrapped");
+    }
+
+    #[test]
+    fn test_typed_init_expr_rust_bool_no_wrap() {
+        let expr = Expression::Literal(Literal::Bool(true));
+        let result = typed_init_expr(&expr, &Type::Custom("bool".into()), TargetLanguage::Rust);
+        assert_eq!(result, "true");
+    }
+
+    #[test]
+    fn test_typed_init_expr_rust_empty_string() {
+        let expr = Expression::Literal(Literal::String("".into()));
+        let result = typed_init_expr(&expr, &Type::Custom("str".into()), TargetLanguage::Rust);
+        assert_eq!(result, "String::from(\"\")");
+    }
+
+    #[test]
+    fn test_typed_init_expr_cpp_empty_string() {
+        let expr = Expression::Literal(Literal::String("".into()));
+        let result = typed_init_expr(&expr, &Type::Custom("str".into()), TargetLanguage::Cpp);
+        assert_eq!(result, "std::string(\"\")");
+    }
+
+    // =========================================================
+    // cpp_wrap_any_arg — C++ std::any wrapping for string literals
+    // =========================================================
+
+    #[test]
+    fn test_cpp_wrap_any_arg_string_literal() {
+        assert_eq!(cpp_wrap_any_arg("\"hello\""), "std::string(\"hello\")");
+    }
+
+    #[test]
+    fn test_cpp_wrap_any_arg_integer() {
+        assert_eq!(cpp_wrap_any_arg("42"), "42");
+    }
+
+    #[test]
+    fn test_cpp_wrap_any_arg_variable() {
+        assert_eq!(cpp_wrap_any_arg("my_var"), "my_var");
+    }
+
+    #[test]
+    fn test_cpp_wrap_any_arg_empty_string() {
+        assert_eq!(cpp_wrap_any_arg("\"\""), "std::string(\"\")");
+    }
+
+    #[test]
+    fn test_cpp_wrap_any_arg_with_whitespace() {
+        assert_eq!(cpp_wrap_any_arg("  \"hello\"  "), "std::string(\"hello\")");
+    }
 }
 

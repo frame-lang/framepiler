@@ -262,6 +262,47 @@ Error codes are organized by range:
 
 Location: `framec/src/frame_c/compiler/validation/`
 
+## Type Wrapping in Codegen
+
+Two target languages — Rust and C++ — have **typed runtime storage** that requires exact type matching between the value stored and the type used to retrieve it. Frame's codegen automatically wraps portable expressions to match these type systems.
+
+### Why wrapping exists
+
+- **Rust**: `Box<dyn Any>` + `downcast::<T>()`. A string literal `"x"` is `&str`, but `downcast::<String>()` expects `String`. Without wrapping, the downcast fails at runtime.
+- **C++**: `std::any` + `std::any_cast<T>()`. A string literal `"x"` is `const char*`, but `any_cast<std::string>()` expects `std::string`. Without wrapping, the cast throws `bad_any_cast`.
+
+### Canonical utilities
+
+- **`typed_init_expr(expr, var_type, lang)`** — `codegen_utils.rs`. Wraps a parsed Expression for a known target type. Used by the Rust XContext Default impl for state var inits. Handles Rust `String::from("...")`, C++ `std::string("...")`, and the parser-fallback case (integer where String expected → `String::new()`).
+- **`cpp_wrap_any_arg(arg)`** — `codegen_utils.rs`. Wraps a raw string argument for C++ `std::any` storage. If the argument looks like a string literal (`starts_with('"') && ends_with('"')`), wraps in `std::string(...)`. Used by transition codegen for exit_args, enter_args, and state_args.
+
+### String literal detection
+
+The wrapping pattern `starts_with('"') && ends_with('"')` detects string literals. This works for:
+- Empty strings: `""`
+- Regular strings: `"hello"`
+- Escaped quotes: `"hello \"world\""`
+
+It does NOT detect:
+- Computed strings: `format!("hello {}", name)` — already returns `String` in Rust
+- Variable references: `self.name` — already the correct type from state var expansion
+- Template literals or string concatenation — the user's responsibility to match types
+
+### Copy vs non-Copy clone decision
+
+When the Rust splicer expands `$.varName` for read access, it generates a `match &__sv_comp.state_context` pattern that borrows the state context. Non-Copy types (like `String`) need `.clone()` to extract an owned value from the shared reference. The expansion checks `ctx.state_var_types` to decide:
+
+- **Copy types** (`i32`, `i64`, `u32`, `u64`, `f32`, `f64`, `bool`, `int`, `float`): no `.clone()` needed
+- **Non-Copy types** (`String`, `str`, or any type not in the Copy list): `.clone()` added
+- **Unknown type** (not in `state_var_types`): `.clone()` added for safety
+
+### Unit test coverage
+
+- `codegen_utils::tests` — 21 tests covering `state_var_init_value`, `typed_init_expr`, and `cpp_wrap_any_arg`
+- `frame_expansion::tests` — 9 tests covering context return wrapping, state var clone, and cross-language behavior
+
+Run: `cargo test --release codegen_utils::tests frame_expansion::tests`
+
 ## Alternative Output: `--format model`
 
 The `--format model` flag produces a JSON representation of the parsed AST instead of generated code. This skips stages 3-7 (no validation, no codegen). Used by tooling (VS Code extension, visualization).

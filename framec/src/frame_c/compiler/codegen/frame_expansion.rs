@@ -706,11 +706,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                 for (i, a) in args.iter().enumerate() {
                                     if let Some(eq_pos) = a.find('=') {
                                         let name = a[..eq_pos].trim();
-                                        let value = a[eq_pos + 1..].trim();
+                                        let value = cpp_wrap_any_arg(a[eq_pos + 1..].trim());
                                         code.push_str(&format!("{}__new_compartment->state_args[\"{}\"] = std::any({});\n", indent_str, name, value));
                                     } else {
                                         let key = resolve_state_arg_key(i, &target, ctx);
-                                        code.push_str(&format!("{}__new_compartment->state_args[\"{}\"] = std::any({});\n", indent_str, key, a));
+                                        let wrapped = cpp_wrap_any_arg(a);
+                                        code.push_str(&format!("{}__new_compartment->state_args[\"{}\"] = std::any({});\n", indent_str, key, wrapped));
                                     }
                                 }
                             }
@@ -2023,7 +2024,13 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._data[{}] = {};", indent_str, key, expanded_expr),
                 TargetLanguage::C => format!("{}{}_DATA_SET(self, \"{}\", {});", indent_str, ctx.system_name, bare_key, expanded_expr),
                 TargetLanguage::Rust => {
-                    format!("{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._data.insert(\"{}\".to_string(), Box::new({}) as Box<dyn std::any::Any>); }}", indent_str, bare_key, expanded_expr)
+                    // Wrap string literals: "x" is &str but downcast expects String
+                    let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
+                        format!("String::from({})", expanded_expr.trim())
+                    } else {
+                        expanded_expr.clone()
+                    };
+                    format!("{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._data.insert(\"{}\".to_string(), Box::new({}) as Box<dyn std::any::Any>); }}", indent_str, bare_key, boxed_expr)
                 }
                 TargetLanguage::Cpp => format!("{}_context_stack.back()._data[\"{}\"] = {};", indent_str, bare_key, expanded_expr),
                 TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._data.put(\"{}\", {});", indent_str, bare_key, expanded_expr),
@@ -2659,5 +2666,127 @@ pub(crate) fn get_native_scanner(lang: TargetLanguage) -> Box<dyn NativeRegionSc
         TargetLanguage::Graphviz => {
             panic!("No native region scanner for {:?}", lang)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame_c::visitors::TargetLanguage;
+    use crate::frame_c::compiler::native_region_scanner::FrameSegmentKind;
+
+    fn make_ctx(state_var_types: Vec<(&str, &str)>) -> HandlerContext {
+        HandlerContext {
+            system_name: "TestSys".to_string(),
+            state_name: "S1".to_string(),
+            event_name: "foo".to_string(),
+            parent_state: None,
+            defined_systems: std::collections::HashSet::new(),
+            use_sv_comp: false,
+            state_var_types: state_var_types.into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            state_param_names: std::collections::HashMap::new(),
+            state_enter_param_names: std::collections::HashMap::new(),
+            state_exit_param_names: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Helper: call generate_frame_expansion with text as bytes + span
+    fn expand(kind: FrameSegmentKind, text: &str, lang: TargetLanguage, ctx: &HandlerContext) -> String {
+        let bytes = text.as_bytes();
+        let span = crate::frame_c::compiler::native_region_scanner::RegionSpan {
+            start: 0,
+            end: bytes.len(),
+        };
+        generate_frame_expansion(bytes, &span, kind, 0, lang, ctx)
+    }
+
+    // =========================================================
+    // Rust @@:(expr) — string literals wrapped with String::from
+    // =========================================================
+
+    #[test]
+    fn test_context_return_expr_rust_string_wraps() {
+        let ctx = make_ctx(vec![]);
+        let result = expand(FrameSegmentKind::ContextReturnExpr, "@@:(\"green\")", TargetLanguage::Rust, &ctx);
+        assert!(result.contains("String::from(\"green\")"),
+            "Rust @@:(\"green\") should wrap with String::from, got: {}", result);
+    }
+
+    #[test]
+    fn test_context_return_expr_rust_int_no_wrap() {
+        let ctx = make_ctx(vec![]);
+        let result = expand(FrameSegmentKind::ContextReturnExpr, "@@:(42)", TargetLanguage::Rust, &ctx);
+        assert!(result.contains("Box::new(42)"),
+            "Rust @@:(42) should NOT wrap with String::from, got: {}", result);
+        assert!(!result.contains("String::from"),
+            "Integer should not get String::from wrapping, got: {}", result);
+    }
+
+    #[test]
+    fn test_context_return_expr_python_no_wrap() {
+        let ctx = make_ctx(vec![]);
+        let result = expand(FrameSegmentKind::ContextReturnExpr, "@@:(\"green\")", TargetLanguage::Python3, &ctx);
+        assert!(!result.contains("String::from"),
+            "Python should NOT wrap string literals, got: {}", result);
+        assert!(result.contains("\"green\""),
+            "Python should pass through the literal, got: {}", result);
+    }
+
+    // =========================================================
+    // Rust @@:return = expr — same wrapping
+    // =========================================================
+
+    #[test]
+    fn test_context_return_assign_rust_string_wraps() {
+        let ctx = make_ctx(vec![]);
+        let result = expand(FrameSegmentKind::ContextReturn, "@@:return = \"hello\"", TargetLanguage::Rust, &ctx);
+        assert!(result.contains("String::from(\"hello\")"),
+            "Rust @@:return = \"hello\" should wrap, got: {}", result);
+    }
+
+    #[test]
+    fn test_context_return_assign_rust_int_no_wrap() {
+        let ctx = make_ctx(vec![]);
+        let result = expand(FrameSegmentKind::ContextReturn, "@@:return = 42", TargetLanguage::Rust, &ctx);
+        assert!(!result.contains("String::from"),
+            "Rust @@:return = 42 should NOT wrap, got: {}", result);
+    }
+
+    // =========================================================
+    // Rust state var READ — .clone() for non-Copy types only
+    // =========================================================
+
+    #[test]
+    fn test_state_var_read_rust_string_clones() {
+        let ctx = make_ctx(vec![("name", "String")]);
+        let result = expand_state_vars_in_expr("$.name", TargetLanguage::Rust, &ctx);
+        assert!(result.contains(".clone()"),
+            "String state var read should add .clone(), got: {}", result);
+    }
+
+    #[test]
+    fn test_state_var_read_rust_int_no_clone() {
+        let ctx = make_ctx(vec![("count", "i32")]);
+        let result = expand_state_vars_in_expr("$.count", TargetLanguage::Rust, &ctx);
+        assert!(!result.contains(".clone()"),
+            "i32 state var read should NOT add .clone(), got: {}", result);
+    }
+
+    #[test]
+    fn test_state_var_read_rust_bool_no_clone() {
+        let ctx = make_ctx(vec![("flag", "bool")]);
+        let result = expand_state_vars_in_expr("$.flag", TargetLanguage::Rust, &ctx);
+        assert!(!result.contains(".clone()"),
+            "bool state var read should NOT add .clone(), got: {}", result);
+    }
+
+    #[test]
+    fn test_state_var_read_rust_unknown_type_clones() {
+        let ctx = make_ctx(vec![]);
+        let result = expand_state_vars_in_expr("$.mystery", TargetLanguage::Rust, &ctx);
+        assert!(result.contains(".clone()"),
+            "Unknown-type state var should clone for safety, got: {}", result);
     }
 }

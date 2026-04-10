@@ -561,6 +561,8 @@ There are two forms for setting the return value on the context stack:
 
 If the current state doesn't handle the event, the caller gets the default value (`0` in this case). Note: bare `return` exits the dispatch method but does NOT set the return value — always use `@@:(expr)` or `@@:return = expr` to set return values.
 
+**String returns across languages**: When returning string literals with `@@:("value")`, the framepiler automatically wraps the literal for typed backends (Rust: `String::from("value")`, C++: `std::string("value")`). For computed strings, use the target language's string construction (e.g., `@@:(format!("hello {}", name))` for Rust, `@@:(std::string("hello ") + name)` for C++). All other languages accept bare string literals without wrapping.
+
 ### Multiple Parameters and Returns
 
 ```

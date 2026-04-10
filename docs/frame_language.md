@@ -281,6 +281,8 @@ $.<varName> (: <type>)? = <initializer_expr>
 - No duplicates within a state
 - State variable names may shadow domain variables (no ambiguity due to `$.` prefix)
 
+**Portable init expressions:** Use Frame-portable literals for state variable initializers: `""` for strings, `0` for integers, `false` for booleans. The framepiler wraps these to match the target language's type system (e.g., `String::from("")` for Rust, `std::string("")` for C++). Target-language-specific constructors like `String::new()` are NOT portable — the Frame parser may not handle them correctly. If you need a target-specific value, write it as native code and the framepiler will pass it through unchanged.
+
 ### Event Handlers
 
 ```
