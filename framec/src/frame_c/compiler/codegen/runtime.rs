@@ -9,6 +9,44 @@ use crate::frame_c::compiler::frame_ast::{SystemAst, Type, Expression};
 use super::ast::{CodegenNode, Field, Param, Visibility};
 use super::codegen_utils::{expression_to_string, state_var_init_value, type_to_string};
 
+/// Map a Frame `Type` to a Rust-native type spelling for use inside
+/// generated structs (e.g. the per-state `XContext`). Mirrors the
+/// conversions in `RustBackend::convert_type`, but lives here so that
+/// raw-text codegen in `runtime.rs` doesn't have to round-trip through
+/// the AST/CodegenNode pipeline. Untyped (`Type::Unknown`) state params
+/// fall back to `String`, matching the dynamic backends' loosely-typed
+/// `state_args` HashMap.
+fn frame_type_to_rust_type(t: &Type) -> String {
+    match t {
+        Type::Custom(name) => match name.as_str() {
+            "int" => "i64".to_string(),
+            "float" => "f64".to_string(),
+            "str" | "string" | "String" => "String".to_string(),
+            "bool" => "bool".to_string(),
+            "Any" => "String".to_string(),
+            other => other.to_string(),
+        },
+        Type::Unknown => "String".to_string(),
+    }
+}
+
+/// Default value (right-hand side of `Self { name: <init> }`) for a
+/// Frame state-param `Type` in Rust. Mirrors `frame_type_to_rust_type`
+/// for the type column. The real value is overwritten at the
+/// transition site, so these are just neutral placeholders.
+fn frame_type_to_rust_default(t: &Type) -> String {
+    match t {
+        Type::Custom(name) => match name.as_str() {
+            "int" | "i32" | "i64" | "u32" | "u64" => "0".to_string(),
+            "float" | "f32" | "f64" => "0.0".to_string(),
+            "bool" => "false".to_string(),
+            "str" | "string" | "String" | "Any" => "String::new()".to_string(),
+            _ => "Default::default()".to_string(),
+        },
+        Type::Unknown => "String::new()".to_string(),
+    }
+}
+
 
 /// Generate Rust runtime types for a system
 ///
@@ -852,24 +890,43 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // Generate state context types (must come before Compartment which references them)
-    // Context structs for states with state variables
+    // Context structs for states with state variables OR state params.
+    // The XContext struct holds BOTH state vars (declared with `$.name`)
+    // AND state params (declared on the state header like `$Counter(initial: int)`)
+    // so that transitions of the form `-> $Counter(42)` can populate the
+    // state's params via the typed enum-of-structs StateContext.
     if let Some(ref machine) = system.machine {
-        let states_with_vars: Vec<_> = machine.states.iter()
-            .filter(|s| !s.state_vars.is_empty())
+        let states_with_storage: Vec<_> = machine.states.iter()
+            .filter(|s| !s.state_vars.is_empty() || !s.params.is_empty())
             .collect();
 
-        for state in &states_with_vars {
+        for state in &states_with_storage {
             code.push_str(&format!("#[derive(Clone)]\nstruct {}Context {{\n", state.name));
+            // State params first (they come from transitions or system header).
+            // Rust requires concrete types, so we map Frame's portable
+            // type names (`int`/`str`/`bool`) to Rust-native spellings
+            // and fall back to `String` for untyped params.
+            for p in &state.params {
+                let type_str = frame_type_to_rust_type(&p.param_type);
+                code.push_str(&format!("    {}: {},\n", p.name, type_str));
+            }
             for var in &state.state_vars {
                 let type_str = type_to_string(&var.var_type);
                 code.push_str(&format!("    {}: {},\n", var.name, type_str));
             }
             code.push_str("}\n\n");
 
-            // Manual Default impl with declared initializers
+            // Manual Default impl with declared initializers (state vars)
+            // and neutral defaults (state params — the real values come
+            // from the transition site). State params use a Rust-typed
+            // default helper so untyped params default to `String::new()`.
             code.push_str(&format!("impl Default for {}Context {{\n", state.name));
             code.push_str("    fn default() -> Self {\n");
             code.push_str("        Self {\n");
+            for p in &state.params {
+                let init_val = frame_type_to_rust_default(&p.param_type);
+                code.push_str(&format!("            {}: {},\n", p.name, init_val));
+            }
             for var in &state.state_vars {
                 let init_val = if let Some(ref init) = var.init {
                     expression_to_string(init, TargetLanguage::Rust)
@@ -884,11 +941,13 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
         }
     }
 
-    // StateContext enum — typed state variable storage on the compartment
+    // StateContext enum — typed state variable storage on the compartment.
+    // A state has a context variant if it declares EITHER state vars or
+    // state params. The variant carries the state's `XContext` struct.
     code.push_str(&format!("#[derive(Clone)]\nenum {}StateContext {{\n", system_name));
     if let Some(ref machine) = system.machine {
         for state in &machine.states {
-            if state.state_vars.is_empty() {
+            if state.state_vars.is_empty() && state.params.is_empty() {
                 code.push_str(&format!("    {},\n", state.name));
             } else {
                 code.push_str(&format!("    {}({}Context),\n", state.name, state.name));
@@ -903,7 +962,7 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
         if let Some(first_state) = machine.states.first() {
             code.push_str(&format!("impl Default for {}StateContext {{\n", system_name));
             code.push_str("    fn default() -> Self {\n");
-            if first_state.state_vars.is_empty() {
+            if first_state.state_vars.is_empty() && first_state.params.is_empty() {
                 code.push_str(&format!("        {}StateContext::{}\n", system_name, first_state.name));
             } else {
                 code.push_str(&format!("        {}StateContext::{}({}Context::default())\n",
@@ -925,13 +984,15 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // Generate Compartment impl with new()
-    // new() automatically sets state_context to the correct variant with defaults
+    // new() automatically sets state_context to the correct variant with defaults.
+    // A state has a context variant if it declares EITHER state vars or
+    // state params (the same condition used by the StateContext enum).
     code.push_str(&format!("impl {}Compartment {{\n", system_name));
     code.push_str("    fn new(state: &str) -> Self {\n");
     code.push_str(&format!("        let state_context = match state {{\n"));
     if let Some(ref machine) = system.machine {
         for state in &machine.states {
-            if state.state_vars.is_empty() {
+            if state.state_vars.is_empty() && state.params.is_empty() {
                 code.push_str(&format!("            \"{}\" => {}StateContext::{},\n",
                     state.name, system_name, state.name));
             } else {

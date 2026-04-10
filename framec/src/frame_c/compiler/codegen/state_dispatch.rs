@@ -165,6 +165,14 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
             .unwrap_or_default();
         for state_entry in arcanum.get_enhanced_states(system_name) {
             let is_start_state = state_entry.name == start_state_name;
+            // For non-start states with declared params, build the list of
+            // declared param names so the handler preamble can bind from
+            // the typed `compartment.state_context::<State>(ref ctx)`.
+            let non_start_state_param_names: Vec<String> = if !is_start_state {
+                state_entry.params.iter().map(|p| p.name.clone()).collect()
+            } else {
+                Vec::new()
+            };
             for (_event, handler_entry) in &state_entry.handlers {
                 let empty: Vec<String> = Vec::new();
                 let sys_param_locals = if is_start_state {
@@ -183,6 +191,10 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
                     &defined_systems,
                     sys_param_locals,
                     is_start_state,
+                    &non_start_state_param_names,
+                    &state_param_names,
+                    &state_enter_param_names,
+                    &state_exit_param_names,
                 );
                 methods.push(method);
             }
@@ -2359,12 +2371,16 @@ pub(crate) fn generate_rust_state_dispatch(
                 continue;
             }
             // Non-start state: extract lifecycle params from event and
-            // pass them to the handler as before. (This is the
-            // pre-Rust-system-init pattern; not affected by the
-            // start-state-only system params rollout.)
+            // pass them to the handler. After the named-key
+            // standardization sweep, transition codegen writes
+            // enter/exit args under the declared param name (e.g.
+            // `enter_args.insert("msg", ...)`), and the kernel hands
+            // those back as `__e.parameters` keyed by the same name.
+            // We therefore read by `param.name`, not the legacy
+            // positional index.
             code.push_str(&format!("    \"{}\" => {{\n", message));
-            for (i, param) in handler.params.iter().enumerate() {
-                code.push_str(&format!("        let {} = __e.parameters.get(\"{}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n", param.name, i));
+            for param in &handler.params {
+                code.push_str(&format!("        let {0} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n", param.name));
             }
             let param_names: Vec<_> = handler.params.iter().map(|p| p.name.clone()).collect();
             code.push_str(&format!("        self.{}(__e, {});\n", handler_method, param_names.join(", ")));
@@ -2649,6 +2665,10 @@ pub(crate) fn generate_handler_from_arcanum(
     defined_systems: &std::collections::HashSet<String>,
     sys_param_locals: &[String],
     is_start_state: bool,
+    non_start_state_param_names: &[String],
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
 ) -> CodegenNode {
     // Build params from handler's parameter symbols
     // V4 uses native types, so we just pass them through as-is
@@ -2692,7 +2712,13 @@ pub(crate) fn generate_handler_from_arcanum(
         format!("_s_{}_{}", state_name, handler.event)
     };
 
-    // Build context for HSM forwarding
+    // Build context for HSM forwarding. The state_param_names /
+    // state_enter_param_names / state_exit_param_names maps are
+    // populated from the caller so that the transition codegen inside
+    // the handler body can resolve `state_args[i]` /
+    // `enter_args[i]` / `exit_args[i]` to declared param names.
+    // Without this, Rust's typed enum-of-structs StateContext would
+    // emit `ctx.0 = val` (positional) instead of `ctx.initial = val`.
     let ctx = HandlerContext {
         system_name: system_name.to_string(),
         state_name: state_name.to_string(),
@@ -2701,9 +2727,9 @@ pub(crate) fn generate_handler_from_arcanum(
         defined_systems: defined_systems.clone(),
         use_sv_comp: false, // Handler-specific methods don't have __sv_comp preamble
         state_var_types: std::collections::HashMap::new(),
-        state_param_names: std::collections::HashMap::new(),
-        state_enter_param_names: std::collections::HashMap::new(),
-        state_exit_param_names: std::collections::HashMap::new(),
+        state_param_names: state_param_names.clone(),
+        state_enter_param_names: state_enter_param_names.clone(),
+        state_exit_param_names: state_exit_param_names.clone(),
     };
 
     // Emit handler default return value if present
@@ -2713,20 +2739,33 @@ pub(crate) fn generate_handler_from_arcanum(
     // `$Start(x: int)`) and start-state enter args (`$>(b: int)`) to
     // bare locals at the top of the handler. The constructor populates
     // `self.__sys_<name>` from the system header params for the start
-    // state only. Non-start states with their own state params remain
-    // unsupported in Rust (the existing limitation that
-    // 26_state_params.frs documents).
+    // state only. Non-start states with declared state params bind from
+    // the typed `self.__compartment.state_context::<State>(ref ctx)`
+    // variant — populated by transition codegen via the typed pattern
+    // match in `frame_expansion.rs`.
     let mut sys_param_preamble = String::new();
-    if matches!(lang, TargetLanguage::Rust) && is_start_state {
-        for name in sys_param_locals {
-            sys_param_preamble.push_str(&format!("let {0} = self.__sys_{0}.clone();\n", name));
-        }
-        // Also bind any enter handler params from `self.__sys_<name>`.
-        if handler.is_enter {
-            for p in &handler.params {
+    if matches!(lang, TargetLanguage::Rust) {
+        if is_start_state {
+            for name in sys_param_locals {
+                sys_param_preamble.push_str(&format!("let {0} = self.__sys_{0}.clone();\n", name));
+            }
+            // Also bind any enter handler params from `self.__sys_<name>`.
+            if handler.is_enter {
+                for p in &handler.params {
+                    sys_param_preamble.push_str(&format!(
+                        "let {0} = self.__sys_{0}.clone();\n",
+                        p.name
+                    ));
+                }
+            }
+        } else if !non_start_state_param_names.is_empty() {
+            // Non-start state with declared state params: pattern-match
+            // the typed state context and bind each declared param to a
+            // local at the top of the handler.
+            for name in non_start_state_param_names {
                 sys_param_preamble.push_str(&format!(
-                    "let {0} = self.__sys_{0}.clone();\n",
-                    p.name
+                    "let {0} = if let {1}StateContext::{2}(ref ctx) = self.__compartment.state_context {{ ctx.{0}.clone() }} else {{ Default::default() }};\n",
+                    name, system_name, state_name
                 ));
             }
         }

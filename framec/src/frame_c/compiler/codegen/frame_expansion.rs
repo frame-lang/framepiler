@@ -575,8 +575,14 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         if let Some(ref exit) = exit_str {
                             let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, key, arg));
+                                let (key, value) = if let Some(eq_pos) = arg.find('=') {
+                                    let name = arg[..eq_pos].trim().to_string();
+                                    let val = arg[eq_pos + 1..].trim().to_string();
+                                    (name, val)
+                                } else {
+                                    (resolve_exit_arg_key(i, ctx), (*arg).to_string())
+                                };
+                                code.push_str(&format!("{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, key, value));
                             }
                         }
 
@@ -584,12 +590,49 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         code.push_str(&format!("{}let mut __compartment = {}Compartment::new(\"{}\");\n", indent_str, ctx.system_name, target));
                         code.push_str(&format!("{}__compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));\n", indent_str));
 
+                        // Set state args if present. Rust uses a typed
+                        // enum-of-structs StateContext, so we pattern-match
+                        // to get a mutable reference to the target state's
+                        // context struct and assign each declared field.
+                        // The args come positionally from the transition
+                        // (`-> $Counter(42)`), and ctx.state_param_names
+                        // gives us the param-name-by-index map for the
+                        // target state.
+                        if let Some(ref state) = state_str {
+                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            if !args.is_empty() {
+                                code.push_str(&format!(
+                                    "{}if let {}StateContext::{}(ref mut ctx) = __compartment.state_context {{\n",
+                                    indent_str, ctx.system_name, target
+                                ));
+                                for (i, arg) in args.iter().enumerate() {
+                                    // Named-arg syntax `k=3` overrides the positional name.
+                                    // Mirrors the Python/JS/TS branches above.
+                                    let (key, value) = if let Some(eq_pos) = arg.find('=') {
+                                        let name = arg[..eq_pos].trim().to_string();
+                                        let val = arg[eq_pos + 1..].trim().to_string();
+                                        (name, val)
+                                    } else {
+                                        (resolve_state_arg_key(i, &target, ctx), (*arg).to_string())
+                                    };
+                                    code.push_str(&format!("{}    ctx.{} = {};\n", indent_str, key, value));
+                                }
+                                code.push_str(&format!("{}}}\n", indent_str));
+                            }
+                        }
+
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
                             let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                             for (i, arg) in args.iter().enumerate() {
-                                let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, key, arg));
+                                let (key, value) = if let Some(eq_pos) = arg.find('=') {
+                                    let name = arg[..eq_pos].trim().to_string();
+                                    let val = arg[eq_pos + 1..].trim().to_string();
+                                    (name, val)
+                                } else {
+                                    (resolve_enter_arg_key(i, &target, ctx), (*arg).to_string())
+                                };
+                                code.push_str(&format!("{}__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, key, value));
                             }
                         }
 
