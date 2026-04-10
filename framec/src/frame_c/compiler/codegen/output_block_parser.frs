@@ -195,11 +195,45 @@
                         if found_brace { continue; }
                     }
 
-                    // ---- RETURN: mark terminal ----
+                    // ---- RETURN: emit the return keyword, then continue
+                    // emitting all subsequent tokens on the same line. We mark
+                    // `after_return` only after the newline so any expression
+                    // tokens that follow `return` (e.g. `return self.value`)
+                    // make it through. Without this, `return X` collapsed to
+                    // bare `return` and the X token was stripped — Lua tests
+                    // that returned a value silently returned nothing.
                     if kind == 8 && !after_return {
                         self.result.push_str(&text);
+                        // Walk subsequent tokens until newline or block close.
+                        let mut look = ti + 1;
+                        while look < n {
+                            let lk = self.token_kinds[look];
+                            if lk == 10 {
+                                // Newline — emit it and now mark after_return.
+                                self.result.push_str(
+                                    &String::from_utf8_lossy(
+                                        &self.bytes[self.token_starts[look]..self.token_ends[look]],
+                                    ),
+                                );
+                                look += 1;
+                                break;
+                            }
+                            if lk == 7 || lk == 9 {
+                                // RBRACE / END — let the outer loop handle it
+                                // so block_depth is decremented correctly.
+                                break;
+                            }
+                            // Anything else (text, whitespace, identifiers) —
+                            // emit as-is so the return expression survives.
+                            self.result.push_str(
+                                &String::from_utf8_lossy(
+                                    &self.bytes[self.token_starts[look]..self.token_ends[look]],
+                                ),
+                            );
+                            look += 1;
+                        }
                         after_return = true;
-                        ti += 1;
+                        ti = look;
                         continue;
                     }
 

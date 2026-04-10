@@ -348,9 +348,26 @@ Several backends — Swift, Kotlin, Lua, GDScript — produce a syntax error whe
 
 #### Lua return-value extraction was broken pre-rollout
 
-Lua's `OutputBlockParser` (the Frame state machine that transforms generated brace-blocks into Lua's `if/then/end` shape) was treating `return X` as a terminal token and stripping the `X` part. Every interface method that returned a value was effectively returning nothing — but no existing test caught it because the Lua tests didn't actually assert the return values. The Phase 4 specialty tests caught it on day one. The fix walks forward from the `return` token and emits all subsequent text/identifier tokens until a newline before marking after-return state. Fix is in `output_block_parser.gen.rs` and is marked-up because the parser is generated from a `.frs` Frame source elsewhere — be careful when regenerating.
+Lua's `OutputBlockParser` (the Frame state machine that transforms generated brace-blocks into Lua's `if/then/end` shape) was treating `return X` as a terminal token and stripping the `X` part. Every interface method that returned a value was effectively returning nothing — but no existing test caught it because the Lua tests didn't actually assert the return values. The Phase 4 specialty tests caught it on day one. The fix walks forward from the `return` token and emits all subsequent text/identifier tokens until a newline before marking after-return state. Fix lives in the `.frs` source (`output_block_parser.frs`) — see the regen workflow below.
 
 The Lua `interface_gen.rs` was also rewritten to use `return table.remove(self._context_stack)._return` as a single expression, avoiding the need for a separate `local __ret = ...; return __ret` pattern that the (then-broken) parser would have stripped.
+
+#### Regenerating `output_block_parser.gen.rs`
+
+The OutputBlockParser is itself a Frame state machine. The `.frs` source lives at `framec/src/frame_c/compiler/codegen/output_block_parser.frs` and the generated Rust at `output_block_parser.gen.rs`. To regenerate:
+
+```bash
+cargo build --release   # build the bootstrap framec
+target/release/framec compile -l rust \
+    -o /tmp \
+    framec/src/frame_c/compiler/codegen/output_block_parser.frs
+cp /tmp/output_block_parser.rs \
+    framec/src/frame_c/compiler/codegen/output_block_parser.gen.rs
+```
+
+Then `cargo test --release` and the full 16-language regression. The regen used to be broken because the framec scanner had a substring-matching bug — it would land on the `r` in identifiers like `after_return` and match the `return` keyword mid-identifier, shredding the Rust code into invalid output. **Fixed in TODO #42**: `match_frame_statement` in `native_region_scanner/unified.rs` now requires a leading word boundary on the `return`/`push$`/`pop$` keyword matches. The corresponding regression tests are in `unified.rs`'s `tests` module.
+
+If you ever see the regen output containing mangled identifiers (`after_                              return = false`) again, the leading-boundary check has regressed — fix the scanner before re-running.
 
 #### Lua `[]` empty list literal
 
@@ -368,6 +385,26 @@ C's `emit_params` was passing the raw Frame type (`str`) into the generated cons
 
 Erlang has no constructor and no compartment dict. The `init/1` callback builds a `#data{}` record literal. State args go into a binary-keyed map field `frame_state_args = #{<<"name">> => Value}`, enter args into `frame_enter_args`, and the state function clauses read them at the top of every clause with `Name = maps:get(<<"name">>, ...)`. Record-field defaults can't see `init/1`'s pattern variables (record defaults evaluate at compile time), so any field that references a param must use a neutral default in the record declaration (`value = undefined`) and the real value comes from the record literal in `init/1`. If your backend has a similarly structurally-different idiom, the same translation pattern works: identify where the constructor params are in scope, emit field assignments and compartment populations there, and make sure the dispatch reader uses the named keys.
 
+#### PHP `bool` stringification
+
+PHP's implicit `bool` → `string` conversion (via `(string) $b` or `"$b"` interpolation or string-concat with `.`) yields **`"1"` for `true` and `""` (empty string) for `false`** — not `"true"` / `"false"` as Python, JavaScript, Java, or C# do. This bites Frame tests that build a description string by concatenating mixed-type domain fields:
+
+```python
+# Python — sysparam_domain_multi.fpy
+@@:return = self.name + "/" + str(self.age) + "/" + str(self.active)
+# Asserts: "alice/30/True"
+```
+
+```php
+// PHP — sysparam_domain_multi.fphp
+@@:($this->name . "/" . $this->age . "/" . ($this->active ? "1" : ""))
+// Asserts: "alice/30/1"
+```
+
+The PHP spelling needs an explicit ternary because the bare `. $this->active .` would emit `"alice/30/1"` (for `true`) — which happens to be what the test asserts here — but `false` would emit `"alice/30/"` (with a trailing slash and nothing after). The cookbook recipe must call this out for any backend author or Frame user touching `bool` columns: **never rely on PHP's default bool stringification**. Either use a ternary like the test does, or call `var_export($b, true)` (yields `"true"`/`"false"`), or use `(int)$b` (yields `1`/`0`) — pick whichever your assertion needs.
+
+This is a documented PHP language quirk, not a Frame codegen bug. The Frame layer can't fix it without inserting per-target type-aware string-coercion shims, which would mean Frame inventing a string-formatting protocol — out of scope.
+
 ### TODOs surfaced by the rollout
 
 These are real defects or rough edges that the rollout uncovered but didn't fix because they were out-of-scope. Each is a candidate for a follow-up issue.
@@ -384,12 +421,14 @@ These are real defects or rough edges that the rollout uncovered but didn't fix 
 
 6. ~~**Lua dead code: `LuaBackend::transform_blocks`**~~ — **DONE**. Removed both the local `LuaBackend::transform_blocks` in `backends/lua.rs` AND a second dead `lua_transform_blocks` free function in `state_dispatch.rs`. The actual block transform happens via `block_transform::transform_blocks` (a Frame state machine elsewhere in the codegen tree). 145/145 Lua tests still pass — the locals were genuinely dead.
 
-7. **C `enter_args` for systems with no enter params** — The C kernel-init event currently passes `self->__compartment->enter_args` as the event `_parameters`. This is correct when there ARE enter params, and harmless when there aren't (the dispatch never reads from a non-existent key), but it does mean every C system pays the cost of indirecting through an empty `FrameDict_get` lookup at start time. Optimization, not correctness.
+7. ~~**C `enter_args` for systems with no enter params**~~ — **DONE**. The C kernel-init code now checks whether the start state's `$>` enter handler declares any params and passes `NULL` for the FrameEvent's `_parameters` when it doesn't. The dispatch generates no `FrameDict_get` calls in that case, so the NULL is never dereferenced. Behavior is unchanged for systems with enter params (still pass `self->__compartment->enter_args`). 156/156 C regression tests still pass.
 
 8. **Field/param init when both have the same name and the user wants the field's value** — The codegen always prefers the constructor parameter on the RHS. There's no Frame syntax to say "use the literal field default instead, ignoring the constructor param of the same name." This is an extremely edge case but not technically supportable today.
 
 9. **Kotlin primary-constructor `val`/`var` decision** — Kotlin's primary constructor params currently use bare `name: Type` (no `val`/`var`). This means the params don't auto-promote to properties of the same name (which would collide with domain fields). It also means they're scoped only inside `init {}`, which is exactly where we use them. If a future feature needs to access constructor params outside `init {}`, this needs to change.
 
-10. **PHP `match` operator output for numbers** — PHP `bool` to-string yields `"1"` / `""`, not `"true"` / `"false"`. The `sysparam_domain_multi.fphp` test asserts `"alice/30/1"` to match. This is a documented PHP quirk, not a bug, but the doc should mention it for backend authors.
+10. ~~**PHP `bool` stringification**~~ — **DONE**. Documented in the new "PHP `bool` stringification" gotcha section above. The behavior is a PHP language quirk (bool→string yields `"1"` / `""`), not a Frame bug. The section covers what to do (ternary, `var_export`, or `(int)$b`) and why Frame can't transparently fix it.
 
 11. **Cookbook/getting-started examples** — Both `frame_cookbook.md` and `frame_getting_started.md` predate Phase 4 and may still show the old `$(name): type` syntax in examples. They should be audited and updated.
+
+12. ~~**Lua block_transform regen workflow / `output_block_parser.gen.rs` hand-edits**~~ — **DONE**. Two root-cause fixes: (a) the framec scanner's `match_frame_statement` was missing a leading word boundary check on the `return`/`push$`/`pop$` keywords, so identifiers like `after_return` got shredded into mangled output on regen — fixed in `native_region_scanner/unified.rs` with regression tests; (b) the actual return-handling fix that had been hand-edited into `output_block_parser.gen.rs` is now ported back to the `.frs` source (`output_block_parser.frs`). The `.gen.rs` was regenerated from `.frs` and is no longer hand-edited. Future regens are clean. See "Regenerating output_block_parser.gen.rs" above for the workflow.

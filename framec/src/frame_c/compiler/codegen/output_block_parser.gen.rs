@@ -217,13 +217,6 @@ impl OutputBlockParserFsm {
         self._context_stack.pop();
     }
 
-    fn _state_Init(&mut self, __e: &OutputBlockParserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "do_parse" => { self._s_Init_do_parse(__e); }
-            _ => {}
-        }
-    }
-
     fn _state_Parsing(&mut self, __e: &OutputBlockParserFsmFrameEvent) {
         match __e.message.as_str() {
             "$>" => { self._s_Parsing_enter(__e); }
@@ -231,11 +224,11 @@ impl OutputBlockParserFsm {
         }
     }
 
-    fn _s_Init_do_parse(&mut self, __e: &OutputBlockParserFsmFrameEvent) {
-        let mut __compartment = OutputBlockParserFsmCompartment::new("Parsing");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
+    fn _state_Init(&mut self, __e: &OutputBlockParserFsmFrameEvent) {
+        match __e.message.as_str() {
+            "do_parse" => { self._s_Init_do_parse(__e); }
+            _ => {}
+        }
     }
 
     fn _s_Parsing_enter(&mut self, __e: &OutputBlockParserFsmFrameEvent) {
@@ -412,7 +405,14 @@ impl OutputBlockParserFsm {
             // `after_return` only after the newline so any expression
             // tokens that follow `return` (e.g. `return self.value`)
             // make it through. Without this, `return X` collapsed to
-            // bare `return` and the X token was stripped. ----
+            // bare `return` and the X token was stripped — Lua tests
+            // that returned a value silently returned nothing.
+            //
+            // KEEP IN SYNC WITH output_block_parser.gen.rs lines
+            // 410-449 — that file is hand-edited until the next
+            // regen, and the fix MUST live in both. See the
+            // "Regenerating output_block_parser.gen.rs" section in
+            // adding-a-backend.md for the workflow.
             if kind == 8 && !after_return {
                 self.result.push_str(&text);
                 // Walk subsequent tokens until newline or block close.
@@ -488,5 +488,12 @@ impl OutputBlockParserFsm {
             self.result.push_str(&text);
             ti += 1;
         }
+    }
+
+    fn _s_Init_do_parse(&mut self, __e: &OutputBlockParserFsmFrameEvent) {
+        let mut __compartment = OutputBlockParserFsmCompartment::new("Parsing");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
     }
 }

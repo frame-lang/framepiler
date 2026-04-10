@@ -438,27 +438,58 @@ fn match_frame_statement<S: SyntaxSkipper>(
     }
 
     // Stack push: push$
+    //
+    // The trailing `$` is its own boundary (not a valid Rust/Python/Go
+    // identifier char), but a JavaScript/TypeScript identifier of the
+    // form `mypush$` would otherwise match `push$` as a suffix and
+    // produce a spurious StackPush region. Require a leading word
+    // boundary so the scanner only matches a standalone `push$`.
     if b == b'p' && pos + 4 < end
         && bytes[pos + 1] == b'u'
         && bytes[pos + 2] == b's'
         && bytes[pos + 3] == b'h'
         && bytes[pos + 4] == b'$'
     {
-        return Some((pos + 5, FrameSegmentKind::StackPush));
+        let leading_boundary = pos == 0
+            || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
+        if leading_boundary {
+            return Some((pos + 5, FrameSegmentKind::StackPush));
+        }
     }
 
     // Stack pop (standalone): pop$
+    //
+    // Same rationale as `push$`: require a leading word boundary so
+    // a JS-style identifier ending in `pop$` doesn't get misclassified.
     if b == b'p' && pos + 3 < end
         && bytes[pos + 1] == b'o'
         && bytes[pos + 2] == b'p'
         && bytes[pos + 3] == b'$'
     {
-        return Some((pos + 4, FrameSegmentKind::StackPop));
+        let leading_boundary = pos == 0
+            || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
+        if leading_boundary {
+            return Some((pos + 4, FrameSegmentKind::StackPop));
+        }
     }
 
     // Return statement: return <expr>?
-    // Detected by keyword + word boundary (space, newline, semicolon, or EOF after "return")
-    // Closures are already skipped by skip_nested_scope(), so this is at handler scope.
+    //
+    // Detected by the `return` keyword surrounded by word boundaries on
+    // BOTH sides. The trailing-boundary check (next char not in
+    // [A-Za-z0-9_]) prevents matching `returns` or `return_value`. The
+    // LEADING-boundary check (previous char not in [A-Za-z0-9_]) is
+    // equally important — without it, the byte-by-byte walker lands on
+    // the `r` of `after_return` and matches `return` mid-identifier,
+    // collapsing the Rust identifier into a Frame return statement.
+    // Real-world casualty: the `output_block_parser.frs` source has
+    // 15+ references to a local `after_return` flag, all of which got
+    // shredded by this misclassification on regen, forcing the
+    // `.gen.rs` to be hand-edited.
+    //
+    // Closures are already skipped by `skip_nested_scope()`, so this
+    // is at handler scope. Position 0 is treated as a valid leading
+    // boundary (start-of-buffer counts).
     if b == b'r' && pos + 5 < end
         && bytes[pos + 1] == b'e'
         && bytes[pos + 2] == b't'
@@ -466,11 +497,12 @@ fn match_frame_statement<S: SyntaxSkipper>(
         && bytes[pos + 4] == b'r'
         && bytes[pos + 5] == b'n'
     {
-        // Word boundary check: next char must not be alphanumeric or _
+        let leading_boundary = pos == 0
+            || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
         let after = pos + 6;
-        let is_word_boundary = after >= end
+        let trailing_boundary = after >= end
             || (!bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_');
-        if is_word_boundary {
+        if leading_boundary && trailing_boundary {
             return Some((after, FrameSegmentKind::ReturnStatement));
         }
     }
@@ -980,5 +1012,135 @@ pub fn skip_ruby_percent_literal(bytes: &[u8], i: usize, end: usize) -> Option<u
             j += 1;
         }
         Some(end) // Unterminated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame_c::compiler::native_region_scanner::rust::RustSkipper;
+
+    /// Helper: scan a Rust handler body and return the kinds of all
+    /// FrameSegment regions found, in order. The body is provided as a
+    /// fully-formed string starting with `{` so the scanner can find
+    /// the matching close brace via the body closer.
+    fn scan_for_kinds(body: &str) -> Vec<FrameSegmentKind> {
+        let bytes = body.as_bytes();
+        let result = scan_native_regions(&RustSkipper, bytes, 0)
+            .expect("scan should succeed");
+        result.regions
+            .iter()
+            .filter_map(|r| match r {
+                Region::FrameSegment { kind, .. } => Some(*kind),
+                Region::NativeText { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Regression test for the `after_return` shred bug.
+    ///
+    /// Before the fix, `match_frame_statement` only checked the
+    /// trailing word boundary after the `return` keyword. The
+    /// byte-by-byte walker would land on the `r` of `after_return`
+    /// inside `let after_return = false;` and match it as a Frame
+    /// `return` statement, mangling the identifier. This was the
+    /// reason `output_block_parser.gen.rs` had to be hand-edited
+    /// after every regen — the .frs source's `after_return` flag
+    /// (15+ references) got shredded.
+    #[test]
+    fn test_return_keyword_requires_leading_word_boundary() {
+        // Identifier ending in `return` — must NOT be matched as a
+        // Frame return statement.
+        let body = "{ let after_return = false; }";
+        let kinds = scan_for_kinds(body);
+        assert!(
+            !kinds.contains(&FrameSegmentKind::ReturnStatement),
+            "`after_return = false` must not be classified as ReturnStatement, got: {:?}",
+            kinds
+        );
+    }
+
+    #[test]
+    fn test_return_keyword_other_identifier_suffixes() {
+        // Various other identifier shapes that contain the substring
+        // `return` and would have been false-positively matched.
+        let cases = [
+            "{ let no_return = 1; }",
+            "{ self.after_return = true; }",
+            "{ if my_return { } }",
+            "{ let _return = 0; }",
+        ];
+        for body in cases {
+            let kinds = scan_for_kinds(body);
+            assert!(
+                !kinds.contains(&FrameSegmentKind::ReturnStatement),
+                "Body {:?} must not produce a ReturnStatement, got: {:?}",
+                body,
+                kinds
+            );
+        }
+    }
+
+    #[test]
+    fn test_return_keyword_still_matches_at_word_boundary() {
+        // The fix must not break legitimate `return` matches. A bare
+        // `return` after whitespace (the common case) and `return`
+        // at the start of a line should still match.
+        let cases = [
+            "{ return; }",
+            "{ return 42; }",
+            "{ \n    return self.value;\n }",
+        ];
+        for body in cases {
+            let kinds = scan_for_kinds(body);
+            assert!(
+                kinds.contains(&FrameSegmentKind::ReturnStatement),
+                "Body {:?} should produce a ReturnStatement, got: {:?}",
+                body,
+                kinds
+            );
+        }
+    }
+
+    /// Same regression but for `push$` and `pop$`. JavaScript-style
+    /// identifiers can contain `$`, so a name like `mypush$` would
+    /// have collided with the `push$` keyword. Less likely to bite
+    /// in practice (Rust doesn't allow `$` in identifiers) but worth
+    /// guarding for backends that do.
+    #[test]
+    fn test_push_pop_require_leading_word_boundary() {
+        let body = "{ let mypush$ = 1; let mypop$ = 2; }";
+        // Note: this is invalid Rust but valid JS — and the scanner
+        // shouldn't classify these as Frame stack-ops regardless of
+        // target language. The scanner is language-agnostic about
+        // identifier shape; the leading-boundary check makes the
+        // detection conservative.
+        let kinds = scan_for_kinds(body);
+        assert!(
+            !kinds.contains(&FrameSegmentKind::StackPush),
+            "`mypush$` must not be classified as StackPush, got: {:?}",
+            kinds
+        );
+        assert!(
+            !kinds.contains(&FrameSegmentKind::StackPop),
+            "`mypop$` must not be classified as StackPop, got: {:?}",
+            kinds
+        );
+    }
+
+    #[test]
+    fn test_push_pop_still_match_at_word_boundary() {
+        let body = "{ push$\n pop$ }";
+        let kinds = scan_for_kinds(body);
+        assert!(
+            kinds.contains(&FrameSegmentKind::StackPush),
+            "bare `push$` should still match, got: {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&FrameSegmentKind::StackPop),
+            "bare `pop$` should still match, got: {:?}",
+            kinds
+        );
     }
 }

@@ -2541,6 +2541,18 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             // The enter_args of the start state's compartment carry any
             // header-declared enter params; pass them through so the
             // start state's $>(name: type) handler can read them.
+            //
+            // C optimization (TODO #41): if the start state has no
+            // declared enter params (`$>` handler with empty `params`),
+            // skip the indirection and pass NULL for the event's
+            // `_parameters`. The dispatch generates no `FrameDict_get`
+            // calls in that case, so the NULL is never dereferenced.
+            // For systems WITH enter params, behavior is unchanged.
+            let start_state_has_enter_params = first_state
+                .enter
+                .as_ref()
+                .map(|e| !e.params.is_empty())
+                .unwrap_or(false);
             let init_event_code = match syntax.language {
                 TargetLanguage::Python3 => format!(
                     r#"__frame_event = {}("$>", self.__compartment.enter_args)
@@ -2560,18 +2572,28 @@ self.__kernel();
 self._context_stack.pop();"#,
                     event_class, system.name
                 ),
-                TargetLanguage::C => format!(
+                TargetLanguage::C => {
                     // Pass the start state's enter_args dict as the event
                     // _parameters so the start state's `$>(name: type)`
                     // enter handler can read header-declared enter params
-                    // by name. For systems without enter params this is an
-                    // empty dict (still safe — nothing to read), so the
-                    // existing zero-arg start states are unaffected.
-                    r#"{}_FrameEvent* __frame_event = {}_FrameEvent_new("$>", self->__compartment->enter_args);
+                    // by name. For systems WITHOUT declared enter params,
+                    // pass NULL — the dispatch generates no FrameDict_get
+                    // calls so the NULL is never dereferenced, and the
+                    // generated code is one indirection lighter at start
+                    // time. Behavior is unchanged for systems with enter
+                    // params.
+                    let parameters_arg = if start_state_has_enter_params {
+                        "self->__compartment->enter_args"
+                    } else {
+                        "NULL"
+                    };
+                    format!(
+                        r#"{}_FrameEvent* __frame_event = {}_FrameEvent_new("$>", {});
 {}_kernel(self, __frame_event);
 {}_FrameEvent_destroy(__frame_event);"#,
-                    system.name, system.name, system.name, system.name
-                ),
+                        system.name, system.name, parameters_arg, system.name, system.name
+                    )
+                },
                 TargetLanguage::Cpp => format!(
                     r#"{}FrameEvent __frame_event("$>");
 {}FrameContext __ctx(std::move(__frame_event));
