@@ -66,8 +66,22 @@ pub fn compile_module(content_str: &str, lang: TargetLanguage) -> Result<String,
 
     // AST-based compilation
     match compiler::compile_ast_based(content_str.as_bytes(), &config) {
-        Ok(result) if result.errors.is_empty() => Ok(result.code),
+        Ok(result) if result.errors.is_empty() => {
+            // Surface non-fatal warnings (W-prefixed codes) to stderr
+            // so the user sees them without polluting stdout, which
+            // typically holds the generated code path or the code
+            // itself when piped.
+            for w in &result.warnings {
+                eprintln!("Warning: {}: {}", w.code, w.message);
+            }
+            Ok(result.code)
+        }
         Ok(result) => {
+            // Even on a failed build, surface any warnings collected
+            // before the error stopped compilation.
+            for w in &result.warnings {
+                eprintln!("Warning: {}: {}", w.code, w.message);
+            }
             // Return validation/compilation errors
             let error_msgs: Vec<String> = result.errors
                 .iter()

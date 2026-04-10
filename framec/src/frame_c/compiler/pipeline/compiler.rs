@@ -323,6 +323,10 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
     // Collect runtime imports once (will be emitted at the start by assembler)
     let runtime_imports = backend.runtime_imports();
 
+    // Warnings accumulated across all systems in the module. Harvested
+    // from each per-system validator and attached to the final result.
+    let mut module_warnings: Vec<CompileError> = Vec::new();
+
     for system_ast in &system_asts {
         // Validate with shared arcanum (all sibling systems visible)
         let frame_ast = FrameAst::System(system_ast.clone());
@@ -332,20 +336,26 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
             return Ok(CompileResult {
                 code: String::new(),
                 errors,
-                warnings: vec![],
+                warnings: module_warnings,
                 source_map: None,
             });
         }
-        // Target-specific checks (e.g. GDScript Object-method collisions).
-        // Run after the general validator so structural errors surface first.
+        // Target-specific checks (e.g. GDScript Object-method collisions,
+        // TypeScript global shadowing). Run after the general validator
+        // so structural errors surface first.
         if let Err(errs) = validator.validate_target_specific(&frame_ast, config.target) {
             let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
             return Ok(CompileResult {
                 code: String::new(),
                 errors,
-                warnings: vec![],
+                warnings: module_warnings,
                 source_map: None,
             });
+        }
+        // Harvest soft warnings (e.g. W501 TypeScript global shadowing)
+        // — these don't fail the build but are surfaced to the user.
+        for w in validator.take_warnings() {
+            module_warnings.push(CompileError::new(&w.code, &w.message));
         }
 
         // Warn if async is used with C target (no native async support)
@@ -450,7 +460,7 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
     Ok(CompileResult {
         code,
         errors: vec![],
-        warnings: vec![],
+        warnings: module_warnings,
         source_map: None,
     })
 }

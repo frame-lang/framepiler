@@ -340,7 +340,7 @@ C and Go are different — they have no field-level initializer at all. Strip un
 #### Reserved names
 
 - **GDScript**: `get`, `set`, `call`, `free`, `connect`, `to_string`, etc. collide with `Object` methods that Frame's generated class would silently override. The framepiler now catches these at compile time and emits **E501** with a suggested rename (see `gdscript_reserved_method_rename` in `frame_validator.rs` for the full list). Common renames: `get` → `get_value`, `set` → `set_value`, `call` → `invoke`. The validator runs after the general semantic checks, so structural errors surface first.
-- **TypeScript**: `Worker` collides with the built-in `Worker` web API class. `Buffer`, `Promise`, `Map`, etc. are similar. New backend tests should pick uncommon system names; the spec doesn't currently warn on these.
+- **TypeScript / JavaScript**: System names that match a global class — `Worker`, `Buffer`, `Promise`, `Map`, `Set`, `Date`, `Error`, `Request`, `Response`, etc. — produce a `class <Name>` declaration that shadows the built-in within the surrounding module. The framepiler now emits **W501** as a soft warning (not a hard error — shadowing is legal TypeScript) when a system name matches the documented list in `typescript_global_collision_rename`. The suggested rename simply appends `Sys` (`Worker` → `WorkerSys`). The warning prints to stderr; build still succeeds.
 
 #### `@@:(expr) return;` on one line is broken
 
@@ -380,7 +380,7 @@ These are real defects or rough edges that the rollout uncovered but didn't fix 
 
 4. ~~**GDScript reserved-method validator**~~ — **DONE**. `FrameValidator::validate_target_specific` runs after the general validator and emits **E501** when an interface method name would collide with an `Object` method (`get`, `set`, `call`, `free`, `connect`, `to_string`, ...). The full reserved-name list lives in `gdscript_reserved_method_rename` in `frame_validator.rs`; each entry pairs the reserved name with a suggested rename so the error message tells the user exactly what to do.
 
-5. **TypeScript built-in collision check** — Same idea: `Worker`, `Buffer`, `Promise`, etc. are common web API names that will collide. A warning at compile time pointing to the conflict would save users the runtime debugging.
+5. ~~**TypeScript built-in collision check**~~ — **DONE**. `validate_target_specific` emits **W501** as a soft warning when a TS/JS-targeted system name matches a documented global (`Worker`, `Buffer`, `Promise`, `Map`, `Set`, `Date`, etc. — full list in `typescript_global_collision_rename`). Unlike GDScript's E501 (a hard error), this is a warning because shadowing is legal in TypeScript and may be intentional. The pipeline harvests warnings into `CompileResult.warnings` and `compile_module` prints them to stderr — build still succeeds. Existing test file `sysparam_enter_single.fjs` declares `@@system Worker(...)` and now compiles cleanly with the W501 warning, demonstrating the foot-gun the warning catches.
 
 6. **Lua dead code: `LuaBackend::transform_blocks`** — The local `LuaBackend::transform_blocks` in `backends/lua.rs` is dead code; the actual block transform happens via `block_transform::transform_blocks` (Frame state machine). The local should be removed to avoid confusing future contributors. Compiler warns about it as dead code already.
 
