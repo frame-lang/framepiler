@@ -55,7 +55,12 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                     | TargetLanguage::Lua | TargetLanguage::Dart => "false".to_string(),
                     TargetLanguage::Graphviz => unreachable!(),
                 },
-                "str" | "string" => "\"\"".to_string(),
+                "str" | "string" => match lang {
+                    // Rust: `""` is `&str`, not `String`. The Default impl
+                    // for typed XContext structs needs a `String` value.
+                    TargetLanguage::Rust => "String::new()".to_string(),
+                    _ => "\"\"".to_string(),
+                },
                 _ => match lang {
                     TargetLanguage::Python3 | TargetLanguage::Rust => "None".to_string(),
                     TargetLanguage::Cpp => "nullptr".to_string(),

@@ -911,15 +911,19 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
                 code.push_str(&format!("    {}: {},\n", p.name, type_str));
             }
             for var in &state.state_vars {
-                let type_str = type_to_string(&var.var_type);
+                // Use the Rust-aware type mapping so Frame's portable
+                // types (str, int, bool) produce valid Rust struct
+                // field types (String, i64, bool).
+                let type_str = frame_type_to_rust_type(&var.var_type);
                 code.push_str(&format!("    {}: {},\n", var.name, type_str));
             }
             code.push_str("}\n\n");
 
             // Manual Default impl with declared initializers (state vars)
             // and neutral defaults (state params — the real values come
-            // from the transition site). State params use a Rust-typed
-            // default helper so untyped params default to `String::new()`.
+            // from the transition site). Both state params and state
+            // vars use the Rust-typed default helper so String fields
+            // get `String::new()`, not `""` (`&str`).
             code.push_str(&format!("impl Default for {}Context {{\n", state.name));
             code.push_str("    fn default() -> Self {\n");
             code.push_str("        Self {\n");
@@ -931,7 +935,8 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
                 let init_val = if let Some(ref init) = var.init {
                     expression_to_string(init, TargetLanguage::Rust)
                 } else {
-                    state_var_init_value(&var.var_type, TargetLanguage::Rust)
+                    // No explicit init: use the Rust-typed default.
+                    frame_type_to_rust_default(&var.var_type)
                 };
                 code.push_str(&format!("            {}: {},\n", var.name, init_val));
             }

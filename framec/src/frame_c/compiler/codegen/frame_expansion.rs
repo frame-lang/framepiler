@@ -1537,8 +1537,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Rust => {
-                    // Access state var via compartment chain navigation + state_context matching
-                    // Navigation handles HSM: walks parent_compartment chain to find correct state
+                    // Access state var via compartment chain navigation + state_context matching.
+                    // Navigation handles HSM: walks parent_compartment chain to find correct state.
                     format!("{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}, _ => unreachable!() }} }}",
                         ctx.state_name, ctx.system_name, ctx.state_name, var_name)
                 },
