@@ -281,6 +281,17 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
                     source_map: None,
                 });
             }
+            // Target-specific checks (no-op for Graphviz today, but kept
+            // here so the validator runs through every entry path).
+            if let Err(errs) = validator.validate_target_specific(&frame_ast, config.target) {
+                let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+                return Ok(CompileResult {
+                    code: String::new(),
+                    errors,
+                    warnings: vec![],
+                    source_map: None,
+                });
+            }
 
             // Build graph IR and emit DOT
             let graph = graphviz::build_system_graph(system_ast, &arcanum);
@@ -317,6 +328,17 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         let frame_ast = FrameAst::System(system_ast.clone());
         let mut validator = FrameValidator::new();
         if let Err(errs) = validator.validate_with_arcanum(&frame_ast, &arcanum) {
+            let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+            return Ok(CompileResult {
+                code: String::new(),
+                errors,
+                warnings: vec![],
+                source_map: None,
+            });
+        }
+        // Target-specific checks (e.g. GDScript Object-method collisions).
+        // Run after the general validator so structural errors surface first.
+        if let Err(errs) = validator.validate_target_specific(&frame_ast, config.target) {
             let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
             return Ok(CompileResult {
                 code: String::new(),

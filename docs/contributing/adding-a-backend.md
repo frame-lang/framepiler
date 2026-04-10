@@ -339,7 +339,7 @@ C and Go are different — they have no field-level initializer at all. Strip un
 
 #### Reserved names
 
-- **GDScript**: `get` and `set` collide with `Object.get(StringName) -> Variant` and `Object.set(...)`. The user must rename interface methods that would generate these. Common workaround: use `get_value`, `set_value`. Frame should ideally validate this at compile time and surface a helpful error.
+- **GDScript**: `get`, `set`, `call`, `free`, `connect`, `to_string`, etc. collide with `Object` methods that Frame's generated class would silently override. The framepiler now catches these at compile time and emits **E501** with a suggested rename (see `gdscript_reserved_method_rename` in `frame_validator.rs` for the full list). Common renames: `get` → `get_value`, `set` → `set_value`, `call` → `invoke`. The validator runs after the general semantic checks, so structural errors surface first.
 - **TypeScript**: `Worker` collides with the built-in `Worker` web API class. `Buffer`, `Promise`, `Map`, etc. are similar. New backend tests should pick uncommon system names; the spec doesn't currently warn on these.
 
 #### `@@:(expr) return;` on one line is broken
@@ -378,7 +378,7 @@ These are real defects or rough edges that the rollout uncovered but didn't fix 
 
 3. ~~**Rust non-start state enter handler params**~~ — **DONE** (commit `1b2e49b`, folded in with #2). Non-start-state lifecycle handlers now read `__e.parameters.get("<name>")` by declared name, matching the named-key writes the Phase 3 sweep put in place. Was a latent bug that only surfaced once `state_param_names` was populated in the per-handler `HandlerContext`.
 
-4. **GDScript reserved-method validator** — `get`, `set`, `clone`, etc. collide silently with `Object` methods. Frame should detect interface methods that would override `Object` and emit a structured error at compile time, with a suggested rename.
+4. ~~**GDScript reserved-method validator**~~ — **DONE**. `FrameValidator::validate_target_specific` runs after the general validator and emits **E501** when an interface method name would collide with an `Object` method (`get`, `set`, `call`, `free`, `connect`, `to_string`, ...). The full reserved-name list lives in `gdscript_reserved_method_rename` in `frame_validator.rs`; each entry pairs the reserved name with a suggested rename so the error message tells the user exactly what to do.
 
 5. **TypeScript built-in collision check** — Same idea: `Worker`, `Buffer`, `Promise`, etc. are common web API names that will collide. A warning at compile time pointing to the conflict would save users the runtime debugging.
 

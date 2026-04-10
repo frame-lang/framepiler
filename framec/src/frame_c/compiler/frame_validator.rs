@@ -27,6 +27,9 @@
 //! - E419: Exit args must match $<() handler params ((args) -> $State)
 //! - E410: Duplicate state variable in same state
 //!
+//! ## Target-specific Errors (E5xx)
+//! - E501: Interface method name collides with reserved target-language method
+//!
 //! ## Warnings (W4xx)
 //! - W414: Unreachable state from start state
 //!
@@ -119,6 +122,77 @@ impl FrameValidator {
             Ok(())
         } else {
             Err(self.errors.clone())
+        }
+    }
+
+    /// Validate target-specific concerns that the language-agnostic
+    /// passes can't catch — e.g. interface method names that collide
+    /// with reserved methods on the target language's base object
+    /// (`Object.get`/`Object.set` in GDScript).
+    ///
+    /// This is invoked from the pipeline AFTER `validate_with_arcanum`
+    /// so the general structural/semantic checks always run first. The
+    /// `target` parameter is the canonical `visitors::TargetLanguage`
+    /// (the legacy `frame_ast::TargetLanguage` only has 8 variants and
+    /// doesn't include GDScript).
+    pub fn validate_target_specific(
+        &mut self,
+        ast: &FrameAst,
+        target: crate::frame_c::visitors::TargetLanguage,
+    ) -> Result<(), Vec<ValidationError>> {
+        match ast {
+            FrameAst::System(system) => self.validate_system_target_specific(system, target),
+            FrameAst::Module(module) => {
+                for system in &module.systems {
+                    self.validate_system_target_specific(system, target);
+                }
+            }
+        }
+
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors.clone())
+        }
+    }
+
+    fn validate_system_target_specific(
+        &mut self,
+        system: &SystemAst,
+        target: crate::frame_c::visitors::TargetLanguage,
+    ) {
+        if matches!(target, crate::frame_c::visitors::TargetLanguage::GDScript) {
+            self.validate_gdscript_reserved_methods(system);
+        }
+    }
+
+    /// E501: Interface method names that would collide with
+    /// `Object`'s built-in methods in GDScript. Frame compiles each
+    /// interface method to a public method on the generated class,
+    /// which inherits from `Object` (via `RefCounted` in Godot 4). If a
+    /// user names an interface method `get`, `set`, `call`, etc., the
+    /// generated method silently overrides the `Object` method and
+    /// every call site that does `obj.get("foo")` ends up routed
+    /// through the user's interface method instead. This is a common
+    /// foot-gun in the Godot ecosystem; emit a structured error with
+    /// a suggested rename rather than letting it surface at runtime.
+    fn validate_gdscript_reserved_methods(&mut self, system: &SystemAst) {
+        for method in &system.interface {
+            if let Some(suggested) = gdscript_reserved_method_rename(&method.name) {
+                self.errors.push(
+                    ValidationError::new(
+                        "E501",
+                        format!(
+                            "Interface method '{}' in system '{}' collides with GDScript's \
+                             built-in `Object.{}` method. Calls like `obj.{}(...)` would \
+                             silently invoke the Frame interface method instead of the engine \
+                             method, breaking core GDScript reflection. Rename it (suggested: '{}').",
+                            method.name, system.name, method.name, method.name, suggested
+                        ),
+                    )
+                    .with_span(method.span.clone()),
+                );
+            }
         }
     }
 
@@ -624,6 +698,63 @@ impl FrameValidator {
     }
 }
 
+/// Reserved-method check for GDScript: returns `Some(rename_suggestion)`
+/// if the given interface method name would collide with a method on
+/// Godot's `Object` (or close ancestor) class hierarchy. Returns
+/// `None` for names that are safe to use as-is.
+///
+/// The list is intentionally conservative — we only flag names that
+/// are documented public methods on `Object` in Godot 4 and that a
+/// Frame user might realistically want to name an interface method.
+/// We don't flag every internal `_notification`-style helper because
+/// underscore-prefixed names are uncommon as interface method names
+/// anyway.
+///
+/// Source: Godot 4 documentation, `Object` class reference.
+pub fn gdscript_reserved_method_rename(name: &str) -> Option<&'static str> {
+    match name {
+        // Property reflection — the most common collisions in practice.
+        "get" => Some("get_value"),
+        "set" => Some("set_value"),
+        // Method reflection / dispatch
+        "call" => Some("invoke"),
+        "call_deferred" => Some("invoke_deferred"),
+        "callv" => Some("invoke_with_args"),
+        "has_method" => Some("supports_method"),
+        // Lifecycle
+        "free" => Some("dispose"),
+        "queue_free" => Some("schedule_free"),
+        "notification" => Some("notify"),
+        // Signals
+        "connect" => Some("connect_handler"),
+        "disconnect" => Some("disconnect_handler"),
+        "emit_signal" => Some("emit"),
+        "has_signal" => Some("supports_signal"),
+        "get_signal_list" => Some("list_signals"),
+        // Class / script reflection
+        "get_class" => Some("class_name"),
+        "is_class" => Some("is_a"),
+        "get_script" => Some("script"),
+        "set_script" => Some("attach_script"),
+        // Property list
+        "get_property_list" => Some("list_properties"),
+        // Metadata
+        "get_meta" => Some("read_meta"),
+        "set_meta" => Some("write_meta"),
+        "has_meta" => Some("supports_meta"),
+        "remove_meta" => Some("clear_meta"),
+        // Stringification / translation
+        "to_string" => Some("describe"),
+        "tr" => Some("translate"),
+        "tr_n" => Some("translate_plural"),
+        // Instance identity
+        "get_instance_id" => Some("instance_id"),
+        // Object lifecycle helpers commonly used in tests
+        "is_queued_for_deletion" => Some("is_pending_free"),
+        _ => None,
+    }
+}
+
 /// Convenience function to validate Frame source code
 pub fn validate_frame_source(source: &str, target: TargetLanguage) -> Result<(), Vec<ValidationError>> {
     use crate::frame_c::compiler::frame_parser::FrameParser;
@@ -644,7 +775,129 @@ pub fn validate_frame_source(source: &str, target: TargetLanguage) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
+    /// Helper: parse + run BOTH the general validator and the
+    /// target-specific validator. The pipeline runs them in this order
+    /// for real compiles, so the tests should mirror that.
+    fn validate_for_target(
+        source: &str,
+        parse_target: TargetLanguage,
+        target: crate::frame_c::visitors::TargetLanguage,
+    ) -> Result<(), Vec<ValidationError>> {
+        use crate::frame_c::compiler::frame_parser::FrameParser;
+        use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
+
+        let mut parser = FrameParser::new(source.as_bytes(), parse_target);
+        let ast = parser.parse_module().map_err(|e| {
+            vec![ValidationError::new("E001", format!("Parse error: {}", e))]
+        })?;
+        let arcanum = build_arcanum_from_frame_ast(&ast);
+
+        let mut validator = FrameValidator::new();
+        validator.validate_with_arcanum(&ast, &arcanum)?;
+        validator.validate_target_specific(&ast, target)
+    }
+
+    #[test]
+    fn test_e501_gdscript_get_collision() {
+        // Use the simple bare-statement body shape that the legacy
+        // FrameParser groks (the V4 `@@:(...)` context-return syntax
+        // isn't handled by the legacy parser path used by the unit
+        // tests). The validator only inspects interface declarations
+        // and method names, so the body shape doesn't matter.
+        let source = r#"
+@@system Robot {
+    interface:
+        get()
+    machine:
+        $Start {
+            get() { }
+        }
+}"#;
+        let result = validate_for_target(
+            source,
+            TargetLanguage::Python3,
+            crate::frame_c::visitors::TargetLanguage::GDScript,
+        );
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, "E501");
+        assert!(errors[0].message.contains("'get'"));
+        assert!(errors[0].message.contains("Object.get"));
+        assert!(errors[0].message.contains("get_value"), "should suggest get_value rename");
+    }
+
+    #[test]
+    fn test_e501_gdscript_set_and_call_collision() {
+        let source = r#"
+@@system Robot {
+    interface:
+        set()
+        call()
+    machine:
+        $Start {
+            set() { }
+            call() { }
+        }
+}"#;
+        let result = validate_for_target(
+            source,
+            TargetLanguage::Python3,
+            crate::frame_c::visitors::TargetLanguage::GDScript,
+        );
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().all(|e| e.code == "E501"));
+        assert!(errors.iter().any(|e| e.message.contains("'set'")));
+        assert!(errors.iter().any(|e| e.message.contains("'call'")));
+    }
+
+    #[test]
+    fn test_e501_gdscript_safe_names_pass() {
+        let source = r#"
+@@system Robot {
+    interface:
+        get_value()
+        set_value()
+        do_something()
+    machine:
+        $Start {
+            get_value() { }
+            set_value() { }
+            do_something() { }
+        }
+}"#;
+        let result = validate_for_target(
+            source,
+            TargetLanguage::Python3,
+            crate::frame_c::visitors::TargetLanguage::GDScript,
+        );
+        assert!(result.is_ok(), "safe names must pass: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_e501_python_does_not_flag_get() {
+        // The same source that fails for GDScript must succeed for
+        // Python — the reserved-method check is target-specific.
+        let source = r#"
+@@system Robot {
+    interface:
+        get()
+    machine:
+        $Start {
+            get() { }
+        }
+}"#;
+        let result = validate_for_target(
+            source,
+            TargetLanguage::Python3,
+            crate::frame_c::visitors::TargetLanguage::Python3,
+        );
+        assert!(result.is_ok(), "python should not flag GDScript-only collisions: {:?}", result.err());
+    }
+
     #[test]
     fn test_e402_unknown_state() {
         let source = r#"
