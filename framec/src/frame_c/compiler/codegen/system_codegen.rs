@@ -572,11 +572,16 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         );
         if type_first && !type_text.is_empty() {
             format!("{} {}{}", type_text, var.name, init_suffix)
-        } else if !type_text.is_empty() {
+        } else if !type_text.is_empty()
+            && !matches!(lang, TargetLanguage::JavaScript)
+        {
             // AnnotatedName: `<name>: <type>[ = <init>]`
+            // JavaScript is excluded — JS class fields don't support
+            // `: type` annotations (only TypeScript does). JS falls
+            // through to the BareName branch below.
             format!("{}: {}{}", var.name, type_text, init_suffix)
         } else {
-            // BareName / unknown type: `<name>[ = <init>]`
+            // BareName / unknown type / JavaScript: `<name>[ = <init>]`
             format!("{}{}", var.name, init_suffix)
         }
     }
