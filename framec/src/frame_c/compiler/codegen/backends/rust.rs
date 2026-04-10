@@ -136,7 +136,7 @@ impl LanguageBackend for RustBackend {
 
                 let async_kw = if *is_async { "async " } else { "" };
                 let return_str = return_type.as_ref()
-                    .map(|rt| format!(" -> {}", rt))
+                    .map(|rt| format!(" -> {}", self.convert_type(rt)))
                     .unwrap_or_default();
 
                 result.push_str(&format!("{}{}{}fn {}({}){} {{\n",

@@ -124,9 +124,19 @@ pub(crate) fn generate_interface_wrappers(system: &SystemAst, syntax: &super::ba
                 // Kernel gets event from context stack
                 match_code.push_str("self.__kernel();\n");
 
-                // Pop context and return
+                // Pop context and return. Map Frame's portable types
+                // to Rust-native spellings so the downcast uses a
+                // sized, concrete type (e.g. `String` not `str`).
                 if let Some(ref rt) = method.return_type {
-                    let return_type = type_to_string(rt);
+                    let raw_type = type_to_string(rt);
+                    let return_type = match raw_type.as_str() {
+                        "str" | "string" => "String".to_string(),
+                        "int" => "i64".to_string(),
+                        "float" => "f64".to_string(),
+                        "bool" => "bool".to_string(),
+                        "Any" => "String".to_string(),
+                        other => other.to_string(),
+                    };
                     match_code.push_str(&format!(
                         r#"let __ctx = self._context_stack.pop().unwrap();
 if let Some(ret) = __ctx._return {{
