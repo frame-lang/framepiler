@@ -1539,8 +1539,16 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Rust => {
                     // Access state var via compartment chain navigation + state_context matching.
                     // Navigation handles HSM: walks parent_compartment chain to find correct state.
-                    format!("{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}, _ => unreachable!() }} }}",
-                        ctx.state_name, ctx.system_name, ctx.state_name, var_name)
+                    // The match borrows via `&`, so non-Copy fields (String) need `.clone()`
+                    // to produce an owned value. Copy types (i64, bool) don't need it.
+                    let is_copy = ctx.state_var_types.get(var_name.as_str())
+                        .map(|t| matches!(t.to_lowercase().as_str(),
+                            "i32" | "i64" | "u32" | "u64" | "isize" | "usize"
+                            | "f32" | "f64" | "bool" | "int" | "float" | "number"))
+                        .unwrap_or(false);
+                    let suffix = if is_copy { "" } else { ".clone()" };
+                    format!("{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}{}, _ => unreachable!() }} }}",
+                        ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix)
                 },
                 TargetLanguage::C => {
                     // For C, access via FrameDict_get with cast
@@ -1786,9 +1794,14 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._return = {};", indent_str, expanded_expr),
                         TargetLanguage::C => format!("{}{}_CTX(self)->_return = (void*)(intptr_t)({});", indent_str, ctx.system_name, expanded_expr),
                         TargetLanguage::Rust => {
-                            // For Rust, evaluate expression first to avoid borrow conflicts
-                            // (expression may read from context_stack while we need mutable access to set _return)
-                            format!("{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", indent_str, expanded_expr, indent_str)
+                            // For Rust, evaluate expression first to avoid borrow conflicts.
+                            // Wrap string literals: "x" is &str but downcast expects String.
+                            let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
+                                format!("String::from({})", expanded_expr.trim())
+                            } else {
+                                expanded_expr.clone()
+                            };
+                            format!("{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", indent_str, boxed_expr, indent_str)
                         }
                         TargetLanguage::Cpp => format!("{}_context_stack.back()._return = std::any({});", indent_str, expanded_expr),
                         TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._return = {};", indent_str, expanded_expr),
@@ -1903,7 +1916,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1]._return = {};", expanded_expr),
                 TargetLanguage::C => format!("{}_CTX(self)->_return = (void*)(intptr_t)({});", ctx.system_name, expanded_expr),
                 TargetLanguage::Rust => {
-                    format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", expanded_expr, indent_str)
+                    let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
+                        format!("String::from({})", expanded_expr.trim())
+                    } else {
+                        expanded_expr.clone()
+                    };
+                    format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", boxed_expr, indent_str)
                 }
                 TargetLanguage::Cpp => format!("_context_stack.back()._return = std::any({});", expanded_expr),
                 TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._return = {};", expanded_expr),
@@ -2367,9 +2385,17 @@ pub(crate) fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &
                         result.push_str(&format!("this.__compartment.state_vars[\"{}\"]", var_name))
                     }
                 }
-                TargetLanguage::Rust => result.push_str(&format!(
-                    "{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}, _ => unreachable!() }} }}",
-                    ctx.state_name, ctx.system_name, ctx.state_name, var_name)),
+                TargetLanguage::Rust => {
+                    let is_copy = ctx.state_var_types.get(&var_name)
+                        .map(|t| matches!(t.to_lowercase().as_str(),
+                            "i32" | "i64" | "u32" | "u64" | "isize" | "usize"
+                            | "f32" | "f64" | "bool" | "int" | "float" | "number"))
+                        .unwrap_or(false);
+                    let suffix = if is_copy { "" } else { ".clone()" };
+                    result.push_str(&format!(
+                        "{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}{}, _ => unreachable!() }} }}",
+                        ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix));
+                }
                 TargetLanguage::C => {
                     if ctx.use_sv_comp {
                         result.push_str(&format!("(int)(intptr_t){}_FrameDict_get(__sv_comp->state_vars, \"{}\")", ctx.system_name, var_name))

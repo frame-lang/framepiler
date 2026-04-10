@@ -116,7 +116,15 @@ pub(crate) fn generate_interface_wrappers(system: &SystemAst, syntax: &super::ba
                 // Create context with event (move, not clone) and push to stack
                 match_code.push_str(&format!("let mut __ctx = {}::new(__e, None);\n", context_class));
                 if let Some(ref init_expr) = method.return_init {
-                    match_code.push_str(&format!("__ctx._return = Some(Box::new({}) as Box<dyn std::any::Any>);\n", init_expr));
+                    // Wrap string literals for Rust: "x" is &str but
+                    // Box<dyn Any> downcast expects String. Convert
+                    // string literals to String::from("x").
+                    let wrapped = if init_expr.trim().starts_with('"') && init_expr.trim().ends_with('"') {
+                        format!("String::from({})", init_expr.trim())
+                    } else {
+                        init_expr.clone()
+                    };
+                    match_code.push_str(&format!("__ctx._return = Some(Box::new({}) as Box<dyn std::any::Any>);\n", wrapped));
                 }
                 match_code.push_str("self._context_stack.push(__ctx);\n");
 

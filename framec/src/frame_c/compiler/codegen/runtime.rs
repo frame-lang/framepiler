@@ -933,9 +933,8 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
             }
             for var in &state.state_vars {
                 let init_val = if let Some(ref init) = var.init {
-                    expression_to_string(init, TargetLanguage::Rust)
+                    super::codegen_utils::typed_init_expr(init, &var.var_type, TargetLanguage::Rust)
                 } else {
-                    // No explicit init: use the Rust-typed default.
                     frame_type_to_rust_default(&var.var_type)
                 };
                 code.push_str(&format!("            {}: {},\n", var.name, init_val));

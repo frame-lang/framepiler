@@ -173,6 +173,23 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
             } else {
                 Vec::new()
             };
+            // Build state_var_types for this state so the Rust state var
+            // expansion can decide whether to add `.clone()` (non-Copy
+            // types like String) or not (Copy types like i64, bool).
+            let handler_state_var_types: std::collections::HashMap<String, String> = machine
+                .states
+                .iter()
+                .find(|s| s.name == state_entry.name)
+                .map(|s| {
+                    s.state_vars.iter().map(|sv| {
+                        let type_str = match &sv.var_type {
+                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
+                            crate::frame_c::compiler::frame_ast::Type::Unknown => "int".to_string(),
+                        };
+                        (sv.name.clone(), type_str)
+                    }).collect()
+                })
+                .unwrap_or_default();
             for (_event, handler_entry) in &state_entry.handlers {
                 let empty: Vec<String> = Vec::new();
                 let sys_param_locals = if is_start_state {
@@ -195,6 +212,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
                     &state_param_names,
                     &state_enter_param_names,
                     &state_exit_param_names,
+                    &handler_state_var_types,
                 );
                 methods.push(method);
             }
@@ -2597,6 +2615,7 @@ pub(crate) fn generate_handler_from_arcanum(
     state_param_names: &std::collections::HashMap<String, Vec<String>>,
     state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    handler_state_var_types: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     // Build params from handler's parameter symbols
     // V4 uses native types, so we just pass them through as-is
@@ -2654,7 +2673,7 @@ pub(crate) fn generate_handler_from_arcanum(
         parent_state: parent_state.map(|s| s.to_string()),
         defined_systems: defined_systems.clone(),
         use_sv_comp: false, // Handler-specific methods don't have __sv_comp preamble
-        state_var_types: std::collections::HashMap::new(),
+        state_var_types: handler_state_var_types.clone(),
         state_param_names: state_param_names.clone(),
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),

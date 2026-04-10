@@ -87,6 +87,40 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
 }
 
 
+/// Convert a state var init expression to a type-correct value for the
+/// target language. Frame source uses portable expressions (`""` for
+/// empty string, `0` for integer, `false` for bool). The target language
+/// may need wrapping — e.g. Rust's struct fields are `String` not `&str`,
+/// so a string literal `""` becomes `String::from("")`.
+///
+/// This is the canonical way to emit state var init values. It delegates
+/// to `expression_to_string` for the base serialization, then wraps
+/// based on declared type + target language.
+pub(crate) fn typed_init_expr(expr: &Expression, var_type: &Type, lang: TargetLanguage) -> String {
+    let raw = expression_to_string(expr, lang);
+    let is_string_type = match var_type {
+        Type::Custom(s) => matches!(s.to_lowercase().as_str(), "str" | "string"),
+        Type::Unknown => false,
+    };
+    let is_string_literal = matches!(expr, Expression::Literal(Literal::String(_)));
+    let is_int_literal = matches!(expr, Expression::Literal(Literal::Int(_)));
+
+    match lang {
+        // Rust: struct field is `String`, literal `""` is `&str` → wrap
+        TargetLanguage::Rust if is_string_type && is_string_literal =>
+            format!("String::from({})", raw),
+        // Rust: parser fallback — String field got Integer(0) because it
+        // couldn't parse a Rust-specific constructor. Substitute default.
+        TargetLanguage::Rust if is_string_type && is_int_literal =>
+            "String::new()".to_string(),
+        // C++: std::any storage needs std::string, not const char*
+        TargetLanguage::Cpp if is_string_type && is_string_literal =>
+            format!("std::string({})", raw),
+        // All other languages: portable expression works as-is
+        _ => raw,
+    }
+}
+
 /// Convert an Expression to a string representation for inline code
 pub(crate) fn expression_to_string(expr: &Expression, lang: TargetLanguage) -> String {
     match expr {
