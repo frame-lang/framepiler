@@ -1069,3 +1069,85 @@ if __name__ == '__main__':
 **How it works:** Two `@@system` blocks in one file generate two independent classes. `@@Logger()` in the domain section instantiates the logger as a domain variable. Systems interact through their public interfaces — they don't share state.
 
 **Features used:** multi-system files, `@@SystemName()` instantiation, domain variable initialization
+
+---
+
+## 21. Configurable Worker Pool (Parameterized Systems)
+
+A task executor whose pool size and retry policy are set at construction time. Domain, state, and enter parameters flow through the constructor to initialize the machine.
+
+```
+@@target python_3
+
+@@system WorkerPool(pool_size: int, $(max_retries: int), $>(start_msg: str)) {
+    interface:
+        submit(task: str)
+        get_status(): str
+
+    machine:
+        $Idle(max_retries: int) {
+            $>(start_msg: str) {
+                print(f"Pool ready: {start_msg}")
+            }
+
+            submit(task: str) {
+                self.pending.append(task)
+                if len(self.pending) >= self.pool_size:
+                    -> $Processing
+            }
+
+            get_status(): str {
+                @@:return = f"idle ({len(self.pending)}/{self.pool_size} pending)"
+            }
+        }
+
+        $Processing {
+            $>() {
+                print(f"Processing batch of {len(self.pending)} tasks")
+                self.pending.clear()
+            }
+
+            submit(task: str) {
+                self.pending.append(task)
+            }
+
+            get_status(): str {
+                @@:return = "processing"
+            }
+        }
+
+    domain:
+        pool_size: int = pool_size
+        pending: list = []
+}
+
+if __name__ == '__main__':
+    pool = @@WorkerPool(3, $(5), $>("v1.0"))
+    # → "Pool ready: v1.0"
+
+    pool.submit("task_a")
+    print(pool.get_status())    # "idle (1/3 pending)"
+
+    pool.submit("task_b")
+    pool.submit("task_c")       # batch threshold reached
+    # → "Processing batch of 3 tasks"
+
+    print(pool.get_status())    # "processing"
+```
+
+**How it works:** The system header declares three parameter groups:
+
+| Parameter | Sigil | Kind | Where it goes |
+|-----------|-------|------|---------------|
+| `pool_size: int` | (bare) | Domain | `self.pool_size` via `domain: pool_size = pool_size` |
+| `$(max_retries: int)` | `$()` | State | `compartment.state_args["max_retries"]` — readable in the start state's handlers as `max_retries` |
+| `$>(start_msg: str)` | `$>()` | Enter | `compartment.enter_args["start_msg"]` — readable in the start state's `$>` handler as `start_msg` |
+
+At the call site, the caller tags each argument with the matching sigil:
+```python
+pool = @@WorkerPool(3, $(5), $>("v1.0"))
+```
+
+The framepiler substitutes Frame defaults for missing arguments and routes each to its compartment field. Transitions like `-> $Processing` create a new compartment with its own state_args, so state params are scoped per-state.
+
+**Features used:** system parameters (domain, state, enter), sigil-tagged call-site syntax, `@@:(expr)` / `@@:return = expr` context return, state transitions triggered by threshold

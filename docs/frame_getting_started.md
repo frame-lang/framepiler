@@ -554,7 +554,12 @@ $Counting {
 }
 ```
 
-The `@@:return = expr` syntax sets the return value on the context stack. If the current state doesn't handle the event, the caller gets the default value (`0` in this case). Note: bare `return` in handlers exits the dispatch method but does NOT set the return value — always use `@@:return =` or `@@:(expr)` to set return values.
+There are two forms for setting the return value on the context stack:
+
+- **`@@:(expr)`** — the concise form (preferred). Sets the return value and can be followed by `return` on a separate line to exit the handler.
+- **`@@:return = expr`** — the long form. Sets the return value in a single statement.
+
+If the current state doesn't handle the event, the caller gets the default value (`0` in this case). Note: bare `return` exits the dispatch method but does NOT set the return value — always use `@@:(expr)` or `@@:return = expr` to set return values.
 
 ### Multiple Parameters and Returns
 
@@ -927,7 +932,7 @@ You can also pass arguments when constructing a system. System parameters can in
 ```
 @@target python_3
 
-@@system Server (port, host) {
+@@system Server(port: int, host: str) {
     interface:
         start()
 
@@ -942,8 +947,8 @@ You can also pass arguments when constructing a system. System parameters can in
         }
 
     domain:
-        port: int = 8080
-        host: str = "localhost"
+        port: int = port
+        host: str = host
 }
 
 if __name__ == '__main__':
@@ -951,7 +956,24 @@ if __name__ == '__main__':
     s.start()  # "Starting on 0.0.0.0:3000"
 ```
 
-System parameters override the default values of matching domain variables.
+System parameters in the header (`port: int, host: str`) become constructor arguments. When a domain variable's initializer references a system parameter by name (`port: int = port`), the constructor assigns the parameter value at construction time. If no system parameter of that name exists, the literal default is used instead.
+
+Frame V4 also supports **state parameters** and **enter parameters** in the system header, prefixed with sigils:
+
+| Sigil | Kind | Stored in | Read by |
+|-------|------|-----------|---------|
+| (bare) | Domain | `self.field` | Any handler via `self.field` |
+| `$(name: type)` | State | `compartment.state_args` | Start state handlers via bare `name` |
+| `$>(name: type)` | Enter | `compartment.enter_args` | Start state `$>` handler via bare `name` |
+
+```
+@@system Robot(name: str, $(x: int), $>(msg: str)) {
+    ...
+}
+r = @@Robot("R2", $(42), $>("hello"))
+```
+
+See the [Frame Language Reference](frame_language.md#passing-system-parameters) for the complete parameter syntax.
 
 ### Try It
 
