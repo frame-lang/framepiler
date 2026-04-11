@@ -303,6 +303,57 @@ When the Rust splicer expands `$.varName` for read access, it generates a `match
 
 Run: `cargo test --release codegen_utils::tests frame_expansion::tests`
 
+## Runtime Object Lifecycle
+
+Frame's generated runtime creates four heap-allocated object types per system. Understanding their lifecycle is critical for backends with manual memory management (C) and for debugging reference-related issues in any language.
+
+### FrameEvent — per-call message
+
+Created at the start of each interface method call. Carries the message name and parameter map. Destroyed at the end of the call.
+
+- **Lifetime**: one interface call
+- **Owner**: the interface wrapper method
+- **C**: malloc'd, explicitly destroyed via `FrameEvent_destroy` (also frees `_parameters` dict)
+- **GC languages**: GC collects after the call returns
+
+### FrameContext — per-call context
+
+Created alongside the FrameEvent. Holds the event reference, return slot (`_return`), and call-scoped data (`_data`). Pushed onto `_context_stack` for reentrancy tracking, popped after the call.
+
+- **Lifetime**: one interface call
+- **Owner**: the interface wrapper method
+- **C**: malloc'd, explicitly destroyed via `FrameContext_destroy` (frees `_data` dict)
+- **GC languages**: GC collects after pop
+
+### Compartment — state closure
+
+The core runtime object. Holds state name, state_vars, state_args, enter_args, exit_args, forward_event, and parent_compartment (HSM chain).
+
+- **Lifetime**: from creation (constructor or transition) until replaced by transition or system destruction
+- **Owner**: the system's `__compartment` field (current) or `_state_stack` (pushed)
+- **Creation points**: `Compartment::new()` in constructor, transitions, push-with-transition
+- **push$ saves a reference** — the stack and current may point to the same object (bare push$) or different objects (push-with-transition)
+- **C**: reference counted (`_ref_count`). `Compartment_ref` increments, `Compartment_unref` decrements and frees at zero (cascades to parent chain)
+- **C++**: `shared_ptr<Compartment>` — RAII ref counting
+- **Rust**: owned values, `Clone` for bare push$, `mem::replace` for push-with-transition, `Drop` cascade
+- **GC languages**: GC handles all lifecycle
+
+### parent_compartment — HSM chain
+
+Links child states to parent compartments in hierarchical state machines. Multiple siblings may share the same parent reference. Forms a DAG (not a cycle).
+
+- **Lifetime**: same as the owning compartment
+- **Owner**: shared reference (C: ref counted, C++: shared_ptr, GC: GC reference)
+- **C**: `Compartment_ref` on assignment, `Compartment_unref` cascades through chain on destruction
+
+### State stack — push$/pop$ history
+
+`Vec`/`List`/`Array` of compartment references. Push adds, pop removes. All entries are cleaned up on system destruction.
+
+- **C**: `System_destroy` walks the stack calling `Compartment_unref` on each entry, then frees the FrameVec
+- **C++/Rust**: container destructor cascades to all entries
+- **GC languages**: GC collects when system is unreferenced
+
 ## Alternative Output: `--format model`
 
 The `--format model` flag produces a JSON representation of the parsed AST instead of generated code. This skips stages 3-7 (no validation, no codegen). Used by tooling (VS Code extension, visualization).

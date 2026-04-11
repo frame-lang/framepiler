@@ -364,6 +364,31 @@ Rust's `Box<dyn Any>` and C++'s `std::any` require **exact type matching** on do
 
 **Unit tests**: `codegen_utils::tests` (21 tests) and `frame_expansion::tests` (9 tests) cover all wrapping paths. Run `cargo test --release codegen_utils::tests frame_expansion::tests` to verify.
 
+#### Memory model — push$/pop$ and compartment lifecycle
+
+`push$` saves a **reference** to the current compartment on the state stack — not a copy. The transition that typically follows creates a NEW compartment; the old one survives on the stack via the saved reference. `pop$` restores the saved reference as the current compartment.
+
+**Per-language implementation:**
+
+| Language family | push$ mechanism | Cleanup |
+|---|---|---|
+| GC languages (Python, JS, TS, Java, C#, Kotlin, Swift, Dart, Go, PHP, Ruby, Lua, GDScript) | Direct reference assignment | GC handles everything |
+| C | Pointer save + reference counting (`_ref_count` field on Compartment). `Compartment_ref()` increments on push/parent assignment. `Compartment_unref()` decrements in kernel transition + `System_destroy`. Frees when count reaches 0, including recursive parent chain. | `System_destroy()` walks state stack + context stack + compartment chain |
+| C++ | `shared_ptr<Compartment>` — push saves a shared_ptr copy (ref count increment). RAII cascade handles cleanup. | Implicit via destructor |
+| Rust | Bare push$: `.clone()` (ownership requires it). Push-with-transition: `mem::replace` (ownership transfer). | `Drop` cascade |
+| Erlang | Immutable list prepend | GC |
+
+**Bare push$ (no transition):** Stack and current point to the same compartment. Modifications after push$ are visible through both. `pop$` restores the same (modified) object. This is intentional — bare push$ is a bookmark, not a snapshot.
+
+**Push-with-transition (`push$ -> $State`):** Stack holds the old compartment. Transition creates a new one. Modifications to the new compartment don't affect the old. `pop$` restores the old (unmodified) compartment. This is the common undo/history pattern.
+
+**When adding a new backend:** Use reference assignment for push$ (not copy). Ensure `System_destroy` (or equivalent) cleans up the state stack on system destruction. For languages with manual memory management, implement reference counting or ownership transfer.
+
+**Key files:**
+- `frame_expansion.rs` lines 1328-1477: push$ codegen for all 17 languages
+- `runtime.rs`: C `Compartment_ref`/`Compartment_unref`, C++ `shared_ptr` types
+- `system_codegen.rs`: C `System_destroy`, C++ shared_ptr fields
+
 #### Reserved names
 
 - **GDScript**: `get`, `set`, `call`, `free`, `connect`, `to_string`, etc. collide with `Object` methods that Frame's generated class would silently override. The framepiler now catches these at compile time and emits **E501** with a suggested rename (see `gdscript_reserved_method_rename` in `frame_validator.rs` for the full list). Common renames: `get` → `get_value`, `set` → `set_value`, `call` → `invoke`. The validator runs after the general semantic checks, so structural errors surface first.

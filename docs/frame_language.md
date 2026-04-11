@@ -437,7 +437,11 @@ Forwards the current event to the parent state's dispatch function. The enclosin
 push$
 ```
 
-Pushes the current compartment (including all state variables) onto the state stack.
+Saves a **reference** to the current compartment (including all state variables) onto the state stack. The compartment itself is NOT copied — the stack entry and `__compartment` point to the same object.
+
+`push$` is almost always followed by a transition (`push$ -> $State`). The transition creates a new compartment for the target state; the old one is preserved on the stack. `-> pop$` later restores the saved reference.
+
+**Bare `push$`** (no transition): the stack entry and current compartment are the same object. Any modifications to state variables after push$ are visible through both. `pop$` restores the same modified object. For snapshot/undo semantics, use `push$ -> $SameState(args)` to create a new compartment on transition.
 
 ### Stack Pop — `pop$`
 
