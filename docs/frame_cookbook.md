@@ -43,19 +43,19 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
     machine:
         $Green {
             next(): str {
-                @@:return = "green"
+                @@:("green")
                 -> $Yellow
             }
         }
         $Yellow {
             next(): str {
-                @@:return = "yellow"
+                @@:("yellow")
                 -> $Red
             }
         }
         $Red {
             next(): str {
-                @@:return = "red"
+                @@:("red")
                 -> $Green
             }
         }
@@ -67,7 +67,7 @@ if __name__ == '__main__':
         print(light.next())
 ```
 
-**How it works:** Three states form a cycle. Each `next()` call sets the return value via `@@:return` and transitions to the next state. The return value is delivered to the caller after the transition completes.
+**How it works:** Three states form a cycle. Each `next()` call sets the return value via `@@:(expr)` and transitions to the next state. The return value is delivered to the caller after the transition completes.
 
 **Features used:** transitions (`->`), return values
 
@@ -88,17 +88,17 @@ if __name__ == '__main__':
     machine:
         $Off {
             toggle(): str {
-                @@:return = "on"
+                @@:("on")
                 -> $On
             }
-            status(): str { @@:return = "off" }
+            status(): str { @@:("off") }
         }
         $On {
             toggle(): str {
-                @@:return = "off"
+                @@:("off")
                 -> $Off
             }
-            status(): str { @@:return = "on" }
+            status(): str { @@:("on") }
         }
 }
 
@@ -130,12 +130,12 @@ if __name__ == '__main__':
     machine:
         $Locked {
             coin() { -> $Unlocked }
-            push(): str { @@:return = "locked - insert coin" }
+            push(): str { @@:("locked - insert coin") }
         }
         $Unlocked {
             coin() { }
             push(): str {
-                @@:return = "welcome"
+                @@:("welcome")
                 -> $Locked
             }
         }
@@ -170,22 +170,22 @@ if __name__ == '__main__':
         $EnterUsername {
             submit(value: str): str {
                 self.username = value
-                @@:return = "enter password"
+                @@:("enter password")
                 -> $EnterPassword
             }
         }
         $EnterPassword {
             submit(value: str): str {
                 if self.authenticate(self.username, value):
-                    @@:return = "welcome"
+                    @@:("welcome")
                     -> $LoggedIn
                 else:
-                    @@:return = "invalid - try again"
+                    @@:("invalid - try again")
                     -> $EnterUsername
             }
         }
         $LoggedIn {
-            submit(value: str): str { @@:return = "already logged in" }
+            submit(value: str): str { @@:("already logged in") }
         }
 
     actions:
@@ -242,7 +242,7 @@ if __name__ == '__main__':
             <$() { print(f"Disconnecting from {self.host}") }
 
             send(data: str): str {
-                @@:return = f"sent '{data}' to {self.host}"
+                @@:(f"sent '{data}' to {self.host}")
             }
             disconnect() { -> $Disconnected }
         }
@@ -294,13 +294,13 @@ if __name__ == '__main__':
                     else:
                         -> $Trying
             }
-            status(): str { @@:return = "trying" }
+            status(): str { @@:("trying") }
         }
         $Succeeded {
-            status(): str { @@:return = "succeeded" }
+            status(): str { @@:("succeeded") }
         }
         $Failed {
-            status(): str { @@:return = "failed after max retries" }
+            status(): str { @@:("failed after max retries") }
         }
 
     actions:
@@ -344,7 +344,7 @@ if __name__ == '__main__':
                 push$
                 -> (name) $Dialog
             }
-            current(): str { @@:return = "main" }
+            current(): str { @@:("main") }
         }
         $Dialog {
             $.name: str = ""
@@ -356,10 +356,10 @@ if __name__ == '__main__':
                 -> (name) $Dialog
             }
             close(): str {
-                @@:return = $.name
+                @@:($.name)
                 -> pop$
             }
-            current(): str { @@:return = $.name }
+            current(): str { @@:($.name) }
         }
 }
 
@@ -406,7 +406,7 @@ if __name__ == '__main__':
             undo() {
                 -> pop$
             }
-            get_buffer(): str { @@:return = $.buffer }
+            get_buffer(): str { @@:($.buffer) }
         }
 }
 
@@ -416,14 +416,14 @@ if __name__ == '__main__':
     e.type_char("i")
     print(e.get_buffer())   # Hi
     e.undo()
-    print(e.get_buffer())   # H
-    e.undo()
-    print(e.get_buffer())   # (empty)
+    print(e.get_buffer())   # Hi (reference semantics — same compartment)
 ```
 
-**How it works:** Every `type_char` pushes the current compartment before modifying the buffer. `undo()` pops the saved compartment, restoring `$.buffer` to its previous value. This is a pushdown automaton — more powerful than a simple FSM.
+**How it works:** `push$` saves a **reference** to the current compartment, not a copy. After `push$`, both the stack entry and the current compartment point to the same object. Modifying `$.buffer` after push$ changes the shared compartment, so `-> pop$` restores the same object — the buffer retains its modified value.
 
-**Features used:** `push$`, `-> pop$`, state variable preservation
+For true snapshot undo, use `push$` with a transition (`push$ -> $Editing`) to create a new compartment. The old compartment on the stack preserves its pre-transition state.
+
+**Features used:** `push$`, `-> pop$`, reference semantics
 
 ---
 
@@ -444,16 +444,16 @@ if __name__ == '__main__':
     machine:
         $Stopped {
             play() { -> $Playing }
-            status(): str { @@:return = "stopped" }
+            status(): str { @@:("stopped") }
         }
         $Playing => $Active {
             pause() { -> $Paused }
-            status(): str { @@:return = "playing" }
+            status(): str { @@:("playing") }
             => $^
         }
         $Paused => $Active {
             play() { -> $Playing }
-            status(): str { @@:return = "paused" }
+            status(): str { @@:("paused") }
             => $^
         }
         $Active {
@@ -497,7 +497,7 @@ if __name__ == '__main__':
                 self.item = item
                 -> $Validating
             }
-            status(): str { @@:return = "idle" }
+            status(): str { @@:("idle") }
         }
         $Validating {
             $>() {
@@ -506,17 +506,17 @@ if __name__ == '__main__':
                 else:
                     -> $Rejected
             }
-            status(): str { @@:return = "validating" }
+            status(): str { @@:("validating") }
         }
         $Processing {
             cancel(reason: str) {
                 print(f"Cancelled: {reason}")
                 -> $Idle
             }
-            status(): str { @@:return = "processing" }
+            status(): str { @@:("processing") }
         }
         $Rejected {
-            status(): str { @@:return = "rejected" }
+            status(): str { @@:("rejected") }
         }
 
     actions:
@@ -559,7 +559,7 @@ if __name__ == '__main__':
     machine:
         $Draft {
             submit() { -> $Review1 }
-            status(): str { @@:return = "draft" }
+            status(): str { @@:("draft") }
         }
         $Review1 {
             approve(reviewer: str) {
@@ -570,7 +570,7 @@ if __name__ == '__main__':
                 print(f"Rejected by {reviewer}")
                 -> $Draft
             }
-            status(): str { @@:return = "awaiting first review" }
+            status(): str { @@:("awaiting first review") }
         }
         $Review2 {
             approve(reviewer: str) {
@@ -581,10 +581,10 @@ if __name__ == '__main__':
                 print(f"Rejected by {reviewer}")
                 -> $Draft
             }
-            status(): str { @@:return = "awaiting second review" }
+            status(): str { @@:("awaiting second review") }
         }
         $Published {
-            status(): str { @@:return = "published" }
+            status(): str { @@:("published") }
         }
 }
 
@@ -624,22 +624,22 @@ if __name__ == '__main__':
         $Idle {
             move() { -> $Walking }
             jump() { -> $Jumping }
-            state(): str { @@:return = "idle" }
+            state(): str { @@:("idle") }
         }
         $Walking {
             sprint() { -> $Running }
             jump() { -> $Jumping }
             stop() { -> $Idle }
-            state(): str { @@:return = "walking" }
+            state(): str { @@:("walking") }
         }
         $Running {
             stop() { -> $Walking }
             jump() { -> $Jumping }
-            state(): str { @@:return = "running" }
+            state(): str { @@:("running") }
         }
         $Jumping {
             land() { -> $Idle }
-            state(): str { @@:return = "jumping" }
+            state(): str { @@:("jumping") }
         }
 }
 
@@ -687,6 +687,7 @@ if __name__ == '__main__':
                 self.action_log = self.action_log + "flee,"
                 -> $Fleeing
             }
+            get_log(): str { @@:(self.action_log) }
         }
         $Fleeing {
             tick() {
@@ -696,6 +697,7 @@ if __name__ == '__main__':
                 self.action_log = self.action_log + "resume,"
                 -> $Exploring
             }
+            get_log(): str { @@:(self.action_log) }
         }
 
     domain:
@@ -712,7 +714,7 @@ if __name__ == '__main__':
     print(a.get_log())  # explore,explore,flee,run,resume,
 ```
 
-**How it works:** Domain variable `action_log` persists across all states. Each state appends its action on `tick()`. Threat/safe events trigger state transitions. The `get_log()` method isn't handled by any state — it returns the default (None). To fix that, add a handler in each state or use an operation.
+**How it works:** Domain variable `action_log` persists across all states. Each state appends its action on `tick()`. Threat/safe events trigger state transitions. Both states handle `get_log()` to return the accumulated log.
 
 **Features used:** domain variables as accumulators, event-driven state transitions
 
@@ -739,12 +741,12 @@ if __name__ == '__main__':
         $LedOff {
             timer_tick() { -> $LedOn }
             disable() { -> $Disabled }
-            is_lit(): bool { @@:return = False }
+            is_lit(): bool { @@:(False) }
         }
         $LedOn {
             timer_tick() { -> $LedOff }
             disable() { -> $Disabled }
-            is_lit(): bool { @@:return = True }
+            is_lit(): bool { @@:(True) }
         }
 }
 
@@ -786,7 +788,7 @@ if __name__ == '__main__':
                 if $.stable_count >= 3:
                     -> $Pressed
             }
-            is_pressed(): bool { @@:return = False }
+            is_pressed(): bool { @@:(False) }
         }
         $Pressed {
             $.stable_count: int = 0
@@ -797,7 +799,7 @@ if __name__ == '__main__':
                 if $.stable_count >= 3:
                     -> $Released
             }
-            is_pressed(): bool { @@:return = True }
+            is_pressed(): bool { @@:(True) }
         }
 }
 
@@ -834,19 +836,19 @@ if __name__ == '__main__':
         $S0 {
             input(bit: int): str {
                 if bit == 1:
-                    @@:return = "0"
+                    @@:("0")
                     -> $S1
                 else:
-                    @@:return = "0"
+                    @@:("0")
             }
         }
         $S1 {
             input(bit: int): str {
                 if bit == 0:
-                    @@:return = "1"
+                    @@:("1")
                     -> $S0
                 else:
-                    @@:return = "0"
+                    @@:("0")
             }
         }
 }
@@ -881,14 +883,14 @@ if __name__ == '__main__':
                 if bit == 1:
                     -> $Odd
             }
-            output(): str { @@:return = "even" }
+            output(): str { @@:("even") }
         }
         $Odd {
             input(bit: int) {
                 if bit == 1:
                     -> $Even
             }
-            output(): str { @@:return = "odd" }
+            output(): str { @@:("odd") }
         }
 }
 
@@ -925,14 +927,14 @@ if __name__ == '__main__':
                 self.user = user
                 -> $LoggedIn
             }
-            who(): str { @@:return = "nobody" }
+            who(): str { @@:("nobody") }
         }
         $LoggedIn {
             logout() {
                 self.user = ""
                 -> $LoggedOut
             }
-            who(): str { @@:return = self.user }
+            who(): str { @@:(self.user) }
         }
 
     domain:
@@ -1079,7 +1081,7 @@ A task executor whose pool size and retry policy are set at construction time. D
 ```
 @@target python_3
 
-@@system WorkerPool(pool_size: int, $(max_retries: int), $>(start_msg: str)) {
+@@system WorkerPool($(max_retries: int), $>(start_msg: str), pool_size: int) {
     interface:
         submit(task: str)
         get_status(): str
@@ -1097,7 +1099,7 @@ A task executor whose pool size and retry policy are set at construction time. D
             }
 
             get_status(): str {
-                @@:return = f"idle ({len(self.pending)}/{self.pool_size} pending)"
+                @@:(f"idle ({len(self.pending)}/{self.pool_size} pending)")
             }
         }
 
@@ -1112,7 +1114,7 @@ A task executor whose pool size and retry policy are set at construction time. D
             }
 
             get_status(): str {
-                @@:return = "processing"
+                @@:("processing")
             }
         }
 
@@ -1122,7 +1124,7 @@ A task executor whose pool size and retry policy are set at construction time. D
 }
 
 if __name__ == '__main__':
-    pool = @@WorkerPool(3, $(5), $>("v1.0"))
+    pool = @@WorkerPool($(5), $>("v1.0"), 3)
     # → "Pool ready: v1.0"
 
     pool.submit("task_a")
@@ -1135,19 +1137,19 @@ if __name__ == '__main__':
     print(pool.get_status())    # "processing"
 ```
 
-**How it works:** The system header declares three parameter groups:
+**How it works:** The system header declares three parameter groups in canonical order — state, enter, domain:
 
 | Parameter | Sigil | Kind | Where it goes |
 |-----------|-------|------|---------------|
-| `pool_size: int` | (bare) | Domain | `self.pool_size` via `domain: pool_size = pool_size` |
 | `$(max_retries: int)` | `$()` | State | `compartment.state_args["max_retries"]` — readable in the start state's handlers as `max_retries` |
 | `$>(start_msg: str)` | `$>()` | Enter | `compartment.enter_args["start_msg"]` — readable in the start state's `$>` handler as `start_msg` |
+| `pool_size: int` | (bare) | Domain | `self.pool_size` via `domain: pool_size = pool_size` |
 
 At the call site, the caller tags each argument with the matching sigil:
 ```python
-pool = @@WorkerPool(3, $(5), $>("v1.0"))
+pool = @@WorkerPool($(5), $>("v1.0"), 3)
 ```
 
 The framepiler substitutes Frame defaults for missing arguments and routes each to its compartment field. Transitions like `-> $Processing` create a new compartment with its own state_args, so state params are scoped per-state.
 
-**Features used:** system parameters (domain, state, enter), sigil-tagged call-site syntax, `@@:(expr)` / `@@:return = expr` context return, state transitions triggered by threshold
+**Features used:** system parameters (state, enter, domain), sigil-tagged call-site syntax, `@@:(expr)` context return, state transitions triggered by threshold

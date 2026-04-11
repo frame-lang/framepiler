@@ -1625,6 +1625,32 @@ pub fn parse_system_header_params(
         });
     }
 
+    // Enforce canonical ordering: $(state) before $>(enter) before domain.
+    // Track the highest group seen so far (0=state, 1=enter, 2=domain).
+    let mut max_group = 0u8;
+    for p in &params {
+        let group = match p.kind {
+            ParamKind::StateArg => 0,
+            ParamKind::EnterArg => 1,
+            ParamKind::Domain => 2,
+        };
+        if group < max_group {
+            let expected = match max_group {
+                1 => "enter params ($>()) must come after state params ($())",
+                2 => "domain params must come last, after state ($()) and enter ($>()) params",
+                _ => "parameters are out of order",
+            };
+            return Err(ParseError {
+                message: format!(
+                    "system header parameter '{}' is out of order: {}",
+                    p.name, expected
+                ),
+                span: p.span.clone(),
+            });
+        }
+        max_group = group;
+    }
+
     Ok(params)
 }
 

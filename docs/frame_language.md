@@ -106,19 +106,17 @@ Sections are optional but **must appear in the order shown**: operations → int
 
 ### System Parameters
 
-Three groups, all optional, declared in any order. Each parameter is sigil-tagged according to its group, except domain params which are bare. Groups can be intermixed — declaration order at the header is the call order.
+Three parameter groups configure a system at construction time. Each is optional, but when present they must appear in this order: **state params** (`$()`), then **enter params** (`$>()`), then **domain params** (bare).
 
 ```
-@@system Name ( <param>, <param>, ... )
+@@system Name ( $(state_params), $>(enter_params), domain_params )
 ```
 
-where each `<param>` is one of:
-
-| Group | Declaration syntax | Target |
-|-------|--------------------|--------|
-| State arg | `$(name: type)` | Start state's `compartment.state_args`, keyed by declared param name |
-| Enter arg | `$>(name: type)` | Start state's `compartment.enter_args`, keyed by declared param name |
-| Domain arg | `name: type` (bare) | Domain variable initializer — used as the right-hand side of the field's `= ...` assignment in the constructor scope |
+| Group | Sigil | Target |
+|-------|-------|--------|
+| State arg | `$(name: type)` | Start state's `compartment.state_args` |
+| Enter arg | `$>(name: type)` | Start state's `compartment.enter_args` |
+| Domain arg | `name: type` (bare) | Constructor argument, used in domain field initializers |
 
 Each param body has the same shape (`name: type` or `name: type = default`) regardless of group; only the sigil differs. The framepiler validates that state and enter args have matching declarations on the start state's `$Start(name: type)` and `$>(name: type)` handlers.
 
@@ -136,48 +134,25 @@ name : type = default
 - Typed (`name : type`): the type string is passed through verbatim to the target language's constructor signature. Use the target's native type names (`int`, `str`, `bool`, `float`, etc.).
 - Defaulted (`name : type = default`): the default expression is pasted verbatim into the constructor signature. Defaults must be valid in the target language at the parameter-default position. Integer and boolean literals are portable; string and collection defaults may not be.
 
-#### Domain params
-
-Bare identifiers in the header become **constructor arguments** that are in scope when the domain field initializers run. A domain field's right-hand side can reference any header param by name:
-
-```frame
-@@system Counter(initial: int = 0) {
-    interface:
-        get(): int
-
-    machine:
-        $Counting {
-            get(): int { @@:return = self.value }
-        }
-
-    domain:
-        value = initial         // initial is a constructor arg in scope
-}
-
-c = @@Counter(10)               // value is 10
-```
-
-The codegen prepends the language-appropriate self-reference (`self.`, `this.`, `@`) to the LHS of the domain field assignment, so `value = value` (param and field with the same name) is unambiguous: it compiles to `self.value = value`.
-
 #### State params
 
 `$(name: type)` declares a parameter that lands in the start state's `compartment.state_args` map under the declared name. The start state must have a matching `$Start(name: type)` declaration so the dispatch function can bind the param to a local at the top of the state body:
 
 ```frame
-@@system Robot(name: str, $(x: int)) {
+@@system Robot($(x: int), name: str) {
     interface:
         describe(): str
 
     machine:
         $Start(x: int) {
-            describe(): str { @@:return = self.name + "@" + str(x) }
+            describe(): str { @@:(self.name + "@" + str(x)) }
         }
 
     domain:
         name = name
 }
 
-r = @@Robot("R2D2", $(7))       // name = "R2D2" (domain), x = 7 (state arg, sigil-tagged)
+r = @@Robot($(7), "R2D2")       // x = 7 (state arg), name = "R2D2" (domain)
 ```
 
 Note the call site: state args are tagged with `$(...)` so the assembler can route them into `compartment.state_args`. See [System Instantiation](#system-instantiation) for the full call site form.
@@ -211,6 +186,29 @@ w = @@Worker($>(50))            // start state's enter handler sees batch_size =
 ```
 
 The call site tags enter args with `$>(...)`, the same shape as the declaration. Enter args are also written by transitions that use the `-> "args" $State` form. As with state args, the codegen stores both transition-passed and constructor-passed enter args under the declared param name.
+
+#### Domain params
+
+Bare identifiers in the header become **constructor arguments** that are in scope when the domain field initializers run. A domain field's right-hand side can reference any header param by name:
+
+```frame
+@@system Counter(initial: int = 0) {
+    interface:
+        get(): int
+
+    machine:
+        $Counting {
+            get(): int { @@:(self.value) }
+        }
+
+    domain:
+        value = initial         // initial is a constructor arg in scope
+}
+
+c = @@Counter(10)               // value is 10
+```
+
+The codegen prepends the language-appropriate self-reference (`self.`, `this.`, `@`) to the LHS of the domain field assignment, so `value = value` (param and field with the same name) is unambiguous: it compiles to `self.value = value`.
 
 ---
 
@@ -678,12 +676,12 @@ State and enter args at the call site are tagged with the same sigils used in th
 
 ```frame
 // Pure domain params — no sigils needed
-@@system Counter(initial: int = 0) { ... }
+@@system Counter(initial: int = 0) { ... }. 
 c = @@Counter(10)
 
-// Mixed: domain + state param
-@@system Robot(name: str, $(x: int)) { ... }
-r = @@Robot("R2D2", $(7))
+// Mixed: state param + domain
+@@system Robot($(x: int), name: str) { ... }
+r = @@Robot($(7), "R2D2")
 
 // Pure enter param
 @@system Worker($>(batch_size: int)) { ... }
@@ -699,8 +697,8 @@ s = @@Service($(0), $>(1000), "primary")
 The named form omits ordering requirements and lets you supply args by declared name. Domain args use bare `name=value`; state and enter args wrap the assignment in their sigil.
 
 ```frame
-@@system Robot(name: str, $(x: int)) { ... }
-r = @@Robot(name="R2D2", $(x=7))
+@@system Robot($(x: int), name: str) { ... }
+r = @@Robot($(x=7), name="R2D2")
 
 @@system Service($(slot: int), $>(timeout: int), name: str) { ... }
 s = @@Service($(slot=0), $>(timeout=1000), name="primary")

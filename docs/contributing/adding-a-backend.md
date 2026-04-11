@@ -92,7 +92,7 @@ Follow the existing test patterns in the codebase.
 
 ## Step 7: System Initialization Parameters
 
-Frame supports `@@system Name(params)` headers that flow constructor arguments through to domain field initializers, the start state's `compartment.state_args`, and the start state's `compartment.enter_args`. See the [user-facing spec](../frame_language.md#system-parameters) for the three groups (domain, state, enter) and the syntax.
+Frame supports `@@system Name(params)` headers that flow constructor arguments through to the start state's `compartment.state_args`, the start state's `compartment.enter_args`, and domain field initializers. See the [user-facing spec](../frame_language.md#system-parameters) for the three groups (state, enter, domain) and the syntax.
 
 A new backend must wire all three groups end-to-end. The cross-cutting infrastructure already exists; the per-backend work is mechanical.
 
@@ -202,8 +202,8 @@ Port the 9 `.fpy` files in `framepiler_test_env/tests/common/positive/system_par
 ### Verification
 
 ```sh
-cd /Users/marktruluck/projects/framepiler && cargo build --release
-cd /Users/marktruluck/projects/framepiler_test_env/docker
+cd /path/to/framepiler && cargo build --release
+cd /path/to/framepiler_test_env/docker
 rm -f framec-native .stamps/framec-native && make framec
 make test-<your-lang>     # expect 9 new specialty tests passing
 make test                 # full 16-language regression — expect 0 failures

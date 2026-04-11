@@ -964,15 +964,15 @@ Frame V4 also supports **state parameters** and **enter parameters** in the syst
 
 | Sigil | Kind | Stored in | Read by |
 |-------|------|-----------|---------|
-| (bare) | Domain | `self.field` | Any handler via `self.field` |
 | `$(name: type)` | State | `compartment.state_args` | Start state handlers via bare `name` |
 | `$>(name: type)` | Enter | `compartment.enter_args` | Start state `$>` handler via bare `name` |
+| (bare) | Domain | `self.field` | Any handler via `self.field` |
 
 ```
-@@system Robot(name: str, $(x: int), $>(msg: str)) {
+@@system Robot($(x: int), $>(msg: str), name: str) {
     ...
 }
-r = @@Robot("R2", $(42), $>("hello"))
+r = @@Robot($(42), $>("hello"), "R2")
 ```
 
 See the [Frame Language Reference](frame_language.md#passing-system-parameters) for the complete parameter syntax.
