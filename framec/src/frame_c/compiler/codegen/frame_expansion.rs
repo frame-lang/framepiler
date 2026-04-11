@@ -1326,15 +1326,9 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             };
 
             match lang {
-                // push$ saves a REFERENCE to the current compartment on the
-                // state stack. In GC languages this is a direct assignment
-                // (the GC prevents leaks). The transition (if any) then
-                // creates a new compartment for the target state; the old
-                // one is preserved on the stack via the saved reference.
-                // pop$ restores the saved reference as the current
-                // compartment. No copies — push$ is O(1).
+                // Python/TypeScript/C: push copy, then separate transition
                 TargetLanguage::Python3 => {
-                    let push_code = format!("{}self._state_stack.append(self.__compartment)", indent_str);
+                    let push_code = format!("{}self._state_stack.append(self.__compartment.copy())", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}self._transition(\"{}\", None, None)", push_code, indent_str, target)
                     } else {
@@ -1342,7 +1336,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::GDScript => {
-                    let push_code = format!("{}self._state_stack.append(self.__compartment)", indent_str);
+                    let push_code = format!("{}self._state_stack.append(self.__compartment.copy())", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}self._transition(\"{}\", null, null)", push_code, indent_str, target)
                     } else {
@@ -1350,7 +1344,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-                    let push_code = format!("{}this._state_stack.push(this.__compartment);", indent_str);
+                    let push_code = format!("{}this._state_stack.push(this.__compartment.copy());", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}this._transition(\"{}\", null, null);", push_code, indent_str, target)
                     } else {
@@ -1358,7 +1352,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Dart => {
-                    let push_code = format!("{}this._state_stack.add(this.__compartment);", indent_str);
+                    let push_code = format!("{}this._state_stack.add(this.__compartment.copy());", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}this.__transition({}Compartment(\"{}\"));\n{}return;",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1366,28 +1360,20 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         push_code
                     }
                 }
-                // Rust: __push_transition moves the current compartment to
-                // the stack (ownership transfer) and installs the new one.
-                // For bare push$, clone is needed because Rust's ownership
-                // model doesn't allow the stack and current field to share
-                // the same owned value without Rc. The clone is the
-                // Rust-idiomatic equivalent of "save a reference."
+                // Rust: __push_transition atomically moves compartment to stack and transitions
                 TargetLanguage::Rust => {
                     if !target.is_empty() {
                         format!("{}self.__push_transition({}Compartment::new(\"{}\"));\n{}return;",
                             indent_str, ctx.system_name, target, indent_str)
                     } else {
-                        format!("{}self._state_stack.push(self.__compartment.clone());",
-                            indent_str)
+                        // Push without transition (bare push$) — clone state name first to avoid borrow conflict
+                        format!("{}{{\n{0}    let __state = self.__compartment.state.clone();\n{0}    self._state_stack.push(std::mem::replace(&mut self.__compartment, {}Compartment::new(&__state)));\n{0}}}",
+                            indent_str, ctx.system_name)
                     }
                 }
                 TargetLanguage::C => {
-                    // C: push pointer (reference). The compartment is
-                    // heap-allocated; the stack holds an additional pointer.
-                    // The transition creates a new compartment; the old one
-                    // lives on the stack until pop or system destroy.
-                    let push_code = format!("{}{}_FrameVec_push(self->_state_stack, self->__compartment);",
-                        indent_str, ctx.system_name);
+                    let push_code = format!("{}{}_FrameVec_push(self->_state_stack, {}_Compartment_copy(self->__compartment));",
+                        indent_str, ctx.system_name, ctx.system_name);
                     if !target.is_empty() {
                         format!("{}\n{}{}_transition(self, {}_Compartment_new(\"{}\"));",
                             push_code, indent_str, ctx.system_name, ctx.system_name, target)
@@ -1396,7 +1382,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Cpp => {
-                    let push_code = format!("{}_state_stack.push_back(__compartment);", indent_str);
+                    let push_code = format!("{}_state_stack.push_back(__compartment->clone());", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}__transition(std::make_unique<{}Compartment>(\"{}\"));\n{}return;",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1405,7 +1391,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Java => {
-                    let push_code = format!("{}_state_stack.add(__compartment);", indent_str);
+                    let push_code = format!("{}_state_stack.add(__compartment.copy());", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}__transition(new {}Compartment(\"{}\"));\n{}return;",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1414,7 +1400,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Kotlin => {
-                    let push_code = format!("{}_state_stack.add(__compartment)", indent_str);
+                    let push_code = format!("{}_state_stack.add(__compartment.copy())", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}__transition({}Compartment(\"{}\"))\n{}return",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1423,7 +1409,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Swift => {
-                    let push_code = format!("{}_state_stack.append(__compartment)", indent_str);
+                    let push_code = format!("{}_state_stack.append(__compartment.copy())", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}__transition({}Compartment(state: \"{}\"))\n{}return",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1432,7 +1418,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Go => {
-                    let push_code = format!("{}s._state_stack = append(s._state_stack, s.__compartment)", indent_str);
+                    let push_code = format!("{}s._state_stack = append(s._state_stack, s.__compartment.copy())", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}s.__transition(new{}Compartment(\"{}\"))\n{}return",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1441,7 +1427,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::CSharp => {
-                    let push_code = format!("{}_state_stack.Add(__compartment);", indent_str);
+                    let push_code = format!("{}_state_stack.Add(__compartment.Copy());", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}__transition(new {}Compartment(\"{}\"));\n{}return;",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1450,7 +1436,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Php => {
-                    let push_code = format!("{}$this->_state_stack[] = $this->__compartment;", indent_str);
+                    let push_code = format!("{}$this->_state_stack[] = $this->__compartment->copy();", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}$this->__transition(new {}Compartment(\"{}\"));\n{}return;",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1459,7 +1445,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Ruby => {
-                    let push_code = format!("{}@_state_stack.push(@__compartment)", indent_str);
+                    let push_code = format!("{}@_state_stack.push(@__compartment.copy)", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}__transition({}Compartment.new(\"{}\"))\n{}return",
                             push_code, indent_str, ctx.system_name, target, indent_str)
@@ -1468,7 +1454,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::Lua => {
-                    let push_code = format!("{}self._state_stack[#self._state_stack + 1] = self.__compartment", indent_str);
+                    // TODO: Lua-specific push
+                    let push_code = format!("{}self._state_stack[#self._state_stack + 1] = self.__compartment:copy()", indent_str);
                     if !target.is_empty() {
                         format!("{}\n{}self:__transition({}Compartment.new(\"{}\"))\n{}return",
                             push_code, indent_str, ctx.system_name, target, indent_str)
