@@ -2039,4 +2039,77 @@ mod tests {
         assert_eq!(machine.states[1].name, "Running");
         assert_eq!(machine.states[2].name, "Done");
     }
+
+    // --- System header param ordering tests ---
+
+    fn parse_header(src: &str) -> Result<Vec<SystemParam>, ParseError> {
+        let bytes = src.as_bytes();
+        let span = Span::new(0, bytes.len());
+        parse_system_header_params(bytes, span)
+    }
+
+    #[test]
+    fn test_param_order_state_then_domain() {
+        let params = parse_header("$(x: int), name: str").unwrap();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "x");
+        assert!(matches!(params[0].kind, ParamKind::StateArg));
+        assert_eq!(params[1].name, "name");
+        assert!(matches!(params[1].kind, ParamKind::Domain));
+    }
+
+    #[test]
+    fn test_param_order_state_enter_domain() {
+        let params = parse_header("$(x: int), $>(msg: str), name: str").unwrap();
+        assert_eq!(params.len(), 3);
+        assert!(matches!(params[0].kind, ParamKind::StateArg));
+        assert!(matches!(params[1].kind, ParamKind::EnterArg));
+        assert!(matches!(params[2].kind, ParamKind::Domain));
+    }
+
+    #[test]
+    fn test_param_order_domain_only() {
+        let params = parse_header("name: str, count: int").unwrap();
+        assert_eq!(params.len(), 2);
+        assert!(matches!(params[0].kind, ParamKind::Domain));
+        assert!(matches!(params[1].kind, ParamKind::Domain));
+    }
+
+    #[test]
+    fn test_param_order_state_only() {
+        let params = parse_header("$(x: int)").unwrap();
+        assert_eq!(params.len(), 1);
+        assert!(matches!(params[0].kind, ParamKind::StateArg));
+    }
+
+    #[test]
+    fn test_param_order_enter_only() {
+        let params = parse_header("$>(msg: str)").unwrap();
+        assert_eq!(params.len(), 1);
+        assert!(matches!(params[0].kind, ParamKind::EnterArg));
+    }
+
+    #[test]
+    fn test_param_order_reject_domain_before_state() {
+        let err = parse_header("name: str, $(x: int)").unwrap_err();
+        assert!(err.message.contains("out of order"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn test_param_order_reject_domain_before_enter() {
+        let err = parse_header("name: str, $>(msg: str)").unwrap_err();
+        assert!(err.message.contains("out of order"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn test_param_order_reject_enter_before_state() {
+        let err = parse_header("$>(msg: str), $(x: int)").unwrap_err();
+        assert!(err.message.contains("out of order"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn test_param_order_reject_domain_between_state_and_enter() {
+        let err = parse_header("$(x: int), name: str, $>(msg: str)").unwrap_err();
+        assert!(err.message.contains("out of order"), "got: {}", err.message);
+    }
 }
