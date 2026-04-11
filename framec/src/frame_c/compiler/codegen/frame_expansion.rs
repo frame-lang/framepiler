@@ -340,7 +340,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         }
 
                         // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment.copy())\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment)\n", indent_str, ctx.system_name, target));
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
@@ -656,7 +656,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Create new compartment
                         code.push_str(&format!("{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n", indent_str, ctx.system_name, ctx.system_name, target));
                         if ctx.parent_state.is_some() {
-                            code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_copy(self->__compartment);\n", indent_str, ctx.system_name));
+                            code.push_str(&format!("{}__compartment->parent_compartment = self->__compartment;\n", indent_str));
                         }
 
                         // Set state_args if present (split by comma for positional args)
@@ -682,7 +682,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         code
                     }
                     TargetLanguage::Cpp => {
-                        // C++: Create unique_ptr compartment, set fields, call __transition
+                        // C++: Create shared_ptr compartment, set fields, call __transition
                         let mut code = String::new();
 
                         // Store exit_args in current compartment if present (named keys)
@@ -696,8 +696,8 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         }
 
                         // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}auto __new_compartment = std::make_unique<{}Compartment>(\"{}\");\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__new_compartment->parent_compartment = __compartment->clone();\n", indent_str));
+                        code.push_str(&format!("{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!("{}__new_compartment->parent_compartment = __compartment;\n", indent_str));
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
@@ -746,7 +746,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Create new compartment with parent_compartment for HSM support
                         code.push_str(&format!("{}var __compartment = new {}Compartment(\"{}\");\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment.copy();\n", indent_str));
+                        code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment;\n", indent_str));
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
@@ -791,7 +791,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         }
 
                         code.push_str(&format!("{}val __compartment = {}Compartment(\"{}\")\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment.copy()\n", indent_str));
+                        code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment\n", indent_str));
 
                         if let Some(ref state) = state_str {
                             let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
@@ -834,7 +834,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         }
 
                         code.push_str(&format!("{}let __compartment = {}Compartment(state: \"{}\")\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__compartment.parent_compartment = self.__compartment.copy()\n", indent_str));
+                        code.push_str(&format!("{}__compartment.parent_compartment = self.__compartment\n", indent_str));
 
                         if let Some(ref state) = state_str {
                             let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
@@ -878,7 +878,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Create new compartment — block scope prevents redeclaration in multiple branches
                         code.push_str(&format!("{}{{ var __new_compartment = new {}Compartment(\"{}\");\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__new_compartment.parent_compartment = __compartment.Copy();\n", indent_str));
+                        code.push_str(&format!("{}__new_compartment.parent_compartment = __compartment;\n", indent_str));
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
@@ -1122,7 +1122,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Python3 => {
                     // Create compartment with forward_event set to current event
                     let mut code = String::new();
-                    code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment.copy())\n", indent_str, ctx.system_name, target));
+                    code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment)\n", indent_str, ctx.system_name, target));
                     code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
                     code.push_str(&format!("{}self.__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
@@ -1169,7 +1169,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     let mut code = String::new();
                     code.push_str(&format!("{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n", indent_str, ctx.system_name, ctx.system_name, target));
                     if ctx.parent_state.is_some() {
-                        code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_copy(self->__compartment);\n", indent_str, ctx.system_name));
+                        code.push_str(&format!("{}__compartment->parent_compartment = self->__compartment;\n", indent_str));
                     }
                     code.push_str(&format!("{}__compartment->forward_event = __e;\n", indent_str));
                     code.push_str(&format!("{}{}_transition(self, __compartment);\n", indent_str, ctx.system_name));
@@ -1177,10 +1177,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     code
                 }
                 TargetLanguage::Cpp => {
-                    // C++: Create unique_ptr compartment with forward event
+                    // C++: Create shared_ptr compartment with forward event
                     let mut code = String::new();
-                    code.push_str(&format!("{}auto __new_compartment = std::make_unique<{}Compartment>(\"{}\");\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__new_compartment->parent_compartment = __compartment->clone();\n", indent_str));
+                    code.push_str(&format!("{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n", indent_str, ctx.system_name, target));
+                    code.push_str(&format!("{}__new_compartment->parent_compartment = __compartment;\n", indent_str));
                     code.push_str(&format!("{}__new_compartment->forward_event = std::make_unique<{}FrameEvent>(__e);\n", indent_str, ctx.system_name));
                     code.push_str(&format!("{}__transition(std::move(__new_compartment));\n", indent_str));
                     code.push_str(&format!("{}return;", indent_str));
@@ -1190,7 +1190,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     // Java: Create compartment with forward event
                     let mut code = String::new();
                     code.push_str(&format!("{}var __compartment = new {}Compartment(\"{}\");\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment.copy();\n", indent_str));
+                    code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment;\n", indent_str));
                     code.push_str(&format!("{}__compartment.forward_event = __e;\n", indent_str));
                     code.push_str(&format!("{}__transition(__compartment);\n", indent_str));
                     code.push_str(&format!("{}return;", indent_str));
@@ -1199,7 +1199,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Kotlin => {
                     let mut code = String::new();
                     code.push_str(&format!("{}val __compartment = {}Compartment(\"{}\")\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment.copy()\n", indent_str));
+                    code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment\n", indent_str));
                     code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
                     code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
@@ -1208,7 +1208,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Swift => {
                     let mut code = String::new();
                     code.push_str(&format!("{}let __compartment = {}Compartment(state: \"{}\")\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.parent_compartment = self.__compartment.copy()\n", indent_str));
+                    code.push_str(&format!("{}__compartment.parent_compartment = self.__compartment\n", indent_str));
                     code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
                     code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
@@ -1226,7 +1226,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     // C#: Create compartment with forward event — block scope
                     let mut code = String::new();
                     code.push_str(&format!("{}{{ var __new_compartment = new {}Compartment(\"{}\");\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__new_compartment.parent_compartment = __compartment.Copy();\n", indent_str));
+                    code.push_str(&format!("{}__new_compartment.parent_compartment = __compartment;\n", indent_str));
                     code.push_str(&format!("{}__new_compartment.forward_event = __e;\n", indent_str));
                     code.push_str(&format!("{}__transition(__new_compartment); }}\n", indent_str));
                     code.push_str(&format!("{}return;", indent_str));

@@ -1067,16 +1067,10 @@ pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
     code.push_str("    std::unordered_map<std::string, std::any> enter_args;\n");
     code.push_str("    std::unordered_map<std::string, std::any> exit_args;\n");
     code.push_str(&format!("    std::unique_ptr<{sys}FrameEvent> forward_event;\n"));
-    code.push_str(&format!("    std::unique_ptr<{sys}Compartment> parent_compartment;\n"));
-    code.push_str(&format!("\n    explicit {sys}Compartment(const std::string& state) : state(state) {{}}\n\n"));
-    code.push_str(&format!("    std::unique_ptr<{sys}Compartment> clone() const {{\n"));
-    code.push_str(&format!("        auto c = std::make_unique<{sys}Compartment>(state);\n"));
-    code.push_str("        c->state_args = state_args;\n");
-    code.push_str("        c->state_vars = state_vars;\n");
-    code.push_str("        c->enter_args = enter_args;\n");
-    code.push_str("        c->exit_args = exit_args;\n");
-    code.push_str("        return c;\n");
-    code.push_str("    }\n");
+    // shared_ptr: parent_compartment is shared across HSM siblings
+    // and state stack entries. shared_ptr ref counting handles cleanup.
+    code.push_str(&format!("    std::shared_ptr<{sys}Compartment> parent_compartment;\n"));
+    code.push_str(&format!("\n    explicit {sys}Compartment(const std::string& state) : state(state) {{}}\n"));
     code.push_str("};\n\n");
 
     code

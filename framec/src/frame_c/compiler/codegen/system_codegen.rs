@@ -455,7 +455,7 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
     // State stack - for push/pop state operations
     let stack_type = match syntax.language {
         TargetLanguage::Rust => format!("Vec<{}Compartment>", system.name),
-        TargetLanguage::Cpp => format!("std::vector<std::unique_ptr<{}Compartment>>", system.name),
+        TargetLanguage::Cpp => format!("std::vector<std::shared_ptr<{}Compartment>>", system.name),
         TargetLanguage::Java => format!("ArrayList<{}Compartment>", system.name),
         TargetLanguage::Kotlin => format!("MutableList<{}Compartment>", system.name),
         TargetLanguage::Dart => format!("List<{}Compartment>", system.name),
@@ -480,8 +480,8 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             format!("Option<{}>", compartment_type),
         ),
         TargetLanguage::Cpp => (
-            format!("std::unique_ptr<{}>", compartment_type),
-            format!("std::unique_ptr<{}>", compartment_type),
+            format!("std::shared_ptr<{}>", compartment_type),
+            format!("std::shared_ptr<{}>", compartment_type),
         ),
         TargetLanguage::Java | TargetLanguage::CSharp => (
             compartment_type.clone(),
@@ -1726,7 +1726,7 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         for (i, ancestor) in ancestor_chain.iter().enumerate() {
                             let comp_var = format!("__parent_comp_{}", i);
                             hsm_init_code.push_str(&format!(
-                                "auto {} = std::make_unique<{}>(\"{}\");\n",
+                                "auto {} = std::make_shared<{}>(\"{}\");\n",
                                 comp_var, compartment_class, ancestor.name
                             ));
                             if prev_comp_expr != "nullptr" {
@@ -1749,7 +1749,7 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             prev_comp_expr = comp_var;
                         }
                         hsm_init_code.push_str(&format!(
-                            "__compartment = std::make_unique<{}>(\"{}\");\n",
+                            "__compartment = std::make_shared<{}>(\"{}\");\n",
                             compartment_class, first_state.name
                         ));
                         hsm_init_code.push_str(&format!(
@@ -1794,7 +1794,7 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                     } else {
                         body.push(CodegenNode::NativeBlock {
                             code: format!(
-                                "__compartment = std::make_unique<{}>(\"{}\");",
+                                "__compartment = std::make_shared<{}>(\"{}\");",
                                 compartment_class, first_state.name
                             ),
                             span: None,
@@ -3283,10 +3283,10 @@ free(self);"#,
             // __transition
             methods.push(CodegenNode::Method {
                 name: "__transition".to_string(),
-                params: vec![Param::new("next").with_type(&format!("std::unique_ptr<{}>", compartment_class))],
+                params: vec![Param::new("next").with_type(&format!("std::shared_ptr<{}>", compartment_class))],
                 return_type: None,
                 body: vec![CodegenNode::NativeBlock {
-                    code: "__next_compartment = std::move(next);".to_string(),
+                    code: "__next_compartment = next;".to_string(),
                     span: None,
                 }],
                 is_async: false,
