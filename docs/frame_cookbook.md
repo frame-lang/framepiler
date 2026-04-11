@@ -1,6 +1,6 @@
 # Frame Cookbook
 
-20 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
+21 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
 
 For language syntax details, see the [Frame Language Reference](frame_language.md). For a tutorial introduction, see [Getting Started](frame_getting_started.md).
 
@@ -26,6 +26,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 18. [Session Persistence](#18-session-persistence) — save/restore with @@persist
 19. [Async HTTP Client](#19-async-http-client) — async interface with two-phase init
 20. [Multi-System Composition](#20-multi-system-composition) — two systems interacting
+21. [Configurable Worker Pool](#21-configurable-worker-pool-parameterized-systems) — parameterized systems
 
 ---
 
