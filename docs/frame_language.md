@@ -14,6 +14,7 @@ Complete reference for the Frame language. For a tutorial introduction, see [Get
 - [Frame Statements](#frame-statements)
 - [Hierarchical State Machines](#hierarchical-state-machines)
 - [System Context](#system-context)
+- [Self Reference](#self-reference)
 - [Compartment](#compartment)
 - [Persistence](#persistence)
 - [Async](#async)
@@ -344,7 +345,7 @@ actions:
     }
 ```
 
-**Can access:** domain variables, `@@:return`, `@@.param`, `@@:event`, `@@:data`
+**Can access:** domain variables, `@@:return`, `@@:params.x`, `@@:event`, `@@:data.key`, `@@:self`
 
 **Cannot access (E401):** `-> $State`, `=> $^`, `push$`, `pop$`, `$.varName`
 
@@ -396,7 +397,7 @@ Domain variables persist across state transitions. The framepiler extracts varia
 
 ## Frame Statements
 
-Frame recognizes exactly **6 constructs** within handler bodies. Everything else is native code.
+Frame recognizes exactly **7 constructs** within handler bodies. Everything else is native code.
 
 ### Transition — `-> $State`
 
@@ -459,17 +460,25 @@ $.counter = <expr>      // write
 ### System Context — `@@`
 
 ```
-@@.param            // interface parameter (shorthand)
+@@:params.x         // interface parameter (by name)
 @@:return = <expr>  // set return value
 @@:return           // read return value
 @@:event            // interface method name
-@@:data[key]        // call-scoped data
-@@:params[x]        // interface parameter (explicit)
+@@:data.key         // call-scoped data (by key)
 ```
 
 See [System Context](#system-context) for full semantics.
 
-**`return` is always native.** It exits the current function — it does NOT set `@@:return`. In event handlers, `return expr` silently loses the value (W415 warning). Use `@@:(expr)` to set the return value, then bare `return` to exit.
+### Self Reference — `@@:self`
+
+```
+@@:self              // reference to this system instance
+@@:self.method(args) // call own interface method (reentrant)
+```
+
+See [Self Reference](#self-reference-1) for full semantics.
+
+**`return` is always native.** It exits the current function — it does NOT set `@@:return`. In event handlers, `return expr` silently loses the value (W415 warning). Use `@@:(expr)` or `@@:return = expr` to set return values.
 
 | Syntax | Effect |
 |--------|--------|
@@ -538,37 +547,28 @@ Every interface call creates:
 
 The context is pushed onto `_context_stack` on call and popped on return. Lifecycle events (`$>`, `<$`) use the existing context.
 
-### Syntax
+### Accessor Grammar
+
+All `@@` accessors follow a uniform grammar:
+
+- **`:`** (colon) — navigates Frame's namespace hierarchy
+- **`.`** (dot) — accesses a field on the resolved object
+
+Colon drills through Frame namespaces. Dot accesses a property on whatever you've arrived at. If the target is a value (not a container), no dot is needed.
+
+### Context Accessors
+
+`@@:` refers to the current execution context. It is transient — it exists for the duration of a dispatch chain and is then discarded. Multiple contexts stack on `_context_stack` during reentrant calls.
 
 | Syntax | Meaning |
 |--------|---------|
-| `@@.x` | Interface parameter `x` (shorthand) |
-| `@@:params[x]` | Interface parameter `x` (explicit) |
-| `@@:event` | Interface method name |
+| `@@:params.x` | Interface parameter `x` |
+| `@@:params` | Parameter bag (if needed as object) |
 | `@@:return` | Get/set return value |
-| `@@:data[key]` | Get/set call-scoped data |
-
-`@@` ALWAYS refers to the interface call context, even inside lifecycle handlers.
-
-### Context Lifecycle
-
-```
-calc.compute(1, 2) called
-│
-├─► FrameEvent("compute", {a: 1, b: 2}) created
-├─► FrameContext(event, _return=None, _data={}) created
-├─► Context PUSHED to _context_stack
-│
-├─► Kernel routes event to handler
-│   ├─► Handler may set @@:return, @@:data
-│   ├─► Handler triggers -> $Next
-│   ├─► <$ handler runs (can access @@.a, @@:return)
-│   ├─► Compartment switch
-│   └─► $> handler runs (can access @@.a, @@:return)
-│
-├─► Context POPPED
-└─► Return context._return to caller
-```
+| `@@:(expr)` | Set return value (concise) |
+| `@@:return(expr)` | Set return value and exit handler |
+| `@@:event` | Interface method name |
+| `@@:data.key` | Call-scoped data entry |
 
 ### Reentrancy
 
@@ -576,7 +576,71 @@ Each interface call pushes its own context. Nested calls are isolated — inner 
 
 ### Context Not Available
 
-`@@` is not available in static operations or the initial `$>` during construction.
+`@@` context accessors are not available in static operations or the initial `$>` during construction.
+
+---
+
+## Self Reference
+
+`@@:self` is the reference to the system instance containing the current context. While contexts are transient, `@@:self` always resolves to the same persistent system instance regardless of how many contexts are stacked.
+
+### Self Accessors
+
+| Syntax | Meaning |
+|--------|---------|
+| `@@:self` | Reference to this system instance |
+
+### Self Interface Call — `@@:self.method(args)`
+
+A system can call its own interface methods using `@@:self.<method>(args)`. This dispatches through the full kernel pipeline — FrameEvent construction, context push, router, state dispatch, handler execution, context pop — exactly as an external call would.
+
+```frame
+$Active {
+    calibrate() {
+        baseline = @@:self.reading()    // reentrant self-call
+        self.offset = baseline * -1
+    }
+    reading(): float {
+        @@:(self.raw_sensor_value + self.offset)
+    }
+}
+```
+
+#### Semantics
+
+- **Full dispatch.** The call goes through the kernel. The handler that executes depends on the current state at the time of the call.
+- **Context isolation.** A new context is pushed onto `_context_stack`. Inside the called handler, `@@:event` is the called method's name, `@@:params` are the called method's parameters, and `@@:return` is the called method's return slot. The calling handler's context is untouched.
+- **Return value.** The return value is available to the caller as a native expression, just like any function call.
+- **State sensitivity.** If a transition occurred before the self-call, the call dispatches to a handler in the new state.
+
+#### Restrictions
+
+- Only interface methods can be called via `@@:self`. Actions and operations are called directly using native syntax.
+- `@@:self` does not support calling constructors.
+
+#### Validation
+
+| Code | Check | Severity |
+|------|-------|----------|
+| E601 | Method does not exist in `interface:` block | Error |
+| E602 | Argument count does not match interface declaration | Error |
+| W601 | Return value not captured for method with return type | Warning |
+
+#### Codegen Expansion
+
+The transpiler expands `@@:self.method(args)` into the target language's native self-call on the generated interface method:
+
+| Target | Expansion |
+|--------|-----------|
+| Python | `self.method(args)` |
+| TypeScript | `this.method(args)` |
+| Rust | `self.method(args)` |
+| C | `SystemName_method(self, args)` |
+| C++ | `this->method(args)` |
+| Go | `s.Method(args)` |
+| Java | `this.method(args)` |
+
+The generated interface method handles FrameEvent construction, context push/pop, kernel dispatch, and return value extraction. The self-call enters the same code path as an external call.
 
 ---
 
@@ -770,11 +834,17 @@ The framepiler validates at the assembler stage:
 
 | Token | Meaning |
 |-------|---------|
-| `@@.x` | Parameter shorthand |
+| `@@:params.x` | Interface parameter `x` |
 | `@@:return` | Return value |
 | `@@:event` | Event name |
-| `@@:params[x]` | Parameter explicit |
-| `@@:data[key]` | Call-scoped data |
+| `@@:data.key` | Call-scoped data |
+
+### Self
+
+| Token | Meaning |
+|-------|---------|
+| `@@:self` | System instance reference |
+| `@@:self.method()` | Self interface call |
 
 ---
 
@@ -813,11 +883,19 @@ The framepiler validates at the assembler stage:
 | E410 | `duplicate-state-var` | State variable declared more than once |
 | E413 | `hsm-cycle` | Circular parent chain |
 
-### Warnings (W4xx)
+### Self-Call Errors (E6xx)
+
+| Code | Name | Description |
+|------|------|-------------|
+| E601 | `unknown-iface-method` | `@@:self.method()` targets method not in `interface:` |
+| E602 | `self-call-arity` | Argument count does not match interface declaration |
+
+### Warnings (W4xx, W6xx)
 
 | Code | Name | Description |
 |------|------|-------------|
 | W414 | `unreachable-state` | State has no incoming transitions |
+| W601 | `unused-self-call-return` | Return value not captured for method with return type |
 
 ---
 

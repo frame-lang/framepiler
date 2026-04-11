@@ -3,72 +3,76 @@
 ## Table of Contents
 
 - [Introduction](#introduction)
-  - [What is Frame?](#what-is-frame)
-  - [Frame Lives Inside Your Code](#frame-lives-inside-your-code)
-  - [Why Machines?](#why-machines)
-  - [What the Framepiler Does](#what-the-framepiler-does)
-  - [Target Language](#target-language)
-  - [File Extensions](#file-extensions)
+    - [What is Frame?](#what-is-frame)
+    - [Frame Lives Inside Your Code](#frame-lives-inside-your-code)
+    - [Why Machines?](#why-machines)
+    - [What the Framepiler Does](#what-the-framepiler-does)
+    - [Target Language](#target-language)
+    - [File Extensions](#file-extensions)
 - [Your First System](#your-first-system)
-  - [Install](#install)
-  - [Write](#write)
-  - [Transpile](#transpile)
-  - [Examine the Output](#examine-the-output)
-  - [Run](#run)
-  - [The Anatomy of a System](#the-anatomy-of-a-system)
+    - [Install](#install)
+    - [Write](#write)
+    - [Transpile](#transpile)
+    - [Examine the Output](#examine-the-output)
+    - [Run](#run)
+    - [The Anatomy of a System](#the-anatomy-of-a-system)
 - [States and Handlers](#states-and-handlers)
-  - [A Light Switch](#a-light-switch)
-  - [How Dispatch Works](#how-dispatch-works)
-  - [Return Values](#return-values)
-  - [A More Interesting Example](#a-more-interesting-example)
-  - [Deferred Transitions](#deferred-transitions)
-  - [Unhandled Events](#unhandled-events)
+    - [A Light Switch](#a-light-switch)
+    - [How Dispatch Works](#how-dispatch-works)
+    - [Return Values](#return-values)
+    - [A More Interesting Example](#a-more-interesting-example)
+    - [Deferred Transitions](#deferred-transitions)
+    - [Unhandled Events](#unhandled-events)
 - [Events and the Interface](#events-and-the-interface)
-  - [Interface Methods](#interface-methods)
-  - [Parameters](#parameters)
-  - [Typed Parameters](#typed-parameters)
-  - [Return Values](#return-values-1)
-  - [Multiple Parameters and Returns](#multiple-parameters-and-returns)
-  - [Events That Change Behavior by State](#events-that-change-behavior-by-state)
+    - [Interface Methods](#interface-methods)
+    - [Parameters](#parameters)
+    - [Typed Parameters](#typed-parameters)
+    - [Return Values](#return-values-1)
+    - [Multiple Parameters and Returns](#multiple-parameters-and-returns)
+    - [Events That Change Behavior by State](#events-that-change-behavior-by-state)
 - [Actions](#actions)
-  - [The Problem](#the-problem)
-  - [Actions to the Rescue](#actions-to-the-rescue)
-  - [What Actions Can Do](#what-actions-can-do)
-  - [What Actions Cannot Do](#what-actions-cannot-do)
-  - [Actions vs Operations vs Native Functions](#actions-vs-operations-vs-native-functions)
+    - [The Problem](#the-problem)
+    - [Actions to the Rescue](#actions-to-the-rescue)
+    - [What Actions Can Do](#what-actions-can-do)
+    - [What Actions Cannot Do](#what-actions-cannot-do)
+    - [Actions vs Operations vs Native Functions](#actions-vs-operations-vs-native-functions)
 - [Variables](#variables)
-  - [Domain Variables](#domain-variables)
-  - [State Variables](#state-variables)
-  - [When to Use Which](#when-to-use-which)
-  - [State Parameters](#state-parameters)
-  - [System Parameters](#system-parameters)
+    - [Domain Variables](#domain-variables)
+    - [State Variables](#state-variables)
+    - [When to Use Which](#when-to-use-which)
+    - [State Parameters](#state-parameters)
+    - [System Parameters](#system-parameters)
 - [Transitions in Depth](#transitions-in-depth)
-  - [Enter and Exit Events](#enter-and-exit-events)
-  - [Enter and Exit Parameters](#enter-and-exit-parameters)
-  - [The Full Transition Form](#the-full-transition-form)
-  - [Event Forwarding](#event-forwarding)
-  - [State Stack and History](#state-stack-and-history)
-  - [Transition Summary](#transition-summary)
+    - [Enter and Exit Events](#enter-and-exit-events)
+    - [Enter and Exit Parameters](#enter-and-exit-parameters)
+    - [The Full Transition Form](#the-full-transition-form)
+    - [Event Forwarding](#event-forwarding)
+    - [State Stack and History](#state-stack-and-history)
+    - [Transition Summary](#transition-summary)
 - [Hierarchical State Machines](#hierarchical-state-machines)
-  - [The Problem](#the-problem-1)
-  - [Parent States](#parent-states)
-  - [Explicit Forwarding](#explicit-forwarding)
-  - [Forwarding Within a Handler](#forwarding-within-a-handler)
-  - [Default Forward vs Selective Handling](#default-forward-vs-selective-handling)
-  - [A Complete Example](#a-complete-example)
-  - [Rules](#rules)
+    - [The Problem](#the-problem-1)
+    - [Parent States](#parent-states)
+    - [Explicit Forwarding](#explicit-forwarding)
+    - [Forwarding Within a Handler](#forwarding-within-a-handler)
+    - [Default Forward vs Selective Handling](#default-forward-vs-selective-handling)
+    - [A Complete Example](#a-complete-example)
+    - [Rules](#rules)
+- [Self Interface Calls](#self-interface-calls)
+    - [Calling Your Own Interface](#calling-your-own-interface)
+    - [Context Isolation](#context-isolation)
+    - [State Sensitivity](#state-sensitivity)
 - [Async](#async)
-  - [Declaring Async Methods](#declaring-async-methods)
-  - [How Async Propagates](#how-async-propagates)
-  - [Language Support](#language-support)
-  - [Two-Phase Initialization](#two-phase-initialization)
+    - [Declaring Async Methods](#declaring-async-methods)
+    - [How Async Propagates](#how-async-propagates)
+    - [Language Support](#language-support)
+    - [Two-Phase Initialization](#two-phase-initialization)
 - [Advanced Topics](#advanced-topics)
-  - [System Context](#system-context)
-  - [Operations](#operations)
-  - [Persistence](#persistence)
-  - [Codegen Options](#codegen-options)
-  - [Multi-System Files](#multi-system-files)
-  - [GraphViz Visualization](#graphviz-visualization)
+    - [System Context](#system-context)
+    - [Operations](#operations)
+    - [Persistence](#persistence)
+    - [Codegen Options](#codegen-options)
+    - [Multi-System Files](#multi-system-files)
+    - [GraphViz Visualization](#graphviz-visualization)
 
 ---
 
@@ -392,7 +396,7 @@ status(): str = "unknown"
 
 In the `interface:` block, `: str` declares the return type and `= "unknown"` sets the default return value. If the current state doesn't handle `status()`, the caller gets `"unknown"`.
 
-Inside a handler, `return` sets the return value:
+Inside a handler, `@@:return` sets the return value:
 
 ```
 status(): str {
@@ -544,12 +548,12 @@ interface:
     get_count(): int = 0
 ```
 
-Then in handlers, use `return`:
+Then in handlers, use `@@:return`:
 
 ```
 $Counting {
     get_count(): int {
-        return self.count
+        @@:return = self.count
     }
 }
 ```
@@ -578,14 +582,14 @@ If the current state doesn't handle the event, the caller gets the default value
         $Ready {
             add(a, b): int {
                 self.last_result = a + b
-                return self.last_result
+                @@:return = self.last_result
             }
             multiply(a, b): int {
                 self.last_result = a * b
-                return self.last_result
+                @@:return = self.last_result
             }
             get_last(): int {
-                return self.last_result
+                @@:return = self.last_result
             }
         }
 
@@ -731,6 +735,8 @@ Actions are native code methods. They can:
 - Access domain variables (via `self` in Python, `this` in TypeScript, etc.)
 - Call other actions
 - Call any native code
+- Access interface context via `@@:params.x`, `@@:return`, `@@:event`, `@@:data.key`
+- Call interface methods on the system via `@@:self.method()`
 
 ```
 actions:
@@ -810,7 +816,7 @@ Domain variables are declared in the `domain:` block. They're instance fields th
                 self.count = self.count + 1
             }
             get_count(): int {
-                return self.count
+                @@:return = self.count
             }
         }
 
@@ -861,7 +867,7 @@ $Retrying {
     }
 
     get_attempts(): int {
-        return $.attempts
+        @@:return = $.attempts
     }
 }
 ```
@@ -919,7 +925,7 @@ You can pass arguments to a state during transition:
                     -> $Page(path.title(), path)
             }
             get_title(): str {
-                return $.title
+                @@:return = $.title
             }
         }
 }
@@ -1028,9 +1034,7 @@ When a transition happens, Frame fires lifecycle events:
 
 if __name__ == '__main__':
     c = @@Connection()       # prints "Ready to connect"
-    c.connect()            # prints "Cleaning up..." wait, no:
-                           # $Disconnected has no <$, so just
-                           # prints "Connection established"
+    c.connect()            # prints "Connection established"
     c.disconnect()         # prints "Cleaning up connection"
                            # then "Ready to connect"
 ```
@@ -1444,6 +1448,93 @@ Build a `Form` system with a parent state `$Validated` that handles `validate():
 
 ---
 
+## Self Interface Calls
+
+Sometimes a handler or action needs to call one of the system's own interface methods. Frame provides `@@:self.method()` for this purpose.
+
+### Calling Your Own Interface
+
+```
+@@target python_3
+
+@@system Sensor {
+    interface:
+        calibrate()
+        reading(): float = 0.0
+
+    machine:
+        $Active {
+            calibrate() {
+                baseline = @@:self.reading()
+                self.offset = baseline * -1
+            }
+            reading(): float {
+                @@:(self.raw_value + self.offset)
+            }
+        }
+
+    domain:
+        raw_value: float = 0.0
+        offset: float = 0.0
+}
+```
+
+`@@:self.reading()` dispatches through the full kernel pipeline — it constructs a FrameEvent, pushes a context, routes through the current state's handler, and returns the result. It's identical to an external caller invoking `sensor.reading()`.
+
+Why not just use `self.reading()` (native Python)? You can — it works the same way mechanically. But `@@:self.reading()` gives the transpiler visibility: it validates the method exists, checks argument counts, and enables tracing and debugging integration. It also makes the self-call portable across all 17 target languages without worrying about native self-reference syntax.
+
+### Context Isolation
+
+A self-call is a reentrant dispatch. Each call gets its own context on the context stack:
+
+```
+$Processing {
+    analyze() {
+        # @@:event == "analyze"
+        status = @@:self.get_status()
+        # Inside get_status handler: @@:event == "get_status"
+        # Back here: @@:event == "analyze" (restored)
+        print(f"Status during analysis: {status}")
+    }
+
+    get_status(): str {
+        @@:("processing")
+    }
+}
+```
+
+The calling handler's `@@:event`, `@@:params`, `@@:return`, and `@@:data` are all preserved across the self-call. The called handler sees its own isolated context.
+
+### State Sensitivity
+
+Because `@@:self.method()` goes through the kernel, the handler that executes depends on the **current state at the time of the call**:
+
+```
+$Setup {
+    initialize() {
+        -> $Ready
+        // After transition, we're in $Ready
+        s = @@:self.status()    // dispatches to $Ready's handler
+        print(s)                // prints "ready", not "setting up"
+    }
+    status(): str {
+        @@:("setting up")
+    }
+}
+
+$Ready {
+    status(): str {
+        @@:("ready")
+    }
+}
+```
+
+### Try It
+
+Build a `HealthMonitor` system with `check()` and `is_healthy(): bool`. Have the `check()` handler call `@@:self.is_healthy()` and transition to `$Degraded` if the result is false.
+
+---
+
 ## Async
 
 Some state machines need to do asynchronous work — network calls, file I/O, timers. Frame supports `async` declarations that generate async/await code in languages that support it.
@@ -1483,10 +1574,10 @@ Sync methods on an async system still work correctly — awaiting a synchronous 
                 self.last_url = url
                 response = await http_get(url)
                 -> $Done
-                return response
+                @@:return = response
             }
             get_last_url(): str {
-                return self.last_url
+                @@:return = self.last_url
             }
         }
 
@@ -1494,10 +1585,10 @@ Sync methods on an async system still work correctly — awaiting a synchronous 
             async fetch(url: str): str {
                 self.last_url = url
                 response = await http_get(url)
-                return response
+                @@:return = response
             }
             get_last_url(): str {
-                return self.last_url
+                @@:return = self.last_url
             }
         }
 
@@ -1559,10 +1650,12 @@ When an interface method is called, Frame creates a *context* that handlers can 
 
 | Syntax | Meaning |
 |--------|---------|
-| `@@.param` | Access interface parameter `param` |
+| `@@:params.x` | Access interface parameter `x` |
 | `@@:return` | Get or set the return value |
 | `@@:event` | The name of the interface method that was called |
-| `@@:data[key]` | Call-scoped data that persists across transitions |
+| `@@:data.key` | Call-scoped data that persists across transitions |
+| `@@:self` | Reference to this system instance |
+| `@@:self.state` | Current state name (string) |
 
 #### Accessing Parameters
 
@@ -1574,15 +1667,15 @@ machine:
     $Ready {
         process(input, mode) {
             # These are equivalent:
-            result = transform(input)   # direct parameter
-            result = transform(@@.input) # system context
+            result = transform(input)        # direct parameter
+            result = transform(@@:params.input) # system context
 
             @@:return = result
         }
     }
 ```
 
-`@@.param` is a shorthand for accessing interface parameters. It's most useful in actions, which don't receive event parameters directly.
+`@@:params.x` accesses interface parameters by name. It's most useful in actions, which don't receive event parameters directly.
 
 #### Return Value
 
@@ -1590,7 +1683,7 @@ machine:
 
 ```
 calculate(a, b): int = 0 {
-    @@:return = @@.a + @@.b
+    @@:return = a + b
 }
 ```
 
@@ -1598,19 +1691,19 @@ calculate(a, b): int = 0 {
 
 #### Call-Scoped Data
 
-`@@:data[key]` stores data that survives transitions within a single interface call:
+`@@:data.key` stores data that survives transitions within a single interface call:
 
 ```
 $Validating {
     submit(order) {
-        @@:data["order"] = order
+        @@:data.order = order
         -> $Processing
     }
 }
 
 $Processing {
     $>() {
-        order = @@:data["order"]  # Still available after transition
+        order = @@:data.order  # Still available after transition
         process(order)
     }
 }
@@ -1775,6 +1868,7 @@ For multi-system files, each system generates its own diagram.
 
 You now know the full Frame language. Here are some directions to explore:
 
+- Browse the [Cookbook](frame_cookbook.md) for 21 complete, runnable examples
 - Browse the [supported languages](../README.md#supported-languages) and try a different target
 - Read the [CONTRIBUTING guide](../CONTRIBUTING.md) if you want to help improve the framepiler
 - Check the [GitHub issues](https://github.com/frame-lang/framepiler/issues) for feature requests and discussions

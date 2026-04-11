@@ -11,6 +11,7 @@ How Frame's language features are implemented in generated code. For the languag
 - [State Stack Operations](#state-stack-operations)
 - [Hierarchical State Machines](#hierarchical-state-machines)
 - [System Context and Return Values](#system-context-and-return-values)
+- [Self Interface Calls](#self-interface-calls)
 - [State Variables](#state-variables)
 - [Actions and Operations](#actions-and-operations)
 - [Persistence](#persistence)
@@ -280,6 +281,22 @@ def _state_Child(self, __e):
 
 ## System Context and Return Values
 
+### Accessor Grammar
+
+All `@@` accessors follow a uniform grammar:
+
+- **`:`** (colon) — navigates Frame's namespace hierarchy
+- **`.`** (dot) — accesses a field on the resolved object
+
+| Frame Syntax | Runtime Access (Python) |
+|-------------|------------------------|
+| `@@:params.x` | `self._context_stack[-1].event._parameters["x"]` |
+| `@@:return` | `self._context_stack[-1]._return` |
+| `@@:event` | `self._context_stack[-1].event._message` |
+| `@@:data.key` | `self._context_stack[-1]._data["key"]` |
+| `@@:self` | `self` |
+| `@@:self.state` | `self.__compartment.state` |
+
 ### Interface Method Pattern
 
 ```python
@@ -293,18 +310,10 @@ def get_status(self) -> str:
 
 ### Setting Return Value
 
-`@@:return = value` generates:
+`@@:return = value` or `@@:(value)` generates:
 
 ```python
 self._context_stack[-1]._return = value
-```
-
-### Setting Return Values
-
-`@@:return = expression` (or `@@:(expression)`) in handlers generates:
-
-```python
-self._context_stack[-1]._return = expression
 ```
 
 Note: `return expr` in handlers is a native return that exits the dispatch method — the value is NOT set on the context stack. The framepiler emits W415 warning for this pattern.
@@ -325,6 +334,70 @@ _context_stack: [
 ```
 
 Inner `@@:return` does not affect outer `@@:return`.
+
+---
+
+## Self Interface Calls
+
+`@@:self.method(args)` allows a system to call its own interface methods from within handlers and actions. The transpiler expands this into a native self-call on the generated interface method.
+
+### Codegen Expansion
+
+| Target | `@@:self.getStatus()` expands to |
+|--------|----------------------------------|
+| Python | `self.getStatus()` |
+| TypeScript | `this.getStatus()` |
+| Rust | `self.getStatus()` |
+| C | `SystemName_getStatus(self)` |
+| C++ | `this->getStatus()` |
+| Go | `s.GetStatus()` |
+| Java | `this.getStatus()` |
+
+### Dispatch Pipeline
+
+The expansion calls the generated interface method, which follows the standard pipeline:
+
+```
+@@:self.getStatus() called inside a handler
+│
+├─► Expands to self.getStatus() (Python)
+├─► Interface method constructs FrameEvent("getStatus", {})
+├─► FrameContext created, pushed to _context_stack
+├─► Kernel dispatches event
+│   ├─► Router selects current state's handler
+│   └─► Handler executes (may set @@:return, trigger transitions)
+├─► Context popped from _context_stack
+└─► Return value available to the calling handler
+```
+
+### Context Isolation
+
+The self-call pushes its own context. The calling handler's context is preserved:
+
+```
+Handler processing "analyze":
+    _context_stack: [ctx_analyze]
+
+    @@:self.getStatus()
+        _context_stack: [ctx_analyze, ctx_getStatus]
+        // inside getStatus: @@:event == "getStatus"
+        // @@:return refers to ctx_getStatus._return
+        _context_stack: [ctx_analyze]   // ctx_getStatus popped
+
+    // back in analyze handler
+    // @@:event == "analyze" (ctx_analyze is top again)
+```
+
+### Validation
+
+The transpiler validates self-calls at transpile time:
+
+| Code | Check |
+|------|-------|
+| E601 | Method does not exist in `interface:` block |
+| E602 | Argument count mismatch |
+
+These validations are not possible with native self-calls, which the transpiler treats as opaque native code.
 
 ---
 
@@ -373,6 +446,7 @@ Private helpers with domain and context access:
 def __my_action(self, param):
     count = self.__compartment.state_vars["count"]  # Can access state vars
     self.domain_var = count  # Can access domain vars
+    # Can use @@:self.method() for self-calls
     # CANNOT use: -> $State, push$, pop$
 ```
 
@@ -444,3 +518,15 @@ Restore does NOT invoke `$>`. The state is being *restored*, not *entered*.
 | C++ | `if/else if` with `==` |
 | Java | `switch` statement |
 | Go | `switch` statement |
+
+### Self Interface Call Expansion
+
+| Language | `@@:self.method(args)` |
+|----------|------------------------|
+| Python | `self.method(args)` |
+| TypeScript | `this.method(args)` |
+| Rust | `self.method(args)` |
+| C | `SystemName_method(self, args)` |
+| C++ | `this->method(args)` |
+| Java | `this.method(args)` |
+| Go | `s.Method(args)` |

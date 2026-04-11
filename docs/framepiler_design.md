@@ -173,6 +173,8 @@ Semantic checks against AST + Arcanum:
 | E405 | Parameter arity mismatch |
 | E410 | Duplicate state variable |
 | E413 | HSM cycle |
+| E601 | `@@:self.method()` targets unknown interface method |
+| E602 | `@@:self.method()` argument count mismatch |
 
 ---
 
@@ -205,6 +207,7 @@ pub enum CodegenNode {
     Forward { to_parent, indent },
     StackPush { indent },
     StackPop { indent },
+    SelfInterfaceCall { method_name, args, has_return },
 
     // Expressions
     Literal, Ident, BinaryOp, UnaryOp, Call, MethodCall,
@@ -230,14 +233,28 @@ Recognition patterns:
 | `push$` | Stack push |
 | `pop$` | Stack pop |
 | `$.` `<ident>` | State variable |
-| `@@.` `<ident>` | Context parameter |
+| `@@:params.` `<ident>` | Context parameter |
 | `@@:return` | Context return |
 | `@@:event` | Context event |
-| `@@:data[key]` | Context data |
+| `@@:data.` `<ident>` | Context data |
+| `@@:self.` `<ident>` `(` | Self interface call |
+| `@@:self.state` | Self state accessor |
+| `@@:self` | Self reference |
+
+#### Self Interface Call Recognition
+
+The scanner detects `@@:self.<ident>(` as a self-interface-call. It then uses `balanced_paren_end()` to find the closing `)`, capturing the full argument list. The complete token `@@:self.<ident>(<args>)` is emitted as a `SelfInterfaceCall` region.
+
+The scanner distinguishes between accessors and calls by the presence of parentheses:
+- `@@:self.state` — no parens → accessor (expand to state name access)
+- `@@:self.method()` — parens → self-call (expand to interface call)
+- `@@:self.method(a, b)` — parens with args → self-call with arguments
 
 ### Splicer
 
 Takes the scanner's region list and builds `CodegenNode` output by emitting `NativeBlock` nodes for native regions and expanding Frame regions into their `CodegenNode` equivalents.
+
+For `SelfInterfaceCall` regions, the splicer emits a `SelfInterfaceCall` node containing the method name and arguments. The backend emitter translates this to the target language's self-call syntax.
 
 ---
 
@@ -266,6 +283,18 @@ pub trait LanguageBackend {
 | TypeScript | `switch` | `switch` | `this.#compartment.stateVars["name"]` |
 | Rust | `match` | `match` | `self.__compartment.state_vars.get("name")` |
 | C | `if/else if` + `strcmp` | `if/else if` | `FrameDict_get(compartment->state_vars, "name")` |
+
+### Self Interface Call Emission
+
+| Backend | `SelfInterfaceCall { method: "m", args: "a, b" }` |
+|---------|-----|
+| Python | `self.m(a, b)` |
+| TypeScript | `this.m(a, b)` |
+| Rust | `self.m(a, b)` |
+| C | `SystemName_m(self, a, b)` |
+| C++ | `this->m(a, b)` |
+| Go | `s.M(a, b)` |
+| Java | `this.m(a, b)` |
 
 ---
 
