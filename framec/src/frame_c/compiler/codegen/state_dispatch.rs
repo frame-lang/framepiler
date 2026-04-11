@@ -2475,7 +2475,7 @@ pub(crate) fn generate_lua_state_dispatch(
     state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
     source: &[u8],
     ctx: &HandlerContext,
-    _default_forward: bool,
+    default_forward: bool,
 ) -> String {
     let mut code = String::new();
     let mut first = true;
@@ -2586,6 +2586,19 @@ pub(crate) fn generate_lua_state_dispatch(
 
         if !body_has_content {
             code.push_str("    -- empty\n");
+        }
+    }
+
+    // Default forward to parent state for HSM
+    if default_forward {
+        if let Some(ref parent) = ctx.parent_state {
+            if first {
+                // No handlers at all — unconditional forward
+                code.push_str(&format!("self:_state_{}(__e)\n", parent));
+            } else {
+                // Add else branch to forward unhandled events
+                code.push_str(&format!("else\n    self:_state_{}(__e)\n", parent));
+            }
         }
     }
 
