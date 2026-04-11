@@ -60,13 +60,17 @@ impl LanguageBackend for KotlinBackend {
                 let primary_ctor = if primary_params.is_empty() {
                     String::new()
                 } else {
-                    // Bare params (no `val`/`var`) so Kotlin doesn't
-                    // auto-synthesize a property of the same name —
-                    // domain fields with the same name (e.g.
-                    // `name: str = name`) would otherwise collide with
-                    // the auto-property. The bare param is in scope only
-                    // inside the `init {}` block, which is exactly where
-                    // domain field assignment happens.
+                    // Collect domain field names to detect collisions.
+                    // Params that collide with a domain field use bare
+                    // syntax (no val/var) — they're only in scope inside
+                    // `init {}` where the field assignment happens.
+                    // Params that DON'T collide get `val` so they're
+                    // accessible as read-only properties throughout the
+                    // class (e.g., in handler bodies via `this.param`).
+                    let field_names: std::collections::HashSet<&str> = fields
+                        .iter()
+                        .map(|f| f.name.as_str())
+                        .collect();
                     let params_str = primary_params
                         .iter()
                         .map(|p| {
@@ -75,7 +79,13 @@ impl LanguageBackend for KotlinBackend {
                                     .as_ref()
                                     .unwrap_or(&"Any?".to_string()),
                             );
-                            format!("{}: {}", p.name, type_ann)
+                            if field_names.contains(p.name.as_str()) {
+                                // Collides with domain field — bare param
+                                format!("{}: {}", p.name, type_ann)
+                            } else {
+                                // No collision — promote to val property
+                                format!("val {}: {}", p.name, type_ann)
+                            }
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
