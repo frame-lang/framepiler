@@ -38,13 +38,8 @@ use super::codegen_utils::{
 
 
 /// Resolve the storage key for a positional state-arg in a transition.
-///
-/// State args used to be stored under the integer index as a string key
-/// (`"0"`, `"1"`, ...). The dispatch reader now expects them under the
-/// declared param name. When the target state is known and has declared
-/// params at this index, return the param name; otherwise fall back to
-/// the integer index for backwards compatibility (e.g. transitions to
-/// states without declared params).
+/// Returns the declared param name if the target state has one at this index,
+/// otherwise falls back to the integer index.
 fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> String {
     ctx.state_param_names
         .get(target_state)
@@ -54,12 +49,7 @@ fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> 
 }
 
 /// Resolve the storage key for a positional enter-arg in a transition.
-///
-/// Mirror of `resolve_state_arg_key` for enter args. The enter handler
-/// dispatch now reads `__e._parameters[name]`, so transition codegen
-/// must write `enter_args[name]` instead of the legacy positional
-/// integer key. Falls back to the integer index when the target state
-/// has no declared enter handler params at this position.
+/// Returns the declared enter param name if available, otherwise the integer index.
 fn resolve_enter_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> String {
     ctx.state_enter_param_names
         .get(target_state)

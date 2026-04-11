@@ -1547,19 +1547,21 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!("typedef struct {{\n"));
     code.push_str("    const char* _message;\n");
     code.push_str(&format!("    {}_FrameDict* _parameters;\n", sys));
+    code.push_str("    int _owns_parameters;\n");
     code.push_str(&format!("}} {}_FrameEvent;\n\n", sys));
 
-    // FrameEvent_new
-    code.push_str(&format!("static {}_FrameEvent* {}_FrameEvent_new(const char* message, {}_FrameDict* parameters) {{\n", sys, sys, sys));
+    // FrameEvent_new — owns_parameters=1 means this event allocated the dict
+    code.push_str(&format!("static {}_FrameEvent* {}_FrameEvent_new(const char* message, {}_FrameDict* parameters, int owns_parameters) {{\n", sys, sys, sys));
     code.push_str(&format!("    {}_FrameEvent* e = malloc(sizeof({}_FrameEvent));\n", sys, sys));
     code.push_str("    e->_message = message;\n");
     code.push_str("    e->_parameters = parameters;\n");
+    code.push_str("    e->_owns_parameters = owns_parameters;\n");
     code.push_str("    return e;\n");
     code.push_str("}\n\n");
 
-    // FrameEvent_destroy
+    // FrameEvent_destroy — only frees parameters if this event owns them
     code.push_str(&format!("static void {}_FrameEvent_destroy({}_FrameEvent* e) {{\n", sys, sys));
-    code.push_str("    // Note: _parameters ownership depends on context\n");
+    code.push_str(&format!("    if (e->_owns_parameters && e->_parameters) {}_FrameDict_destroy(e->_parameters);\n", sys));
     code.push_str("    free(e);\n");
     code.push_str("}\n\n");
 

@@ -325,13 +325,13 @@ self._context_stack.pop()"#,
 
                 // Build parameters dict creation (with semicolon)
                 let params_code = if method.params.is_empty() {
-                    format!("{}_FrameEvent* __e = {}_FrameEvent_new(\"{}\", NULL);", sys, sys, method.name)
+                    format!("{}_FrameEvent* __e = {}_FrameEvent_new(\"{}\", NULL, 0);", sys, sys, method.name)
                 } else {
                     let mut code = format!("{}_FrameDict* __params = {}_FrameDict_new();\n", sys, sys);
                     for p in &method.params {
                         code.push_str(&format!("{}_FrameDict_set(__params, \"{}\", (void*)(intptr_t){});\n", sys, p.name, p.name));
                     }
-                    code.push_str(&format!("{}_FrameEvent* __e = {}_FrameEvent_new(\"{}\", __params);", sys, sys, method.name));
+                    code.push_str(&format!("{}_FrameEvent* __e = {}_FrameEvent_new(\"{}\", __params, 1);", sys, sys, method.name));
                     code
                 };
 

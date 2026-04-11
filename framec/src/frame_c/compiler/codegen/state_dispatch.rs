@@ -2388,14 +2388,8 @@ pub(crate) fn generate_rust_state_dispatch(
                 code.push_str(&format!("    \"{}\" => {{ self.{}(__e); }}\n", message, handler_method));
                 continue;
             }
-            // Non-start state: extract lifecycle params from event and
-            // pass them to the handler. After the named-key
-            // standardization sweep, transition codegen writes
-            // enter/exit args under the declared param name (e.g.
-            // `enter_args.insert("msg", ...)`), and the kernel hands
-            // those back as `__e.parameters` keyed by the same name.
-            // We therefore read by `param.name`, not the legacy
-            // positional index.
+            // Non-start state: extract lifecycle params from event
+            // (keyed by declared param name) and pass to handler.
             code.push_str(&format!("    \"{}\" => {{\n", message));
             for param in &handler.params {
                 code.push_str(&format!("        let {0} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n", param.name));
@@ -2736,11 +2730,8 @@ pub(crate) fn generate_handler_from_arcanum(
     body_code.push_str(&return_init_code);
     body_code.push_str(&splice_handler_body_from_span(&handler.body_span, source, lang, &ctx));
 
-    // Note: Rust handlers are now void (context stack pattern), no need to strip trailing semicolons
-
-    // For TypeScript and Rust, don't put return types on handler methods
-    // The interface wrappers handle returns via context stack pattern
-    // Handlers set @@:return (context._return) and the interface method returns it
+    // Handler methods are void — returns go through the context stack.
+    // Some languages strip the return type from the handler signature.
     let method_return_type = match lang {
         // These languages don't use return types on state handler methods
         TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript | TargetLanguage::Rust => None,

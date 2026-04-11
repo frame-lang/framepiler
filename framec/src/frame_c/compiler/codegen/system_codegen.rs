@@ -632,30 +632,16 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
     // Domain variables.
     //
     // The pipeline parser's domain_native module produces structured
-    // (name, var_type, initializer_text) tuples for every field. We
-    // build a Field codegen node from those structured slots — no more
-    // string surgery on raw_code.
-    //
-    // For each backend's `emit_field` we currently still pass raw_code
-    // for backwards compat (existing emitters fall back to it). The raw
-    // code is now SYNTHESISED from the structured fields rather than
-    // taken from the source line, so the per-backend emitter sees a
-    // canonical form. Future backend cleanups can drop raw_code in
-    // favor of the structured slots.
+    // Build a Field codegen node from each domain variable's structured
+    // slots (name, type, initializer). We also synthesize raw_code for
+    // backends that emit fields from the raw declaration text.
     for domain_var in &system.domain {
         let type_str = type_to_string(&domain_var.var_type);
 
-        // Build a synthesised raw_code line from the structured fields
-        // for the backends that still consume raw_code at the field
-        // declaration site. The shape varies per backend:
-        //   - C / C++ / Java / etc. (TypeFirst):  `<type> <name> = <init>`
-        //   - Python / TS / Rust / etc.:           `<name>: <type> = <init>`
-        //   - Erlang (BareName):                   `<name> = <init>`
-        // For now we hand back the AnnotatedName form (`<name>: <type> = <init>`)
-        // for languages that historically used it, and TypeFirst for the
-        // C-family backends. Init is omitted entirely if not present, so
-        // raw_code remains a faithful representation of what the user
-        // would have written.
+        // Synthesize raw_code in the appropriate format for this backend:
+        //   TypeFirst (C/C++/Java/...):  `<type> <name> = <init>`
+        //   AnnotatedName (Python/TS/Rust/...): `<name>: <type> = <init>`
+        //   BareName (Erlang/JS):        `<name> = <init>`
         let sys_param_names: Vec<String> = system.params.iter().map(|p| p.name.clone()).collect();
         let synthesised_raw = synthesize_field_raw(domain_var, syntax.language, &sys_param_names);
         let expanded_code = expand_tagged_in_domain(&synthesised_raw, syntax.language);
@@ -665,11 +651,7 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             .with_type(&type_str)
             .with_raw_code(&expanded_code);
 
-        // Also populate the structured initializer slot when the field
-        // has an init expression and the legacy Expression form is
-        // present (always None today; reserved for a future Frame
-        // expression parser that handles domain init expressions
-        // structurally).
+        // Populate the structured initializer slot when present.
         if let Some(ref init) = &domain_var.initializer {
             field = field.with_initializer(convert_expression(init));
         }
@@ -2638,7 +2620,7 @@ self._context_stack.pop();"#,
                         "NULL"
                     };
                     format!(
-                        r#"{}_FrameEvent* __frame_event = {}_FrameEvent_new("$>", {});
+                        r#"{}_FrameEvent* __frame_event = {}_FrameEvent_new("$>", {}, 0);
 {}_kernel(self, __frame_event);
 {}_FrameEvent_destroy(__frame_event);"#,
                         system.name, system.name, parameters_arg, system.name, system.name
@@ -2755,10 +2737,8 @@ self._context_stack.pop_back()"#,
     }
 }
 
-/// Generate Frame machinery methods
-///
-/// For Python/TypeScript: Proper Frame runtime with __kernel, __router, __transition
-/// For Rust: Simplified implementation (proper runtime in future task)
+/// Generate Frame machinery methods (__kernel, __router, __transition)
+/// for all target languages.
 fn generate_frame_machinery(system: &SystemAst, syntax: &super::backend::ClassSyntax, lang: TargetLanguage) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
     let compartment_class = format!("{}Compartment", system.name);
@@ -3127,7 +3107,7 @@ while (self->__next_compartment != NULL) {{
     {sys}_Compartment* next_compartment = self->__next_compartment;
     self->__next_compartment = NULL;
     // Exit current state (with exit_args from current compartment)
-    {sys}_FrameEvent* exit_event = {sys}_FrameEvent_new("<$", self->__compartment->exit_args);
+    {sys}_FrameEvent* exit_event = {sys}_FrameEvent_new("<$", self->__compartment->exit_args, 0);
     {sys}_router(self, exit_event);
     {sys}_FrameEvent_destroy(exit_event);
     // Switch to new compartment
@@ -3135,7 +3115,7 @@ while (self->__next_compartment != NULL) {{
     self->__compartment = next_compartment;
     // Enter new state (or forward event)
     if (next_compartment->forward_event == NULL) {{
-        {sys}_FrameEvent* enter_event = {sys}_FrameEvent_new("$>", self->__compartment->enter_args);
+        {sys}_FrameEvent* enter_event = {sys}_FrameEvent_new("$>", self->__compartment->enter_args, 0);
         {sys}_router(self, enter_event);
         {sys}_FrameEvent_destroy(enter_event);
     }} else {{
@@ -3148,7 +3128,7 @@ while (self->__next_compartment != NULL) {{
             {sys}_router(self, forward_event);
         }} else {{
             // Forwarding other event - send $> first, then forward
-            {sys}_FrameEvent* enter_event = {sys}_FrameEvent_new("$>", self->__compartment->enter_args);
+            {sys}_FrameEvent* enter_event = {sys}_FrameEvent_new("$>", self->__compartment->enter_args, 0);
             {sys}_router(self, enter_event);
             {sys}_FrameEvent_destroy(enter_event);
             {sys}_router(self, forward_event);
@@ -3942,12 +3922,6 @@ if self.has_method(handler_name):
         TargetLanguage::Graphviz => unreachable!(),
     }
 
-    // NOTE: _change_state method removed (->> operator is not supported)
-    // The ->> syntax should not compile in V4
-
-    // NOTE: Rust now uses kernel pattern like Python/TypeScript
-    // $>/$< events are handled via _state_X dispatch methods, not _enter/_exit dispatchers
-
     // Generate __push_transition method for Rust when there's a machine
     // Uses mem::replace to move the current compartment to the stack (no clone)
     if matches!(lang, TargetLanguage::Rust) && system.machine.is_some() {
@@ -4105,6 +4079,49 @@ use crate::frame_c::compiler::codegen::codegen_utils::{
             }
             _ => panic!("Expected Constructor node"),
         }
+    }
+
+    #[test]
+    fn test_init_references_param_exact_match() {
+        assert!(init_references_param("balance", &["balance".into()]));
+    }
+
+    #[test]
+    fn test_init_references_param_in_expression() {
+        assert!(init_references_param("balance + 10", &["balance".into()]));
+    }
+
+    #[test]
+    fn test_init_references_param_no_match() {
+        assert!(!init_references_param("0", &["balance".into()]));
+        assert!(!init_references_param("mutableListOf<>()", &["balance".into()]));
+    }
+
+    #[test]
+    fn test_init_references_param_member_access_not_matched() {
+        // Defaults.count should NOT match param "count" — it's a member access
+        assert!(!init_references_param("Defaults.count", &["count".into()]));
+        assert!(!init_references_param("obj.balance", &["balance".into()]));
+        assert!(!init_references_param("Config.DEFAULT_VALUE", &["DEFAULT_VALUE".into()]));
+    }
+
+    #[test]
+    fn test_init_references_param_method_on_param() {
+        // count.toString() SHOULD match — it's a method call on the param
+        assert!(init_references_param("count.toString()", &["count".into()]));
+    }
+
+    #[test]
+    fn test_init_references_param_substring_not_matched() {
+        // "rebalance" should NOT match param "balance"
+        assert!(!init_references_param("rebalance", &["balance".into()]));
+        assert!(!init_references_param("balanced_tree", &["balance".into()]));
+    }
+
+    #[test]
+    fn test_init_references_param_empty() {
+        assert!(!init_references_param("", &["balance".into()]));
+        assert!(!init_references_param("balance", &[]));
     }
 }
 
