@@ -97,6 +97,49 @@ fn init_references_param(init_text: &str, params: &[String]) -> bool {
     false
 }
 
+/// Prefix `$` to identifiers in `text` that match system param names.
+/// Used for PHP domain initializer expressions (e.g. `initial_balance` → `$initial_balance`).
+fn prefix_php_vars(text: &str, params: &[String]) -> String {
+    let mut result = text.to_string();
+    for p in params {
+        if p.is_empty() {
+            continue;
+        }
+        // Replace whole-word occurrences of `p` with `$p`
+        let mut new_result = String::new();
+        let bytes = result.as_bytes();
+        let pb = p.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if i + pb.len() <= bytes.len() {
+                if let Some(found) = bytes[i..].windows(pb.len()).position(|w| w == pb) {
+                    let start = i + found;
+                    let end = start + pb.len();
+                    let prev_ok = start == 0
+                        || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_' || bytes[start - 1] == b'$');
+                    let next_ok = end == bytes.len()
+                        || !(bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
+                    // Copy text before the match
+                    new_result.push_str(&result[i..start]);
+                    if prev_ok && next_ok {
+                        new_result.push('$');
+                    }
+                    new_result.push_str(p);
+                    i = end;
+                } else {
+                    new_result.push_str(&result[i..]);
+                    break;
+                }
+            } else {
+                new_result.push_str(&result[i..]);
+                break;
+            }
+        }
+        result = new_result;
+    }
+    result
+}
+
 /// Generate a complete CodegenNode for a Frame system
 ///
 /// # Arguments
@@ -949,8 +992,10 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             if init_refs_param {
                 if let Some(ref init_text) = init_text_opt {
                     let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Php);
+                    // Prefix $ to system param references in the init expression
+                    let init_with_php_vars = prefix_php_vars(&init_expanded, &sys_param_names_for_init);
                     body.push(CodegenNode::NativeBlock {
-                        code: format!("$this->{} = {};", domain_var.name, init_expanded),
+                        code: format!("$this->{} = {};", domain_var.name, init_with_php_vars),
                         span: None,
                     });
                 }
