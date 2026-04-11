@@ -2195,6 +2195,81 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 }
             }
         }
+        FrameSegmentKind::ReturnCall => {
+            // @@:return(expr) — set context return value AND exit handler.
+            // This is the "set + return" one-liner. The segment text is
+            // `@@:return(expr)` — extract the expression between parens.
+            let trimmed = segment_text.trim();
+            let expr = if let Some(start) = trimmed.find('(') {
+                let inner = &trimmed[start + 1..];
+                if let Some(end) = inner.rfind(')') {
+                    inner[..end].trim()
+                } else {
+                    inner.trim()
+                }
+            } else {
+                ""
+            };
+            let expanded_expr = expand_state_vars_in_expr(expr, lang, ctx);
+
+            // Emit: set return slot + native return.
+            // The splicer provides the leading indent for the first line
+            // (from the native text before the @@ segment). We do NOT
+            // add indent_str to the first line. The return on the next
+            // line does need indent_str since it's a new line.
+            let set_code = match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript =>
+                    format!("self._context_stack[-1]._return = {}", expanded_expr),
+                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript =>
+                    format!("this._context_stack[this._context_stack.length - 1]._return = {};", expanded_expr),
+                TargetLanguage::C =>
+                    format!("{}_CTX(self)->_return = (void*)(intptr_t)({});", ctx.system_name, expanded_expr),
+                TargetLanguage::Rust => {
+                    let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
+                        format!("String::from({})", expanded_expr.trim())
+                    } else {
+                        expanded_expr.clone()
+                    };
+                    format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", boxed_expr, indent_str)
+                }
+                TargetLanguage::Cpp =>
+                    format!("_context_stack.back()._return = std::any({});", expanded_expr),
+                TargetLanguage::Java =>
+                    format!("_context_stack.get(_context_stack.size() - 1)._return = {};", expanded_expr),
+                TargetLanguage::Kotlin =>
+                    format!("_context_stack[_context_stack.size - 1]._return = {}", expanded_expr),
+                TargetLanguage::Swift =>
+                    format!("_context_stack[_context_stack.count - 1]._return = {}", expanded_expr),
+                TargetLanguage::CSharp =>
+                    format!("_context_stack[_context_stack.Count - 1]._return = {};", expanded_expr),
+                TargetLanguage::Go =>
+                    format!("s._context_stack[len(s._context_stack)-1]._return = {}", expanded_expr),
+                TargetLanguage::Php =>
+                    format!("$this->_context_stack[count($this->_context_stack) - 1]->_return = {};", expanded_expr),
+                TargetLanguage::Ruby =>
+                    format!("@_context_stack[@_context_stack.length - 1]._return = {}", expanded_expr),
+                TargetLanguage::Lua =>
+                    format!("self._context_stack[#self._context_stack]._return = {}", expanded_expr),
+                TargetLanguage::Erlang => {
+                    let erl_expr = expanded_expr.replace("self.", "Data#data.");
+                    format!("__ReturnVal = {}", erl_expr)
+                }
+                TargetLanguage::Graphviz => unreachable!(),
+            };
+
+            // Append native return on a new line with proper indent
+            let ret_code = match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby =>
+                    format!("\n{}return", indent_str),
+                TargetLanguage::Lua =>
+                    format!("\n{}return", indent_str),
+                TargetLanguage::Erlang => String::new(),
+                _ =>
+                    format!("\n{}return;", indent_str),
+            };
+
+            format!("{}{}", set_code, ret_code)
+        }
         FrameSegmentKind::ReturnStatement => {
             // Native return keyword detected in handler body.
             // Extract expression after "return" (if any).

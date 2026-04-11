@@ -89,7 +89,7 @@ include!("expr_scanner.gen.rs");
 
         $ParseReturn {
             $>() {
-                // @@:return — check for assignment, optionally create ExprScanner PDA
+                // @@:return — check for assignment, call form, or bare read
                 let mut i = self.pos;
                 let end = self.end;
                 let bytes = &self.bytes;
@@ -99,7 +99,22 @@ include!("expr_scanner.gen.rs");
                     i += 1;
                 }
 
-                if i < end && bytes[i] == b'=' && (i + 1 >= end || bytes[i + 1] != b'=') {
+                if i < end && bytes[i] == b'(' {
+                    // @@:return(expr) — set return value AND exit handler.
+                    // Scan balanced parens to find matching ')'.
+                    let mut depth: usize = 1;
+                    i += 1; // Skip opening '('
+                    while i < end && depth > 0 {
+                        if bytes[i] == b'(' { depth += 1; }
+                        if bytes[i] == b')' { depth -= 1; }
+                        if depth > 0 { i += 1; }
+                    }
+                    if depth == 0 { i += 1; } // Skip closing ')'
+                    self.result_end = i;
+                    self.result_kind = 9; // ReturnCall
+                    self.has_result = true;
+                    -> $Done
+                } else if i < end && bytes[i] == b'=' && (i + 1 >= end || bytes[i + 1] != b'=') {
                     // @@:return = <expr> — create ExprScanner sub-machine
                     i += 1; // Skip '='
                     let mut expr = ExprScannerFsm::new();
@@ -109,12 +124,17 @@ include!("expr_scanner.gen.rs");
                     expr.do_scan();
                     i = expr.result_end;
                     // expr is destroyed here (state manager pattern)
+                    self.result_end = i;
+                    self.result_kind = 2; // ContextReturn
+                    self.has_result = true;
+                    -> $Done
+                } else {
+                    // @@:return (bare read) — rvalue access to return slot
+                    self.result_end = i;
+                    self.result_kind = 2; // ContextReturn (read mode)
+                    self.has_result = true;
+                    -> $Done
                 }
-
-                self.result_end = i;
-                self.result_kind = 2; // ContextReturn
-                self.has_result = true;
-                -> $Done
             }
         }
 

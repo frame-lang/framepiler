@@ -253,6 +253,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         6 => FrameSegmentKind::ContextParams,
                         7 => FrameSegmentKind::TaggedInstantiation,
                         8 => FrameSegmentKind::ContextReturnExpr,
+                        9 => FrameSegmentKind::ReturnCall,
                         _ => FrameSegmentKind::ContextReturn, // shouldn't happen
                     };
                     let mut seg_end = parser.result_end;
@@ -302,7 +303,8 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     // because their expansions emit a single statement
                     // and the splicer's leading native text already
                     // carries the correct indentation.
-                    let computed_indent = if kind == FrameSegmentKind::ContextReturnExpr {
+                    let computed_indent = if kind == FrameSegmentKind::ContextReturnExpr
+                        || kind == FrameSegmentKind::ReturnCall {
                         let mut line_start = ctx_start;
                         while line_start > open_brace_index + 1
                             && bytes[line_start - 1] != b'\n'

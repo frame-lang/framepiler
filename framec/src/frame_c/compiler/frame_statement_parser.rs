@@ -36,6 +36,7 @@ impl FrameStatementParser {
             FrameSegmentKind::ContextDataAssign |
             FrameSegmentKind::ContextParams |
             FrameSegmentKind::TaggedInstantiation |
+            FrameSegmentKind::ReturnCall |
             FrameSegmentKind::ReturnStatement => {
                 Err(ParseError::err(ParseErrorKind::InvalidHead, "context/tagged/return syntax handled by splicer"))
             }
