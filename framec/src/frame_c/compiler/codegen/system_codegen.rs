@@ -3131,7 +3131,7 @@ while (self->__next_compartment != NULL) {{
     {sys}_router(self, exit_event);
     {sys}_FrameEvent_destroy(exit_event);
     // Switch to new compartment
-    {sys}_Compartment_destroy(self->__compartment);
+    {sys}_Compartment_unref(self->__compartment);
     self->__compartment = next_compartment;
     // Enter new state (or forward event)
     if (next_compartment->forward_event == NULL) {{
@@ -3204,8 +3204,16 @@ while (self->__next_compartment != NULL) {{
                 return_type: None,
                 body: vec![CodegenNode::NativeBlock {
                     code: format!(
-                        r#"if (self->__compartment) {sys}_Compartment_destroy(self->__compartment);
-if (self->_state_stack) {sys}_FrameVec_destroy(self->_state_stack);
+                        r#"// Unref current compartment (may free if not on stack)
+if (self->__compartment) {sys}_Compartment_unref(self->__compartment);
+if (self->__next_compartment) {sys}_Compartment_unref(self->__next_compartment);
+// Unref all state stack entries
+if (self->_state_stack) {{
+    for (int __i = 0; __i < self->_state_stack->size; __i++) {{
+        {sys}_Compartment_unref(({sys}_Compartment*)self->_state_stack->items[__i]);
+    }}
+    {sys}_FrameVec_destroy(self->_state_stack);
+}}
 if (self->_context_stack) {sys}_FrameVec_destroy(self->_context_stack);
 free(self);"#,
                         sys = sys

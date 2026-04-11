@@ -656,7 +656,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // Create new compartment
                         code.push_str(&format!("{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n", indent_str, ctx.system_name, ctx.system_name, target));
                         if ctx.parent_state.is_some() {
-                            code.push_str(&format!("{}__compartment->parent_compartment = self->__compartment;\n", indent_str));
+                            code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_ref(self->__compartment);\n", indent_str, ctx.system_name));
                         }
 
                         // Set state_args if present (split by comma for positional args)
@@ -1169,7 +1169,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     let mut code = String::new();
                     code.push_str(&format!("{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n", indent_str, ctx.system_name, ctx.system_name, target));
                     if ctx.parent_state.is_some() {
-                        code.push_str(&format!("{}__compartment->parent_compartment = self->__compartment;\n", indent_str));
+                        code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_ref(self->__compartment);\n", indent_str, ctx.system_name));
                     }
                     code.push_str(&format!("{}__compartment->forward_event = __e;\n", indent_str));
                     code.push_str(&format!("{}{}_transition(self, __compartment);\n", indent_str, ctx.system_name));
@@ -1381,12 +1381,11 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     }
                 }
                 TargetLanguage::C => {
-                    // C: save pointer. On push-with-transition the
-                    // transition installs a new Compartment_new(), so the
-                    // old pointer on the stack is exclusively owned by the
-                    // stack. System_destroy walks and frees all entries.
-                    let push_code = format!("{}{}_FrameVec_push(self->_state_stack, self->__compartment);",
-                        indent_str, ctx.system_name);
+                    // C: save reference via ref count increment. The stack
+                    // holds a ref'd pointer. The kernel's _unref on
+                    // transition won't free it while the stack holds a ref.
+                    let push_code = format!("{}{}_FrameVec_push(self->_state_stack, {}_Compartment_ref(self->__compartment));",
+                        indent_str, ctx.system_name, ctx.system_name);
                     if !target.is_empty() {
                         format!("{}\n{}{}_transition(self, {}_Compartment_new(\"{}\"));",
                             push_code, indent_str, ctx.system_name, ctx.system_name, target)

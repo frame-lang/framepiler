@@ -1606,6 +1606,7 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!("    {}_FrameDict* exit_args;\n", sys));
     code.push_str(&format!("    {}_FrameEvent* forward_event;\n", sys));
     code.push_str(&format!("    struct {}_Compartment* parent_compartment;\n", sys));
+    code.push_str("    int _ref_count;\n");
     code.push_str(&format!("}} {}_Compartment;\n\n", sys));
 
     // Compartment_new
@@ -1618,7 +1619,29 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!("    c->exit_args = {}_FrameDict_new();\n", sys));
     code.push_str("    c->forward_event = NULL;\n");
     code.push_str("    c->parent_compartment = NULL;\n");
+    code.push_str("    c->_ref_count = 1;\n");
     code.push_str("    return c;\n");
+    code.push_str("}\n\n");
+
+    // Compartment_ref — increment reference count
+    code.push_str(&format!("static {sys}_Compartment* {sys}_Compartment_ref({sys}_Compartment* c) {{\n"));
+    code.push_str("    if (c) c->_ref_count++;\n");
+    code.push_str("    return c;\n");
+    code.push_str("}\n\n");
+
+    // Compartment_unref — decrement reference count, destroy when zero
+    code.push_str(&format!("static void {sys}_Compartment_unref({sys}_Compartment* c);\n"));
+    code.push_str(&format!("static void {sys}_Compartment_unref({sys}_Compartment* c) {{\n"));
+    code.push_str("    if (c == NULL) return;\n");
+    code.push_str("    c->_ref_count--;\n");
+    code.push_str("    if (c->_ref_count <= 0) {\n");
+    code.push_str(&format!("        {sys}_Compartment_unref(c->parent_compartment);\n"));
+    code.push_str(&format!("        {sys}_FrameDict_destroy(c->state_args);\n"));
+    code.push_str(&format!("        {sys}_FrameDict_destroy(c->state_vars);\n"));
+    code.push_str(&format!("        {sys}_FrameDict_destroy(c->enter_args);\n"));
+    code.push_str(&format!("        {sys}_FrameDict_destroy(c->exit_args);\n"));
+    code.push_str("        free(c);\n");
+    code.push_str("    }\n");
     code.push_str("}\n\n");
 
     // Compartment_copy
