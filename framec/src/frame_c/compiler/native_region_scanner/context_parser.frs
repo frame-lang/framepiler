@@ -5,8 +5,8 @@
 // Dispatches on the character after @@ to parse:
 //   @@:return [= expr] → ContextReturn (kind=2)
 //   @@:event           → ContextEvent (kind=3)
-//   @@:data[key] [= e] → ContextData (kind=4) or ContextDataAssign (kind=5)
-//   @@:params[key]     → ContextParams (kind=6)
+//   @@:data.key [= e]  → ContextData (kind=4) or ContextDataAssign (kind=5)
+//   @@:params.key      → ContextParams (kind=6)
 //   @@SystemName()     → TaggedInstantiation (kind=7)
 //   @@:(expr)          → ContextReturnExpr (kind=8)
 //   other              → no match (has_result=false)
@@ -182,18 +182,16 @@ include!("expr_scanner.gen.rs");
 
         $ParseData {
             $>() {
-                // @@:data[key] or @@:data[key] = expr
+                // @@:data.key or @@:data.key = expr
                 let mut i = self.pos;
                 let end = self.end;
                 let bytes = &self.bytes;
 
-                // Scan [key]
-                if i < end && bytes[i] == b'[' {
-                    while i < end && bytes[i] != b']' {
+                // Scan .key (dot + identifier)
+                if i < end && bytes[i] == b'.' {
+                    i += 1; // Skip '.'
+                    while i < end && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                         i += 1;
-                    }
-                    if i < end {
-                        i += 1; // Skip ']'
                     }
                 }
 
@@ -226,17 +224,16 @@ include!("expr_scanner.gen.rs");
 
         $ParseParams {
             $>() {
-                // @@:params[key]
+                // @@:params.key — dot-accessor for interface parameter
                 let mut i = self.pos;
                 let end = self.end;
                 let bytes = &self.bytes;
 
-                if i < end && bytes[i] == b'[' {
-                    while i < end && bytes[i] != b']' {
+                if i < end && bytes[i] == b'.' {
+                    i += 1; // Skip '.'
+                    // Scan identifier
+                    while i < end && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                         i += 1;
-                    }
-                    if i < end {
-                        i += 1; // Skip ']'
                     }
                 }
 

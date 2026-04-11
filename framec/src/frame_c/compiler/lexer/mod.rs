@@ -69,8 +69,8 @@ pub enum Token {
     // ===== Context Syntax =====
     ContextReturn,           // "@@:return"
     ContextEvent,            // "@@:event"
-    ContextData(String),     // "@@:data[key]"
-    ContextParams(String),   // "@@:params[key]"
+    ContextData(String),     // "@@:data.key"
+    ContextParams(String),   // "@@:params.key"
 
     // ===== Delimiters =====
     LBrace,              // "{"
@@ -900,13 +900,13 @@ impl<'a> Lexer<'a> {
                 && &self.source[self.cursor..self.cursor + 4] == b"data"
             {
                 self.cursor += 4;
-                let key = self.scan_bracket_key(end);
+                let key = self.scan_dot_key(end);
                 self.emit(Token::ContextData(key), start, self.cursor);
             } else if self.cursor + 5 < end
                 && &self.source[self.cursor..self.cursor + 6] == b"params"
             {
                 self.cursor += 6;
-                let key = self.scan_bracket_key(end);
+                let key = self.scan_dot_key(end);
                 self.emit(Token::ContextParams(key), start, self.cursor);
             } else {
                 // Unknown @@: variant — emit as native
@@ -1179,20 +1179,14 @@ impl<'a> Lexer<'a> {
         String::from_utf8_lossy(&self.source[start..self.cursor]).to_string()
     }
 
-    fn scan_bracket_key(&mut self, end: usize) -> String {
-        if self.cursor < end && self.source[self.cursor] == b'[' {
-            self.cursor += 1; // Skip [
+    fn scan_dot_key(&mut self, end: usize) -> String {
+        if self.cursor < end && self.source[self.cursor] == b'.' {
+            self.cursor += 1; // Skip .
             let key_start = self.cursor;
-            while self.cursor < end && self.source[self.cursor] != b']' {
+            while self.cursor < end && (self.source[self.cursor].is_ascii_alphanumeric() || self.source[self.cursor] == b'_') {
                 self.cursor += 1;
             }
-            let key = String::from_utf8_lossy(
-                &self.source[key_start..self.cursor]
-            ).to_string();
-            if self.cursor < end {
-                self.cursor += 1; // Skip ]
-            }
-            key
+            String::from_utf8_lossy(&self.source[key_start..self.cursor]).to_string()
         } else {
             String::new()
         }
@@ -1572,7 +1566,7 @@ mod tests {
 
     #[test]
     fn test_native_context_data() {
-        let src = b"v = @@:data[mykey]\n";
+        let src = b"v = @@:data.mykey\n";
         let mut lexer = make_lexer(src);
         lexer.enter_native_mode(src.len());
 
@@ -1754,7 +1748,7 @@ mod tests {
 
     #[test]
     fn test_context_params() {
-        let src = b"v = @@:params[age]\n";
+        let src = b"v = @@:params.age\n";
         let mut lexer = make_lexer(src);
         lexer.enter_native_mode(src.len());
 

@@ -1987,44 +1987,41 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             }
         }
         FrameSegmentKind::ContextData => {
-            // @@:data[key] - call-scoped data (read)
-            // Extract key from "@@:data[key]" — key includes user quotes (e.g. 'key' or "key")
-            let key = extract_bracket_key(&segment_text, "@@:data");
-            let bare_key = key.trim_matches('"').trim_matches('\'');
+            // @@:data.key - call-scoped data (read)
+            let key = extract_dot_key(&segment_text, "@@:data");
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1]._data[{}]", key),
-                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1]._data[{}]", key),
-                TargetLanguage::C => format!("{}_DATA(self, \"{}\")", ctx.system_name, bare_key),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1]._data[\"{}\"]", key),
+                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1]._data[\"{}\"]", key),
+                TargetLanguage::C => format!("{}_DATA(self, \"{}\")", ctx.system_name, key),
                 TargetLanguage::Rust => {
-                    format!("self._context_stack.last().and_then(|ctx| ctx._data.get(\"{}\")).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default()", bare_key)
+                    format!("self._context_stack.last().and_then(|ctx| ctx._data.get(\"{}\")).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default()", key)
                 }
-                TargetLanguage::Cpp => format!("_context_stack.back()._data[\"{}\"]", bare_key),
-                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._data.get(\"{}\")", bare_key),
-                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._data[\"{}\"]", bare_key),
-                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._data[\"{}\"]", bare_key),
-                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._data[\"{}\"]", bare_key),
-                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._data[\"{}\"]", bare_key),
-                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_data[\"{}\"]", bare_key),
-                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._data[{}]", key),
-                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._data[{}]", key),
+                TargetLanguage::Cpp => format!("_context_stack.back()._data[\"{}\"]", key),
+                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._data.get(\"{}\")", key),
+                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._data[\"{}\"]", key),
+                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._data[\"{}\"]", key),
+                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._data[\"{}\"]", key),
+                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._data[\"{}\"]", key),
+                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_data[\"{}\"]", key),
+                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._data[\"{}\"]", key),
+                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._data[\"{}\"]", key),
                 TargetLanguage::Erlang => "undefined".to_string(), // gen_statem has no context data
                 TargetLanguage::Graphviz => unreachable!(),
             }
         }
         FrameSegmentKind::ContextDataAssign => {
             // @@:data[key] = expr - call-scoped data (assignment)
-            // Extract key and value from "@@:data[key] = expr;"
-            let key = extract_bracket_key(&segment_text, "@@:data");
-            let bare_key = key.trim_matches('"').trim_matches('\'');
+            // Extract key and value from "@@:data.key = expr;"
+            let key = extract_dot_key(&segment_text, "@@:data");
             // Find the = and extract the expression
             let trimmed = segment_text.trim();
             let eq_pos = trimmed.find('=').unwrap_or(trimmed.len());
             let expr = trimmed[eq_pos + 1..].trim().trim_end_matches(';').trim();
             let expanded_expr = expand_state_vars_in_expr(expr, lang, ctx);
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._context_stack[-1]._data[{}] = {}", indent_str, key, expanded_expr),
-                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._data[{}] = {};", indent_str, key, expanded_expr),
-                TargetLanguage::C => format!("{}{}_DATA_SET(self, \"{}\", {});", indent_str, ctx.system_name, bare_key, expanded_expr),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._context_stack[-1]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
+                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._data[\"{}\"] = {};", indent_str, key, expanded_expr),
+                TargetLanguage::C => format!("{}{}_DATA_SET(self, \"{}\", {});", indent_str, ctx.system_name, key, expanded_expr),
                 TargetLanguage::Rust => {
                     // Wrap string literals: "x" is &str but downcast expects String
                     let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
@@ -2032,41 +2029,39 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     } else {
                         expanded_expr.clone()
                     };
-                    format!("{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._data.insert(\"{}\".to_string(), Box::new({}) as Box<dyn std::any::Any>); }}", indent_str, bare_key, boxed_expr)
+                    format!("{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._data.insert(\"{}\".to_string(), Box::new({}) as Box<dyn std::any::Any>); }}", indent_str, key, boxed_expr)
                 }
-                TargetLanguage::Cpp => format!("{}_context_stack.back()._data[\"{}\"] = {};", indent_str, bare_key, expanded_expr),
-                TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._data.put(\"{}\", {});", indent_str, bare_key, expanded_expr),
-                TargetLanguage::Kotlin => format!("{}_context_stack[_context_stack.size - 1]._data[\"{}\"] = {}", indent_str, bare_key, expanded_expr),
-                TargetLanguage::Swift => format!("{}_context_stack[_context_stack.count - 1]._data[\"{}\"] = {}", indent_str, bare_key, expanded_expr),
-                TargetLanguage::CSharp => format!("{}_context_stack[_context_stack.Count - 1]._data[\"{}\"] = {};", indent_str, bare_key, expanded_expr),
-                TargetLanguage::Go => format!("{}s._context_stack[len(s._context_stack)-1]._data[\"{}\"] = {}", indent_str, bare_key, expanded_expr),
-                TargetLanguage::Php => format!("{}$this->_context_stack[count($this->_context_stack) - 1]->_data[\"{}\"] = {};", indent_str, bare_key, expanded_expr),
-                TargetLanguage::Ruby => format!("{}@_context_stack[@_context_stack.length - 1]._data[\"{}\"] = {}", indent_str, bare_key, expanded_expr),
-                TargetLanguage::Lua => format!("{}self._context_stack[#self._context_stack]._data[\"{}\"] = {}", indent_str, bare_key, expanded_expr),
+                TargetLanguage::Cpp => format!("{}_context_stack.back()._data[\"{}\"] = {};", indent_str, key, expanded_expr),
+                TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._data.put(\"{}\", {});", indent_str, key, expanded_expr),
+                TargetLanguage::Kotlin => format!("{}_context_stack[_context_stack.size - 1]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
+                TargetLanguage::Swift => format!("{}_context_stack[_context_stack.count - 1]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
+                TargetLanguage::CSharp => format!("{}_context_stack[_context_stack.Count - 1]._data[\"{}\"] = {};", indent_str, key, expanded_expr),
+                TargetLanguage::Go => format!("{}s._context_stack[len(s._context_stack)-1]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
+                TargetLanguage::Php => format!("{}$this->_context_stack[count($this->_context_stack) - 1]->_data[\"{}\"] = {};", indent_str, key, expanded_expr),
+                TargetLanguage::Ruby => format!("{}@_context_stack[@_context_stack.length - 1]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
+                TargetLanguage::Lua => format!("{}self._context_stack[#self._context_stack]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
                 TargetLanguage::Erlang => format!("{}ok", indent_str), // gen_statem has no context data
                 TargetLanguage::Graphviz => unreachable!(),
             }
         }
         FrameSegmentKind::ContextParams => {
-            // @@:params[key] - explicit parameter access
-            // Extract key from "@@:params[key]" — key includes user quotes
-            let key = extract_bracket_key(&segment_text, "@@:params");
-            let bare_key = key.trim_matches('"').trim_matches('\'');
+            // @@:params.key - dot-accessor for interface parameter
+            let key = extract_dot_key(&segment_text, "@@:params");
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1].event._parameters[{}]", key),
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", key),
-                TargetLanguage::Dart => format!("this._context_stack[this._context_stack.length - 1].event._parameters![{}]", key),
-                TargetLanguage::C => bare_key.to_string(),
-                TargetLanguage::Rust => bare_key.to_string(),
-                TargetLanguage::Cpp => bare_key.to_string(),
-                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get(\"{}\")", bare_key),
-                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._event._parameters[\"{}\"]", bare_key),
-                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._event._parameters[\"{}\"]", bare_key),
-                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._event._parameters[\"{}\"]", bare_key),
-                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._event._parameters[\"{}\"]", bare_key),
-                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_event->_parameters[\"{}\"]", bare_key),
-                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._event._parameters[\"{}\"]", bare_key),
-                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._event._parameters[\"{}\"]", bare_key),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1].event._parameters[\"{}\"]", key),
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[\"{}\"]", key),
+                TargetLanguage::Dart => format!("this._context_stack[this._context_stack.length - 1].event._parameters![\"{}\"]", key),
+                TargetLanguage::C => key.to_string(),
+                TargetLanguage::Rust => key.to_string(),
+                TargetLanguage::Cpp => key.to_string(),
+                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get(\"{}\")", key),
+                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._event._parameters[\"{}\"]", key),
+                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._event._parameters[\"{}\"]", key),
+                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._event._parameters[\"{}\"]", key),
+                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._event._parameters[\"{}\"]", key),
+                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_event->_parameters[\"{}\"]", key),
+                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._event._parameters[\"{}\"]", key),
+                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._event._parameters[\"{}\"]", key),
                 TargetLanguage::Erlang => "undefined".to_string(), // params accessed as variables directly
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -2291,12 +2286,15 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 /// Extract bracketed key from syntax like "@@:data[key]" or "@@:params[key]"
 /// Returns the raw content between [ and ] — including any user-supplied quotes.
 /// For languages that need a bare key (C, Rust), call .trim_matches on the result.
-pub(crate) fn extract_bracket_key(text: &str, prefix: &str) -> String {
+/// Extract the key from a dot-accessor: `@@:params.key` → `key`
+pub(crate) fn extract_dot_key(text: &str, prefix: &str) -> String {
     if let Some(rest) = text.strip_prefix(prefix) {
-        if let Some(start) = rest.find('[') {
-            if let Some(end) = rest.find(']') {
-                return rest[start + 1..end].trim().to_string();
-            }
+        if let Some(rest) = rest.strip_prefix('.') {
+            // Extract only the identifier (alphanumeric + underscore)
+            let key: String = rest.chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            return key;
         }
     }
     "".to_string()
