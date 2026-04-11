@@ -407,12 +407,6 @@ impl OutputBlockParserFsm {
             // make it through. Without this, `return X` collapsed to
             // bare `return` and the X token was stripped — Lua tests
             // that returned a value silently returned nothing.
-            //
-            // KEEP IN SYNC WITH output_block_parser.gen.rs lines
-            // 410-449 — that file is hand-edited until the next
-            // regen, and the fix MUST live in both. See the
-            // "Regenerating output_block_parser.gen.rs" section in
-            // adding-a-backend.md for the workflow.
             if kind == 8 && !after_return {
                 self.result.push_str(&text);
                 // Walk subsequent tokens until newline or block close.

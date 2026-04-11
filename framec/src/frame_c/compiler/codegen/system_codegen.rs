@@ -82,7 +82,7 @@ fn init_references_param(init_text: &str, params: &[String]) -> bool {
                 let start = i + found;
                 let end = start + pb.len();
                 let prev_ok = start == 0
-                    || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
+                    || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_' || bytes[start - 1] == b'.');
                 let next_ok = end == bytes.len()
                     || !(bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
                 if prev_ok && next_ok {
