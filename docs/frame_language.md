@@ -475,11 +475,14 @@ See [System Context](#system-context) for full semantics.
 
 | Syntax | Effect |
 |--------|--------|
-| `@@:(expr)` | Set return value (concise) |
-| `@@:return = expr` | Set return value (explicit) |
+| `@@:(expr)` | Set return value only (concise) |
+| `@@:return = expr` | Set return value only (explicit long form) |
+| **`@@:return(expr)`** | **Set return value AND exit handler (one statement)** |
 | `return` | Exit the handler (native — valid everywhere) |
 | `return expr` | Native return — in handlers, value is lost (W415) |
 | `return @@:(expr)` | Error E408 — cannot combine |
+
+**`@@:return(expr)`** is the recommended form when you want to set the return value and immediately exit. It replaces the common two-statement pattern `@@:(expr)` + `return`. The expression inside the parens is evaluated, stored in the context return slot, and a native `return` is emitted — all in one Frame statement.
 
 ---
 
