@@ -375,30 +375,35 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
             Field::new("event").with_type(&event_class).with_visibility(Visibility::Public),
             Field::new("_return").with_type("any").with_visibility(Visibility::Public),
             Field::new("_data").with_type("Record<string, any>").with_visibility(Visibility::Public),
+            Field::new("_transitioned").with_type("boolean").with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Dart) {
         vec![
             Field::new("event").with_type(&event_class).with_visibility(Visibility::Public),
             Field::new("_return").with_type("dynamic").with_visibility(Visibility::Public),
             Field::new("_data").with_type("Map<String, dynamic>").with_visibility(Visibility::Public),
+            Field::new("_transitioned").with_type("bool").with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Php) {
         vec![
             Field::new("_event").with_visibility(Visibility::Public),
             Field::new("_return").with_visibility(Visibility::Public),
             Field::new("_data").with_visibility(Visibility::Public),
+            Field::new("_transitioned").with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Ruby) {
         vec![
             Field::new("_event").with_visibility(Visibility::Public),
             Field::new("_return").with_visibility(Visibility::Public),
             Field::new("_data").with_visibility(Visibility::Public),
+            Field::new("_transitioned").with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::GDScript) {
         vec![
             Field::new("event").with_visibility(Visibility::Public),
             Field::new("_return").with_visibility(Visibility::Public),
             Field::new("_data").with_visibility(Visibility::Public),
+            Field::new("_transitioned").with_visibility(Visibility::Public),
         ]
     } else {
         vec![]
