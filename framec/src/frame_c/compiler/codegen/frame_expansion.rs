@@ -2343,6 +2343,13 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Graphviz => unreachable!(),
             };
 
+            // Add statement terminator for languages that require it
+            let terminator = match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby
+                    | TargetLanguage::Lua => "",
+                _ => ";",
+            };
+
             // Generate the transition guard check
             let guard = match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript =>
@@ -2377,7 +2384,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Graphviz => unreachable!(),
             };
 
-            format!("{}{}", call_expr, guard)
+            format!("{}{}{}", call_expr, terminator, guard)
         }
         FrameSegmentKind::ReturnStatement => {
             // Native return keyword detected in handler body.
