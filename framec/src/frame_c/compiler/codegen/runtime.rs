@@ -277,7 +277,7 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
 
     // Constructor body: initialize fields
     let constructor_body = match lang {
-        TargetLanguage::Python3 | TargetLanguage::GDScript => vec![
+        TargetLanguage::Python3 => vec![
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "event"),
                 CodegenNode::ident("event"),
@@ -293,6 +293,24 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "_transitioned"),
                 CodegenNode::ident("False"),
+            ),
+        ],
+        TargetLanguage::GDScript => vec![
+            CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "event"),
+                CodegenNode::ident("event"),
+            ),
+            CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "_return"),
+                CodegenNode::ident("default_return"),
+            ),
+            CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "_data"),
+                CodegenNode::Dict(vec![]),
+            ),
+            CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "_transitioned"),
+                CodegenNode::ident("false"),
             ),
         ],
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => vec![
