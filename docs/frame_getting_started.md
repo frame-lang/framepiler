@@ -1507,27 +1507,32 @@ The calling handler's `@@:event`, `@@:params`, `@@:return`, and `@@:data` are al
 
 ### State Sensitivity
 
-Because `@@:self.method()` goes through the kernel, the handler that executes depends on the **current state at the time of the call**:
+Because `@@:self.method()` goes through the kernel, the handler that executes depends on the **current state at the time of the call**. If a transition has been deferred, the self-call dispatches to the new state's handler:
 
 ```
-$Setup {
-    initialize() {
+$Calibrating {
+    run_calibration() {
+        // Self-call before transition — dispatches to $Calibrating's handler
+        baseline = @@:self.reading()    // returns "raw"
+
+        // Self-call in an action also dispatches to current state
+        self.do_calibration()
+
         -> $Ready
-        // After transition, we're in $Ready
-        s = @@:self.status()    // dispatches to $Ready's handler
-        print(s)                // prints "ready", not "setting up"
     }
-    status(): str {
-        @@:("setting up")
+    reading(): str {
+        @@:("raw")
     }
 }
 
 $Ready {
-    status(): str {
-        @@:("ready")
+    reading(): str {
+        @@:("calibrated")
     }
 }
 ```
+
+After `run_calibration()` returns, the system transitions to `$Ready`. A subsequent external call to `reading()` would dispatch to `$Ready`'s handler and return `"calibrated"`.
 
 ### Try It
 

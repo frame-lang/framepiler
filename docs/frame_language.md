@@ -926,18 +926,17 @@ import logging
         $Idle {
             submit(order) {
                 logging.info("Received order")
-                $.order_data = order
+                self.order_data = order
                 -> $Validating
             }
         }
 
         $Validating {
-            $.order_data = None
             $.attempts: int = 0
 
             $>() {
                 $.attempts = $.attempts + 1
-                if validate($.order_data):
+                if validate(self.order_data):
                     -> $Processing
                 else:
                     if $.attempts >= self.max_retries:
@@ -945,7 +944,7 @@ import logging
             }
 
             getStatus(): str {
-                return "validating"
+                @@:("validating")
             }
         }
 
@@ -959,7 +958,7 @@ import logging
             }
 
             getStatus(): str {
-                return "processing"
+                @@:("processing")
             }
         }
 
@@ -982,6 +981,7 @@ import logging
 
     domain:
         max_retries: int = 3
+        order_data = None
 }
 
 if __name__ == '__main__':
