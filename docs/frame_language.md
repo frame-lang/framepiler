@@ -346,7 +346,7 @@ actions:
     }
 ```
 
-**Can access:** domain variables, `@@:return`, `@@:params.x`, `@@:event`, `@@:data.key`, `@@:self`
+**Can access:** domain variables, `@@:return`, `@@:params.x`, `@@:event`, `@@:data.key`, `@@:self.method()`, `@@:system.state`
 
 **Cannot access (E401):** `-> $State`, `=> $^`, `push$`, `pop$`, `$.varName`
 
@@ -470,15 +470,16 @@ $.counter = <expr>      // write
 
 See [System Context](#system-context) for full semantics.
 
-### Self Reference — `@@:self`
+### Self & System Prefixes
 
 ```frame
-@@:self              // reference to this system instance
 @@:self.method(args) // call own interface method (reentrant)
 @@:system.state      // current state name (read-only)
 ```
 
-See [Self Reference](#self-reference-1) for full semantics.
+`@@:self` and `@@:system` are syntactic prefixes — neither is a first-class value. Bare `@@:self` (E603) and bare `@@:system` (E604) are errors.
+
+See [Self Reference](#self-reference-1) and [System Runtime](#system-runtime) for full semantics.
 
 **`return` is always native.** It exits the current function — it does NOT set `@@:return`. In event handlers, `return expr` silently loses the value (W415 warning). Use `@@:(expr)` or `@@:return = expr` to set return values.
 
@@ -584,18 +585,27 @@ Each interface call pushes its own context. Nested calls are isolated — inner 
 
 ## Self Reference
 
-`@@:self` is the reference to the system instance containing the current context. While contexts are transient, `@@:self` always resolves to the same persistent system instance regardless of how many contexts are stacked.
+`@@:self` is a syntactic prefix used to dispatch through the system's own interface. It is **not** a first-class value — bare `@@:self` is a compile error (E603). The only valid form is `@@:self.method(args)`.
 
 ### Self Accessors
 
 | Syntax | Meaning |
 |--------|---------|
-| `@@:self` | Reference to this system instance |
 | `@@:self.method(args)` | Reentrant interface call |
+| `@@:self` (bare) | **Error — E603.** Requires `.method(args)`. |
 
 ### Self Interface Call — `@@:self.method(args)`
 
 A system can call its own interface methods using `@@:self.<method>(args)`. This dispatches through the full kernel pipeline — FrameEvent construction, context push, router, state dispatch, handler execution, context pop — exactly as an external call would.
+
+#### Why `@@:self.method()` and not native `self.method()`?
+
+In OO target languages (Python, TypeScript, Rust, Java, Kotlin, Swift, C#, Ruby, PHP, Dart) a plain `self.method()` / `this.method()` inside a handler body *also* reaches the generated interface method and produces the same runtime behavior — the context-stack push/pop and deferred-transition semantics live in the generated interface wrapper, not in the `@@:self.` syntax.
+
+`@@:self.method(args)` is preferred for two reasons:
+
+1. **Static validation.** The validator checks that `method` exists in the `interface:` block with the right arity (E601/E602). Native calls bypass this.
+2. **Cross-backend portability.** In C and Erlang the handler scope has no `self`/`this` keyword; dispatch goes through a different mechanism. `@@:self.` abstracts that difference so the same Frame source compiles everywhere.
 
 ```frame
 $Active {
@@ -618,8 +628,8 @@ $Active {
 
 #### Restrictions
 
-- Only interface methods can be called via `@@:self`. Actions and operations are called directly using native syntax.
-- `@@:self` does not support calling constructors.
+- Only interface methods can be called via `@@:self.method()`. Actions and operations are called directly using native syntax.
+- `@@:self.method()` does not support calling constructors.
 
 #### Self-Call Validation
 
@@ -657,7 +667,7 @@ The generated interface method handles FrameEvent construction, context push/pop
 
 ### Current State — `@@:system.state`
 
-Returns the current state name as a string, without the `$` prefix. Read-only — assignment is an error (E603).
+Returns the current state name as a string, without the `$` prefix. Read-only — assignment is a parse error.
 
 ```frame
 $Processing {
@@ -671,7 +681,7 @@ $Processing {
 
 **Available in:** event handlers, enter/exit handlers, actions, non-static operations.
 
-**Not available in:** static operations (E604 — no system instance).
+**Not available in:** static operations (no system instance).
 
 ---
 
@@ -870,12 +880,13 @@ The framepiler validates at the assembler stage:
 | `@@:event` | Event name |
 | `@@:data.key` | Call-scoped data |
 
-### Self
+### Self & System
+
+Both `@@:self` and `@@:system` are syntactic prefixes. Bare forms are errors (E603 / E604).
 
 | Token | Meaning |
 |-------|---------|
-| `@@:self` | System instance reference |
-| `@@:self.method()` | Self interface call |
+| `@@:self.method()` | Self interface call (reentrant) |
 | `@@:system.state` | Current state name (read-only) |
 
 ---
@@ -921,6 +932,8 @@ The framepiler validates at the assembler stage:
 |------|------|-------------|
 | E601 | `unknown-iface-method` | `@@:self.method()` targets method not in `interface:` |
 | E602 | `self-call-arity` | Argument count does not match interface declaration |
+| E603 | `bare-self-reference` | Bare `@@:self` — must be `@@:self.method(args)` |
+| E604 | `bare-system-reference` | Bare `@@:system` — must be `@@:system.state` (or other member) |
 
 ### Warnings (W4xx, W6xx)
 

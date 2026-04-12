@@ -1176,8 +1176,8 @@ The framepiler substitutes Frame defaults for missing arguments and routes each 
     machine:
         $Active {
             calibrate(): str {
-                # @@:self dispatches through the full kernel pipeline.
-                # reading() executes in $Active, returns 42.0.
+                # @@:self.reading() dispatches through the full kernel pipeline.
+                # It executes in $Active, returns 42.0.
                 baseline = @@:self.reading()
                 self.offset = baseline * -1
                 @@:(f"calibrated: offset={self.offset}")

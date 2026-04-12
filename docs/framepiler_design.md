@@ -240,15 +240,14 @@ Recognition patterns:
 | `@@:event` | Context event |
 | `@@:data.` `<ident>` | Context data |
 | `@@:self.` `<ident>` `(` | Self interface call |
-| `@@:self.state` | Self state accessor |
-| `@@:self` | Self reference |
+| `@@:system.state` | Current state accessor |
 
 #### Self Interface Call Recognition
 
 The scanner detects `@@:self.<ident>(` as a self-interface-call. It then uses `balanced_paren_end()` to find the closing `)`, capturing the full argument list. The complete token `@@:self.<ident>(<args>)` is emitted as a `SelfInterfaceCall` region.
 
-The scanner distinguishes between accessors and calls by the presence of parentheses:
-- `@@:self.state` — no parens → accessor (expand to state name access)
+The scanner distinguishes between system accessors and self-calls by the prefix and parentheses:
+- `@@:system.state` — no parens → accessor (expand to state name access)
 - `@@:self.method()` — parens → self-call (expand to interface call)
 - `@@:self.method(a, b)` — parens with args → self-call with arguments
 

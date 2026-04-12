@@ -294,8 +294,8 @@ All `@@` accessors follow a uniform grammar:
 | `@@:return` | `self._context_stack[-1]._return` |
 | `@@:event` | `self._context_stack[-1].event._message` |
 | `@@:data.key` | `self._context_stack[-1]._data["key"]` |
-| `@@:self` | `self` |
-| `@@:self.state` | `self.__compartment.state` |
+| `@@:self.method(args)` | `self.method(args)` (generated interface call) |
+| `@@:system.state` | `self.__compartment.state` |
 
 ### Interface Method Pattern
 

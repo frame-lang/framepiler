@@ -1666,8 +1666,10 @@ When an interface method is called, Frame creates a *context* that handlers can 
 | `@@:return` | Get or set the return value |
 | `@@:event` | The name of the interface method that was called |
 | `@@:data.key` | Call-scoped data that persists across transitions |
-| `@@:self` | Reference to this system instance |
+| `@@:self.method()` | Reentrant call to own interface method |
 | `@@:system.state` | Current state name (read-only string) |
+
+`@@:self` and `@@:system` are **syntactic prefixes**, not values — bare use is an error (E603 / E604). Always chain a member: `@@:self.method()`, `@@:system.state`.
 
 #### Accessing Parameters
 
