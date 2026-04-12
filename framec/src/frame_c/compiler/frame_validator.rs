@@ -251,6 +251,21 @@ impl FrameValidator {
             let mut i = 0;
             while i + prefix.len() <= body.len() {
                 if &body[i..i + prefix.len()] == prefix {
+                    // Skip if inside a comment (# or // before this on the same line)
+                    let mut line_start = i;
+                    while line_start > 0 && body[line_start - 1] != b'\n' {
+                        line_start -= 1;
+                    }
+                    let line_prefix = &body[line_start..i];
+                    let in_comment = line_prefix.iter().enumerate().any(|(j, &b)| {
+                        b == b'#'
+                        || (b == b'/' && j + 1 < line_prefix.len() && line_prefix[j + 1] == b'/')
+                    });
+                    if in_comment {
+                        i += prefix.len();
+                        continue;
+                    }
+
                     let after = i + prefix.len();
                     // Skip if followed by `.member` — that's the chained form,
                     // validated elsewhere (E601/E602) or accepted (@@:system.state).
