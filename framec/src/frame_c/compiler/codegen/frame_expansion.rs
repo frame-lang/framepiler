@@ -302,9 +302,9 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 let state_args = extract_state_args(&segment_text);
 
                 // Expand state variable references in arguments
-                let exit_str = exit_args.map(|a| expand_state_vars_in_expr(&a, lang, ctx));
-                let enter_str = enter_args.map(|a| expand_state_vars_in_expr(&a, lang, ctx));
-                let state_str = state_args.map(|a| expand_state_vars_in_expr(&a, lang, ctx));
+                let exit_str = exit_args.map(|a| expand_expression(&a, lang, ctx));
+                let enter_str = enter_args.map(|a| expand_expression(&a, lang, ctx));
+                let state_str = state_args.map(|a| expand_expression(&a, lang, ctx));
 
                 // Get compartment class name from system name
                 let _compartment_class = format!("{}Compartment", ctx.system_name);
@@ -1674,7 +1674,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 ""
             };
             // Expand state vars in the expression
-            let expanded_expr = expand_state_vars_in_expr(expr, lang, ctx);
+            let expanded_expr = expand_expression(expr, lang, ctx);
 
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
@@ -1791,7 +1791,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 if eq_pos + 1 < trimmed.len() && trimmed.as_bytes().get(eq_pos + 1) != Some(&b'=') {
                     // Assignment: @@:return = expr
                     let expr = trimmed[eq_pos + 1..].trim().trim_end_matches(';').trim();
-                    let expanded_expr = expand_state_vars_in_expr(expr, lang, ctx);
+                    let expanded_expr = expand_expression(expr, lang, ctx);
                     match lang {
                         TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._context_stack[-1]._return = {}", indent_str, expanded_expr),
                         TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._return = {};", indent_str, expanded_expr),
@@ -1906,7 +1906,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             } else {
                 (trimmed.to_string(), false)
             };
-            let expanded_expr = expand_state_vars_in_expr(expr.trim(), lang, ctx);
+            let expanded_expr = expand_expression(expr.trim(), lang, ctx);
             // The assignment line uses an empty indent prefix because
             // the splicer always copies the source's leading whitespace
             // as native text immediately before the segment expansion.
@@ -2017,7 +2017,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             let trimmed = segment_text.trim();
             let eq_pos = trimmed.find('=').unwrap_or(trimmed.len());
             let expr = trimmed[eq_pos + 1..].trim().trim_end_matches(';').trim();
-            let expanded_expr = expand_state_vars_in_expr(expr, lang, ctx);
+            let expanded_expr = expand_expression(expr, lang, ctx);
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._context_stack[-1]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._data[\"{}\"] = {};", indent_str, key, expanded_expr),
@@ -2195,7 +2195,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             } else {
                 ""
             };
-            let expanded_expr = expand_state_vars_in_expr(expr, lang, ctx);
+            let expanded_expr = expand_expression(expr, lang, ctx);
 
             // Emit: set return slot + native return.
             // The splicer provides the leading indent for the first line
@@ -2457,9 +2457,68 @@ pub(crate) fn extract_state_var_name(text: &str) -> String {
 }
 
 /// Expand state variable references ($.varName) and context syntax (@@) in an expression string
-/// Uses compartment.state_vars for Python/TypeScript
+/// Expand all Frame segments within an expression string.
+///
+/// This is the proper way to handle nested Frame constructs inside
+/// expressions — e.g., `@@:(@@:params.a + @@:params.b)`. The expression
+/// text is wrapped in a synthetic handler body `{ expr }` and run through
+/// the full scanner pipeline. Each recognized Frame segment is expanded
+/// via `generate_frame_expansion`, and native text passes through.
+///
+/// This respects the pipeline boundary: scanning happens in the scanner,
+/// expansion happens in the expander. No ad-hoc string matching.
+pub(crate) fn expand_expression(expr: &str, lang: TargetLanguage, ctx: &HandlerContext) -> String {
+    // First expand state vars ($.x) which are handled by a dedicated function
+    let with_state_vars = expand_state_vars_in_expr(expr, lang, ctx);
+
+    // If no @@ constructs remain, return early
+    if !with_state_vars.contains("@@:") && !with_state_vars.contains("@@") {
+        return with_state_vars;
+    }
+
+    // Wrap expression in synthetic braces for the scanner
+    let synthetic_body = format!("{{{}}}", with_state_vars);
+    let body_bytes = synthetic_body.as_bytes();
+
+    // Run the scanner on the synthetic body
+    let mut scanner = get_native_scanner(lang);
+    let scan_result = match scanner.scan(body_bytes, 0) {
+        Ok(r) => r,
+        Err(_) => return with_state_vars,
+    };
+
+    if std::env::var("FRAME_DEBUG_EXPR").is_ok() {
+        eprintln!("[expand_expression] input='{}' regions={}", with_state_vars, scan_result.regions.len());
+        for (i, r) in scan_result.regions.iter().enumerate() {
+            match r {
+                Region::NativeText { span } => eprintln!("  [{}] NativeText {:?} = '{}'", i, span, String::from_utf8_lossy(&body_bytes[span.start..span.end])),
+                Region::FrameSegment { span, kind, .. } => eprintln!("  [{}] FrameSegment {:?} {:?} = '{}'", i, kind, span, String::from_utf8_lossy(&body_bytes[span.start..span.end])),
+            }
+        }
+    }
+
+    // Expand each Frame segment
+    let mut expansions = Vec::new();
+    for region in &scan_result.regions {
+        if let Region::FrameSegment { span, kind, indent: _ } = region {
+            let expansion = generate_frame_expansion(body_bytes, span, *kind, 0, lang, ctx);
+            expansions.push(expansion);
+        }
+    }
+
+    // Splice native text + expansions
+    let splicer = Splicer;
+    let spliced = splicer.splice(body_bytes, &scan_result.regions, &expansions);
+
+    // Remove synthetic braces and trim
+    let text = spliced.text.trim();
+    text.to_string()
+}
+
+/// Expand `$.varName` state variable references within an expression string.
+/// Uses compartment.state_vars for Python/TypeScript.
 /// For HSM: uses __sv_comp when ctx.use_sv_comp is true (navigates to correct parent compartment)
-pub(crate) fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerContext) -> String {
+fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerContext) -> String {
     let mut result = String::new();
     let bytes = expr.as_bytes();
     let mut i = 0;
@@ -2611,125 +2670,6 @@ pub(crate) fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             }
-        } else if i + 1 < bytes.len() && bytes[i] == b'@' && bytes[i + 1] == b'@' {
-            // Found @@ - context syntax
-            i += 2; // Skip "@@"
-            if i < bytes.len() && bytes[i] == b':' {
-                i += 1; // Skip ":"
-                // Check which context field
-                if i + 5 < bytes.len() && &bytes[i..i + 6] == b"return" {
-                    // @@:return
-                    i += 6;
-                    match lang {
-                        TargetLanguage::Python3 | TargetLanguage::GDScript => result.push_str("self._context_stack[-1]._return"),
-                        TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => result.push_str("this._context_stack[this._context_stack.length - 1]._return"),
-                        TargetLanguage::C => result.push_str(&format!("{}_RETURN(self)", ctx.system_name)),
-                        TargetLanguage::Rust => result.push_str("self._context_stack.last().and_then(|ctx| ctx._return.as_ref())"),
-                        TargetLanguage::Cpp => result.push_str("std::any_cast<std::string>(this->_context_stack.back()._return)"),
-                        TargetLanguage::Java => result.push_str("_context_stack.get(_context_stack.size() - 1)._return"),
-                        TargetLanguage::Kotlin => result.push_str("_context_stack[_context_stack.size - 1]._return"),
-                        TargetLanguage::Swift => result.push_str("_context_stack[_context_stack.count - 1]._return"),
-                        TargetLanguage::CSharp => result.push_str("_context_stack[_context_stack.Count - 1]._return"),
-                        TargetLanguage::Go => result.push_str("s.contextStack[len(s.contextStack)-1].returnVal"),
-                        TargetLanguage::Php => result.push_str("$this->_context_stack[count($this->_context_stack) - 1]->_return"),
-                        TargetLanguage::Ruby => result.push_str("@_context_stack[@_context_stack.length - 1]._return"),
-                        TargetLanguage::Lua => result.push_str("self._context_stack[#self._context_stack]._return"),
-                        TargetLanguage::Erlang => {}, // TODO: Erlang gen_statem codegen
-                        TargetLanguage::Graphviz => unreachable!(),
-                    }
-                } else if i + 4 < bytes.len() && &bytes[i..i + 5] == b"event" {
-                    // @@:event
-                    i += 5;
-                    match lang {
-                        TargetLanguage::Python3 | TargetLanguage::GDScript => result.push_str("self._context_stack[-1].event._message"),
-                        TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => result.push_str("this._context_stack[this._context_stack.length - 1].event._message"),
-                        TargetLanguage::C => result.push_str(&format!("{}_CTX(self)->event->_message", ctx.system_name)),
-                        // Rust: handlers receive __e as parameter, use it directly to avoid borrow conflicts
-                        TargetLanguage::Rust => result.push_str("__e.message.clone()"),
-                        TargetLanguage::Cpp => result.push_str("this->_context_stack.back()._event._message"),
-                        TargetLanguage::Java => result.push_str("_context_stack.get(_context_stack.size() - 1)._event._message"),
-                        TargetLanguage::Kotlin => result.push_str("_context_stack[_context_stack.size - 1]._event._message"),
-                        TargetLanguage::Swift => result.push_str("_context_stack[_context_stack.count - 1]._event._message"),
-                        TargetLanguage::CSharp => result.push_str("_context_stack[_context_stack.Count - 1]._event._message"),
-                        TargetLanguage::Go => result.push_str("s.contextStack[len(s.contextStack)-1].event.message"),
-                        TargetLanguage::Php => result.push_str("$this->_context_stack[count($this->_context_stack) - 1]->_event->_message"),
-                        TargetLanguage::Ruby => result.push_str("@_context_stack[@_context_stack.length - 1]._event._message"),
-                        TargetLanguage::Lua => result.push_str("self._context_stack[#self._context_stack]._event._message"),
-                        TargetLanguage::Erlang => {}, // TODO: Erlang gen_statem codegen
-                        TargetLanguage::Graphviz => unreachable!(),
-                    }
-                } else if i + 3 < bytes.len() && &bytes[i..i + 4] == b"data" {
-                    // @@:data[key]
-                    i += 4;
-                    if i < bytes.len() && bytes[i] == b'[' {
-                        i += 1; // Skip '['
-                        let start = i;
-                        while i < bytes.len() && bytes[i] != b']' {
-                            i += 1;
-                        }
-                        let key = String::from_utf8_lossy(&bytes[start..i]).trim().trim_matches('"').trim_matches('\'').to_string();
-                        if i < bytes.len() {
-                            i += 1; // Skip ']'
-                        }
-                        match lang {
-                            TargetLanguage::Python3 | TargetLanguage::GDScript => result.push_str(&format!("self._context_stack[-1]._data[\"{}\"]", key)),
-                            TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => result.push_str(&format!("this._context_stack[this._context_stack.length - 1]._data[\"{}\"]", key)),
-                            TargetLanguage::C => result.push_str(&format!("{}_DATA(self, \"{}\")", ctx.system_name, key)),
-                            TargetLanguage::Rust => result.push_str(&format!("self._context_stack.last().and_then(|ctx| ctx._data.get(\"{}\")).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default()", key)),
-                            TargetLanguage::Cpp => result.push_str(&format!("_context_stack.back()._data[\"{}\"]", key)),
-                            TargetLanguage::Java => result.push_str(&format!("_context_stack.get(_context_stack.size() - 1)._data.get(\"{}\")", key)),
-                            TargetLanguage::Kotlin => result.push_str(&format!("_context_stack[_context_stack.size - 1]._data[\"{}\"]", key)),
-                            TargetLanguage::Swift => result.push_str(&format!("_context_stack[_context_stack.count - 1]._data[\"{}\"]", key)),
-                            TargetLanguage::CSharp => result.push_str(&format!("_context_stack[_context_stack.Count - 1]._data[\"{}\"]", key)),
-                            TargetLanguage::Go => result.push_str(&format!("s.contextStack[len(s.contextStack)-1].data[\"{}\"]", key)),
-                            TargetLanguage::Php => result.push_str(&format!("$this->_context_stack[count($this->_context_stack) - 1]->_data[\"{}\"]", key)),
-                            TargetLanguage::Ruby => result.push_str(&format!("@_context_stack[@_context_stack.length - 1]._data[\"{}\"]", key)),
-                            TargetLanguage::Lua => result.push_str(&format!("self._context_stack[#self._context_stack]._data[\"{}\"]", key)),
-                            TargetLanguage::Erlang => {}, // TODO: Erlang gen_statem codegen
-                            TargetLanguage::Graphviz => unreachable!(),
-                        }
-                    }
-                } else if i + 5 < bytes.len() && &bytes[i..i + 6] == b"params" {
-                    // @@:params[key]
-                    i += 6;
-                    if i < bytes.len() && bytes[i] == b'[' {
-                        i += 1; // Skip '['
-                        let start = i;
-                        while i < bytes.len() && bytes[i] != b']' {
-                            i += 1;
-                        }
-                        let key = String::from_utf8_lossy(&bytes[start..i]).trim().trim_matches('"').trim_matches('\'').to_string();
-                        if i < bytes.len() {
-                            i += 1; // Skip ']'
-                        }
-                        match lang {
-                            TargetLanguage::Python3 | TargetLanguage::GDScript => result.push_str(&format!("self._context_stack[-1].event._parameters[\"{}\"]", key)),
-                            TargetLanguage::TypeScript | TargetLanguage::JavaScript => result.push_str(&format!("this._context_stack[this._context_stack.length - 1].event._parameters[\"{}\"]", key)),
-                            TargetLanguage::Dart => result.push_str(&format!("this._context_stack[this._context_stack.length - 1].event._parameters![\"{}\"]", key)),
-                            TargetLanguage::C => result.push_str(&format!("(intptr_t){}_PARAM(self, \"{}\")", ctx.system_name, key)),
-                            // Rust: for params access, just use the handler's direct parameter
-                            TargetLanguage::Rust => result.push_str(&key),
-                            TargetLanguage::Cpp => result.push_str(&key),
-                            TargetLanguage::Java => result.push_str(&format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get(\"{}\")", key)),
-                            TargetLanguage::Kotlin => result.push_str(&format!("_context_stack[_context_stack.size - 1]._event._parameters[\"{}\"]", key)),
-                            TargetLanguage::Swift => result.push_str(&format!("_context_stack[_context_stack.count - 1]._event._parameters[\"{}\"]", key)),
-                            TargetLanguage::CSharp => result.push_str(&format!("_context_stack[_context_stack.Count - 1]._event._parameters[\"{}\"]", key)),
-                            TargetLanguage::Go => result.push_str(&format!("s.contextStack[len(s.contextStack)-1].event.parameters[\"{}\"]", key)),
-                            TargetLanguage::Php => result.push_str(&format!("$this->_context_stack[count($this->_context_stack) - 1]->_event->_parameters[\"{}\"]", key)),
-                            TargetLanguage::Ruby => result.push_str(&format!("@_context_stack[@_context_stack.length - 1]._event._parameters[\"{}\"]", key)),
-                            TargetLanguage::Lua => result.push_str(&format!("self._context_stack[#self._context_stack]._event._parameters[\"{}\"]", key)),
-                            TargetLanguage::Erlang => {}, // TODO: Erlang gen_statem codegen
-                            TargetLanguage::Graphviz => unreachable!(),
-                        }
-                    }
-                } else {
-                    // Unknown, pass through
-                    result.push_str("@@:");
-                }
-            } else {
-                // Just @@ without . or :, pass through
-                result.push_str("@@");
-            }
         } else {
             result.push(bytes[i] as char);
             i += 1;
@@ -2857,7 +2797,7 @@ mod tests {
     #[test]
     fn test_state_var_read_rust_string_clones() {
         let ctx = make_ctx(vec![("name", "String")]);
-        let result = expand_state_vars_in_expr("$.name", TargetLanguage::Rust, &ctx);
+        let result = expand_expression("$.name", TargetLanguage::Rust, &ctx);
         assert!(result.contains(".clone()"),
             "String state var read should add .clone(), got: {}", result);
     }
@@ -2865,7 +2805,7 @@ mod tests {
     #[test]
     fn test_state_var_read_rust_int_no_clone() {
         let ctx = make_ctx(vec![("count", "i32")]);
-        let result = expand_state_vars_in_expr("$.count", TargetLanguage::Rust, &ctx);
+        let result = expand_expression("$.count", TargetLanguage::Rust, &ctx);
         assert!(!result.contains(".clone()"),
             "i32 state var read should NOT add .clone(), got: {}", result);
     }
@@ -2873,7 +2813,7 @@ mod tests {
     #[test]
     fn test_state_var_read_rust_bool_no_clone() {
         let ctx = make_ctx(vec![("flag", "bool")]);
-        let result = expand_state_vars_in_expr("$.flag", TargetLanguage::Rust, &ctx);
+        let result = expand_expression("$.flag", TargetLanguage::Rust, &ctx);
         assert!(!result.contains(".clone()"),
             "bool state var read should NOT add .clone(), got: {}", result);
     }
@@ -2881,7 +2821,7 @@ mod tests {
     #[test]
     fn test_state_var_read_rust_unknown_type_clones() {
         let ctx = make_ctx(vec![]);
-        let result = expand_state_vars_in_expr("$.mystery", TargetLanguage::Rust, &ctx);
+        let result = expand_expression("$.mystery", TargetLanguage::Rust, &ctx);
         assert!(result.contains(".clone()"),
             "Unknown-type state var should clone for safety, got: {}", result);
     }
