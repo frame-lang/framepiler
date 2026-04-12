@@ -1,6 +1,6 @@
 # Frame Cookbook
 
-21 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
+22 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
 
 For language syntax details, see the [Frame Language Reference](frame_language.md). For a tutorial introduction, see [Getting Started](frame_getting_started.md).
 
@@ -27,6 +27,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 19. [Async HTTP Client](#19-async-http-client) — async interface with two-phase init
 20. [Multi-System Composition](#20-multi-system-composition) — two systems interacting
 21. [Configurable Worker Pool](#21-configurable-worker-pool-parameterized-systems) — parameterized systems
+22. [Self-Calibrating Sensor](#22-self-calibrating-sensor-self-interface-call) — `@@:self` reentrant dispatch
 
 ---
 
@@ -1154,3 +1155,91 @@ pool = @@WorkerPool($(5), $>("v1.0"), 3)
 The framepiler substitutes Frame defaults for missing arguments and routes each to its compartment field. Transitions like `-> $Processing` create a new compartment with its own state_args, so state params are scoped per-state.
 
 **Features used:** system parameters (state, enter, domain), sigil-tagged call-site syntax, `@@:(expr)` context return, state transitions triggered by threshold
+
+---
+
+## 22. Self-Calibrating Sensor (@@:self Interface Call)
+
+**Problem:** A sensor that calibrates itself by reading its own value through the interface, then applying an offset.
+
+```frame
+@@target python_3
+
+@@system Sensor {
+    interface:
+        calibrate(): str
+        reading(): float
+        trigger_shutdown()
+        attempt_post_shutdown(): str
+        status(): str
+
+    machine:
+        $Active {
+            calibrate(): str {
+                # @@:self dispatches through the full kernel pipeline.
+                # reading() executes in $Active, returns 42.0.
+                baseline = @@:self.reading()
+                self.offset = baseline * -1
+                @@:(f"calibrated: offset={self.offset}")
+            }
+
+            reading(): float {
+                @@:(self.raw_value + self.offset)
+            }
+
+            trigger_shutdown() {
+                -> $Shutdown
+            }
+
+            attempt_post_shutdown(): str {
+                self.trace = "before"
+
+                # This self-call transitions to $Shutdown.
+                @@:self.trigger_shutdown()
+
+                # *** SURPRISE: this line does NOT execute. ***
+                # The transition guard detects that the system already
+                # transitioned during the self-call above. All remaining
+                # code in this handler is suppressed — the system is now
+                # in $Shutdown, and running $Active code would be wrong.
+                self.trace = "after"
+
+                @@:(self.trace)
+            }
+
+            status(): str { @@:("active") }
+        }
+
+        $Shutdown {
+            status(): str { @@:("shutdown") }
+        }
+
+    domain:
+        raw_value: float = 42.0
+        offset: float = 0.0
+        trace: str = ""
+}
+
+if __name__ == '__main__':
+    # --- Self-call basics ---
+    s = @@Sensor()
+    print(s.reading())       # 42.0
+    print(s.calibrate())     # calibrated: offset=-42.0
+    print(s.reading())       # 0.0
+
+    # --- Transition guard ---
+    s2 = @@Sensor()
+    s2.attempt_post_shutdown()
+    print(s2.trace)          # "before" — "after" was suppressed
+    print(s2.status())       # "shutdown"
+```
+
+**How it works:** `@@:self.reading()` dispatches through the full kernel pipeline — FrameEvent construction, context push, router, state dispatch, handler execution, context pop. The return value is available as a native expression. Each self-call gets its own context, so `@@:event`, `@@:params`, and `@@:return` are isolated from the calling handler.
+
+**Transition guard — the key subtlety:** Look at `attempt_post_shutdown()`. It calls `@@:self.trigger_shutdown()`, which transitions to `$Shutdown`. When control returns from the self-call, the system has already moved to `$Shutdown`. The transition guard detects this: it checks `_transitioned` on the current context and immediately returns, suppressing `self.trace = "after"` and the `@@:` return.
+
+This is intentional. Code after a self-call that triggered a transition was written for `$Active` — but the system is now in `$Shutdown`. Executing that code would violate state assumptions. The guard prevents it.
+
+**When the guard does NOT fire:** If the self-call's handler does NOT transition (like `calibrate()` calling `@@:self.reading()`), code after the self-call executes normally. The guard only activates when a transition actually occurred.
+
+**Features used:** `@@:self.method()`, reentrant dispatch, return value from self-call, transition guard
