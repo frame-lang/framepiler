@@ -48,6 +48,10 @@
 
 use super::arcanum::Arcanum;
 use super::frame_ast::*;
+use super::native_region_scanner::{
+    FrameSegmentKind, Region, SegmentMetadata,
+};
+use crate::frame_c::compiler::codegen::frame_expansion::get_native_scanner;
 use std::collections::{HashMap, HashSet};
 
 /// Validation error with error code and message
@@ -156,18 +160,20 @@ impl FrameValidator {
     /// `target` parameter is the canonical `visitors::TargetLanguage`
     /// (the legacy `frame_ast::TargetLanguage` only has 8 variants and
     /// doesn't include GDScript).
-    /// Validate @@:self.method() calls against the interface declaration.
-    /// Requires source bytes to scan handler bodies for self-call patterns.
+    /// Validate @@:self.method() calls and bare @@: references using the scanner.
+    /// The scanner identifies Frame segments correctly (handling comments, strings),
+    /// so the validator walks structured output instead of byte-scanning.
     pub fn validate_self_calls(
         &mut self,
         ast: &FrameAst,
         source: &[u8],
+        target: crate::frame_c::visitors::TargetLanguage,
     ) -> Result<(), Vec<ValidationError>> {
         match ast {
-            FrameAst::System(system) => self.validate_system_self_calls(system, source),
+            FrameAst::System(system) => self.validate_system_self_calls(system, source, target),
             FrameAst::Module(module) => {
                 for system in &module.systems {
-                    self.validate_system_self_calls(system, source);
+                    self.validate_system_self_calls(system, source, target);
                 }
             }
         }
@@ -179,10 +185,10 @@ impl FrameValidator {
         }
     }
 
-    fn validate_system_self_calls(&mut self, system: &SystemAst, source: &[u8]) {
+    fn validate_system_self_calls(&mut self, system: &SystemAst, source: &[u8], target: crate::frame_c::visitors::TargetLanguage) {
         let interface_methods = self.build_interface_map(system);
 
-        // Scan all handler body spans for @@:self.method(args) patterns
+        // Validate handler bodies using the scanner (handles comments, strings correctly)
         if let Some(machine) = &system.machine {
             for state in &machine.states {
                 for handler in &state.handlers {
@@ -191,190 +197,107 @@ impl FrameValidator {
                         continue;
                     }
                     let body = &source[span.start..span.end];
-                    self.scan_self_calls_in_body(
-                        body,
-                        &interface_methods,
-                        &state.name,
-                        &handler.event,
-                        span.start,
+                    self.validate_frame_segments_in_body(
+                        body, &interface_methods, &state.name, &handler.event, target,
                     );
-                    self.scan_bare_context_refs_in_body(body, &state.name, &handler.event);
                 }
             }
         }
 
-        // Also scan action bodies
+        // Also validate action bodies
         for action in &system.actions {
             let span = &action.span;
             if span.start >= source.len() || span.end > source.len() {
                 continue;
             }
             let body = &source[span.start..span.end];
-            self.scan_self_calls_in_body(
-                body,
-                &interface_methods,
-                "(action)",
-                &action.name,
-                span.start,
+            self.validate_frame_segments_in_body(
+                body, &interface_methods, "(action)", &action.name, target,
             );
-            self.scan_bare_context_refs_in_body(body, "(action)", &action.name);
         }
     }
 
-    /// Flag bare `@@:self` and `@@:system` — both are syntactic prefixes and
-    /// require a member access.
-    ///   - `@@:self`   must be `@@:self.method(args)` — E603
-    ///   - `@@:system` must be `@@:system.<member>`   — E604
-    ///
-    /// Identifier characters after the prefix (e.g. `@@:selfish`) are not
-    /// matched — that's unrelated native code passing through.
-    fn scan_bare_context_refs_in_body(
-        &mut self,
-        body: &[u8],
-        scope_outer: &str,
-        scope_inner: &str,
-    ) {
-        for (prefix, code, label, example) in [
-            (
-                b"@@:self".as_slice(),
-                "E603",
-                "@@:self",
-                "e.g. `@@:self.method(args)`",
-            ),
-            (
-                b"@@:system".as_slice(),
-                "E604",
-                "@@:system",
-                "e.g. `@@:system.state`",
-            ),
-        ] {
-            let mut i = 0;
-            while i + prefix.len() <= body.len() {
-                if &body[i..i + prefix.len()] == prefix {
-                    // Skip if inside a comment (# or // before this on the same line)
-                    let mut line_start = i;
-                    while line_start > 0 && body[line_start - 1] != b'\n' {
-                        line_start -= 1;
-                    }
-                    let line_prefix = &body[line_start..i];
-                    let in_comment = line_prefix.iter().enumerate().any(|(j, &b)| {
-                        b == b'#'
-                        || (b == b'/' && j + 1 < line_prefix.len() && line_prefix[j + 1] == b'/')
-                    });
-                    if in_comment {
-                        i += prefix.len();
-                        continue;
-                    }
-
-                    let after = i + prefix.len();
-                    // Skip if followed by `.member` — that's the chained form,
-                    // validated elsewhere (E601/E602) or accepted (@@:system.state).
-                    // Skip if followed by an identifier char — it's a different token
-                    // (e.g. a native identifier starting with the same prefix letters).
-                    let next = body.get(after).copied();
-                    let is_chained = next == Some(b'.');
-                    let is_ident_continuation = next
-                        .map(|b| b.is_ascii_alphanumeric() || b == b'_')
-                        .unwrap_or(false);
-                    if !is_chained && !is_ident_continuation {
-                        self.errors.push(ValidationError::new(
-                            code,
-                            format!(
-                                "bare `{}` in {}/{} — `{}` is a syntactic prefix and requires a member access ({})",
-                                label, scope_outer, scope_inner, label, example
-                            ),
-                        ));
-                    }
-                    i = after;
-                } else {
-                    i += 1;
-                }
-            }
-        }
-    }
-
-    fn scan_self_calls_in_body(
+    /// Validate Frame segments in a handler/action body using the scanner.
+    /// Runs the language-specific scanner on the body text, then walks the
+    /// identified segments. No byte-level scanning — the scanner handles
+    /// comments, strings, and language-specific syntax.
+    fn validate_frame_segments_in_body(
         &mut self,
         body: &[u8],
         interface_methods: &HashMap<String, &InterfaceMethod>,
-        state_name: &str,
-        handler_name: &str,
-        base_offset: usize,
+        scope_outer: &str,
+        scope_inner: &str,
+        target: crate::frame_c::visitors::TargetLanguage,
     ) {
-        let pattern = b"@@:self.";
-        let mut i = 0;
-        while i + pattern.len() < body.len() {
-            if &body[i..i + pattern.len()] == pattern {
-                let after_dot = i + pattern.len();
-                // Extract method name
-                let mut name_end = after_dot;
-                while name_end < body.len()
-                    && (body[name_end].is_ascii_alphanumeric() || body[name_end] == b'_')
-                {
-                    name_end += 1;
-                }
-                let method_name = String::from_utf8_lossy(&body[after_dot..name_end]).to_string();
+        // Find the opening brace
+        let open_brace = match body.iter().position(|&b| b == b'{') {
+            Some(pos) => pos,
+            None => return,
+        };
 
-                if name_end < body.len() && body[name_end] == b'(' {
-                    // This is a self-call: @@:self.method(args)
-                    // E601: Check method exists in interface
-                    if let Some(iface_method) = interface_methods.get(&method_name) {
-                        // E602: Check argument count
-                        // Count args by scanning for commas between balanced parens
-                        let mut arg_count = 0;
-                        let mut depth = 0;
-                        let mut j = name_end;
-                        let mut found_arg = false;
-                        while j < body.len() {
-                            match body[j] {
-                                b'(' => {
-                                    depth += 1;
+        // Run the scanner
+        let mut scanner = get_native_scanner(target);
+        let scan_result = match scanner.scan(body, open_brace) {
+            Ok(r) => r,
+            Err(_) => return, // Scanner error — can't validate
+        };
+
+        // Walk segments and validate
+        for region in &scan_result.regions {
+            if let Region::FrameSegment { kind, metadata, .. } = region {
+                match kind {
+                    // E601: @@:self.method() — check method exists in interface
+                    FrameSegmentKind::ContextSelfCall => {
+                        if let SegmentMetadata::SelfCall { method, args } = metadata {
+                            if let Some(iface_method) = interface_methods.get(method.as_str()) {
+                                // E602: check argument count
+                                let arg_count = count_args(args);
+                                let expected = iface_method.params.len();
+                                if arg_count != expected {
+                                    self.errors.push(ValidationError::new(
+                                        "E602",
+                                        format!(
+                                            "@@:self.{}() in {}/{} has {} arguments but interface expects {}",
+                                            method, scope_outer, scope_inner, arg_count, expected
+                                        )
+                                    ));
                                 }
-                                b')' => {
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        break;
-                                    }
-                                }
-                                b',' if depth == 1 => {
-                                    arg_count += 1;
-                                }
-                                b' ' | b'\t' | b'\n' | b'\r' => {}
-                                _ if depth == 1 => {
-                                    found_arg = true;
-                                }
-                                _ => {}
+                            } else {
+                                self.errors.push(ValidationError::new(
+                                    "E601",
+                                    format!(
+                                        "@@:self.{}() in {}/{} — method '{}' not found in interface",
+                                        method, scope_outer, scope_inner, method
+                                    )
+                                ));
                             }
-                            j += 1;
                         }
-                        if found_arg || arg_count > 0 {
-                            arg_count += 1; // N commas = N+1 args
-                        }
+                    }
 
-                        let expected = iface_method.params.len();
-                        if arg_count != expected {
-                            self.errors.push(ValidationError::new(
-                                "E602",
-                                format!(
-                                    "@@:self.{}() in {}/{} has {} arguments but interface expects {}",
-                                    method_name, state_name, handler_name, arg_count, expected
-                                )
-                            ));
-                        }
-                    } else {
+                    // E603: bare @@:self without .method()
+                    FrameSegmentKind::ContextSelf => {
                         self.errors.push(ValidationError::new(
-                            "E601",
+                            "E603",
                             format!(
-                                "@@:self.{}() in {}/{} — method '{}' not found in interface",
-                                method_name, state_name, handler_name, method_name
+                                "bare `@@:self` in {}/{} — `@@:self` requires a member access (e.g. `@@:self.method(args)`)",
+                                scope_outer, scope_inner
                             ),
                         ));
                     }
-                }
 
-                i = name_end;
-            } else {
-                i += 1;
+                    // E604: bare @@:system without .state
+                    FrameSegmentKind::ContextSystemBare => {
+                        self.errors.push(ValidationError::new(
+                            "E604",
+                            format!(
+                                "bare `@@:system` in {}/{} — `@@:system` requires a member access (e.g. `@@:system.state`)",
+                                scope_outer, scope_inner
+                            ),
+                        ));
+                    }
+
+                    _ => {}
+                }
             }
         }
     }
@@ -1178,22 +1101,46 @@ pub fn validate_frame_source(
     validator.validate_with_arcanum(&ast, &arcanum)
 }
 
+/// Count arguments in a parenthesized argument string like "(a, b, c)".
+/// Returns 0 for "()" or empty.
+fn count_args(args: &str) -> usize {
+    let inner = args.trim().trim_start_matches('(').trim_end_matches(')').trim();
+    if inner.is_empty() {
+        return 0;
+    }
+    // Count commas at depth 0
+    let mut count = 1;
+    let mut depth = 0;
+    for b in inner.bytes() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b',' if depth == 0 => count += 1,
+            _ => {}
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Test convenience: import the visitors TargetLanguage with an alias
+    // since `use super::*` already imports frame_ast::TargetLanguage
+    use crate::frame_c::visitors::TargetLanguage as VTarget;
 
     /// Helper: parse + run BOTH the general validator and the
     /// target-specific validator. The pipeline runs them in this order
     /// for real compiles, so the tests should mirror that.
     fn validate_for_target(
         source: &str,
-        parse_target: TargetLanguage,
-        target: crate::frame_c::visitors::TargetLanguage,
+        target: VTarget,
     ) -> Result<(), Vec<ValidationError>> {
         use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
         use crate::frame_c::compiler::frame_parser::FrameParser;
 
-        let mut parser = FrameParser::new(source.as_bytes(), parse_target);
+        // FrameParser uses frame_ast::TargetLanguage, not visitors::TargetLanguage
+        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
         let ast = parser
             .parse_module()
             .map_err(|e| vec![ValidationError::new("E001", format!("Parse error: {}", e))])?;
@@ -1222,8 +1169,7 @@ mod tests {
 }"#;
         let result = validate_for_target(
             source,
-            TargetLanguage::Python3,
-            crate::frame_c::visitors::TargetLanguage::GDScript,
+            VTarget::GDScript,
         );
         assert!(result.is_err());
         let errors = result.unwrap_err();
@@ -1252,8 +1198,7 @@ mod tests {
 }"#;
         let result = validate_for_target(
             source,
-            TargetLanguage::Python3,
-            crate::frame_c::visitors::TargetLanguage::GDScript,
+            VTarget::GDScript,
         );
         assert!(result.is_err());
         let errors = result.unwrap_err();
@@ -1280,8 +1225,7 @@ mod tests {
 }"#;
         let result = validate_for_target(
             source,
-            TargetLanguage::Python3,
-            crate::frame_c::visitors::TargetLanguage::GDScript,
+            VTarget::GDScript,
         );
         assert!(result.is_ok(), "safe names must pass: {:?}", result.err());
     }
@@ -1291,13 +1235,12 @@ mod tests {
     /// (W501 etc.) — `validate_for_target` only returns errors.
     fn validate_for_target_with_warnings(
         source: &str,
-        parse_target: TargetLanguage,
-        target: crate::frame_c::visitors::TargetLanguage,
+        target: VTarget,
     ) -> (Result<(), Vec<ValidationError>>, Vec<ValidationError>) {
         use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
         use crate::frame_c::compiler::frame_parser::FrameParser;
 
-        let mut parser = FrameParser::new(source.as_bytes(), parse_target);
+        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
         let ast = match parser.parse_module() {
             Ok(a) => a,
             Err(e) => {
@@ -1337,8 +1280,7 @@ mod tests {
 }"#;
         let (result, warnings) = validate_for_target_with_warnings(
             source,
-            TargetLanguage::Python3,
-            crate::frame_c::visitors::TargetLanguage::TypeScript,
+            VTarget::TypeScript,
         );
         assert!(
             result.is_ok(),
@@ -1376,8 +1318,7 @@ mod tests {
 }"#;
         let (result, warnings) = validate_for_target_with_warnings(
             source,
-            TargetLanguage::Python3,
-            crate::frame_c::visitors::TargetLanguage::TypeScript,
+            VTarget::TypeScript,
         );
         assert!(result.is_ok());
         // Both system names should be flagged. The validator runs
@@ -1401,8 +1342,7 @@ mod tests {
 }"#;
         let (result, warnings) = validate_for_target_with_warnings(
             source,
-            TargetLanguage::Python3,
-            crate::frame_c::visitors::TargetLanguage::TypeScript,
+            VTarget::TypeScript,
         );
         assert!(result.is_ok());
         assert!(
@@ -1427,8 +1367,7 @@ mod tests {
 }"#;
         let (result, warnings) = validate_for_target_with_warnings(
             source,
-            TargetLanguage::Python3,
-            crate::frame_c::visitors::TargetLanguage::Python3,
+            VTarget::Python3,
         );
         assert!(result.is_ok());
         assert!(
@@ -1453,8 +1392,7 @@ mod tests {
 }"#;
         let result = validate_for_target(
             source,
-            TargetLanguage::Python3,
-            crate::frame_c::visitors::TargetLanguage::Python3,
+            VTarget::Python3,
         );
         assert!(
             result.is_ok(),
@@ -1799,8 +1737,21 @@ mod tests {
     /// E603/E604; the parser-level invocation is covered by integration
     /// tests via `framec compile`.
     fn scan_bare(body: &[u8]) -> Vec<ValidationError> {
+        // Wrap the body in braces for the scanner
+        let mut wrapped = Vec::with_capacity(body.len() + 2);
+        wrapped.push(b'{');
+        wrapped.extend_from_slice(body);
+        wrapped.push(b'}');
+
         let mut v = FrameValidator::new();
-        v.scan_bare_context_refs_in_body(body, "TestState", "test_evt");
+        let empty_methods = std::collections::HashMap::new();
+        v.validate_frame_segments_in_body(
+            &wrapped,
+            &empty_methods,
+            "TestState",
+            "test_evt",
+            crate::frame_c::visitors::TargetLanguage::Python3,
+        );
         v.errors
     }
 

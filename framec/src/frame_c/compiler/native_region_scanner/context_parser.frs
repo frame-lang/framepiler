@@ -322,9 +322,10 @@ include!("expr_scanner.gen.rs");
                     self.result_kind = 12; // ContextSystemState
                     self.has_result = true;
                 } else {
-                    // Unknown @@:system variant — no match
+                    // Bare @@:system or unknown variant — emit for validation
                     self.result_end = i;
-                    self.has_result = false;
+                    self.result_kind = 13; // ContextSystemBare
+                    self.has_result = true;
                 }
 
                 -> $Done

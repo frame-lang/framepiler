@@ -19,6 +19,7 @@ pub enum FrameSegmentKind {
     ContextSelfCall,     // @@:self.method(args) - reentrant interface call
     ContextSelf,         // @@:self - bare system instance reference
     ContextSystemState,  // @@:system.state - current state name (read-only)
+    ContextSystemBare,   // @@:system without recognized member - error E604
     ReturnStatement,     // return <expr>? - native return keyword in handler body
 }
 

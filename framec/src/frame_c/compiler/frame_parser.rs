@@ -1852,6 +1852,7 @@ impl FrameParser {
             | FrameSegmentKind::ContextSelfCall
             | FrameSegmentKind::ContextSelf
             | FrameSegmentKind::ContextSystemState
+            | FrameSegmentKind::ContextSystemBare
             | FrameSegmentKind::ReturnStatement => Err(ParseError::Expected(
                 "Context/tagged/return/self syntax handled by splicer".to_string(),
             )),

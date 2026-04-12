@@ -3259,6 +3259,10 @@ pub(crate) fn generate_frame_expansion(
 
             format!("{}{}", set_code, ret_code)
         }
+        FrameSegmentKind::ContextSystemBare => {
+            // Bare @@:system — should have been caught by validator (E604)
+            "/* ERROR: bare @@:system */".to_string()
+        }
         FrameSegmentKind::ContextSystemState => {
             // @@:system.state — current state name (read-only)
             match lang {

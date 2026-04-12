@@ -293,6 +293,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         10 => FrameSegmentKind::ContextSelfCall,
                         11 => FrameSegmentKind::ContextSelf,
                         12 => FrameSegmentKind::ContextSystemState,
+                        13 => FrameSegmentKind::ContextSystemBare,
                         _ => FrameSegmentKind::ContextReturn, // shouldn't happen
                     };
                     let mut seg_end = parser.result_end;
@@ -1220,7 +1221,7 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         }
 
         FrameSegmentKind::ContextSelf | FrameSegmentKind::ContextSystemState
-            | FrameSegmentKind::ContextEvent => {
+            | FrameSegmentKind::ContextSystemBare | FrameSegmentKind::ContextEvent => {
             // These carry no variable content — the kind is sufficient
             SegmentMetadata::None
         }

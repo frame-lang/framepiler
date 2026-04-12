@@ -325,7 +325,7 @@ pub fn compile_ast_based(
                 });
             }
             // @@:self.method() validation against interface
-            if let Err(errs) = validator.validate_self_calls(&frame_ast, source) {
+            if let Err(errs) = validator.validate_self_calls(&frame_ast, source, config.target) {
                 let errors = errs
                     .iter()
                     .map(|e| CompileError::new(&e.code, &e.message))
@@ -405,7 +405,7 @@ pub fn compile_ast_based(
             });
         }
         // @@:self.method() validation against interface
-        if let Err(errs) = validator.validate_self_calls(&frame_ast, source) {
+        if let Err(errs) = validator.validate_self_calls(&frame_ast, source, config.target) {
             let errors = errs
                 .iter()
                 .map(|e| CompileError::new(&e.code, &e.message))
