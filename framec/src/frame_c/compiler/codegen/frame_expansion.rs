@@ -21,7 +21,7 @@ use crate::frame_c::compiler::native_region_scanner::{
     kotlin::NativeRegionScannerKotlin, lua::NativeRegionScannerLua, php::NativeRegionScannerPhp,
     python::NativeRegionScannerPy, ruby::NativeRegionScannerRuby, rust::NativeRegionScannerRust,
     swift::NativeRegionScannerSwift, typescript::NativeRegionScannerTs, FrameSegmentKind,
-    NativeRegionScanner, Region,
+    NativeRegionScanner, Region, SegmentMetadata,
 };
 use crate::frame_c::compiler::splice::Splicer;
 use crate::frame_c::visitors::TargetLanguage;
@@ -90,8 +90,8 @@ pub(crate) fn splice_handler_body_from_span(
     // Generate expansions for each Frame segment
     let mut expansions = Vec::new();
     for region in &scan_result.regions {
-        if let Region::FrameSegment { span, kind, indent, .. } = region {
-            let expansion = generate_frame_expansion(body_bytes, span, *kind, *indent, lang, ctx);
+        if let Region::FrameSegment { span, kind, indent, metadata } = region {
+            let expansion = generate_frame_expansion(body_bytes, span, *kind, *indent, lang, ctx, metadata);
             expansions.push(expansion);
         }
     }
@@ -224,10 +224,9 @@ pub(crate) fn generate_frame_expansion(
     indent: usize,
     lang: TargetLanguage,
     ctx: &HandlerContext,
+    metadata: &SegmentMetadata,
 ) -> String {
     let segment_text = String::from_utf8_lossy(&body_bytes[span.start..span.end]);
-    // Use scanner's indent value to match native code indentation
-    // This ensures Frame expansions align with surrounding native code
     let indent_str = " ".repeat(indent);
 
     match kind {
@@ -2202,7 +2201,11 @@ pub(crate) fn generate_frame_expansion(
         }
         FrameSegmentKind::StateVar => {
             // Extract variable name from "$.varName"
-            let var_name = extract_state_var_name(&segment_text);
+            let var_name = if let SegmentMetadata::StateVar { name } = metadata {
+                name.clone()
+            } else {
+                extract_state_var_name(&segment_text) // fallback
+            };
             // State variables are stored in compartment.state_vars
             // For HSM: use __sv_comp if available (navigates to correct compartment for parent states)
             match lang {
@@ -2410,7 +2413,11 @@ pub(crate) fn generate_frame_expansion(
             // Parse: $.varName = expr;
             let text = segment_text.trim();
             // Extract variable name: skip "$." and collect identifier
-            let var_name = if text.starts_with("$.") {
+            let var_name_owned;
+            let var_name = if let SegmentMetadata::StateVar { name } = metadata {
+                var_name_owned = name.clone();
+                var_name_owned.as_str()
+            } else if text.starts_with("$.") {
                 let rest = &text[2..];
                 let end = rest
                     .find(|c: char| !c.is_alphanumeric() && c != '_')
@@ -2922,7 +2929,11 @@ pub(crate) fn generate_frame_expansion(
         }
         FrameSegmentKind::ContextData => {
             // @@:data.key - call-scoped data (read)
-            let key = extract_dot_key(&segment_text, "@@:data");
+            let key = if let SegmentMetadata::ContextData { key, .. } = metadata {
+                key.clone()
+            } else {
+                extract_dot_key(&segment_text, "@@:data") // fallback
+            };
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
                     format!("self._context_stack[-1]._data[\"{}\"]", key)
@@ -2976,7 +2987,11 @@ pub(crate) fn generate_frame_expansion(
         FrameSegmentKind::ContextDataAssign => {
             // @@:data[key] = expr - call-scoped data (assignment)
             // Extract key and value from "@@:data.key = expr;"
-            let key = extract_dot_key(&segment_text, "@@:data");
+            let key = if let SegmentMetadata::ContextData { key, .. } = metadata {
+                key.clone()
+            } else {
+                extract_dot_key(&segment_text, "@@:data") // fallback
+            };
             // Find the = and extract the expression
             let trimmed = segment_text.trim();
             let eq_pos = trimmed.find('=').unwrap_or(trimmed.len());
@@ -3010,7 +3025,11 @@ pub(crate) fn generate_frame_expansion(
         }
         FrameSegmentKind::ContextParams => {
             // @@:params.key - dot-accessor for interface parameter
-            let key = extract_dot_key(&segment_text, "@@:params");
+            let key = if let SegmentMetadata::ContextParams { key } = metadata {
+                key.clone()
+            } else {
+                extract_dot_key(&segment_text, "@@:params") // fallback
+            };
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1].event._parameters[\"{}\"]", key),
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[\"{}\"]", key),
@@ -3296,10 +3315,13 @@ pub(crate) fn generate_frame_expansion(
             // @@:self.method(args) — reentrant interface call with transition guard
             // Extract method name and args from segment text: @@:self.method(args)
             let trimmed = segment_text.trim();
-            let after_self = trimmed.strip_prefix("@@:self.").unwrap_or(trimmed);
-            let paren_pos = after_self.find('(').unwrap_or(after_self.len());
-            let method_name = &after_self[..paren_pos];
-            let args_with_parens = &after_self[paren_pos..]; // "(args)" or "()"
+            let (method_name, args_with_parens) = if let SegmentMetadata::SelfCall { method, args } = metadata {
+                (method.as_str(), args.as_str())
+            } else {
+                let after_self = trimmed.strip_prefix("@@:self.").unwrap_or(trimmed);
+                let paren_pos = after_self.find('(').unwrap_or(after_self.len());
+                (&after_self[..paren_pos], &after_self[paren_pos..])
+            };
 
             // Generate the native self-call
             let call_expr = match lang {
@@ -3686,10 +3708,11 @@ pub(crate) fn expand_expression(expr: &str, lang: TargetLanguage, ctx: &HandlerC
         if let Region::FrameSegment {
             span,
             kind,
+            metadata,
             ..
         } = region
         {
-            let expansion = generate_frame_expansion(body_bytes, span, *kind, 0, lang, ctx);
+            let expansion = generate_frame_expansion(body_bytes, span, *kind, 0, lang, ctx, metadata);
             expansions.push(expansion);
         }
     }
@@ -4006,7 +4029,7 @@ mod tests {
             start: 0,
             end: bytes.len(),
         };
-        generate_frame_expansion(bytes, &span, kind, 0, lang, ctx)
+        generate_frame_expansion(bytes, &span, kind, 0, lang, ctx, &SegmentMetadata::None)
     }
 
     // =========================================================
