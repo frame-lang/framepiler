@@ -1161,4 +1161,34 @@ mod tests {
             kinds
         );
     }
+
+    #[test]
+    fn test_self_call_recognized() {
+        let kinds = scan_for_kinds("{ @@:self.reading() }");
+        assert_eq!(kinds, vec![FrameSegmentKind::ContextSelfCall]);
+    }
+
+    #[test]
+    fn test_self_call_with_args() {
+        let kinds = scan_for_kinds("{ @@:self.process(a, b) }");
+        assert_eq!(kinds, vec![FrameSegmentKind::ContextSelfCall]);
+    }
+
+    #[test]
+    fn test_self_call_in_assignment() {
+        let kinds = scan_for_kinds("{ let x = @@:self.getStatus(); }");
+        assert_eq!(kinds, vec![FrameSegmentKind::ContextSelfCall]);
+    }
+
+    #[test]
+    fn test_bare_self_recognized() {
+        let kinds = scan_for_kinds("{ let s = @@:self; }");
+        assert_eq!(kinds, vec![FrameSegmentKind::ContextSelf]);
+    }
+
+    #[test]
+    fn test_self_call_with_nested_parens() {
+        let kinds = scan_for_kinds("{ @@:self.process(foo(1, 2), bar()) }");
+        assert_eq!(kinds, vec![FrameSegmentKind::ContextSelfCall]);
+    }
 }
