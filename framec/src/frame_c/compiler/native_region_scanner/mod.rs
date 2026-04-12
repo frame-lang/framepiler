@@ -22,6 +22,64 @@ pub enum FrameSegmentKind {
     ReturnStatement,     // return <expr>? - native return keyword in handler body
 }
 
+/// Structured content parsed from a Frame segment during scanning.
+/// Eliminates the need for downstream stages to re-parse raw segment text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SegmentMetadata {
+    /// `-> $State`, `-> pop$`, `(exit) -> (enter) $State(state_args)`
+    Transition {
+        target_state: String,
+        exit_args: Option<String>,
+        enter_args: Option<String>,
+        state_args: Option<String>,
+        label: Option<String>,
+        is_pop: bool,
+    },
+    /// `$.varName` (read) or `$.varName = expr` (assign)
+    StateVar {
+        name: String,
+    },
+    /// `@@:params.key`
+    ContextParams {
+        key: String,
+    },
+    /// `@@:data.key` (read) or `@@:data.key = expr` (assign)
+    ContextData {
+        key: String,
+        assign_expr: Option<String>,
+    },
+    /// `@@:self.method(args)`
+    SelfCall {
+        method: String,
+        args: String,
+    },
+    /// `@@SystemName(args)`
+    TaggedInstantiation {
+        system_name: String,
+        args: String,
+    },
+    /// `@@:(expr)` — may contain nested Frame segments
+    ReturnExpr {
+        expr: String,
+    },
+    /// `@@:return(expr)` — set return + exit
+    ReturnCall {
+        expr: String,
+    },
+    /// `@@:return = expr` or `@@:return` (bare read)
+    ContextReturn {
+        assign_expr: Option<String>,
+    },
+    /// Segments with no additional parsed content
+    None,
+}
+
+impl Default for SegmentMetadata {
+    fn default() -> Self {
+        SegmentMetadata::None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegionSpan {
     pub start: usize,
@@ -37,6 +95,7 @@ pub enum Region {
         span: RegionSpan,
         kind: FrameSegmentKind,
         indent: usize,
+        metadata: SegmentMetadata,
     },
 }
 

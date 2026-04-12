@@ -90,7 +90,7 @@ pub(crate) fn splice_handler_body_from_span(
     // Generate expansions for each Frame segment
     let mut expansions = Vec::new();
     for region in &scan_result.regions {
-        if let Region::FrameSegment { span, kind, indent } = region {
+        if let Region::FrameSegment { span, kind, indent, .. } = region {
             let expansion = generate_frame_expansion(body_bytes, span, *kind, *indent, lang, ctx);
             expansions.push(expansion);
         }
@@ -3686,7 +3686,7 @@ pub(crate) fn expand_expression(expr: &str, lang: TargetLanguage, ctx: &HandlerC
         if let Region::FrameSegment {
             span,
             kind,
-            indent: _,
+            ..
         } = region
         {
             let expansion = generate_frame_expansion(body_bytes, span, *kind, 0, lang, ctx);

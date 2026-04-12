@@ -1754,7 +1754,7 @@ impl FrameParser {
                 Region::NativeText { .. } => {
                     // Skip native text - it's preserved by the splicer, not stored in AST
                 }
-                Region::FrameSegment { span, kind, indent } => {
+                Region::FrameSegment { span, kind, indent, .. } => {
                     // StateVar, StateVarAssign, and Context segments
                     // are inline expressions handled by the splicer during code generation
                     if *kind == FrameSegmentKind::StateVar

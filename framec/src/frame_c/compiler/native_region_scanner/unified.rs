@@ -167,6 +167,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     },
                     kind,
                     indent,
+                    metadata: SegmentMetadata::None,
                 });
 
                 i = stmt_end;
@@ -226,6 +227,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     },
                     kind,
                     indent: 0,
+                    metadata: SegmentMetadata::None,
                 });
                 i = parser.result_end;
                 seg_start = i;
@@ -365,6 +367,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         },
                         kind,
                         indent: computed_indent,
+                        metadata: SegmentMetadata::None,
                     });
                     i = seg_end;
                 } else {
