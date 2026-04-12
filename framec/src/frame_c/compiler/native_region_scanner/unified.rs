@@ -160,6 +160,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 // Find end of Frame statement
                 let stmt_end = skipper.find_line_end(bytes, i, end);
 
+                let stmt_bytes = &bytes[i..stmt_end];
+                let stmt_text = String::from_utf8_lossy(stmt_bytes);
+                let metadata = extract_segment_metadata(kind, &stmt_text);
+
                 regions.push(Region::FrameSegment {
                     span: RegionSpan {
                         start: i,
@@ -167,7 +171,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     },
                     kind,
                     indent,
-                    metadata: SegmentMetadata::None,
+                    metadata,
                 });
 
                 i = stmt_end;
@@ -220,6 +224,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 } else {
                     FrameSegmentKind::StateVar
                 };
+                let sv_bytes = &bytes[var_start..parser.result_end];
+                let sv_text = String::from_utf8_lossy(sv_bytes);
+                let metadata = extract_segment_metadata(kind, &sv_text);
+
                 regions.push(Region::FrameSegment {
                     span: RegionSpan {
                         start: var_start,
@@ -227,7 +235,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     },
                     kind,
                     indent: 0,
-                    metadata: SegmentMetadata::None,
+                    metadata,
                 });
                 i = parser.result_end;
                 seg_start = i;
@@ -360,6 +368,13 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         0
                     };
 
+                    // Extract structured metadata from the segment text.
+                    // This is the scanner's job — downstream stages consume
+                    // metadata instead of re-parsing raw segment text.
+                    let segment_bytes = &bytes[ctx_start..seg_end];
+                    let segment_text = String::from_utf8_lossy(segment_bytes);
+                    let metadata = extract_segment_metadata(kind, &segment_text);
+
                     regions.push(Region::FrameSegment {
                         span: RegionSpan {
                             start: ctx_start,
@@ -367,7 +382,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         },
                         kind,
                         indent: computed_indent,
-                        metadata: SegmentMetadata::None,
+                        metadata,
                     });
                     i = seg_end;
                 } else {
@@ -1088,6 +1103,280 @@ pub fn skip_ruby_percent_literal(bytes: &[u8], i: usize, end: usize) -> Option<u
     }
 }
 
+/// Extract structured metadata from a Frame segment's raw text.
+///
+/// This is the scanner's parsing phase — it produces structured data that
+/// downstream stages (codegen, validator, assembler) consume directly,
+/// eliminating the need for re-parsing raw segment text.
+fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetadata {
+    match kind {
+        // --- Context accessors ---
+
+        FrameSegmentKind::ContextParams => {
+            // @@:params.key → extract key
+            if let Some(rest) = text.strip_prefix("@@:params.") {
+                let key: String = rest.chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                SegmentMetadata::ContextParams { key }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        FrameSegmentKind::ContextData => {
+            // @@:data.key → extract key
+            if let Some(rest) = text.strip_prefix("@@:data.") {
+                let key: String = rest.chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                SegmentMetadata::ContextData { key, assign_expr: None }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        FrameSegmentKind::ContextDataAssign => {
+            // @@:data.key = expr → extract key and expr
+            if let Some(rest) = text.strip_prefix("@@:data.") {
+                let key: String = rest.chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                let after_key = &rest[key.len()..];
+                let expr = after_key.trim()
+                    .strip_prefix('=')
+                    .map(|e| e.trim().trim_end_matches(';').trim().to_string());
+                SegmentMetadata::ContextData { key, assign_expr: expr }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        FrameSegmentKind::ContextReturn => {
+            // @@:return = expr (assignment) or @@:return (bare read)
+            let trimmed = text.trim();
+            if let Some(rest) = trimmed.strip_prefix("@@:return") {
+                let rest = rest.trim();
+                if rest.starts_with('=') && !rest.starts_with("==") {
+                    let expr = rest[1..].trim().trim_end_matches(';').trim().to_string();
+                    SegmentMetadata::ContextReturn { assign_expr: Some(expr) }
+                } else {
+                    SegmentMetadata::ContextReturn { assign_expr: None }
+                }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        FrameSegmentKind::ContextReturnExpr => {
+            // @@:(expr) → extract the expression between parens
+            let trimmed = text.trim();
+            if let Some(start) = trimmed.find("@@:(") {
+                let after_open = start + 4;
+                let bytes = trimmed.as_bytes();
+                let mut depth = 1i32;
+                let mut p = after_open;
+                while p < bytes.len() && depth > 0 {
+                    match bytes[p] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    if depth > 0 { p += 1; }
+                }
+                let expr = trimmed[after_open..p].to_string();
+                SegmentMetadata::ReturnExpr { expr }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        FrameSegmentKind::ReturnCall => {
+            // @@:return(expr) → extract expr
+            let trimmed = text.trim();
+            if let Some(rest) = trimmed.strip_prefix("@@:return(") {
+                let expr = rest.trim_end_matches(')').to_string();
+                SegmentMetadata::ReturnCall { expr }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        // --- Self and system ---
+
+        FrameSegmentKind::ContextSelfCall => {
+            // @@:self.method(args) → extract method and args
+            if let Some(rest) = text.strip_prefix("@@:self.") {
+                if let Some(paren) = rest.find('(') {
+                    let method = rest[..paren].to_string();
+                    let args = rest[paren..].to_string(); // includes parens
+                    SegmentMetadata::SelfCall { method, args }
+                } else {
+                    SegmentMetadata::None
+                }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        FrameSegmentKind::ContextSelf | FrameSegmentKind::ContextSystemState
+            | FrameSegmentKind::ContextEvent => {
+            // These carry no variable content — the kind is sufficient
+            SegmentMetadata::None
+        }
+
+        // --- State variables ---
+
+        FrameSegmentKind::StateVar | FrameSegmentKind::StateVarAssign => {
+            // $.varName or $.varName = expr → extract name
+            if let Some(rest) = text.strip_prefix("$.") {
+                let name: String = rest.chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                SegmentMetadata::StateVar { name }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        // --- Transitions ---
+
+        FrameSegmentKind::Transition | FrameSegmentKind::TransitionForward => {
+            // (exit)? -> (=>)? (enter)? $State(state_args)?
+            // or -> pop$
+            let trimmed = text.trim();
+            if trimmed.contains("pop$") {
+                return SegmentMetadata::Transition {
+                    target_state: "pop$".to_string(),
+                    exit_args: None,
+                    enter_args: None,
+                    state_args: None,
+                    label: None,
+                    is_pop: true,
+                };
+            }
+
+            // Find target state: last $Uppercase identifier
+            let mut target = String::new();
+            let bytes = trimmed.as_bytes();
+            let mut last_state_start = 0;
+            for i in 0..bytes.len() {
+                if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_uppercase() {
+                    last_state_start = i;
+                }
+            }
+            if last_state_start > 0 {
+                let mut j = last_state_start + 1;
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                target = String::from_utf8_lossy(&bytes[last_state_start + 1..j]).to_string();
+            }
+
+            // Extract exit args: (args) before ->
+            let arrow_pos = trimmed.find("->").unwrap_or(0);
+            let before_arrow = &trimmed[..arrow_pos].trim();
+            let exit_args = if before_arrow.starts_with('(') {
+                let inner = before_arrow.trim_start_matches('(').trim_end_matches(')');
+                if !inner.is_empty() { Some(inner.to_string()) } else { None }
+            } else {
+                None
+            };
+
+            // Extract enter args: (args) between -> and $State
+            let after_arrow = &trimmed[arrow_pos + 2..];
+            let enter_args = if let Some(paren_start) = after_arrow.find('(') {
+                // Check if this paren is before the $State
+                let state_pos = after_arrow.find('$').unwrap_or(after_arrow.len());
+                if paren_start < state_pos {
+                    let paren_text = &after_arrow[paren_start..];
+                    // Find matching close paren
+                    let mut depth = 0;
+                    let mut end = 0;
+                    for (k, &b) in paren_text.as_bytes().iter().enumerate() {
+                        if b == b'(' { depth += 1; }
+                        if b == b')' { depth -= 1; if depth == 0 { end = k + 1; break; } }
+                    }
+                    let inner = &paren_text[1..end.saturating_sub(1)];
+                    if !inner.is_empty() { Some(inner.to_string()) } else { None }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Extract state args: $State(args) — parens after state name
+            let state_args = if last_state_start > 0 {
+                let mut j = last_state_start + 1;
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'(' {
+                    let mut depth = 0;
+                    let mut end = j;
+                    for k in j..bytes.len() {
+                        if bytes[k] == b'(' { depth += 1; }
+                        if bytes[k] == b')' { depth -= 1; if depth == 0 { end = k + 1; break; } }
+                    }
+                    let inner = String::from_utf8_lossy(&bytes[j + 1..end.saturating_sub(1)]).to_string();
+                    if !inner.is_empty() { Some(inner) } else { None }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Check for label: -> "label" $State
+            let label = if let Some(q_start) = after_arrow.find('"') {
+                let rest = &after_arrow[q_start + 1..];
+                if let Some(q_end) = rest.find('"') {
+                    Some(rest[..q_end].to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            SegmentMetadata::Transition {
+                target_state: target,
+                exit_args,
+                enter_args,
+                state_args,
+                label,
+                is_pop: false,
+            }
+        }
+
+        // --- Tagged instantiation ---
+
+        FrameSegmentKind::TaggedInstantiation => {
+            // @@SystemName(args)
+            if let Some(rest) = text.strip_prefix("@@") {
+                if let Some(paren) = rest.find('(') {
+                    let system_name = rest[..paren].to_string();
+                    let args = rest[paren..].to_string();
+                    SegmentMetadata::TaggedInstantiation { system_name, args }
+                } else {
+                    SegmentMetadata::None
+                }
+            } else {
+                SegmentMetadata::None
+            }
+        }
+
+        // --- Others ---
+
+        FrameSegmentKind::Forward | FrameSegmentKind::StackPush
+            | FrameSegmentKind::StackPop | FrameSegmentKind::ReturnStatement => {
+            // These are simple statements with no variable content
+            SegmentMetadata::None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1279,5 +1568,139 @@ mod tests {
             "@@:system.foo should not match, got: {:?}",
             kinds
         );
+    }
+
+    // ===== SegmentMetadata extraction tests =====
+
+    /// Helper: scan a body and return metadata for all FrameSegments
+    fn scan_for_metadata(body: &str) -> Vec<(FrameSegmentKind, SegmentMetadata)> {
+        let bytes = body.as_bytes();
+        let result = scan_native_regions(&RustSkipper, bytes, 0)
+            .expect("scan should succeed");
+        result.regions
+            .iter()
+            .filter_map(|r| match r {
+                Region::FrameSegment { kind, metadata, .. } => Some((*kind, metadata.clone())),
+                Region::NativeText { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_metadata_context_params() {
+        let metas = scan_for_metadata("{ let x = @@:params.age; }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::ContextParams { key } => assert_eq!(key, "age"),
+            other => panic!("Expected ContextParams, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_context_data() {
+        let metas = scan_for_metadata("{ let x = @@:data.msg; }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::ContextData { key, assign_expr } => {
+                assert_eq!(key, "msg");
+                assert!(assign_expr.is_none());
+            }
+            other => panic!("Expected ContextData, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_state_var() {
+        let metas = scan_for_metadata("{ $.count }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::StateVar { name } => assert_eq!(name, "count"),
+            other => panic!("Expected StateVar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_self_call() {
+        let metas = scan_for_metadata("{ @@:self.reading() }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::SelfCall { method, args } => {
+                assert_eq!(method, "reading");
+                assert_eq!(args, "()");
+            }
+            other => panic!("Expected SelfCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_self_call_with_args() {
+        let metas = scan_for_metadata("{ @@:self.process(a, b) }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::SelfCall { method, args } => {
+                assert_eq!(method, "process");
+                assert_eq!(args, "(a, b)");
+            }
+            other => panic!("Expected SelfCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_transition_simple() {
+        let metas = scan_for_metadata("{ -> $Active }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::Transition { target_state, is_pop, .. } => {
+                assert_eq!(target_state, "Active");
+                assert!(!is_pop);
+            }
+            other => panic!("Expected Transition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_transition_pop() {
+        let metas = scan_for_metadata("{ -> pop$ }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::Transition { is_pop, .. } => assert!(is_pop),
+            other => panic!("Expected Transition with is_pop, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_transition_with_enter_args() {
+        let metas = scan_for_metadata("{ -> (\"hello\") $Dialog }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::Transition { target_state, enter_args, .. } => {
+                assert_eq!(target_state, "Dialog");
+                assert!(enter_args.is_some());
+            }
+            other => panic!("Expected Transition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_return_expr() {
+        let metas = scan_for_metadata("{ @@:(42) }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::ReturnExpr { expr } => assert_eq!(expr, "42"),
+            other => panic!("Expected ReturnExpr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_tagged_instantiation() {
+        let metas = scan_for_metadata("{ let x = @@Counter(10); }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::TaggedInstantiation { system_name, args } => {
+                assert_eq!(system_name, "Counter");
+                assert_eq!(args, "(10)");
+            }
+            other => panic!("Expected TaggedInstantiation, got {:?}", other),
+        }
     }
 }
