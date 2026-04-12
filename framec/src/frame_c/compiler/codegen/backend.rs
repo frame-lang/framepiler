@@ -3,8 +3,8 @@
 //! This module defines the LanguageBackend trait that all language-specific
 //! code generators must implement.
 
+use super::ast::{BinaryOp, CodegenNode, Literal, UnaryOp, Visibility};
 use crate::frame_c::visitors::TargetLanguage;
-use super::ast::{CodegenNode, Literal, BinaryOp, UnaryOp, Visibility};
 
 /// Emit context tracks state during code generation
 #[derive(Debug, Clone)]
@@ -315,10 +315,10 @@ impl ClassSyntax {
             constructor_name: "initialize".to_string(),
             explicit_fields: false,
             method_keyword: Some("def".to_string()),
-            block_start: String::new(),  // Ruby doesn't use { for blocks
+            block_start: String::new(), // Ruby doesn't use { for blocks
             block_end: "end".to_string(),
             statement_terminator: String::new(), // Ruby doesn't use semicolons
-            type_sep: String::new(), // Ruby is dynamically typed
+            type_sep: String::new(),             // Ruby is dynamically typed
             return_type_sep: String::new(),
         }
     }
@@ -326,7 +326,7 @@ impl ClassSyntax {
     pub fn lua() -> Self {
         Self {
             language: TargetLanguage::Lua,
-            class_keyword: String::new(),  // Lua uses table+metatable, no class keyword
+            class_keyword: String::new(), // Lua uses table+metatable, no class keyword
             extends_keyword: None,
             self_keyword: "self".to_string(),
             constructor_name: "new".to_string(),
@@ -335,7 +335,7 @@ impl ClassSyntax {
             block_start: String::new(),
             block_end: "end".to_string(),
             statement_terminator: String::new(),
-            type_sep: String::new(),  // Lua is dynamically typed
+            type_sep: String::new(), // Lua is dynamically typed
             return_type_sep: String::new(),
         }
     }
@@ -345,14 +345,14 @@ impl ClassSyntax {
             language: TargetLanguage::Erlang,
             class_keyword: "-module".to_string(),
             extends_keyword: None,
-            self_keyword: "Data".to_string(),  // gen_statem state data parameter
+            self_keyword: "Data".to_string(), // gen_statem state data parameter
             constructor_name: "init".to_string(),
             explicit_fields: true,
-            method_keyword: None,  // Erlang functions don't have a keyword prefix
+            method_keyword: None, // Erlang functions don't have a keyword prefix
             block_start: String::new(),
-            block_end: ".".to_string(),  // Erlang function clauses end with .
+            block_end: ".".to_string(), // Erlang function clauses end with .
             statement_terminator: String::new(),
-            type_sep: " :: ".to_string(),  // Erlang type specs
+            type_sep: " :: ".to_string(), // Erlang type specs
             return_type_sep: " -> ".to_string(),
         }
     }
@@ -429,13 +429,24 @@ pub trait LanguageBackend: Send + Sync {
             Literal::Int(n) => n.to_string(),
             Literal::Float(f) => format!("{}", f),
             Literal::String(s) => format!("\"{}\"", s.replace("\\", "\\\\").replace("\"", "\\\"")),
-            Literal::Bool(b) => if *b { self.true_keyword() } else { self.false_keyword() }.to_string(),
+            Literal::Bool(b) => if *b {
+                self.true_keyword()
+            } else {
+                self.false_keyword()
+            }
+            .to_string(),
             Literal::Null => self.null_keyword().to_string(),
         }
     }
 
     /// Emit binary operator
-    fn emit_binary_op(&self, op: &BinaryOp, left: &CodegenNode, right: &CodegenNode, ctx: &mut EmitContext) -> String {
+    fn emit_binary_op(
+        &self,
+        op: &BinaryOp,
+        left: &CodegenNode,
+        right: &CodegenNode,
+        ctx: &mut EmitContext,
+    ) -> String {
         let left_str = self.emit(left, ctx);
         let right_str = self.emit(right, ctx);
         let op_str = match op {
@@ -467,12 +478,24 @@ pub trait LanguageBackend: Send + Sync {
 
     // Language-specific keywords (with defaults)
 
-    fn true_keyword(&self) -> &'static str { "true" }
-    fn false_keyword(&self) -> &'static str { "false" }
-    fn null_keyword(&self) -> &'static str { "null" }
-    fn and_operator(&self) -> &'static str { "&&" }
-    fn or_operator(&self) -> &'static str { "||" }
-    fn not_operator(&self) -> &'static str { "!" }
+    fn true_keyword(&self) -> &'static str {
+        "true"
+    }
+    fn false_keyword(&self) -> &'static str {
+        "false"
+    }
+    fn null_keyword(&self) -> &'static str {
+        "null"
+    }
+    fn and_operator(&self) -> &'static str {
+        "&&"
+    }
+    fn or_operator(&self) -> &'static str {
+        "||"
+    }
+    fn not_operator(&self) -> &'static str {
+        "!"
+    }
 }
 
 /// Get the appropriate backend for a target language
@@ -500,7 +523,10 @@ pub fn get_backend(lang: TargetLanguage) -> Box<dyn LanguageBackend> {
         // Non-V4 targets have no backend — panic early with a clear message.
         // No _ => arm: compiler enforces new TargetLanguage variants are added here.
         TargetLanguage::Graphviz => {
-            panic!("No V4 backend for {:?} — this target does not support V4 code generation", lang)
+            panic!(
+                "No V4 backend for {:?} — this target does not support V4 code generation",
+                lang
+            )
         }
     }
 }

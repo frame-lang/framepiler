@@ -1,10 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use super::ast::{SystemDecl, MachineDecl, StateDecl, ModuleAst, Span};
+use super::ast::{MachineDecl, ModuleAst, Span, StateDecl, SystemDecl};
 use super::frame_ast::{
-    FrameAst, SystemAst as FrameSystemAst, StateAst as FrameStateAst,
-    MachineAst as FrameMachineAst,
-    HandlerAst as FrameHandlerAst, Span as FrameSpan, Type,
+    FrameAst, HandlerAst as FrameHandlerAst, MachineAst as FrameMachineAst, Span as FrameSpan,
+    StateAst as FrameStateAst, SystemAst as FrameSystemAst, Type,
 };
 
 /// Convert a Type to its string representation — types pass through verbatim
@@ -18,9 +17,9 @@ fn type_to_string(t: &Type) -> String {
 /// Variable type information for Frame validation
 #[derive(Debug, Clone, PartialEq)]
 pub enum VarType {
-    Frame,      // Frame-specific types
-    Native,     // Native language types
-    Unknown,    // Type not yet determined
+    Frame,   // Frame-specific types
+    Native,  // Native language types
+    Unknown, // Type not yet determined
 }
 
 // ============================================================================
@@ -44,7 +43,7 @@ pub struct FrameSymbol {
     pub name: String,
     pub kind: FrameSymbolKind,
     pub declared_at: Span,
-    pub symbol_type: Option<String>,  // Type annotation if present
+    pub symbol_type: Option<String>, // Type annotation if present
 }
 
 /// Handler entry with parameters and body span
@@ -52,11 +51,11 @@ pub struct FrameSymbol {
 pub struct HandlerEntry {
     pub event: String,
     pub params: Vec<FrameSymbol>,
-    pub return_type: Option<String>,  // Return type annotation if present
-    pub return_init: Option<String>,  // Default return value: = @@:(expr)
-    pub body_span: Span,              // For splicer to extract body content
-    pub is_enter: bool,               // $>
-    pub is_exit: bool,                // $<
+    pub return_type: Option<String>, // Return type annotation if present
+    pub return_init: Option<String>, // Default return value: = @@:(expr)
+    pub body_span: Span,             // For splicer to extract body content
+    pub is_enter: bool,              // $>
+    pub is_exit: bool,               // $<
 }
 
 /// Enhanced state entry with handlers
@@ -112,58 +111,73 @@ pub struct MachineEntry {
 }
 
 impl Arcanum {
-    pub fn new() -> Self { Self { systems: HashMap::new() } }
+    pub fn new() -> Self {
+        Self {
+            systems: HashMap::new(),
+        }
+    }
 
     pub fn resolve_state<'a>(&'a self, system: &str, state: &str) -> Option<&'a StateDecl> {
-        self.systems.get(system)
+        self.systems
+            .get(system)
             .and_then(|s| s.machines.values().find_map(|m| m.states.get(state)))
     }
 
     pub fn has_parent(&self, system: &str, state: &str) -> bool {
-        self.resolve_state(system, state).and_then(|d| d.parent.as_ref()).is_some()
+        self.resolve_state(system, state)
+            .and_then(|d| d.parent.as_ref())
+            .is_some()
     }
 
     pub fn any_parent_relation(&self) -> bool {
-        self.systems.values().any(|sys| sys.machines.values().any(|m| m.states.values().any(|s| s.parent.is_some())))
+        self.systems.values().any(|sys| {
+            sys.machines
+                .values()
+                .any(|m| m.states.values().any(|s| s.parent.is_some()))
+        })
     }
 
     pub fn all_state_names(&self) -> std::collections::HashSet<String> {
         let mut set = std::collections::HashSet::new();
         for sys in self.systems.values() {
             for m in sys.machines.values() {
-                for s in m.states.values() { set.insert(s.name.clone()); }
+                for s in m.states.values() {
+                    set.insert(s.name.clone());
+                }
             }
         }
         set
     }
-    
+
     // Enhanced validation methods (Stage 1)
-    
+
     /// Check if a method is in the system's interface (E406)
     pub fn is_interface_method(&self, system: &str, method: &str) -> bool {
-        self.systems.get(system)
+        self.systems
+            .get(system)
             .map(|s| s.interface_methods.contains(method))
             .unwrap_or(false)
     }
-    
+
     /// Check if an action exists in the system
     pub fn has_action(&self, system: &str, action: &str) -> bool {
-        self.systems.get(system)
+        self.systems
+            .get(system)
             .map(|s| s.actions.contains(action))
             .unwrap_or(false)
     }
-    
+
     /// Check if an operation exists in the system
     pub fn has_operation(&self, system: &str, operation: &str) -> bool {
-        self.systems.get(system)
+        self.systems
+            .get(system)
             .map(|s| s.operations.contains(operation))
             .unwrap_or(false)
     }
-    
+
     /// Get state parameter count for arity validation (E405)
     pub fn get_state_param_count(&self, system: &str, state: &str) -> Option<usize> {
-        self.resolve_state(system, state)
-            .map(|s| s.params.len())
+        self.resolve_state(system, state).map(|s| s.params.len())
     }
 
     /// Get enter handler parameter count for transition arg validation (E417)
@@ -203,18 +217,24 @@ impl Arcanum {
         } else {
             let available = self.get_system_states(system);
             if available.is_empty() {
-                Err(format!("Unknown state '{}' (system has no states)", target_state))
+                Err(format!(
+                    "Unknown state '{}' (system has no states)",
+                    target_state
+                ))
             } else {
-                Err(format!("Unknown state '{}'. Available states: {}", 
-                    target_state, 
-                    available.join(", ")))
+                Err(format!(
+                    "Unknown state '{}'. Available states: {}",
+                    target_state,
+                    available.join(", ")
+                ))
             }
         }
     }
-    
+
     /// Get all states in a system (for error messages)
     pub fn get_system_states(&self, system: &str) -> Vec<String> {
-        self.systems.get(system)
+        self.systems
+            .get(system)
             .map(|s| {
                 let mut states = Vec::new();
                 for m in s.machines.values() {
@@ -285,12 +305,14 @@ impl Arcanum {
         handler: Option<&str>,
         name: &str,
     ) -> bool {
-        self.resolve_frame_symbol(system, state, handler, name).is_some()
+        self.resolve_frame_symbol(system, state, handler, name)
+            .is_some()
     }
 
     /// Get all handlers for a state (for codegen iteration)
     pub fn get_state_handlers(&self, system: &str, state: &str) -> Vec<&HandlerEntry> {
-        self.systems.get(system)
+        self.systems
+            .get(system)
             .and_then(|s| s.enhanced_machines.values().next())
             .and_then(|m| m.states.get(state))
             .map(|s| s.handlers.values().collect())
@@ -299,14 +321,16 @@ impl Arcanum {
 
     /// Get enhanced state entry (for codegen)
     pub fn get_enhanced_state(&self, system: &str, state: &str) -> Option<&EnhancedStateEntry> {
-        self.systems.get(system)
+        self.systems
+            .get(system)
             .and_then(|s| s.enhanced_machines.values().next())
             .and_then(|m| m.states.get(state))
     }
 
     /// Get all enhanced states for a system (for codegen iteration)
     pub fn get_enhanced_states(&self, system: &str) -> Vec<&EnhancedStateEntry> {
-        self.systems.get(system)
+        self.systems
+            .get(system)
             .and_then(|s| s.enhanced_machines.values().next())
             .map(|m| m.states.values().collect())
             .unwrap_or_default()
@@ -317,7 +341,10 @@ pub fn build_arcanum_from_outline_bytes(bytes: &[u8], _start: usize) -> Arcanum 
     // DEPRECATED: kept temporarily for compatibility; prefer build_arcanum_from_module_ast.
     // For now, delegate to a ModuleAst-based builder using the default language
     // assumptions of the outer pipeline (Python3 is sufficient for brace/indent).
-    let module = crate::frame_c::compiler::system_parser::SystemParser::parse_module(bytes, crate::frame_c::visitors::TargetLanguage::Python3);
+    let module = crate::frame_c::compiler::system_parser::SystemParser::parse_module(
+        bytes,
+        crate::frame_c::visitors::TargetLanguage::Python3,
+    );
     build_arcanum_from_module_ast(bytes, &module)
 }
 
@@ -328,14 +355,18 @@ pub(crate) fn collect_methods_in_section(bytes: &[u8], span: &Span) -> HashSet<S
     let start = span.start.min(n);
     let end = span.end.min(n);
     let mut p = start;
-    
+
     while p < end {
         // Skip whitespace
-        while p < end && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+        while p < end
+            && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n')
+        {
             p += 1;
         }
-        if p >= end { break; }
-        
+        if p >= end {
+            break;
+        }
+
         // Look for method names - they start with a letter or underscore
         if bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' {
             let name_start = p;
@@ -344,24 +375,24 @@ pub(crate) fn collect_methods_in_section(bytes: &[u8], span: &Span) -> HashSet<S
                 p += 1;
             }
             let name = String::from_utf8_lossy(&bytes[name_start..p]).to_string();
-            
+
             // Skip whitespace after name
             while p < end && (bytes[p] == b' ' || bytes[p] == b'\t') {
                 p += 1;
             }
-            
+
             // Check if followed by '(' indicating a method
             if p < end && bytes[p] == b'(' {
                 methods.insert(name);
             }
         }
-        
+
         // Move to next line or character
         while p < end && bytes[p] != b'\n' {
             p += 1;
         }
     }
-    
+
     methods
 }
 
@@ -372,20 +403,26 @@ pub(crate) fn collect_domain_vars(bytes: &[u8], span: &Span) -> HashMap<String, 
     let start = span.start.min(n);
     let end = span.end.min(n);
     let mut p = start;
-    
+
     while p < end {
         // Skip whitespace
-        while p < end && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') {
+        while p < end
+            && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n')
+        {
             p += 1;
         }
-        if p >= end { break; }
-        
+        if p >= end {
+            break;
+        }
+
         // Look for variable declarations (simple heuristic)
         // Could be: var name, name:, or just name
 
         // Check for 'var' keyword
-        if p + 3 < end && &bytes[p..p+3] == b"var" &&
-           (p + 3 >= end || bytes[p+3] == b' ' || bytes[p+3] == b'\t') {
+        if p + 3 < end
+            && &bytes[p..p + 3] == b"var"
+            && (p + 3 >= end || bytes[p + 3] == b' ' || bytes[p + 3] == b'\t')
+        {
             p += 3;
             while p < end && (bytes[p] == b' ' || bytes[p] == b'\t') {
                 p += 1;
@@ -412,13 +449,13 @@ pub(crate) fn collect_domain_vars(bytes: &[u8], span: &Span) -> HashMap<String, 
                 vars.insert(var_name, VarType::Unknown);
             }
         }
-        
+
         // Move to next line
         while p < end && bytes[p] != b'\n' {
             p += 1;
         }
     }
-    
+
     vars
 }
 
@@ -428,40 +465,76 @@ fn collect_states_in_machine(bytes: &[u8], span: &Span) -> Vec<StateDecl> {
     let end = span.end.min(n);
     let mut temp_states: Vec<(String, Option<String>, Vec<String>, usize)> = Vec::new();
     let mut p = start;
-    fn is_space(b: u8) -> bool { b == b' ' || b == b'\t' }
+    fn is_space(b: u8) -> bool {
+        b == b' ' || b == b'\t'
+    }
     while p < end {
-        while p < end && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') { p += 1; }
-        if p >= end { break; }
+        while p < end
+            && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n')
+        {
+            p += 1;
+        }
+        if p >= end {
+            break;
+        }
         if bytes[p] == b'$' {
             let mut k = p + 1;
             if k < end && (bytes[k].is_ascii_alphabetic() || bytes[k] == b'_') {
-                k += 1; while k < end && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') { k += 1; }
-                let name = String::from_utf8_lossy(&bytes[p+1..k]).to_string();
-                let mut q = k; while q < end && (bytes[q] == b' ' || bytes[q] == b'\t') { q += 1; }
+                k += 1;
+                while k < end && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') {
+                    k += 1;
+                }
+                let name = String::from_utf8_lossy(&bytes[p + 1..k]).to_string();
+                let mut q = k;
+                while q < end && (bytes[q] == b' ' || bytes[q] == b'\t') {
+                    q += 1;
+                }
                 let mut parent: Option<String> = None;
-                if q + 2 < end && bytes[q] == b'=' && bytes[q+1] == b'>' {
-                    let mut r = q + 2; while r < end && (bytes[r] == b' ' || bytes[r] == b'\t') { r += 1; }
+                if q + 2 < end && bytes[q] == b'=' && bytes[q + 1] == b'>' {
+                    let mut r = q + 2;
+                    while r < end && (bytes[r] == b' ' || bytes[r] == b'\t') {
+                        r += 1;
+                    }
                     if r < end && bytes[r] == b'$' {
-                        let mut s = r + 1; if s < end && (bytes[s].is_ascii_alphabetic() || bytes[s] == b'_') {
-                            s += 1; while s < end && (bytes[s].is_ascii_alphanumeric() || bytes[s] == b'_') { s += 1; }
-                            parent = Some(String::from_utf8_lossy(&bytes[r+1..s]).to_string());
+                        let mut s = r + 1;
+                        if s < end && (bytes[s].is_ascii_alphabetic() || bytes[s] == b'_') {
+                            s += 1;
+                            while s < end && (bytes[s].is_ascii_alphanumeric() || bytes[s] == b'_')
+                            {
+                                s += 1;
+                            }
+                            parent = Some(String::from_utf8_lossy(&bytes[r + 1..s]).to_string());
                             q = s;
                         }
                     }
                 }
                 // header must contain '{' on the same line
-                let mut has_lbrace = false; let mut t = q; while t < end && bytes[t] != b'\n' { if bytes[t] == b'{' { has_lbrace = true; break; } t += 1; }
+                let mut has_lbrace = false;
+                let mut t = q;
+                while t < end && bytes[t] != b'\n' {
+                    if bytes[t] == b'{' {
+                        has_lbrace = true;
+                        break;
+                    }
+                    t += 1;
+                }
                 if has_lbrace {
                     // Parse optional state parameter list: $State(param1, param2, ...) where
                     // each parameter is a bare identifier before any ':' or '='.
                     let mut params: Vec<String> = Vec::new();
                     let mut x = k;
-                    while x < end && is_space(bytes[x]) { x += 1; }
+                    while x < end && is_space(bytes[x]) {
+                        x += 1;
+                    }
                     if x < end && bytes[x] == b'(' {
                         x += 1; // after '('
                         loop {
-                            while x < end && (is_space(bytes[x]) || bytes[x] == b',') { x += 1; }
-                            if x >= end || bytes[x] == b')' { break; }
+                            while x < end && (is_space(bytes[x]) || bytes[x] == b',') {
+                                x += 1;
+                            }
+                            if x >= end || bytes[x] == b')' {
+                                break;
+                            }
                             let ident_start = x;
                             while x < end {
                                 let c = bytes[x];
@@ -471,21 +544,32 @@ fn collect_states_in_machine(bytes: &[u8], span: &Span) -> Vec<StateDecl> {
                                 x += 1;
                             }
                             if ident_start < x {
-                                let token = String::from_utf8_lossy(&bytes[ident_start..x]).trim().to_string();
+                                let token = String::from_utf8_lossy(&bytes[ident_start..x])
+                                    .trim()
+                                    .to_string();
                                 if !token.is_empty() {
                                     params.push(token);
                                 }
                             }
-                            while x < end && bytes[x] != b',' && bytes[x] != b')' { x += 1; }
-                            if x < end && bytes[x] == b',' { x += 1; continue; }
-                            if x < end && bytes[x] == b')' { break; }
+                            while x < end && bytes[x] != b',' && bytes[x] != b')' {
+                                x += 1;
+                            }
+                            if x < end && bytes[x] == b',' {
+                                x += 1;
+                                continue;
+                            }
+                            if x < end && bytes[x] == b')' {
+                                break;
+                            }
                         }
                     }
                     temp_states.push((name, parent, params, p));
                 }
             }
         }
-        while p < end && bytes[p] != b'\n' { p += 1; }
+        while p < end && bytes[p] != b'\n' {
+            p += 1;
+        }
     }
     let mut result = Vec::new();
     for idx in 0..temp_states.len() {
@@ -499,7 +583,10 @@ fn collect_states_in_machine(bytes: &[u8], span: &Span) -> Vec<StateDecl> {
             name: name.clone(),
             parent: parent.clone(),
             params: params.clone(),
-            span: Span { start: start_pos, end: span_end },
+            span: Span {
+                start: start_pos,
+                end: span_end,
+            },
         });
     }
     result
@@ -508,56 +595,76 @@ fn collect_states_in_machine(bytes: &[u8], span: &Span) -> Vec<StateDecl> {
 pub fn build_arcanum_from_module_ast(bytes: &[u8], module: &ModuleAst) -> Arcanum {
     let mut arc = Arcanum::new();
     if std::env::var("FRAME_TRANSPILER_DEBUG").ok().as_deref() == Some("1") {
-        eprintln!("[build_arcanum] Module has {} systems", module.systems.len());
+        eprintln!(
+            "[build_arcanum] Module has {} systems",
+            module.systems.len()
+        );
         for sys_ast in &module.systems {
             eprintln!("[build_arcanum] System: {}", sys_ast.name);
         }
     }
     for sys_ast in &module.systems {
         let mut sys_entry = SystemEntry::default();
-        
+
         // Collect interface methods
         if let Some(iface_span) = sys_ast.sections.interface {
             let methods = collect_methods_in_section(bytes, &iface_span);
             sys_entry.interface_methods = methods;
             if std::env::var("FRAME_TRANSPILER_DEBUG").ok().as_deref() == Some("1") {
-                eprintln!("[build_arcanum] System {} interface methods: {:?}", sys_ast.name, sys_entry.interface_methods);
+                eprintln!(
+                    "[build_arcanum] System {} interface methods: {:?}",
+                    sys_ast.name, sys_entry.interface_methods
+                );
             }
         }
-        
+
         // Collect actions
         if let Some(actions_span) = sys_ast.sections.actions {
             let actions = collect_methods_in_section(bytes, &actions_span);
             sys_entry.actions = actions;
             if std::env::var("FRAME_TRANSPILER_DEBUG").ok().as_deref() == Some("1") {
-                eprintln!("[build_arcanum] System {} actions: {:?}", sys_ast.name, sys_entry.actions);
+                eprintln!(
+                    "[build_arcanum] System {} actions: {:?}",
+                    sys_ast.name, sys_entry.actions
+                );
             }
         }
-        
+
         // Collect operations
         if let Some(ops_span) = sys_ast.sections.operations {
             let operations = collect_methods_in_section(bytes, &ops_span);
             sys_entry.operations = operations;
             if std::env::var("FRAME_TRANSPILER_DEBUG").ok().as_deref() == Some("1") {
-                eprintln!("[build_arcanum] System {} operations: {:?}", sys_ast.name, sys_entry.operations);
+                eprintln!(
+                    "[build_arcanum] System {} operations: {:?}",
+                    sys_ast.name, sys_entry.operations
+                );
             }
         }
-        
+
         // Collect domain variables
         if let Some(domain_span) = sys_ast.sections.domain {
             let vars = collect_domain_vars(bytes, &domain_span);
             sys_entry.domain_vars = vars;
             if std::env::var("FRAME_TRANSPILER_DEBUG").ok().as_deref() == Some("1") {
-                eprintln!("[build_arcanum] System {} domain vars: {} vars", sys_ast.name, sys_entry.domain_vars.len());
+                eprintln!(
+                    "[build_arcanum] System {} domain vars: {} vars",
+                    sys_ast.name,
+                    sys_entry.domain_vars.len()
+                );
             }
         }
-        
+
         // Collect machine states
         if let Some(machine_span) = sys_ast.sections.machine {
             let mut machine_entry = MachineEntry::default();
             let states = collect_states_in_machine(bytes, &machine_span);
             if std::env::var("FRAME_TRANSPILER_DEBUG").ok().as_deref() == Some("1") {
-                eprintln!("[build_arcanum] System {} has {} states", sys_ast.name, states.len());
+                eprintln!(
+                    "[build_arcanum] System {} has {} states",
+                    sys_ast.name,
+                    states.len()
+                );
                 for s in &states {
                     eprintln!("[build_arcanum]   State: {}", s.name);
                 }
@@ -566,7 +673,9 @@ pub fn build_arcanum_from_module_ast(bytes: &[u8], module: &ModuleAst) -> Arcanu
                 machine_entry.states.insert(s.name.clone(), s);
             }
             // Single machine entry per system for now; name can be refined later.
-            sys_entry.machines.insert("machine".to_string(), machine_entry);
+            sys_entry
+                .machines
+                .insert("machine".to_string(), machine_entry);
         }
         arc.systems.insert(sys_ast.name.clone(), sys_entry);
     }
@@ -599,7 +708,10 @@ pub fn build_arcanum_from_frame_ast(ast: &FrameAst) -> Arcanum {
     }
 
     if std::env::var("FRAME_TRANSPILER_DEBUG").ok().as_deref() == Some("1") {
-        eprintln!("[build_arcanum_from_frame_ast] Built arcanum with {} systems", arc.systems.len());
+        eprintln!(
+            "[build_arcanum_from_frame_ast] Built arcanum with {} systems",
+            arc.systems.len()
+        );
         for (name, entry) in &arc.systems {
             eprintln!("[build_arcanum_from_frame_ast]   System '{}': {} states, {} interface, {} actions, {} operations",
                 name,
@@ -651,7 +763,10 @@ fn build_system_entry_from_frame_ast(system: &FrameSystemAst) -> SystemEntry {
         let symbol = FrameSymbol {
             name: var.name.clone(),
             kind: FrameSymbolKind::DomainVar,
-            declared_at: Span { start: var.span.start, end: var.span.end },
+            declared_at: Span {
+                start: var.span.start,
+                end: var.span.end,
+            },
             symbol_type: Some(format!("{:?}", var.var_type)),
         };
         entry.domain_symbols.insert(var.name.clone(), symbol);
@@ -672,7 +787,9 @@ fn build_system_entry_from_frame_ast(system: &FrameSystemAst) -> SystemEntry {
     // Phase 7: Build enhanced machine with handlers
     if let Some(ref machine) = system.machine {
         let enhanced_machine = build_enhanced_machine_from_frame_ast(machine);
-        entry.enhanced_machines.insert("machine".to_string(), enhanced_machine);
+        entry
+            .enhanced_machines
+            .insert("machine".to_string(), enhanced_machine);
     }
 
     entry
@@ -696,18 +813,23 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
 
     // Helper to convert frame_ast::Span to ast::Span
     fn convert_span(s: &FrameSpan) -> Span {
-        Span { start: s.start, end: s.end }
+        Span {
+            start: s.start,
+            end: s.end,
+        }
     }
 
     // Convert state parameters to FrameSymbols
-    let params: Vec<FrameSymbol> = state.params.iter().map(|p| {
-        FrameSymbol {
+    let params: Vec<FrameSymbol> = state
+        .params
+        .iter()
+        .map(|p| FrameSymbol {
             name: p.name.clone(),
             kind: FrameSymbolKind::StateParam,
             declared_at: convert_span(&p.span),
             symbol_type: Some(type_to_string(&p.param_type)),
-        }
-    }).collect();
+        })
+        .collect();
 
     // Convert regular handlers
     for handler in &state.handlers {
@@ -719,15 +841,17 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
     if let Some(ref enter) = state.enter {
         let handler_entry = HandlerEntry {
             event: "$>".to_string(),
-            params: enter.params.iter().map(|p| {
-                FrameSymbol {
+            params: enter
+                .params
+                .iter()
+                .map(|p| FrameSymbol {
                     name: p.name.clone(),
                     kind: FrameSymbolKind::HandlerParam,
                     declared_at: convert_span(&p.span),
                     symbol_type: Some(type_to_string(&p.param_type)),
-                }
-            }).collect(),
-            return_type: None,  // Enter handlers don't have return types
+                })
+                .collect(),
+            return_type: None, // Enter handlers don't have return types
             return_init: None,
             body_span: convert_span(&enter.body.span),
             is_enter: true,
@@ -740,15 +864,17 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
     if let Some(ref exit) = state.exit {
         let handler_entry = HandlerEntry {
             event: "$<".to_string(),
-            params: exit.params.iter().map(|p| {
-                FrameSymbol {
+            params: exit
+                .params
+                .iter()
+                .map(|p| FrameSymbol {
                     name: p.name.clone(),
                     kind: FrameSymbolKind::HandlerParam,
                     declared_at: convert_span(&p.span),
                     symbol_type: Some(type_to_string(&p.param_type)),
-                }
-            }).collect(),
-            return_type: None,   // Exit handlers don't have return types
+                })
+                .collect(),
+            return_type: None, // Exit handlers don't have return types
             return_init: None,
             body_span: convert_span(&exit.body.span),
             is_enter: false,
@@ -770,17 +896,22 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
 fn build_handler_entry_from_ast(handler: &FrameHandlerAst) -> HandlerEntry {
     // Helper to convert frame_ast::Span to ast::Span
     fn convert_span(s: &FrameSpan) -> Span {
-        Span { start: s.start, end: s.end }
+        Span {
+            start: s.start,
+            end: s.end,
+        }
     }
 
-    let params: Vec<FrameSymbol> = handler.params.iter().map(|p| {
-        FrameSymbol {
+    let params: Vec<FrameSymbol> = handler
+        .params
+        .iter()
+        .map(|p| FrameSymbol {
             name: p.name.clone(),
             kind: FrameSymbolKind::HandlerParam,
             declared_at: convert_span(&p.span),
             symbol_type: Some(type_to_string(&p.param_type)),
-        }
-    }).collect();
+        })
+        .collect();
 
     HandlerEntry {
         event: handler.event.clone(),

@@ -22,8 +22,8 @@
 
 use std::convert::TryFrom;
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::native_region_scanner::unified::SyntaxSkipper;
+use crate::frame_c::visitors::TargetLanguage;
 
 // ============================================================================
 // SourceMap and Segment types
@@ -65,9 +65,7 @@ pub enum PragmaKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
     /// Native code region — passes through verbatim to output
-    Native {
-        span: Span,
-    },
+    Native { span: Span },
     /// Pragma line (@@target, @@persist, @@run-expect, etc.)
     Pragma {
         kind: PragmaKind,
@@ -103,17 +101,26 @@ pub struct SourceMap {
 impl SourceMap {
     /// Get all system segments
     pub fn systems(&self) -> Vec<&Segment> {
-        self.segments.iter().filter(|s| matches!(s, Segment::System { .. })).collect()
+        self.segments
+            .iter()
+            .filter(|s| matches!(s, Segment::System { .. }))
+            .collect()
     }
 
     /// Get all native segments
     pub fn natives(&self) -> Vec<&Segment> {
-        self.segments.iter().filter(|s| matches!(s, Segment::Native { .. })).collect()
+        self.segments
+            .iter()
+            .filter(|s| matches!(s, Segment::Native { .. }))
+            .collect()
     }
 
     /// Get all pragma segments
     pub fn pragmas(&self) -> Vec<&Segment> {
-        self.segments.iter().filter(|s| matches!(s, Segment::Pragma { .. })).collect()
+        self.segments
+            .iter()
+            .filter(|s| matches!(s, Segment::Pragma { .. }))
+            .collect()
     }
 
     /// Extract text content for a span
@@ -125,13 +132,26 @@ impl SourceMap {
 
     /// Get the @@persist pragma if present
     pub fn persist_pragma(&self) -> Option<&Segment> {
-        self.segments.iter().find(|s| matches!(s, Segment::Pragma { kind: PragmaKind::Persist, .. }))
+        self.segments.iter().find(|s| {
+            matches!(
+                s,
+                Segment::Pragma {
+                    kind: PragmaKind::Persist,
+                    ..
+                }
+            )
+        })
     }
 
     /// Get the @@run-expect value if present
     pub fn run_expect(&self) -> Option<&str> {
         self.segments.iter().find_map(|s| {
-            if let Segment::Pragma { kind: PragmaKind::RunExpect, value: Some(v), .. } = s {
+            if let Segment::Pragma {
+                kind: PragmaKind::RunExpect,
+                value: Some(v),
+                ..
+            } = s
+            {
                 Some(v.as_str())
             } else {
                 None
@@ -160,8 +180,15 @@ pub enum SegmentError {
 impl std::fmt::Display for SegmentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SegmentError::UnterminatedSystem { name, open_brace_pos } => {
-                write!(f, "Unterminated @@system block '{}' (opening brace at byte {})", name, open_brace_pos)
+            SegmentError::UnterminatedSystem {
+                name,
+                open_brace_pos,
+            } => {
+                write!(
+                    f,
+                    "Unterminated @@system block '{}' (opening brace at byte {})",
+                    name, open_brace_pos
+                )
             }
             SegmentError::UnterminatedString { pos } => {
                 write!(f, "Unterminated string literal at byte {}", pos)
@@ -184,10 +211,7 @@ impl std::fmt::Display for SegmentError {
 ///
 /// This is the entry point for Stage 0 of the pipeline. It uses the given
 /// `SyntaxSkipper` to avoid false `@@` detection inside strings and comments.
-pub fn segment<S: SyntaxSkipper>(
-    skipper: &S,
-    source: &[u8],
-) -> Result<SourceMap, SegmentError> {
+pub fn segment<S: SyntaxSkipper>(skipper: &S, source: &[u8]) -> Result<SourceMap, SegmentError> {
     let mut segments: Vec<Segment> = Vec::new();
     let n = source.len();
     let mut i = 0usize;
@@ -209,7 +233,10 @@ pub fn segment<S: SyntaxSkipper>(
                 // Found pragma — emit any preceding native text
                 if seg_start < line_start {
                     segments.push(Segment::Native {
-                        span: Span { start: seg_start, end: line_start },
+                        span: Span {
+                            start: seg_start,
+                            end: line_start,
+                        },
                     });
                 }
 
@@ -233,7 +260,10 @@ pub fn segment<S: SyntaxSkipper>(
                         let line_end = find_line_end(source, pragma_start);
                         segments.push(Segment::Pragma {
                             kind: PragmaKind::Target,
-                            span: Span { start: pragma_start, end: line_end },
+                            span: Span {
+                                start: pragma_start,
+                                end: line_end,
+                            },
                             value: pragma_value,
                         });
                         i = line_end;
@@ -246,7 +276,10 @@ pub fn segment<S: SyntaxSkipper>(
                         let block_end = find_pragma_block_end(skipper, source, pragma_start)?;
                         segments.push(Segment::Pragma {
                             kind: PragmaKind::Codegen,
-                            span: Span { start: pragma_start, end: block_end },
+                            span: Span {
+                                start: pragma_start,
+                                end: block_end,
+                            },
                             value: pragma_value,
                         });
                         i = block_end;
@@ -258,7 +291,9 @@ pub fn segment<S: SyntaxSkipper>(
                         // These can optionally have a block body
                         // Check if there's a { on the same line
                         let line_end_pos = find_line_end(source, pragma_start);
-                        let has_brace = source[pragma_start..line_end_pos].iter().any(|&b| b == b'{');
+                        let has_brace = source[pragma_start..line_end_pos]
+                            .iter()
+                            .any(|&b| b == b'{');
                         let end = if has_brace {
                             find_pragma_block_end(skipper, source, pragma_start)?
                         } else {
@@ -266,7 +301,10 @@ pub fn segment<S: SyntaxSkipper>(
                         };
                         segments.push(Segment::Pragma {
                             kind: kind.clone(),
-                            span: Span { start: pragma_start, end },
+                            span: Span {
+                                start: pragma_start,
+                                end,
+                            },
                             value: pragma_value,
                         });
                         i = end;
@@ -312,7 +350,10 @@ pub fn segment<S: SyntaxSkipper>(
                                 k += 1;
                             }
                             if k < n && source[k] == b')' {
-                                let span = Span { start: inner_start, end: k };
+                                let span = Span {
+                                    start: inner_start,
+                                    end: k,
+                                };
                                 after_name = k + 1;
                                 Some(span)
                             } else {
@@ -324,7 +365,10 @@ pub fn segment<S: SyntaxSkipper>(
 
                         // Find the opening brace
                         let mut brace_pos = after_name;
-                        while brace_pos < n && source[brace_pos] != b'{' && source[brace_pos] != b'\n' {
+                        while brace_pos < n
+                            && source[brace_pos] != b'{'
+                            && source[brace_pos] != b'\n'
+                        {
                             brace_pos += 1;
                         }
 
@@ -358,8 +402,14 @@ pub fn segment<S: SyntaxSkipper>(
                         let body_end = close_pos;
 
                         segments.push(Segment::System {
-                            outer_span: Span { start: pragma_start, end: outer_end },
-                            body_span: Span { start: body_start, end: body_end },
+                            outer_span: Span {
+                                start: pragma_start,
+                                end: outer_end,
+                            },
+                            body_span: Span {
+                                start: body_start,
+                                end: body_end,
+                            },
                             header_params_span,
                             name: system_name,
                         });
@@ -374,7 +424,10 @@ pub fn segment<S: SyntaxSkipper>(
                         let line_end = find_line_end(source, pragma_start);
                         segments.push(Segment::Pragma {
                             kind,
-                            span: Span { start: pragma_start, end: line_end },
+                            span: Span {
+                                start: pragma_start,
+                                end: line_end,
+                            },
                             value: pragma_value,
                         });
                         i = line_end;
@@ -413,7 +466,10 @@ pub fn segment<S: SyntaxSkipper>(
     // Emit any remaining native text
     if seg_start < n {
         segments.push(Segment::Native {
-            span: Span { start: seg_start, end: n },
+            span: Span {
+                start: seg_start,
+                end: n,
+            },
         });
     }
 
@@ -431,8 +487,8 @@ pub fn segment<S: SyntaxSkipper>(
 /// Check if position is at `@@system` (not just any `@@` pragma)
 fn is_system_pragma(bytes: &[u8], pos: usize) -> bool {
     let remaining = &bytes[pos..];
-    remaining.starts_with(b"@@system") &&
-        (remaining.len() <= 8 || !remaining[8].is_ascii_alphanumeric())
+    remaining.starts_with(b"@@system")
+        && (remaining.len() <= 8 || !remaining[8].is_ascii_alphanumeric())
 }
 
 /// Identify the kind and value of a pragma at the given position.
@@ -465,7 +521,11 @@ fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
     };
     // Trim trailing whitespace from value
     let mut value_end = line_end;
-    while value_end > value_start && (bytes[value_end - 1] == b' ' || bytes[value_end - 1] == b'\t' || bytes[value_end - 1] == b'\r') {
+    while value_end > value_start
+        && (bytes[value_end - 1] == b' '
+            || bytes[value_end - 1] == b'\t'
+            || bytes[value_end - 1] == b'\r')
+    {
         value_end -= 1;
     }
     let value = if value_start < value_end {
@@ -551,9 +611,7 @@ fn find_pragma_block_end<S: SyntaxSkipper>(
             }
             Ok(end)
         }
-        Err(_) => {
-            Err(SegmentError::UnterminatedComment { pos: start })
-        }
+        Err(_) => Err(SegmentError::UnterminatedComment { pos: start }),
     }
 }
 
@@ -638,12 +696,10 @@ pub fn segment_source(source: &[u8], lang: TargetLanguage) -> Result<SourceMap, 
         // Non-V4 targets — should never reach the segmenter.
         // No _ => arm: the compiler enforces that new TargetLanguage variants
         // must be added here explicitly.
-        TargetLanguage::Graphviz => {
-            Err(SegmentError::InvalidTarget {
-                value: format!("{:?}", lang),
-                pos: 0,
-            })
-        }
+        TargetLanguage::Graphviz => Err(SegmentError::InvalidTarget {
+            value: format!("{:?}", lang),
+            pos: 0,
+        }),
     }
 }
 
@@ -673,7 +729,13 @@ mod tests {
         let map = segment_py(source);
         assert_eq!(map.segments.len(), 1);
         assert!(matches!(&map.segments[0], Segment::Native { .. }));
-        assert_eq!(map.text(&Span { start: 0, end: source.len() }), source);
+        assert_eq!(
+            map.text(&Span {
+                start: 0,
+                end: source.len()
+            }),
+            source
+        );
     }
 
     #[test]
@@ -682,7 +744,11 @@ mod tests {
         let map = segment_py(source);
         assert_eq!(map.segments.len(), 1);
         match &map.segments[0] {
-            Segment::Pragma { kind: PragmaKind::Target, value, .. } => {
+            Segment::Pragma {
+                kind: PragmaKind::Target,
+                value,
+                ..
+            } => {
                 assert_eq!(value.as_deref(), Some("python_3"));
             }
             other => panic!("Expected Target pragma, got: {:?}", other),
@@ -692,7 +758,8 @@ mod tests {
 
     #[test]
     fn test_simple_system() {
-        let source = "@@target python_3\n\n@@system Foo {\n    machine:\n        $A {\n        }\n}\n";
+        let source =
+            "@@target python_3\n\n@@system Foo {\n    machine:\n        $A {\n        }\n}\n";
         let map = segment_py(source);
 
         // Should have: Target pragma, Native (blank line), System
@@ -715,7 +782,11 @@ mod tests {
         let native_count = map.natives().len();
         let system_count = map.systems().len();
         assert_eq!(system_count, 1);
-        assert!(native_count >= 2, "Expected at least 2 native segments (before and after system), got {}", native_count);
+        assert!(
+            native_count >= 2,
+            "Expected at least 2 native segments (before and after system), got {}",
+            native_count
+        );
     }
 
     #[test]
@@ -726,10 +797,13 @@ mod tests {
         let systems: Vec<_> = map.systems();
         assert_eq!(systems.len(), 2);
 
-        let names: Vec<&str> = systems.iter().map(|s| match s {
-            Segment::System { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
+        let names: Vec<&str> = systems
+            .iter()
+            .map(|s| match s {
+                Segment::System { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
         assert_eq!(names, vec!["A", "B"]);
     }
 
@@ -741,11 +815,20 @@ mod tests {
         let systems = map.systems();
         assert_eq!(systems.len(), 1);
         match systems[0] {
-            Segment::System { body_span, name, .. } => {
+            Segment::System {
+                body_span, name, ..
+            } => {
                 assert_eq!(name, "Foo");
                 let body = map.text(body_span);
-                assert!(body.contains("machine:"), "Body should contain 'machine:', got: '{}'", body);
-                assert!(!body.contains("@@system"), "Body should not contain '@@system'");
+                assert!(
+                    body.contains("machine:"),
+                    "Body should contain 'machine:', got: '{}'",
+                    body
+                );
+                assert!(
+                    !body.contains("@@system"),
+                    "Body should not contain '@@system'"
+                );
             }
             _ => panic!("Expected System segment"),
         }
@@ -817,11 +900,19 @@ template = """
 }
 "#;
         let map = segment_source(source, TargetLanguage::Python3).unwrap();
-        let systems: Vec<&str> = map.systems().iter().map(|s| match s {
-            Segment::System { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
-        assert_eq!(systems, vec!["Real"], "Triple-quoted string should hide @@system Fake");
+        let systems: Vec<&str> = map
+            .systems()
+            .iter()
+            .map(|s| match s {
+                Segment::System { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(
+            systems,
+            vec!["Real"],
+            "Triple-quoted string should hide @@system Fake"
+        );
     }
 
     #[test]
@@ -841,11 +932,19 @@ EOT;
 }
 "#;
         let map = segment_source(source, TargetLanguage::Php).unwrap();
-        let systems: Vec<&str> = map.systems().iter().map(|s| match s {
-            Segment::System { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
-        assert_eq!(systems, vec!["Real"], "PHP heredoc should hide @@system Fake");
+        let systems: Vec<&str> = map
+            .systems()
+            .iter()
+            .map(|s| match s {
+                Segment::System { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(
+            systems,
+            vec!["Real"],
+            "PHP heredoc should hide @@system Fake"
+        );
     }
 
     #[test]
@@ -864,11 +963,19 @@ val template = """
 }
 "#;
         let map = segment_source(source, TargetLanguage::Kotlin).unwrap();
-        let systems: Vec<&str> = map.systems().iter().map(|s| match s {
-            Segment::System { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
-        assert_eq!(systems, vec!["Real"], "Kotlin raw string should hide @@system Fake");
+        let systems: Vec<&str> = map
+            .systems()
+            .iter()
+            .map(|s| match s {
+                Segment::System { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(
+            systems,
+            vec!["Real"],
+            "Kotlin raw string should hide @@system Fake"
+        );
     }
 
     #[test]
@@ -890,11 +997,19 @@ Still in outer comment
 }
 "#;
         let map = segment_source(source, TargetLanguage::Swift).unwrap();
-        let systems: Vec<&str> = map.systems().iter().map(|s| match s {
-            Segment::System { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
-        assert_eq!(systems, vec!["Real"], "Swift nested block comment should hide @@system Fake");
+        let systems: Vec<&str> = map
+            .systems()
+            .iter()
+            .map(|s| match s {
+                Segment::System { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(
+            systems,
+            vec!["Real"],
+            "Swift nested block comment should hide @@system Fake"
+        );
     }
 
     #[test]
@@ -913,17 +1028,28 @@ template = %Q{
 }
 "#;
         let map = segment_source(source, TargetLanguage::Ruby).unwrap();
-        let systems: Vec<&str> = map.systems().iter().map(|s| match s {
-            Segment::System { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
-        assert_eq!(systems, vec!["Real"], "Ruby percent-Q literal should hide @@system Fake");
+        let systems: Vec<&str> = map
+            .systems()
+            .iter()
+            .map(|s| match s {
+                Segment::System { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(
+            systems,
+            vec!["Real"],
+            "Ruby percent-Q literal should hide @@system Fake"
+        );
     }
 
     #[test]
     fn test_graphviz_returns_error() {
         let source = b"@@target graphviz\n";
         let result = segment_source(source, TargetLanguage::Graphviz);
-        assert!(result.is_err(), "Graphviz should return error from segmenter");
+        assert!(
+            result.is_err(),
+            "Graphviz should return error from segmenter"
+        );
     }
 }

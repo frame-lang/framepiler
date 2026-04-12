@@ -42,7 +42,7 @@ pub struct Field {
     pub visibility: Visibility,
     pub is_static: bool,
     pub initializer: Option<Box<CodegenNode>>,
-    pub raw_code: Option<String>,  // V4: Native code pass-through
+    pub raw_code: Option<String>, // V4: Native code pass-through
 }
 
 impl Field {
@@ -167,7 +167,6 @@ impl UnaryOp {
 #[derive(Debug, Clone)]
 pub enum CodegenNode {
     // ===== Structural =====
-
     /// A complete module with imports and items
     Module {
         imports: Vec<CodegenNode>,
@@ -199,7 +198,6 @@ pub enum CodegenNode {
     },
 
     // ===== Methods =====
-
     /// Method definition
     Method {
         name: String,
@@ -220,7 +218,6 @@ pub enum CodegenNode {
     },
 
     // ===== Statements =====
-
     /// Variable declaration
     VarDecl {
         name: String,
@@ -236,9 +233,7 @@ pub enum CodegenNode {
     },
 
     /// Return statement
-    Return {
-        value: Option<Box<CodegenNode>>,
-    },
+    Return { value: Option<Box<CodegenNode>> },
 
     /// If statement
     If {
@@ -279,16 +274,12 @@ pub enum CodegenNode {
     Await(Box<CodegenNode>),
 
     /// Comment
-    Comment {
-        text: String,
-        is_doc: bool,
-    },
+    Comment { text: String, is_doc: bool },
 
     /// Empty statement / no-op
     Empty,
 
     // ===== Expressions =====
-
     /// Identifier reference
     Ident(String),
 
@@ -368,7 +359,6 @@ pub enum CodegenNode {
     },
 
     // ===== Frame-Specific =====
-
     /// State transition
     Transition {
         target_state: String,
@@ -407,9 +397,7 @@ pub enum CodegenNode {
     },
 
     /// State context (for state parameters)
-    StateContext {
-        state_name: String,
-    },
+    StateContext { state_name: String },
 
     /// Frame message/event send
     SendEvent {
@@ -418,18 +406,12 @@ pub enum CodegenNode {
     },
 
     // ===== Native Code Preservation =====
-
     /// Native code block (ocean model)
     /// This preserves user-written native code exactly as-is
-    NativeBlock {
-        code: String,
-        span: Option<Span>,
-    },
+    NativeBlock { code: String, span: Option<Span> },
 
     /// Placeholder for splice point
-    SplicePoint {
-        id: String,
-    },
+    SplicePoint { id: String },
 }
 
 /// Enum variant
@@ -516,7 +498,11 @@ impl CodegenNode {
         }
     }
 
-    pub fn if_stmt(condition: CodegenNode, then_block: Vec<CodegenNode>, else_block: Option<Vec<CodegenNode>>) -> Self {
+    pub fn if_stmt(
+        condition: CodegenNode,
+        then_block: Vec<CodegenNode>,
+        else_block: Option<Vec<CodegenNode>>,
+    ) -> Self {
         CodegenNode::If {
             condition: Box::new(condition),
             then_block,
@@ -598,7 +584,11 @@ mod tests {
             vec![CodegenNode::ident("new_state")],
         );
         match node {
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 assert!(matches!(*object, CodegenNode::SelfRef));
                 assert_eq!(method, "_transition");
                 assert_eq!(args.len(), 1);

@@ -46,8 +46,8 @@
 //! | `-> => $State`          | forward_event   | E410       |
 //! | `$.varName`             | state_vars      | E410       |
 
-use super::frame_ast::*;
 use super::arcanum::Arcanum;
+use super::frame_ast::*;
 use std::collections::{HashMap, HashSet};
 
 /// Validation error with error code and message
@@ -66,7 +66,7 @@ impl ValidationError {
             span: None,
         }
     }
-    
+
     pub fn with_span(mut self, span: Span) -> Self {
         self.span = Some(span);
         self
@@ -98,7 +98,7 @@ impl FrameValidator {
     pub fn take_warnings(&mut self) -> Vec<ValidationError> {
         std::mem::take(&mut self.warnings)
     }
-    
+
     /// Validate a Frame AST
     pub fn validate(&mut self, ast: &FrameAst) -> Result<(), Vec<ValidationError>> {
         match ast {
@@ -121,7 +121,11 @@ impl FrameValidator {
     ///
     /// This is the preferred validation method when the Arcanum has been built.
     /// It uses the Arcanum's scope resolution for more thorough validation.
-    pub fn validate_with_arcanum(&mut self, ast: &FrameAst, arcanum: &Arcanum) -> Result<(), Vec<ValidationError>> {
+    pub fn validate_with_arcanum(
+        &mut self,
+        ast: &FrameAst,
+        arcanum: &Arcanum,
+    ) -> Result<(), Vec<ValidationError>> {
         match ast {
             FrameAst::System(system) => {
                 self.validate_system(system);
@@ -187,7 +191,13 @@ impl FrameValidator {
                         continue;
                     }
                     let body = &source[span.start..span.end];
-                    self.scan_self_calls_in_body(body, &interface_methods, &state.name, &handler.event, span.start);
+                    self.scan_self_calls_in_body(
+                        body,
+                        &interface_methods,
+                        &state.name,
+                        &handler.event,
+                        span.start,
+                    );
                 }
             }
         }
@@ -199,7 +209,13 @@ impl FrameValidator {
                 continue;
             }
             let body = &source[span.start..span.end];
-            self.scan_self_calls_in_body(body, &interface_methods, "(action)", &action.name, span.start);
+            self.scan_self_calls_in_body(
+                body,
+                &interface_methods,
+                "(action)",
+                &action.name,
+                span.start,
+            );
         }
     }
 
@@ -218,7 +234,9 @@ impl FrameValidator {
                 let after_dot = i + pattern.len();
                 // Extract method name
                 let mut name_end = after_dot;
-                while name_end < body.len() && (body[name_end].is_ascii_alphanumeric() || body[name_end] == b'_') {
+                while name_end < body.len()
+                    && (body[name_end].is_ascii_alphanumeric() || body[name_end] == b'_')
+                {
                     name_end += 1;
                 }
                 let method_name = String::from_utf8_lossy(&body[after_dot..name_end]).to_string();
@@ -235,14 +253,22 @@ impl FrameValidator {
                         let mut found_arg = false;
                         while j < body.len() {
                             match body[j] {
-                                b'(' => { depth += 1; }
+                                b'(' => {
+                                    depth += 1;
+                                }
                                 b')' => {
                                     depth -= 1;
-                                    if depth == 0 { break; }
+                                    if depth == 0 {
+                                        break;
+                                    }
                                 }
-                                b',' if depth == 1 => { arg_count += 1; }
+                                b',' if depth == 1 => {
+                                    arg_count += 1;
+                                }
                                 b' ' | b'\t' | b'\n' | b'\r' => {}
-                                _ if depth == 1 => { found_arg = true; }
+                                _ if depth == 1 => {
+                                    found_arg = true;
+                                }
                                 _ => {}
                             }
                             j += 1;
@@ -267,7 +293,7 @@ impl FrameValidator {
                             format!(
                                 "@@:self.{}() in {}/{} — method '{}' not found in interface",
                                 method_name, state_name, handler_name, method_name
-                            )
+                            ),
                         ));
                     }
                 }
@@ -392,7 +418,12 @@ impl FrameValidator {
     }
 
     /// Validate state transitions using Arcanum's state resolution
-    fn validate_state_transitions_with_arcanum(&mut self, system_name: &str, state: &StateAst, arcanum: &Arcanum) {
+    fn validate_state_transitions_with_arcanum(
+        &mut self,
+        system_name: &str,
+        state: &StateAst,
+        arcanum: &Arcanum,
+    ) {
         // Validate handlers
         for handler in &state.handlers {
             for stmt in &handler.body.statements {
@@ -422,41 +453,61 @@ impl FrameValidator {
     }
 
     /// Validate a transition using Arcanum's state resolution
-    fn validate_transition_with_arcanum(&mut self, system_name: &str, trans: &TransitionAst, arcanum: &Arcanum) {
+    fn validate_transition_with_arcanum(
+        &mut self,
+        system_name: &str,
+        trans: &TransitionAst,
+        arcanum: &Arcanum,
+    ) {
         // Skip validation for pop-transition marker $$[-]
         if trans.target == "pop$" {
-            return;  // Pop-transition: target comes from stack at runtime
+            return; // Pop-transition: target comes from stack at runtime
         }
 
         // Use Arcanum's validate_transition which includes "did you mean" suggestions
         if let Err(msg) = arcanum.validate_transition(system_name, &trans.target) {
             // Only add if not already reported by basic validation
-            if !self.errors.iter().any(|e| e.code == "E402" && e.span.as_ref() == Some(&trans.span)) {
-                self.errors.push(ValidationError::new("E402", msg).with_span(trans.span.clone()));
+            if !self
+                .errors
+                .iter()
+                .any(|e| e.code == "E402" && e.span.as_ref() == Some(&trans.span))
+            {
+                self.errors
+                    .push(ValidationError::new("E402", msg).with_span(trans.span.clone()));
             }
         } else {
             // State exists, check transition argument arity against STATE PARAMS
             // Skip arity checking when args are NativeExpr blobs (native compiler handles it)
-            let has_native_args = trans.args.iter().any(|a| matches!(a, Expression::NativeExpr(_)));
+            let has_native_args = trans
+                .args
+                .iter()
+                .any(|a| matches!(a, Expression::NativeExpr(_)));
             if !has_native_args {
                 let args_count = trans.args.len();
                 if let Some(expected) = arcanum.get_state_param_count(system_name, &trans.target) {
                     if expected != args_count {
-                        if !self.errors.iter().any(|e| e.code == "E405" && e.span.as_ref() == Some(&trans.span)) {
-                            self.errors.push(ValidationError::new(
-                                "E405",
-                                format!(
-                                    "State '{}' expects {} parameters but {} provided",
-                                    trans.target, expected, args_count
+                        if !self
+                            .errors
+                            .iter()
+                            .any(|e| e.code == "E405" && e.span.as_ref() == Some(&trans.span))
+                        {
+                            self.errors.push(
+                                ValidationError::new(
+                                    "E405",
+                                    format!(
+                                        "State '{}' expects {} parameters but {} provided",
+                                        trans.target, expected, args_count
+                                    ),
                                 )
-                            ).with_span(trans.span.clone()));
+                                .with_span(trans.span.clone()),
+                            );
                         }
                     }
                 }
             }
         }
     }
-    
+
     /// Validate a system
     fn validate_system(&mut self, system: &SystemAst) {
         // Phase 1: Structural validation
@@ -474,7 +525,13 @@ impl FrameValidator {
 
         // Validate machine if present
         if let Some(machine) = &system.machine {
-            self.validate_machine(machine, &state_map, &interface_methods, &actions, &operations);
+            self.validate_machine(
+                machine,
+                &state_map,
+                &interface_methods,
+                &actions,
+                &operations,
+            );
         }
 
         // E401: Validate no Frame statements in actions
@@ -528,13 +585,16 @@ impl FrameValidator {
                 SystemSectionKind::Actions => "actions:",
                 SystemSectionKind::Domain => "domain:",
             };
-            self.errors.push(ValidationError::new(
-                "E114",
-                format!(
-                    "Duplicate '{}' section in system '{}'",
-                    section_name, system.name
+            self.errors.push(
+                ValidationError::new(
+                    "E114",
+                    format!(
+                        "Duplicate '{}' section in system '{}'",
+                        section_name, system.name
+                    ),
                 )
-            ).with_span(system.span.clone()));
+                .with_span(system.span.clone()),
+            );
         }
     }
 
@@ -553,20 +613,23 @@ impl FrameValidator {
         // Operations have native bodies, same as actions
         let _ = operation; // suppress unused warning
     }
-    
+
     /// Build a map of state names to state definitions
     fn build_state_map<'a>(&mut self, system: &'a SystemAst) -> HashMap<String, &'a StateAst> {
         let mut map = HashMap::new();
         if let Some(machine) = &system.machine {
             for state in &machine.states {
                 if map.contains_key(&state.name) {
-                    self.errors.push(ValidationError::new(
-                        "E116",
-                        format!(
-                            "Duplicate state name '{}' in system '{}'",
-                            state.name, system.name
+                    self.errors.push(
+                        ValidationError::new(
+                            "E116",
+                            format!(
+                                "Duplicate state name '{}' in system '{}'",
+                                state.name, system.name
+                            ),
                         )
-                    ).with_span(state.span.clone()));
+                        .with_span(state.span.clone()),
+                    );
                 } else {
                     map.insert(state.name.clone(), state);
                 }
@@ -574,16 +637,19 @@ impl FrameValidator {
         }
         map
     }
-    
+
     /// Build a map of interface method names to definitions
-    fn build_interface_map<'a>(&self, system: &'a SystemAst) -> HashMap<String, &'a InterfaceMethod> {
+    fn build_interface_map<'a>(
+        &self,
+        system: &'a SystemAst,
+    ) -> HashMap<String, &'a InterfaceMethod> {
         let mut map = HashMap::new();
         for method in &system.interface {
             map.insert(method.name.clone(), method);
         }
         map
     }
-    
+
     /// E413: Detect circular parent chains in HSM hierarchy
     fn validate_hsm_cycles(&mut self, _system: &SystemAst, state_map: &HashMap<String, &StateAst>) {
         for (state_name, state) in state_map {
@@ -596,17 +662,19 @@ impl FrameValidator {
             while let Some(parent_name) = current {
                 if !visited.insert(parent_name.to_string()) {
                     // Cycle detected
-                    self.errors.push(ValidationError::new(
-                        "E413",
-                        format!(
+                    self.errors.push(
+                        ValidationError::new(
+                            "E413",
+                            format!(
                             "HSM cycle detected: state '{}' has circular parent chain through '{}'",
                             state_name, parent_name
+                        ),
                         )
-                    ).with_span(state.span.clone()));
+                        .with_span(state.span.clone()),
+                    );
                     break;
                 }
-                current = state_map.get(parent_name)
-                    .and_then(|s| s.parent.as_deref());
+                current = state_map.get(parent_name).and_then(|s| s.parent.as_deref());
             }
         }
     }
@@ -615,12 +683,12 @@ impl FrameValidator {
     fn build_action_set(&self, system: &SystemAst) -> HashSet<String> {
         system.actions.iter().map(|a| a.name.clone()).collect()
     }
-    
+
     /// Build a set of operation names
     fn build_operation_set(&self, system: &SystemAst) -> HashSet<String> {
         system.operations.iter().map(|o| o.name.clone()).collect()
     }
-    
+
     /// Validate a machine
     fn validate_machine(
         &mut self,
@@ -634,7 +702,7 @@ impl FrameValidator {
             self.validate_state(state, state_map, interface_methods, _actions, _operations);
         }
     }
-    
+
     /// Validate a state
     fn validate_state(
         &mut self,
@@ -649,13 +717,16 @@ impl FrameValidator {
             let mut seen_vars: HashSet<String> = HashSet::new();
             for sv in &state.state_vars {
                 if !seen_vars.insert(sv.name.clone()) {
-                    self.errors.push(ValidationError::new(
-                        "E410",
-                        format!(
-                            "Duplicate state variable '$.{}' in state '{}'",
-                            sv.name, state.name
+                    self.errors.push(
+                        ValidationError::new(
+                            "E410",
+                            format!(
+                                "Duplicate state variable '$.{}' in state '{}'",
+                                sv.name, state.name
+                            ),
                         )
-                    ).with_span(sv.span.clone()));
+                        .with_span(sv.span.clone()),
+                    );
                 }
             }
         }
@@ -663,34 +734,44 @@ impl FrameValidator {
         // E403: Validate parent state exists for HSM
         if let Some(parent_name) = &state.parent {
             if !state_map.contains_key(parent_name) {
-                self.errors.push(ValidationError::new(
-                    "E403",
-                    format!(
-                        "State '{}' has invalid parent '{}'. Available states: {}",
-                        state.name,
-                        parent_name,
-                        self.format_available_states(state_map)
+                self.errors.push(
+                    ValidationError::new(
+                        "E403",
+                        format!(
+                            "State '{}' has invalid parent '{}'. Available states: {}",
+                            state.name,
+                            parent_name,
+                            self.format_available_states(state_map)
+                        ),
                     )
-                ).with_span(state.span.clone()));
+                    .with_span(state.span.clone()),
+                );
             }
         }
-        
+
         // Validate handlers
         for handler in &state.handlers {
-            self.validate_handler(handler, state, state_map, interface_methods, _actions, _operations);
+            self.validate_handler(
+                handler,
+                state,
+                state_map,
+                interface_methods,
+                _actions,
+                _operations,
+            );
         }
-        
+
         // Validate enter handler
         if let Some(enter) = &state.enter {
             self.validate_handler_body(&enter.body, state, state_map);
         }
-        
+
         // Validate exit handler
         if let Some(exit) = &state.exit {
             self.validate_handler_body(&exit.body, state, state_map);
         }
     }
-    
+
     /// Validate a handler
     fn validate_handler(
         &mut self,
@@ -720,7 +801,7 @@ impl FrameValidator {
 
         self.validate_handler_body(&handler.body, state, state_map);
     }
-    
+
     /// Validate handler body statements
     fn validate_handler_body(
         &mut self,
@@ -771,12 +852,10 @@ impl FrameValidator {
                 // The target language compiler handles native reachability.
                 // E400 only catches Frame-level unreachability: transition → transition
                 // with no native code between them.
-                let has_non_trivial_after = statements[idx + 1..].iter().any(|s| {
-                    match s {
-                        Statement::Return(_) => false,
-                        Statement::NativeCode(_) => false,
-                        _ => true,
-                    }
+                let has_non_trivial_after = statements[idx + 1..].iter().any(|s| match s {
+                    Statement::Return(_) => false,
+                    Statement::NativeCode(_) => false,
+                    _ => true,
                 });
                 if has_non_trivial_after {
                     let span = match &statements[idx] {
@@ -784,10 +863,14 @@ impl FrameValidator {
                         Statement::Forward(f) => f.span.clone(),
                         _ => body.span.clone(),
                     };
-                    self.errors.push(ValidationError::new(
-                        "E400",
-                        "Transition/forward must be the last statement in its containing block".to_string()
-                    ).with_span(span));
+                    self.errors.push(
+                        ValidationError::new(
+                            "E400",
+                            "Transition/forward must be the last statement in its containing block"
+                                .to_string(),
+                        )
+                        .with_span(span),
+                    );
                 }
             }
         }
@@ -798,7 +881,7 @@ impl FrameValidator {
     fn is_terminal_statement(&self, stmt: &Statement) -> bool {
         matches!(stmt, Statement::Transition(_))
     }
-    
+
     /// Validate a transition statement
     fn validate_transition(
         &mut self,
@@ -809,39 +892,50 @@ impl FrameValidator {
         // E402: Check target state exists
         // Skip validation for pop-transition marker $$[-]
         if transition.target == "pop$" {
-            return;  // Pop-transition: target comes from stack at runtime
+            return; // Pop-transition: target comes from stack at runtime
         }
 
         if !state_map.contains_key(&transition.target) {
-            self.errors.push(ValidationError::new(
-                "E402",
-                format!(
-                    "Unknown state '{}' in transition. Available states: {}",
-                    transition.target,
-                    self.format_available_states(state_map)
+            self.errors.push(
+                ValidationError::new(
+                    "E402",
+                    format!(
+                        "Unknown state '{}' in transition. Available states: {}",
+                        transition.target,
+                        self.format_available_states(state_map)
+                    ),
                 )
-            ).with_span(transition.span.clone()));
+                .with_span(transition.span.clone()),
+            );
         } else {
             // E405: Check STATE PARAMETER arity
             // Skip arity checking when args are NativeExpr blobs (native compiler handles it)
-            let has_native_args = transition.args.iter().any(|a| matches!(a, Expression::NativeExpr(_)));
+            let has_native_args = transition
+                .args
+                .iter()
+                .any(|a| matches!(a, Expression::NativeExpr(_)));
             if !has_native_args {
-                let Some(target_state) = state_map.get(&transition.target) else { return };
+                let Some(target_state) = state_map.get(&transition.target) else {
+                    return;
+                };
                 if target_state.params.len() != transition.args.len() {
-                    self.errors.push(ValidationError::new(
-                        "E405",
-                        format!(
-                            "State '{}' expects {} parameters but {} provided",
-                            transition.target,
-                            target_state.params.len(),
-                            transition.args.len()
+                    self.errors.push(
+                        ValidationError::new(
+                            "E405",
+                            format!(
+                                "State '{}' expects {} parameters but {} provided",
+                                transition.target,
+                                target_state.params.len(),
+                                transition.args.len()
+                            ),
                         )
-                    ).with_span(transition.span.clone()));
+                        .with_span(transition.span.clone()),
+                    );
                 }
             }
         }
     }
-    
+
     /// Validate a forward statement
     fn validate_forward(
         &mut self,
@@ -851,30 +945,34 @@ impl FrameValidator {
     ) {
         // E403: Forward is only valid if state has a parent
         if state.parent.is_none() {
-            self.errors.push(ValidationError::new(
-                "E403",
-                format!(
-                    "State '{}' cannot forward event '{}' - no parent state defined",
-                    state.name,
-                    forward.event
+            self.errors.push(
+                ValidationError::new(
+                    "E403",
+                    format!(
+                        "State '{}' cannot forward event '{}' - no parent state defined",
+                        state.name, forward.event
+                    ),
                 )
-            ).with_span(forward.span.clone()));
+                .with_span(forward.span.clone()),
+            );
         } else {
             // Could validate that parent handles this event
             // For now, just check parent exists
-            let Some(parent_name) = state.parent.as_ref() else { return };
+            let Some(parent_name) = state.parent.as_ref() else {
+                return;
+            };
             if !state_map.contains_key(parent_name) {
-                self.errors.push(ValidationError::new(
-                    "E403",
-                    format!(
-                        "Cannot forward to invalid parent state '{}'",
-                        parent_name
+                self.errors.push(
+                    ValidationError::new(
+                        "E403",
+                        format!("Cannot forward to invalid parent state '{}'", parent_name),
                     )
-                ).with_span(forward.span.clone()));
+                    .with_span(forward.span.clone()),
+                );
             }
         }
     }
-    
+
     /// Format available states for error messages
     fn format_available_states(&self, state_map: &HashMap<String, &StateAst>) -> String {
         let mut states: Vec<String> = state_map.keys().cloned().collect();
@@ -987,14 +1085,17 @@ pub fn typescript_global_collision_rename(name: &str) -> Option<String> {
 }
 
 /// Convenience function to validate Frame source code
-pub fn validate_frame_source(source: &str, target: TargetLanguage) -> Result<(), Vec<ValidationError>> {
-    use crate::frame_c::compiler::frame_parser::FrameParser;
+pub fn validate_frame_source(
+    source: &str,
+    target: TargetLanguage,
+) -> Result<(), Vec<ValidationError>> {
     use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
+    use crate::frame_c::compiler::frame_parser::FrameParser;
 
     let mut parser = FrameParser::new(source.as_bytes(), target);
-    let ast = parser.parse_module().map_err(|e| {
-        vec![ValidationError::new("E001", format!("Parse error: {}", e))]
-    })?;
+    let ast = parser
+        .parse_module()
+        .map_err(|e| vec![ValidationError::new("E001", format!("Parse error: {}", e))])?;
 
     // Build Arcanum for semantic validation (E405 etc)
     let arcanum = build_arcanum_from_frame_ast(&ast);
@@ -1015,13 +1116,13 @@ mod tests {
         parse_target: TargetLanguage,
         target: crate::frame_c::visitors::TargetLanguage,
     ) -> Result<(), Vec<ValidationError>> {
-        use crate::frame_c::compiler::frame_parser::FrameParser;
         use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
+        use crate::frame_c::compiler::frame_parser::FrameParser;
 
         let mut parser = FrameParser::new(source.as_bytes(), parse_target);
-        let ast = parser.parse_module().map_err(|e| {
-            vec![ValidationError::new("E001", format!("Parse error: {}", e))]
-        })?;
+        let ast = parser
+            .parse_module()
+            .map_err(|e| vec![ValidationError::new("E001", format!("Parse error: {}", e))])?;
         let arcanum = build_arcanum_from_frame_ast(&ast);
 
         let mut validator = FrameValidator::new();
@@ -1056,7 +1157,10 @@ mod tests {
         assert_eq!(errors[0].code, "E501");
         assert!(errors[0].message.contains("'get'"));
         assert!(errors[0].message.contains("Object.get"));
-        assert!(errors[0].message.contains("get_value"), "should suggest get_value rename");
+        assert!(
+            errors[0].message.contains("get_value"),
+            "should suggest get_value rename"
+        );
     }
 
     #[test]
@@ -1116,16 +1220,21 @@ mod tests {
         parse_target: TargetLanguage,
         target: crate::frame_c::visitors::TargetLanguage,
     ) -> (Result<(), Vec<ValidationError>>, Vec<ValidationError>) {
-        use crate::frame_c::compiler::frame_parser::FrameParser;
         use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
+        use crate::frame_c::compiler::frame_parser::FrameParser;
 
         let mut parser = FrameParser::new(source.as_bytes(), parse_target);
         let ast = match parser.parse_module() {
             Ok(a) => a,
-            Err(e) => return (
-                Err(vec![ValidationError::new("E001", format!("Parse error: {}", e))]),
-                vec![],
-            ),
+            Err(e) => {
+                return (
+                    Err(vec![ValidationError::new(
+                        "E001",
+                        format!("Parse error: {}", e),
+                    )]),
+                    vec![],
+                )
+            }
         };
         let arcanum = build_arcanum_from_frame_ast(&ast);
 
@@ -1157,11 +1266,18 @@ mod tests {
             TargetLanguage::Python3,
             crate::frame_c::visitors::TargetLanguage::TypeScript,
         );
-        assert!(result.is_ok(), "TS shadowing is a warning, not an error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "TS shadowing is a warning, not an error: {:?}",
+            result.err()
+        );
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "W501");
         assert!(warnings[0].message.contains("'Worker'"));
-        assert!(warnings[0].message.contains("WorkerSys"), "should suggest WorkerSys rename");
+        assert!(
+            warnings[0].message.contains("WorkerSys"),
+            "should suggest WorkerSys rename"
+        );
     }
 
     #[test]
@@ -1215,7 +1331,11 @@ mod tests {
             crate::frame_c::visitors::TargetLanguage::TypeScript,
         );
         assert!(result.is_ok());
-        assert!(warnings.is_empty(), "safe names should not warn: {:?}", warnings);
+        assert!(
+            warnings.is_empty(),
+            "safe names should not warn: {:?}",
+            warnings
+        );
     }
 
     #[test]
@@ -1237,7 +1357,11 @@ mod tests {
             crate::frame_c::visitors::TargetLanguage::Python3,
         );
         assert!(result.is_ok());
-        assert!(warnings.is_empty(), "python should not flag TS-only collisions: {:?}", warnings);
+        assert!(
+            warnings.is_empty(),
+            "python should not flag TS-only collisions: {:?}",
+            warnings
+        );
     }
 
     #[test]
@@ -1258,7 +1382,11 @@ mod tests {
             TargetLanguage::Python3,
             crate::frame_c::visitors::TargetLanguage::Python3,
         );
-        assert!(result.is_ok(), "python should not flag GDScript-only collisions: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "python should not flag GDScript-only collisions: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1270,16 +1398,16 @@ mod tests {
             go() { -> $Unknown() }
         }
 }"#;
-        
+
         let result = validate_frame_source(source, TargetLanguage::Python3);
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].code, "E402");
         assert!(errors[0].message.contains("Unknown state 'Unknown'"));
     }
-    
+
     #[test]
     fn test_e403_invalid_parent() {
         let source = r#"
@@ -1291,14 +1419,16 @@ mod tests {
         $ActualParent {
         }
 }"#;
-        
+
         let result = validate_frame_source(source, TargetLanguage::Python3);
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.code == "E403" && e.message.contains("invalid parent")));
+        assert!(errors
+            .iter()
+            .any(|e| e.code == "E403" && e.message.contains("invalid parent")));
     }
-    
+
     #[test]
     fn test_e403_forward_without_parent() {
         // Test using the supported forward syntax: => $^
@@ -1317,9 +1447,11 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.code == "E403" && e.message.contains("no parent")));
+        assert!(errors
+            .iter()
+            .any(|e| e.code == "E403" && e.message.contains("no parent")));
     }
-    
+
     #[test]
     fn test_e405_state_param_mismatch() {
         // Transition args go to STATE PARAMS, not enter handler
@@ -1338,7 +1470,12 @@ mod tests {
 
         let errors = result.unwrap_err();
         // State expects 1 param but 3 provided
-        assert!(errors.iter().any(|e| e.code == "E405" && e.message.contains("expects 1 parameters but 3 provided")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.code == "E405"
+                    && e.message.contains("expects 1 parameters but 3 provided"))
+        );
     }
 
     #[test]
@@ -1358,9 +1495,14 @@ mod tests {
 
         let errors = result.unwrap_err();
         // State expects 0 params but 2 provided
-        assert!(errors.iter().any(|e| e.code == "E405" && e.message.contains("expects 0 parameters but 2 provided")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.code == "E405"
+                    && e.message.contains("expects 0 parameters but 2 provided"))
+        );
     }
-    
+
     #[test]
     fn test_valid_system() {
         let source = r#"
@@ -1379,11 +1521,11 @@ mod tests {
             }
         }
 }"#;
-        
+
         let result = validate_frame_source(source, TargetLanguage::Python3);
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_valid_hsm() {
         let source = r#"
@@ -1408,7 +1550,7 @@ mod tests {
         let mut system = SystemAst::new("Test".to_string(), Span::new(0, 100));
         system.section_order = vec![
             SystemSectionKind::Machine,
-            SystemSectionKind::Interface,  // Wrong order - interface should come before machine
+            SystemSectionKind::Interface, // Wrong order - interface should come before machine
         ];
 
         let mut validator = FrameValidator::new();
@@ -1528,7 +1670,9 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.code == "E406" && e.message.contains("has 1 parameters but interface method expects 2")));
+        assert!(errors.iter().any(|e| e.code == "E406"
+            && e.message
+                .contains("has 1 parameters but interface method expects 2")));
     }
 
     #[test]

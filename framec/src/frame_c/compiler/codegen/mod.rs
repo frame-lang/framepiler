@@ -11,17 +11,23 @@
 
 pub mod ast;
 pub mod backend;
-pub mod system_codegen;
-pub mod erlang_system;
-pub mod runtime;
-pub mod frame_expansion;
-pub mod codegen_utils;
-pub mod state_dispatch;
-pub mod interface_gen;
-pub mod block_transform;
 pub mod backends;
+pub mod block_transform;
+pub mod codegen_utils;
+pub mod erlang_system;
+pub mod frame_expansion;
+pub mod interface_gen;
+pub mod runtime;
+pub mod state_dispatch;
+pub mod system_codegen;
 
 pub use ast::CodegenNode;
-pub use backend::{LanguageBackend, EmitContext, ClassSyntax, get_backend};
+pub use backend::{get_backend, ClassSyntax, EmitContext, LanguageBackend};
+pub use runtime::{
+    generate_c_compartment_types, generate_compartment_class, generate_cpp_compartment_types,
+    generate_csharp_compartment_types, generate_frame_context_class, generate_frame_event_class,
+    generate_go_compartment_types, generate_java_compartment_types,
+    generate_kotlin_compartment_types, generate_rust_compartment_types,
+    generate_swift_compartment_types,
+};
 pub use system_codegen::generate_system;
-pub use runtime::{generate_rust_compartment_types, generate_c_compartment_types, generate_cpp_compartment_types, generate_java_compartment_types, generate_kotlin_compartment_types, generate_swift_compartment_types, generate_csharp_compartment_types, generate_go_compartment_types, generate_compartment_class, generate_frame_event_class, generate_frame_context_class};

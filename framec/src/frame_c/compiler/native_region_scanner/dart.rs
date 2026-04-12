@@ -3,9 +3,9 @@
 // Dart uses the same comment styles (// and /* */), string delimiters
 // (" and '), and brace-delimited blocks as TypeScript.
 
-use super::*;
-use super::unified::*;
 use super::typescript::TypeScriptSkipper;
+use super::unified::*;
+use super::*;
 use crate::frame_c::compiler::body_closer::dart::BodyCloserDart;
 use crate::frame_c::compiler::body_closer::BodyCloser;
 

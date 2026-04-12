@@ -12,7 +12,7 @@ pub mod call_args;
 pub mod domain_native;
 
 use crate::frame_c::compiler::frame_ast::*;
-use crate::frame_c::compiler::lexer::{Lexer, Token, Spanned, LexError};
+use crate::frame_c::compiler::lexer::{LexError, Lexer, Spanned, Token};
 use crate::frame_c::visitors::TargetLanguage;
 
 // ============================================================================
@@ -27,7 +27,11 @@ pub struct ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Parse error at {}-{}: {}", self.span.start, self.span.end, self.message)
+        write!(
+            f,
+            "Parse error at {}-{}: {}",
+            self.span.start, self.span.end, self.message
+        )
     }
 }
 
@@ -139,8 +143,11 @@ impl<'a> Parser<'a> {
             let tok = self.peek()?;
             match tok {
                 // Next section or end of system
-                Token::Machine | Token::Actions | Token::Operations
-                | Token::Domain | Token::Eof => break,
+                Token::Machine
+                | Token::Actions
+                | Token::Operations
+                | Token::Domain
+                | Token::Eof => break,
                 // Another interface keyword (duplicate section)
                 Token::Interface => break,
                 // Method name
@@ -200,7 +207,7 @@ impl<'a> Parser<'a> {
         // Optional return init: = expr (can be multi-token like "self.x + a")
         let return_init = if self.check(&Token::Equals)? {
             self.advance()?; // =
-            // Scan source bytes from cursor to end of line to capture the full expression
+                             // Scan source bytes from cursor to end of line to capture the full expression
             let src = self.lexer.source();
             let init_start = self.lexer.cursor();
             let mut pos = init_start;
@@ -208,10 +215,16 @@ impl<'a> Parser<'a> {
                 pos += 1;
             }
             let init_text = std::str::from_utf8(&src[init_start..pos])
-                .unwrap_or("").trim().to_string();
+                .unwrap_or("")
+                .trim()
+                .to_string();
             // Advance lexer cursor past this expression
             self.lexer.set_cursor(pos);
-            if init_text.is_empty() { None } else { Some(strip_context_return_wrapper(&init_text)) }
+            if init_text.is_empty() {
+                None
+            } else {
+                Some(strip_context_return_wrapper(&init_text))
+            }
         } else {
             None
         };
@@ -289,8 +302,11 @@ impl<'a> Parser<'a> {
                     states.push(state);
                 }
                 // Next section or end
-                Token::Interface | Token::Actions | Token::Operations
-                | Token::Domain | Token::Eof => break,
+                Token::Interface
+                | Token::Actions
+                | Token::Operations
+                | Token::Domain
+                | Token::Eof => break,
                 Token::Machine => break,
                 _ => {
                     let spanned = self.advance()?;
@@ -344,7 +360,9 @@ impl<'a> Parser<'a> {
         // State body: { ... }
         let brace_tok = self.expect_token(&Token::LBrace)?;
         let body_start = brace_tok.span.start;
-        let body_close = self.lexer.find_close_brace(body_start)
+        let body_close = self
+            .lexer
+            .find_close_brace(body_start)
             .ok_or_else(|| ParseError {
                 message: format!("Unmatched '{{' for state {}", state_name),
                 span: brace_tok.span.clone(),
@@ -477,10 +495,7 @@ impl<'a> Parser<'a> {
     // Handler Parsing
     // ========================================================================
 
-    fn parse_enter_handler(
-        &mut self,
-        _state_close: usize,
-    ) -> Result<EnterHandler, ParseError> {
+    fn parse_enter_handler(&mut self, _state_close: usize) -> Result<EnterHandler, ParseError> {
         let start_tok = self.advance()?; // $>
         let start = start_tok.span.start;
 
@@ -504,10 +519,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_exit_handler(
-        &mut self,
-        _state_close: usize,
-    ) -> Result<ExitHandler, ParseError> {
+    fn parse_exit_handler(&mut self, _state_close: usize) -> Result<ExitHandler, ParseError> {
         let start_tok = self.advance()?; // <$
         let start = start_tok.span.start;
 
@@ -531,10 +543,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_event_handler(
-        &mut self,
-        _state_close: usize,
-    ) -> Result<HandlerAst, ParseError> {
+    fn parse_event_handler(&mut self, _state_close: usize) -> Result<HandlerAst, ParseError> {
         let (event_name, name_span) = self.expect_ident()?;
         let start = name_span.start;
 
@@ -559,7 +568,7 @@ impl<'a> Parser<'a> {
         // Optional return init: = @@:(expr) or = expr
         let return_init = if self.check(&Token::Equals)? {
             self.advance()?; // =
-            // Scan source bytes from cursor to '{' to capture the expression
+                             // Scan source bytes from cursor to '{' to capture the expression
             let src = self.lexer.source();
             let init_start = self.lexer.cursor();
             let mut pos = init_start;
@@ -567,10 +576,16 @@ impl<'a> Parser<'a> {
                 pos += 1;
             }
             let init_text = std::str::from_utf8(&src[init_start..pos])
-                .unwrap_or("").trim().to_string();
+                .unwrap_or("")
+                .trim()
+                .to_string();
             // Advance lexer cursor past this expression
             self.lexer.set_cursor(pos);
-            if init_text.is_empty() { None } else { Some(strip_context_return_wrapper(&init_text)) }
+            if init_text.is_empty() {
+                None
+            } else {
+                Some(strip_context_return_wrapper(&init_text))
+            }
         } else {
             None
         };
@@ -623,7 +638,9 @@ impl<'a> Parser<'a> {
         let brace_tok = self.expect_token(&Token::LBrace)?;
         let open_pos = brace_tok.span.start;
 
-        let close_pos = self.lexer.find_close_brace(open_pos)
+        let close_pos = self
+            .lexer
+            .find_close_brace(open_pos)
             .ok_or_else(|| ParseError {
                 message: "Unmatched '{' in handler body".to_string(),
                 span: brace_tok.span.clone(),
@@ -663,36 +680,28 @@ impl<'a> Parser<'a> {
                         }
                         Token::StringLit(label_text) => {
                             // -> "label" $State — transition with label
-                            let target_tok = self.lexer.next_token()
-                                .map_err(ParseError::from)?;
+                            let target_tok = self.lexer.next_token().map_err(ParseError::from)?;
                             if let Token::StateRef(target) = target_tok.token {
                                 statements.push(Statement::Transition(TransitionAst {
                                     target,
                                     args: vec![],
                                     label: Some(label_text),
-                                    span: Span::new(
-                                        tok.span.start,
-                                        target_tok.span.end,
-                                    ),
+                                    span: Span::new(tok.span.start, target_tok.span.end),
                                     indent: 0,
                                 }));
                             }
                         }
                         Token::FatArrow => {
                             // -> => $State (transition forward)
-                            let target_tok = self.lexer.next_token()
-                                .map_err(ParseError::from)?;
+                            let target_tok = self.lexer.next_token().map_err(ParseError::from)?;
                             if let Token::StateRef(target) = target_tok.token {
-                                statements.push(
-                                    Statement::TransitionForward(TransitionForwardAst {
+                                statements.push(Statement::TransitionForward(
+                                    TransitionForwardAst {
                                         target,
-                                        span: Span::new(
-                                            tok.span.start,
-                                            target_tok.span.end,
-                                        ),
+                                        span: Span::new(tok.span.start, target_tok.span.end),
                                         indent: 0,
-                                    }),
-                                );
+                                    },
+                                ));
                             }
                         }
                         Token::PopState => {
@@ -703,8 +712,7 @@ impl<'a> Parser<'a> {
                         }
                         Token::NativeCode(args) => {
                             // -> (args) $State or -> (args) "label" $State
-                            let after_args = self.lexer.next_token()
-                                .map_err(ParseError::from)?;
+                            let after_args = self.lexer.next_token().map_err(ParseError::from)?;
                             match after_args.token {
                                 Token::StateRef(target) => {
                                     // -> (args) $State — enter args, no label
@@ -712,26 +720,20 @@ impl<'a> Parser<'a> {
                                         target,
                                         args: vec![Expression::NativeExpr(args)],
                                         label: None,
-                                        span: Span::new(
-                                            tok.span.start,
-                                            after_args.span.end,
-                                        ),
+                                        span: Span::new(tok.span.start, after_args.span.end),
                                         indent: 0,
                                     }));
                                 }
                                 Token::StringLit(label_text) => {
                                     // -> (args) "label" $State — enter args + label
-                                    let target_tok = self.lexer.next_token()
-                                        .map_err(ParseError::from)?;
+                                    let target_tok =
+                                        self.lexer.next_token().map_err(ParseError::from)?;
                                     if let Token::StateRef(target) = target_tok.token {
                                         statements.push(Statement::Transition(TransitionAst {
                                             target,
                                             args: vec![Expression::NativeExpr(args)],
                                             label: Some(label_text),
-                                            span: Span::new(
-                                                tok.span.start,
-                                                target_tok.span.end,
-                                            ),
+                                            span: Span::new(tok.span.start, target_tok.span.end),
                                             indent: 0,
                                         }));
                                     }
@@ -798,33 +800,23 @@ impl<'a> Parser<'a> {
                     // State variable reference (mid-line in native code)
                     // The codegen will handle this via NativeCode chunks
                     // For now, store as NativeCode with the Frame syntax
-                    statements.push(Statement::NativeCode(
-                        format!("$.{}", name),
-                    ));
+                    statements.push(Statement::NativeCode(format!("$.{}", name)));
                 }
 
                 Token::ContextReturn => {
-                    statements.push(Statement::NativeCode(
-                        "@@:return".to_string(),
-                    ));
+                    statements.push(Statement::NativeCode("@@:return".to_string()));
                 }
 
                 Token::ContextEvent => {
-                    statements.push(Statement::NativeCode(
-                        "@@:event".to_string(),
-                    ));
+                    statements.push(Statement::NativeCode("@@:event".to_string()));
                 }
 
                 Token::ContextData(key) => {
-                    statements.push(Statement::NativeCode(
-                        format!("@@:data[{}]", key),
-                    ));
+                    statements.push(Statement::NativeCode(format!("@@:data[{}]", key)));
                 }
 
                 Token::ContextParams(key) => {
-                    statements.push(Statement::NativeCode(
-                        format!("@@:params[{}]", key),
-                    ));
+                    statements.push(Statement::NativeCode(format!("@@:params[{}]", key)));
                 }
 
                 _ => {
@@ -856,8 +848,12 @@ impl<'a> Parser<'a> {
                     let action = self.parse_action()?;
                     actions.push(action);
                 }
-                Token::Interface | Token::Machine | Token::Operations
-                | Token::Domain | Token::Eof | Token::Actions => break,
+                Token::Interface
+                | Token::Machine
+                | Token::Operations
+                | Token::Domain
+                | Token::Eof
+                | Token::Actions => break,
                 _ => {
                     self.advance()?; // skip
                 }
@@ -899,7 +895,10 @@ impl<'a> Parser<'a> {
         Ok(ActionAst {
             name,
             params,
-            body: ActionBody { span: body.span, code: Some(code) },
+            body: ActionBody {
+                span: body.span,
+                code: Some(code),
+            },
             is_async,
             span: Span::new(start, self.lexer.cursor()),
         })
@@ -944,8 +943,12 @@ impl<'a> Parser<'a> {
                     let op = self.parse_operation()?;
                     ops.push(op);
                 }
-                Token::Interface | Token::Machine | Token::Actions
-                | Token::Domain | Token::Eof | Token::Operations => break,
+                Token::Interface
+                | Token::Machine
+                | Token::Actions
+                | Token::Domain
+                | Token::Eof
+                | Token::Operations => break,
                 _ => {
                     self.advance()?;
                 }
@@ -1005,7 +1008,10 @@ impl<'a> Parser<'a> {
             name,
             params,
             return_type,
-            body: OperationBody { span: body.span, code: Some(code) },
+            body: OperationBody {
+                span: body.span,
+                code: Some(code),
+            },
             is_static,
             is_async,
             span: Span::new(start, self.lexer.cursor()),
@@ -1056,7 +1062,9 @@ impl<'a> Parser<'a> {
         let lang = self.lexer.lang();
 
         // Skip initial whitespace/newlines after `domain:`
-        while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t' || src[pos] == b'\n' || src[pos] == b'\r') {
+        while pos < src.len()
+            && (src[pos] == b' ' || src[pos] == b'\t' || src[pos] == b'\n' || src[pos] == b'\r')
+        {
             pos += 1;
         }
 
@@ -1101,7 +1109,12 @@ impl<'a> Parser<'a> {
             }
             let followed_by_colon = check_pos < src.len() && src[check_pos] == b':';
 
-            if followed_by_colon && matches!(word, "interface" | "machine" | "actions" | "operations" | "domain") {
+            if followed_by_colon
+                && matches!(
+                    word,
+                    "interface" | "machine" | "actions" | "operations" | "domain"
+                )
+            {
                 // This is a new section — stop parsing domain
                 self.lexer.set_cursor(line_start);
                 break;
@@ -1114,7 +1127,9 @@ impl<'a> Parser<'a> {
                 pos += 1;
             }
             let raw_line = std::str::from_utf8(&src[content_start..pos])
-                .unwrap_or("").trim_end().to_string();
+                .unwrap_or("")
+                .trim_end()
+                .to_string();
 
             if raw_line.is_empty() {
                 continue;
@@ -1149,10 +1164,16 @@ impl<'a> Parser<'a> {
         loop {
             let tok = self.peek()?;
             match tok {
-                Token::Interface | Token::Machine | Token::Actions
-                | Token::Operations | Token::Eof | Token::Domain => break,
+                Token::Interface
+                | Token::Machine
+                | Token::Actions
+                | Token::Operations
+                | Token::Eof
+                | Token::Domain => break,
                 Token::RBrace => break,
-                _ => { self.advance()?; }
+                _ => {
+                    self.advance()?;
+                }
             }
         }
         Ok(vars)
@@ -1180,10 +1201,22 @@ impl<'a> Parser<'a> {
         while pos < src.len() {
             let b = src[pos];
             match b {
-                b'<' => { angle_depth += 1; pos += 1; }
-                b'>' => { angle_depth -= 1; pos += 1; }
-                b'[' => { bracket_depth += 1; pos += 1; }
-                b']' => { bracket_depth -= 1; pos += 1; }
+                b'<' => {
+                    angle_depth += 1;
+                    pos += 1;
+                }
+                b'>' => {
+                    angle_depth -= 1;
+                    pos += 1;
+                }
+                b'[' => {
+                    bracket_depth += 1;
+                    pos += 1;
+                }
+                b']' => {
+                    bracket_depth -= 1;
+                    pos += 1;
+                }
                 // Stop at delimiters (only when not inside <> or [])
                 b'\n' | b'{' if angle_depth == 0 && bracket_depth == 0 => break,
                 b'=' | b')' | b',' if angle_depth == 0 && bracket_depth == 0 => break,
@@ -1193,7 +1226,9 @@ impl<'a> Parser<'a> {
         }
 
         let type_text = std::str::from_utf8(&src[type_start..pos])
-            .unwrap_or("").trim().to_string();
+            .unwrap_or("")
+            .trim()
+            .to_string();
         self.lexer.set_cursor(pos);
 
         if type_text.is_empty() {
@@ -1217,9 +1252,7 @@ impl<'a> Parser<'a> {
             Token::BoolLit(b) => Ok(Expression::Literal(Literal::Bool(b))),
             Token::Ident(name) => {
                 match name.as_str() {
-                    "None" | "null" | "nullptr" | "nil" => {
-                        Ok(Expression::NativeExpr(name))
-                    }
+                    "None" | "null" | "nullptr" | "nil" => Ok(Expression::NativeExpr(name)),
                     _ => {
                         // Check for path expression like Vec::new() or String::new()
                         // :: is lexed as two Colon tokens
@@ -1262,8 +1295,16 @@ impl<'a> Parser<'a> {
                 while depth > 0 {
                     let next = self.advance()?;
                     match &next.token {
-                        Token::LBracket => { depth += 1; content.push('['); }
-                        Token::RBracket => { depth -= 1; if depth > 0 { content.push(']'); } }
+                        Token::LBracket => {
+                            depth += 1;
+                            content.push('[');
+                        }
+                        Token::RBracket => {
+                            depth -= 1;
+                            if depth > 0 {
+                                content.push(']');
+                            }
+                        }
                         Token::Eof => break,
                         _ => {
                             let src = self.lexer.source();
@@ -1283,8 +1324,16 @@ impl<'a> Parser<'a> {
                 while depth > 0 {
                     let next = self.advance()?;
                     match &next.token {
-                        Token::LBrace => { depth += 1; content.push('{'); }
-                        Token::RBrace => { depth -= 1; if depth > 0 { content.push('}'); } }
+                        Token::LBrace => {
+                            depth += 1;
+                            content.push('{');
+                        }
+                        Token::RBrace => {
+                            depth -= 1;
+                            if depth > 0 {
+                                content.push('}');
+                            }
+                        }
                         Token::Eof => break,
                         _ => {
                             let src = self.lexer.source();
@@ -1386,8 +1435,8 @@ impl<'a> Parser<'a> {
     fn validate_no_forbidden_frame_syntax(
         &self,
         statements: &[Statement],
-        context_kind: &str,   // "action" or "operation"
-        context_name: &str,   // the action/operation name
+        context_kind: &str, // "action" or "operation"
+        context_name: &str, // the action/operation name
     ) -> Result<(), ParseError> {
         for stmt in statements {
             match stmt {
@@ -1560,8 +1609,7 @@ pub fn parse_system_header_params(
             // Parse the typed param body INSIDE the parens. The body
             // shape is `name: type [= default]` and ends at the matching
             // close paren `)`.
-            let body =
-                parse_typed_param_body(source, &mut i, end, /*close_at_paren=*/ true)?;
+            let body = parse_typed_param_body(source, &mut i, end, /*close_at_paren=*/ true)?;
             name = body.0;
             param_type = body.1;
             default = body.2;
@@ -1578,12 +1626,15 @@ pub fn parse_system_header_params(
                 });
             }
             i += 1; // past `)`
-            kind = if is_enter { ParamKind::EnterArg } else { ParamKind::StateArg };
+            kind = if is_enter {
+                ParamKind::EnterArg
+            } else {
+                ParamKind::StateArg
+            };
         } else if is_ident_start(source[i]) {
             // Bare domain branch: `name: type [= default]` directly at
             // the top level of the system header param list.
-            let body =
-                parse_typed_param_body(source, &mut i, end, /*close_at_paren=*/ false)?;
+            let body = parse_typed_param_body(source, &mut i, end, /*close_at_paren=*/ false)?;
             name = body.0;
             param_type = body.1;
             default = body.2;
@@ -1799,8 +1850,13 @@ mod tests {
     fn parse_py(src: &str) -> SystemAst {
         let bytes = src.as_bytes();
         let span = Span::new(0, bytes.len());
-        parse_system(bytes, "TestSystem".to_string(), span, TargetLanguage::Python3)
-            .expect("Parse failed")
+        parse_system(
+            bytes,
+            "TestSystem".to_string(),
+            span,
+            TargetLanguage::Python3,
+        )
+        .expect("Parse failed")
     }
 
     #[test]
@@ -1837,13 +1893,18 @@ mod tests {
     #[test]
     fn test_interface_with_return_type() {
         let sys = parse_py("interface:\n    getData(): int");
-        assert_eq!(sys.interface[0].return_type, Some(Type::Custom("int".into())));
+        assert_eq!(
+            sys.interface[0].return_type,
+            Some(Type::Custom("int".into()))
+        );
     }
 
     #[test]
     fn test_interface_with_alias() {
-        let sys = parse_py(r#"interface:
-    foo(a: int): str = "myFoo""#);
+        let sys = parse_py(
+            r#"interface:
+    foo(a: int): str = "myFoo""#,
+        );
         assert_eq!(sys.interface[0].name, "foo");
         assert_eq!(sys.interface[0].return_init, Some("\"myFoo\"".to_string()));
     }
@@ -1859,7 +1920,7 @@ mod tests {
     #[test]
     fn test_machine_state_with_handler() {
         let sys = parse_py(
-            "machine:\n    $Idle {\n        start() {\n            -> $Running\n        }\n    }"
+            "machine:\n    $Idle {\n        start() {\n            -> $Running\n        }\n    }",
         );
         let machine = sys.machine.unwrap();
         assert_eq!(machine.states[0].name, "Idle");
@@ -1868,17 +1929,20 @@ mod tests {
 
         // Check handler body has a transition
         let body = &machine.states[0].handlers[0].body;
-        let has_transition = body.statements.iter().any(|s| {
-            matches!(s, Statement::Transition(t) if t.target == "Running")
-        });
-        assert!(has_transition, "Handler body should contain transition to $Running");
+        let has_transition = body
+            .statements
+            .iter()
+            .any(|s| matches!(s, Statement::Transition(t) if t.target == "Running"));
+        assert!(
+            has_transition,
+            "Handler body should contain transition to $Running"
+        );
     }
 
     #[test]
     fn test_machine_enter_handler() {
-        let sys = parse_py(
-            "machine:\n    $Init {\n        $>() {\n            x = 1\n        }\n    }"
-        );
+        let sys =
+            parse_py("machine:\n    $Init {\n        $>() {\n            x = 1\n        }\n    }");
         let machine = sys.machine.unwrap();
         let state = &machine.states[0];
         assert!(state.enter.is_some());
@@ -1890,7 +1954,7 @@ mod tests {
     #[test]
     fn test_machine_exit_handler() {
         let sys = parse_py(
-            "machine:\n    $Init {\n        <$() {\n            cleanup()\n        }\n    }"
+            "machine:\n    $Init {\n        <$() {\n            cleanup()\n        }\n    }",
         );
         let machine = sys.machine.unwrap();
         let state = &machine.states[0];
@@ -1921,7 +1985,7 @@ mod tests {
     #[test]
     fn test_multiple_sections() {
         let sys = parse_py(
-            "interface:\n    start()\n\nmachine:\n    $Idle {\n    }\n\ndomain:\n    x = 0"
+            "interface:\n    start()\n\nmachine:\n    $Idle {\n    }\n\ndomain:\n    x = 0",
         );
         assert_eq!(sys.interface.len(), 1);
         assert!(sys.machine.is_some());
@@ -1930,14 +1994,16 @@ mod tests {
 
     #[test]
     fn test_section_order() {
-        let sys = parse_py(
-            "interface:\n    start()\nmachine:\n    $A {\n    }\ndomain:\n    x = 0"
+        let sys =
+            parse_py("interface:\n    start()\nmachine:\n    $A {\n    }\ndomain:\n    x = 0");
+        assert_eq!(
+            sys.section_order,
+            vec![
+                SystemSectionKind::Interface,
+                SystemSectionKind::Machine,
+                SystemSectionKind::Domain,
+            ]
         );
-        assert_eq!(sys.section_order, vec![
-            SystemSectionKind::Interface,
-            SystemSectionKind::Machine,
-            SystemSectionKind::Domain,
-        ]);
     }
 
     #[test]
@@ -1951,9 +2017,9 @@ mod tests {
 
         // Should have: NativeCode("x = 1"), Transition(B), NativeCode("y = 2")
         let has_native = stmts.iter().any(|s| matches!(s, Statement::NativeCode(_)));
-        let has_transition = stmts.iter().any(|s| {
-            matches!(s, Statement::Transition(t) if t.target == "B")
-        });
+        let has_transition = stmts
+            .iter()
+            .any(|s| matches!(s, Statement::Transition(t) if t.target == "B"));
         assert!(has_native, "Should have native code");
         assert!(has_transition, "Should have transition to $B");
     }
@@ -2009,7 +2075,7 @@ mod tests {
     #[test]
     fn test_handler_return_sugar() {
         let sys = parse_py(
-            "machine:\n    $A {\n        get() {\n            return 42\n        }\n    }"
+            "machine:\n    $A {\n        get() {\n            return 42\n        }\n    }",
         );
         let machine = sys.machine.unwrap();
         let stmts = &machine.states[0].handlers[0].body.statements;
@@ -2020,7 +2086,7 @@ mod tests {
     #[test]
     fn test_forward_to_parent() {
         let sys = parse_py(
-            "machine:\n    $Child {\n        evt() {\n            => $^\n        }\n    }"
+            "machine:\n    $Child {\n        evt() {\n            => $^\n        }\n    }",
         );
         let machine = sys.machine.unwrap();
         let stmts = &machine.states[0].handlers[0].body.statements;
@@ -2030,9 +2096,8 @@ mod tests {
 
     #[test]
     fn test_multiple_states() {
-        let sys = parse_py(
-            "machine:\n    $Idle {\n    }\n    $Running {\n    }\n    $Done {\n    }"
-        );
+        let sys =
+            parse_py("machine:\n    $Idle {\n    }\n    $Running {\n    }\n    $Done {\n    }");
         let machine = sys.machine.unwrap();
         assert_eq!(machine.states.len(), 3);
         assert_eq!(machine.states[0].name, "Idle");

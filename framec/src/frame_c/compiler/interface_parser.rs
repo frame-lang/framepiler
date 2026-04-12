@@ -143,8 +143,7 @@ impl InterfaceParser {
                     k += 1;
                 }
                 if k < end && bytes[k] == b'(' {
-                    let name =
-                        String::from_utf8_lossy(&bytes[name_start..name_end]).to_string();
+                    let name = String::from_utf8_lossy(&bytes[name_start..name_end]).to_string();
                     if !name.is_empty() {
                         out.insert(name);
                     }
@@ -275,7 +274,7 @@ pub(crate) fn parse_interface_header_meta(line: &str) -> Option<(String, Interfa
     // Find parameter list parentheses.
     let rest = &trimmed[name_end..];
     let lp = rest.find('(')?; // must exist
-    // naive paren match: find first ')'
+                              // naive paren match: find first ')'
     let rp_rel = rest[lp + 1..].find(')')?;
     let after_params = lp + 1 + rp_rel + 1;
     let mut return_type: Option<String> = None;
@@ -288,7 +287,8 @@ pub(crate) fn parse_interface_header_meta(line: &str) -> Option<(String, Interfa
         let mut end = tail.len();
         // TypeExpr runs until '=' or comment start
         for (idx, ch) in tail.char_indices() {
-            if ch == '=' || ch == '#' || (ch == '/' && tail[idx + ch.len_utf8()..].starts_with('/')) {
+            if ch == '=' || ch == '#' || (ch == '/' && tail[idx + ch.len_utf8()..].starts_with('/'))
+            {
                 end = idx;
                 break;
             }
@@ -316,5 +316,11 @@ pub(crate) fn parse_interface_header_meta(line: &str) -> Option<(String, Interfa
         }
     }
 
-    Some((name, InterfaceMethodMeta { return_type, return_init }))
+    Some((
+        name,
+        InterfaceMethodMeta {
+            return_type,
+            return_init,
+        },
+    ))
 }

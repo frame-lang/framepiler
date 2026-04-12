@@ -1,5 +1,4 @@
 /// Emits DOT (GraphViz) text from a SystemGraph IR.
-
 use super::ir::*;
 use std::collections::HashSet;
 use std::fmt::Write;
@@ -40,11 +39,7 @@ pub fn emit_dot(graph: &SystemGraph) -> String {
 
     // Emit states — parents as clusters, leaves as nodes
     // We need to emit in hierarchy order: top-level states first, children inside clusters
-    let top_level: Vec<&StateNode> = graph
-        .states
-        .iter()
-        .filter(|s| s.parent.is_none())
-        .collect();
+    let top_level: Vec<&StateNode> = graph.states.iter().filter(|s| s.parent.is_none()).collect();
 
     for state in &top_level {
         emit_state_recursive(state, &graph.states, &parent_names, &mut out, 1);
@@ -102,12 +97,7 @@ fn emit_state_recursive(
         // Parent state → subgraph cluster
         writeln!(out, "{}subgraph cluster_{} {{", pad, state.name).ok();
         writeln!(out, "{}    label = <", pad).ok();
-        writeln!(
-            out,
-            "{}        <table cellborder=\"0\" border=\"0\">",
-            pad
-        )
-        .ok();
+        writeln!(out, "{}        <table cellborder=\"0\" border=\"0\">", pad).ok();
         writeln!(out, "{}            <tr><td>{}</td></tr>", pad, state.name).ok();
         writeln!(out, "{}            <hr/>", pad).ok();
         writeln!(out, "{}            <tr><td></td></tr>", pad).ok();
@@ -238,12 +228,7 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
         writeln!(out, "{}        </font></td></tr>", pad).ok();
     }
 
-    writeln!(
-        out,
-        "{}    </table>",
-        pad
-    )
-    .ok();
+    writeln!(out, "{}    </table>", pad).ok();
     writeln!(out, "{}> margin=0 shape=none]", pad).ok();
 }
 

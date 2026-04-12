@@ -3,17 +3,12 @@
 //! This module eliminates the 6x scanner duplication by providing a unified
 //! trait and factory function for language-specific scanners.
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::native_region_scanner::{
-    NativeRegionScanner, ScanResult, ScanError,
-    python::NativeRegionScannerPy,
-    typescript::NativeRegionScannerTs,
-    rust::NativeRegionScannerRust,
-    csharp::NativeRegionScannerCs,
-    c::NativeRegionScannerC,
-    cpp::NativeRegionScannerCpp,
-    java::NativeRegionScannerJava,
+    c::NativeRegionScannerC, cpp::NativeRegionScannerCpp, csharp::NativeRegionScannerCs,
+    java::NativeRegionScannerJava, python::NativeRegionScannerPy, rust::NativeRegionScannerRust,
+    typescript::NativeRegionScannerTs, NativeRegionScanner, ScanError, ScanResult,
 };
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Trait for region scanning (wrapper around NativeRegionScanner)
 pub trait RegionScannerTrait: Send + Sync {

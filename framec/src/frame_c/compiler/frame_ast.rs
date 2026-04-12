@@ -7,7 +7,6 @@
 //! This is the SINGLE unified AST for Frame V4. The old `ast.rs` module has been
 //! merged into this file to eliminate the dual-AST problem.
 
-
 /// Span represents a source location in the original Frame code
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
@@ -187,8 +186,8 @@ pub struct StateVarAst {
 pub struct StateAst {
     pub name: String,
     pub params: Vec<StateParam>,
-    pub parent: Option<String>,  // For HSM parent state
-    pub state_vars: Vec<StateVarAst>,  // State-local variables ($.varName)
+    pub parent: Option<String>,       // For HSM parent state
+    pub state_vars: Vec<StateVarAst>, // State-local variables ($.varName)
     pub handlers: Vec<HandlerAst>,
     pub enter: Option<EnterHandler>,
     pub exit: Option<ExitHandler>,
@@ -341,7 +340,6 @@ pub struct ContinueAst {
     pub span: Span,
 }
 
-
 /// If statement
 #[derive(Debug, Clone)]
 pub struct IfAst {
@@ -362,8 +360,8 @@ pub struct LoopAst {
 #[derive(Debug, Clone)]
 pub enum LoopKind {
     While(Expression),
-    For(String, Expression),  // for var in expr
-    Loop,  // infinite loop
+    For(String, Expression), // for var in expr
+    Loop,                    // infinite loop
 }
 
 /// Expression AST
@@ -387,15 +385,9 @@ pub enum Expression {
         right: Box<Expression>,
     },
     /// Unary operation
-    Unary {
-        op: UnaryOp,
-        expr: Box<Expression>,
-    },
+    Unary { op: UnaryOp, expr: Box<Expression> },
     /// Method/function call
-    Call {
-        func: String,
-        args: Vec<Expression>,
-    },
+    Call { func: String, args: Vec<Expression> },
     /// Member access (obj.field)
     Member {
         object: Box<Expression>,
@@ -429,10 +421,22 @@ pub enum Literal {
 /// Binary operators
 #[derive(Debug, Clone)]
 pub enum BinaryOp {
-    Add, Sub, Mul, Div, Mod,
-    Eq, Ne, Lt, Le, Gt, Ge,
-    And, Or,
-    BitAnd, BitOr, BitXor,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    BitAnd,
+    BitOr,
+    BitXor,
 }
 
 /// Unary operators
@@ -532,7 +536,7 @@ pub struct DomainVar {
     /// possible future use if Frame ever wants to validate init
     /// expressions structurally.
     pub initializer: Option<Expression>,
-    pub is_frame: bool,  // true if Frame-managed, false if native
+    pub is_frame: bool, // true if Frame-managed, false if native
     /// Original source line, kept for diagnostics and as a fallback for
     /// any backend that hasn't migrated to consume the structured fields.
     /// Codegen should prefer the structured fields where possible.
@@ -579,8 +583,10 @@ impl SystemAst {
 
     /// Find a state by name
     pub fn find_state(&self, name: &str) -> Option<&StateAst> {
-        self.machine.as_ref()?
-            .states.iter()
+        self.machine
+            .as_ref()?
+            .states
+            .iter()
             .find(|s| s.name == name)
     }
 
@@ -697,9 +703,7 @@ mod tests {
     fn test_system_ast_creation() {
         let mut system = SystemAst::new("TrafficLight".to_string(), Span::new(0, 100));
         system.machine = Some(MachineAst {
-            states: vec![
-                StateAst::new("Red".to_string(), Span::new(0, 10)),
-            ],
+            states: vec![StateAst::new("Red".to_string(), Span::new(0, 10))],
             span: Span::new(0, 20),
         });
 
@@ -743,7 +747,10 @@ mod tests {
             SystemSectionKind::Machine, // duplicate!
         ];
 
-        assert_eq!(system.has_duplicate_sections(), Some(SystemSectionKind::Machine));
+        assert_eq!(
+            system.has_duplicate_sections(),
+            Some(SystemSectionKind::Machine)
+        );
     }
 
     #[test]
@@ -757,6 +764,9 @@ mod tests {
         });
 
         assert!(system.persist_attr.is_some());
-        assert_eq!(system.persist_attr.as_ref().unwrap().save_name, Some("custom_save".to_string()));
+        assert_eq!(
+            system.persist_attr.as_ref().unwrap().save_name,
+            Some("custom_save".to_string())
+        );
     }
 }

@@ -1,6 +1,6 @@
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::ast::Span;
 use crate::frame_c::compiler::system_param_semantics::header_param_names;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Parser utilities for `machine:` sections. For now this is focused on entry
 /// handlers `$>()` so that system-parameter semantics (E417) can be driven
@@ -47,7 +47,10 @@ impl MachineParser {
                 }
                 continue;
             }
-            if i + 1 < machine_span.end && bytes[i] == b'/' && (bytes[i + 1] == b'/' || bytes[i + 1] == b'*') {
+            if i + 1 < machine_span.end
+                && bytes[i] == b'/'
+                && (bytes[i + 1] == b'/' || bytes[i + 1] == b'*')
+            {
                 while i < machine_span.end && bytes[i] != b'\n' {
                     i += 1;
                 }
@@ -97,7 +100,11 @@ impl MachineParser {
                 s += 1;
             }
             if s >= line_end {
-                j = if line_end < machine_span.end { line_end + 1 } else { machine_span.end };
+                j = if line_end < machine_span.end {
+                    line_end + 1
+                } else {
+                    machine_span.end
+                };
                 continue;
             }
             // Next state header? Stop scanning this state.
@@ -114,11 +121,22 @@ impl MachineParser {
             }
             // Comment-only lines.
             if bytes[s] == b'#' {
-                j = if line_end < machine_span.end { line_end + 1 } else { machine_span.end };
+                j = if line_end < machine_span.end {
+                    line_end + 1
+                } else {
+                    machine_span.end
+                };
                 continue;
             }
-            if s + 1 < line_end && bytes[s] == b'/' && (bytes[s + 1] == b'/' || bytes[s + 1] == b'*') {
-                j = if line_end < machine_span.end { line_end + 1 } else { machine_span.end };
+            if s + 1 < line_end
+                && bytes[s] == b'/'
+                && (bytes[s + 1] == b'/' || bytes[s + 1] == b'*')
+            {
+                j = if line_end < machine_span.end {
+                    line_end + 1
+                } else {
+                    machine_span.end
+                };
                 continue;
             }
             // Look for `$>()` header.
@@ -132,7 +150,11 @@ impl MachineParser {
                 return Some(params);
             }
 
-            j = if line_end < machine_span.end { line_end + 1 } else { machine_span.end };
+            j = if line_end < machine_span.end {
+                line_end + 1
+            } else {
+                machine_span.end
+            };
         }
 
         None

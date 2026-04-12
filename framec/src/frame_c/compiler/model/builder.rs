@@ -156,142 +156,208 @@ pub struct ParamModel {
 /// Build a semantic model from a parsed Frame system.
 pub fn build_system_model(system: &SystemAst, target: &str, source: &[u8]) -> SystemModel {
     // Interface
-    let interface: Vec<InterfaceMethodModel> = system.interface.iter().map(|m| {
-        InterfaceMethodModel {
+    let interface: Vec<InterfaceMethodModel> = system
+        .interface
+        .iter()
+        .map(|m| InterfaceMethodModel {
             name: m.name.clone(),
-            params: m.params.iter().map(|p| ParamModel {
-                name: p.name.clone(),
-                param_type: format_type_opt(&p.param_type),
-            }).collect(),
+            params: m
+                .params
+                .iter()
+                .map(|p| ParamModel {
+                    name: p.name.clone(),
+                    param_type: format_type_opt(&p.param_type),
+                })
+                .collect(),
             return_type: m.return_type.as_ref().and_then(|t| format_type_opt(t)),
             return_init: m.return_init.clone(),
             is_async: if m.is_async { Some(true) } else { None },
-        }
-    }).collect();
+        })
+        .collect();
 
     // Machine
     let machine = system.machine.as_ref().map(|m| {
         let mut all_transitions = Vec::new();
-        let states: Vec<StateModel> = m.states.iter().enumerate().map(|(i, s)| {
-            let children: Vec<String> = m.states.iter()
-                .filter(|other| other.parent.as_deref() == Some(&s.name))
-                .map(|other| other.name.clone())
-                .collect();
+        let states: Vec<StateModel> = m
+            .states
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let children: Vec<String> = m
+                    .states
+                    .iter()
+                    .filter(|other| other.parent.as_deref() == Some(&s.name))
+                    .map(|other| other.name.clone())
+                    .collect();
 
-            let mut handler_models = Vec::new();
-            for handler in &s.handlers {
-                let mut transitions = Vec::new();
-                extract_transitions(&handler.body.statements, &s.name, &handler.event, None, &mut transitions);
-                all_transitions.extend(transitions.clone());
+                let mut handler_models = Vec::new();
+                for handler in &s.handlers {
+                    let mut transitions = Vec::new();
+                    extract_transitions(
+                        &handler.body.statements,
+                        &s.name,
+                        &handler.event,
+                        None,
+                        &mut transitions,
+                    );
+                    all_transitions.extend(transitions.clone());
 
-                handler_models.push(HandlerModel {
-                    event: handler.event.clone(),
-                    params: handler.params.iter().map(|p| ParamModel {
-                        name: p.name.clone(),
-                        param_type: format_type_opt(&p.param_type),
-                    }).collect(),
-                    return_type: handler.return_type.as_ref().and_then(|t| format_type_opt(t)),
-                    body: extract_body_lines(source, &handler.body.span),
-                    transitions,
+                    handler_models.push(HandlerModel {
+                        event: handler.event.clone(),
+                        params: handler
+                            .params
+                            .iter()
+                            .map(|p| ParamModel {
+                                name: p.name.clone(),
+                                param_type: format_type_opt(&p.param_type),
+                            })
+                            .collect(),
+                        return_type: handler
+                            .return_type
+                            .as_ref()
+                            .and_then(|t| format_type_opt(t)),
+                        body: extract_body_lines(source, &handler.body.span),
+                        transitions,
+                    });
+                }
+
+                let enter_handler = s.enter.as_ref().map(|e| {
+                    let mut transitions = Vec::new();
+                    extract_transitions(&e.body.statements, &s.name, "$>", None, &mut transitions);
+                    all_transitions.extend(transitions.clone());
+                    HandlerModel {
+                        event: "$>".to_string(),
+                        params: e
+                            .params
+                            .iter()
+                            .map(|p| ParamModel {
+                                name: p.name.clone(),
+                                param_type: format_type_opt(&p.param_type),
+                            })
+                            .collect(),
+                        return_type: None,
+                        body: extract_body_lines(source, &e.body.span),
+                        transitions,
+                    }
                 });
-            }
 
-            let enter_handler = s.enter.as_ref().map(|e| {
-                let mut transitions = Vec::new();
-                extract_transitions(&e.body.statements, &s.name, "$>", None, &mut transitions);
-                all_transitions.extend(transitions.clone());
-                HandlerModel {
-                    event: "$>".to_string(),
-                    params: e.params.iter().map(|p| ParamModel {
-                        name: p.name.clone(),
-                        param_type: format_type_opt(&p.param_type),
-                    }).collect(),
-                    return_type: None,
-                    body: extract_body_lines(source, &e.body.span),
-                    transitions,
+                let exit_handler = s.exit.as_ref().map(|e| {
+                    let mut transitions = Vec::new();
+                    extract_transitions(&e.body.statements, &s.name, "<$", None, &mut transitions);
+                    all_transitions.extend(transitions.clone());
+                    HandlerModel {
+                        event: "<$".to_string(),
+                        params: e
+                            .params
+                            .iter()
+                            .map(|p| ParamModel {
+                                name: p.name.clone(),
+                                param_type: format_type_opt(&p.param_type),
+                            })
+                            .collect(),
+                        return_type: None,
+                        body: extract_body_lines(source, &e.body.span),
+                        transitions,
+                    }
+                });
+
+                StateModel {
+                    name: s.name.clone(),
+                    is_start: i == 0,
+                    parent: s.parent.clone(),
+                    children,
+                    default_forward: if s.default_forward { Some(true) } else { None },
+                    state_vars: s
+                        .state_vars
+                        .iter()
+                        .map(|sv| StateVarModel {
+                            name: sv.name.clone(),
+                            var_type: format_type_opt(&sv.var_type),
+                            init: sv.init.as_ref().map(|e| format_expr(e)),
+                        })
+                        .collect(),
+                    state_params: s
+                        .params
+                        .iter()
+                        .map(|p| ParamModel {
+                            name: p.name.clone(),
+                            param_type: format_type_opt(&p.param_type),
+                        })
+                        .collect(),
+                    enter_handler,
+                    exit_handler,
+                    handlers: handler_models,
                 }
-            });
+            })
+            .collect();
 
-            let exit_handler = s.exit.as_ref().map(|e| {
-                let mut transitions = Vec::new();
-                extract_transitions(&e.body.statements, &s.name, "<$", None, &mut transitions);
-                all_transitions.extend(transitions.clone());
-                HandlerModel {
-                    event: "<$".to_string(),
-                    params: e.params.iter().map(|p| ParamModel {
-                        name: p.name.clone(),
-                        param_type: format_type_opt(&p.param_type),
-                    }).collect(),
-                    return_type: None,
-                    body: extract_body_lines(source, &e.body.span),
-                    transitions,
-                }
-            });
-
-            StateModel {
-                name: s.name.clone(),
-                is_start: i == 0,
-                parent: s.parent.clone(),
-                children,
-                default_forward: if s.default_forward { Some(true) } else { None },
-                state_vars: s.state_vars.iter().map(|sv| StateVarModel {
-                    name: sv.name.clone(),
-                    var_type: format_type_opt(&sv.var_type),
-                    init: sv.init.as_ref().map(|e| format_expr(e)),
-                }).collect(),
-                state_params: s.params.iter().map(|p| ParamModel {
-                    name: p.name.clone(),
-                    param_type: format_type_opt(&p.param_type),
-                }).collect(),
-                enter_handler,
-                exit_handler,
-                handlers: handler_models,
-            }
-        }).collect();
-
-        MachineModel { states, transitions: all_transitions }
+        MachineModel {
+            states,
+            transitions: all_transitions,
+        }
     });
 
     // Actions
-    let actions: Vec<ActionModel> = system.actions.iter().map(|a| {
-        ActionModel {
+    let actions: Vec<ActionModel> = system
+        .actions
+        .iter()
+        .map(|a| ActionModel {
             name: a.name.clone(),
-            params: a.params.iter().map(|p| ParamModel {
-                name: p.name.clone(),
-                param_type: format_type_opt(&p.param_type),
-            }).collect(),
+            params: a
+                .params
+                .iter()
+                .map(|p| ParamModel {
+                    name: p.name.clone(),
+                    param_type: format_type_opt(&p.param_type),
+                })
+                .collect(),
             is_async: if a.is_async { Some(true) } else { None },
-        }
-    }).collect();
+        })
+        .collect();
 
     // Operations
-    let operations: Vec<OperationModel> = system.operations.iter().map(|o| {
-        OperationModel {
+    let operations: Vec<OperationModel> = system
+        .operations
+        .iter()
+        .map(|o| OperationModel {
             name: o.name.clone(),
-            params: o.params.iter().map(|p| ParamModel {
-                name: p.name.clone(),
-                param_type: format_type_opt(&p.param_type),
-            }).collect(),
+            params: o
+                .params
+                .iter()
+                .map(|p| ParamModel {
+                    name: p.name.clone(),
+                    param_type: format_type_opt(&p.param_type),
+                })
+                .collect(),
             return_type: format_type_opt(&o.return_type),
             is_static: o.is_static,
             is_async: if o.is_async { Some(true) } else { None },
-        }
-    }).collect();
+        })
+        .collect();
 
     // Domain
-    let domain: Vec<DomainVarModel> = system.domain.iter().map(|d| {
-        DomainVarModel {
+    let domain: Vec<DomainVarModel> = system
+        .domain
+        .iter()
+        .map(|d| DomainVarModel {
             name: d.name.clone(),
             var_type: format_type_opt(&d.var_type),
-            default: d.initializer.as_ref().map(|e| format_expr(e))
+            default: d
+                .initializer
+                .as_ref()
+                .map(|e| format_expr(e))
                 .or_else(|| d.raw_code.clone()),
-        }
-    }).collect();
+        })
+        .collect();
 
     SystemModel {
         name: system.name.clone(),
         target: target.to_string(),
-        persist: if system.persist_attr.is_some() { Some(true) } else { None },
+        persist: if system.persist_attr.is_some() {
+            Some(true)
+        } else {
+            None
+        },
         interface,
         machine,
         actions,
@@ -323,14 +389,21 @@ fn format_expr(expr: &Expression) -> String {
         Expression::Var(name) => name.clone(),
         Expression::Binary { op, left, right } => {
             let op_str = match op {
-                BinaryOp::Add => "+", BinaryOp::Sub => "-",
-                BinaryOp::Mul => "*", BinaryOp::Div => "/",
+                BinaryOp::Add => "+",
+                BinaryOp::Sub => "-",
+                BinaryOp::Mul => "*",
+                BinaryOp::Div => "/",
                 BinaryOp::Mod => "%",
-                BinaryOp::Eq => "==", BinaryOp::Ne => "!=",
-                BinaryOp::Lt => "<", BinaryOp::Le => "<=",
-                BinaryOp::Gt => ">", BinaryOp::Ge => ">=",
-                BinaryOp::And => "&&", BinaryOp::Or => "||",
-                BinaryOp::BitAnd => "&", BinaryOp::BitOr => "|",
+                BinaryOp::Eq => "==",
+                BinaryOp::Ne => "!=",
+                BinaryOp::Lt => "<",
+                BinaryOp::Le => "<=",
+                BinaryOp::Gt => ">",
+                BinaryOp::Ge => ">=",
+                BinaryOp::And => "&&",
+                BinaryOp::Or => "||",
+                BinaryOp::BitAnd => "&",
+                BinaryOp::BitOr => "|",
                 BinaryOp::BitXor => "^",
             };
             format!("{} {} {}", format_expr(left), op_str, format_expr(right))
@@ -363,11 +436,12 @@ fn extract_body_lines(source: &[u8], span: &Span) -> Vec<String> {
     // Strip outer braces and normalize
     let trimmed = body_text.trim();
     let inner = if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        &trimmed[1..trimmed.len()-1]
+        &trimmed[1..trimmed.len() - 1]
     } else {
         trimmed
     };
-    inner.lines()
+    inner
+        .lines()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect()
@@ -435,10 +509,22 @@ fn extract_transitions(
             }
             Statement::If(if_ast) => {
                 let guard_text = format_expr(&if_ast.condition);
-                extract_transitions(&[*if_ast.then_branch.clone()], state_name, event, Some(&guard_text), out);
+                extract_transitions(
+                    &[*if_ast.then_branch.clone()],
+                    state_name,
+                    event,
+                    Some(&guard_text),
+                    out,
+                );
                 if let Some(ref else_branch) = if_ast.else_branch {
                     let else_guard = format!("!{}", guard_text);
-                    extract_transitions(&[*else_branch.clone()], state_name, event, Some(&else_guard), out);
+                    extract_transitions(
+                        &[*else_branch.clone()],
+                        state_name,
+                        event,
+                        Some(&else_guard),
+                        out,
+                    );
                 }
             }
             _ => {}

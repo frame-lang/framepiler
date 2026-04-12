@@ -1,8 +1,8 @@
 // Body closer for GDScript language — reuses Python FSM since both use
 // # line comments, "..." and '...' strings, and """...""" triple-quoted strings.
 
-use super::{BodyCloser, CloseError};
 use super::python::BodyCloserPy;
+use super::{BodyCloser, CloseError};
 
 pub struct BodyCloserGDScript;
 

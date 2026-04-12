@@ -1,8 +1,8 @@
 //! Dart code generation backend
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Dart backend for code generation
 pub struct DartBackend;
@@ -11,7 +11,6 @@ impl LanguageBackend for DartBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
             // ===== Structural =====
-
             CodegenNode::Module { imports, items } => {
                 let mut result = String::new();
 
@@ -34,7 +33,11 @@ impl LanguageBackend for DartBackend {
                 result
             }
 
-            CodegenNode::Import { module, items, alias } => {
+            CodegenNode::Import {
+                module,
+                items,
+                alias,
+            } => {
                 if items.is_empty() {
                     if let Some(alias) = alias {
                         format!("import '{}' as {};", module, alias)
@@ -47,7 +50,14 @@ impl LanguageBackend for DartBackend {
                 }
             }
 
-            CodegenNode::Class { name, fields, methods, base_classes, is_abstract, .. } => {
+            CodegenNode::Class {
+                name,
+                fields,
+                methods,
+                base_classes,
+                is_abstract,
+                ..
+            } => {
                 let mut result = String::new();
 
                 let abstract_kw = if *is_abstract { "abstract " } else { "" };
@@ -57,7 +67,13 @@ impl LanguageBackend for DartBackend {
                     format!(" extends {}", base_classes[0])
                 };
 
-                result.push_str(&format!("{}{}class {}{} {{\n", ctx.get_indent(), abstract_kw, name, extends));
+                result.push_str(&format!(
+                    "{}{}class {}{} {{\n",
+                    ctx.get_indent(),
+                    abstract_kw,
+                    name,
+                    extends
+                ));
 
                 ctx.push_indent();
 
@@ -84,10 +100,14 @@ impl LanguageBackend for DartBackend {
                         }
                     } else {
                         let static_kw = if field.is_static { "static " } else { "" };
-                        let converted_type = field.type_annotation.as_ref()
+                        let converted_type = field
+                            .type_annotation
+                            .as_ref()
                             .map(|t| self.convert_type(t))
                             .unwrap_or_else(|| "dynamic".to_string());
-                        let init = field.initializer.as_ref()
+                        let init = field
+                            .initializer
+                            .as_ref()
                             .map(|i| format!(" = {}", self.emit(i, ctx)))
                             .unwrap_or_default();
 
@@ -103,11 +123,23 @@ impl LanguageBackend for DartBackend {
                         };
 
                         // Dart: non-nullable fields without initializer need 'late' keyword
-                        let is_nullable = converted_type.ends_with('?') || converted_type == "dynamic";
-                        let late_kw = if init.is_empty() && !is_nullable && !field.is_static { "late " } else { "" };
+                        let is_nullable =
+                            converted_type.ends_with('?') || converted_type == "dynamic";
+                        let late_kw = if init.is_empty() && !is_nullable && !field.is_static {
+                            "late "
+                        } else {
+                            ""
+                        };
 
-                        result.push_str(&format!("{}{}{}{} {}{};\n",
-                            ctx.get_indent(), static_kw, late_kw, converted_type, field_name, init));
+                        result.push_str(&format!(
+                            "{}{}{}{} {}{};\n",
+                            ctx.get_indent(),
+                            static_kw,
+                            late_kw,
+                            converted_type,
+                            field_name,
+                            init
+                        ));
                     }
                 }
 
@@ -147,7 +179,12 @@ impl LanguageBackend for DartBackend {
                             comma
                         ));
                     } else {
-                        result.push_str(&format!("{}{}{}\n", ctx.get_indent(), variant.name, comma));
+                        result.push_str(&format!(
+                            "{}{}{}\n",
+                            ctx.get_indent(),
+                            variant.name,
+                            comma
+                        ));
                     }
                 }
 
@@ -157,14 +194,23 @@ impl LanguageBackend for DartBackend {
             }
 
             // ===== Methods =====
-
-            CodegenNode::Method { name, params, return_type, body, is_async, is_static, visibility, decorators: _ } => {
+            CodegenNode::Method {
+                name,
+                params,
+                return_type,
+                body,
+                is_async,
+                is_static,
+                visibility,
+                decorators: _,
+            } => {
                 let mut result = String::new();
 
                 let static_kw = if *is_static { "static " } else { "" };
                 let async_kw = if *is_async { "async " } else { "" };
                 let params_str = self.emit_params(params);
-                let return_str = return_type.as_ref()
+                let return_str = return_type
+                    .as_ref()
                     .map(|rt| self.convert_type(rt))
                     .unwrap_or_else(|| "void".to_string());
 
@@ -176,7 +222,12 @@ impl LanguageBackend for DartBackend {
 
                 result.push_str(&format!(
                     "{}{}{}{} {}({}) {{\n",
-                    ctx.get_indent(), static_kw, async_kw, return_str, method_name, params_str
+                    ctx.get_indent(),
+                    static_kw,
+                    async_kw,
+                    return_str,
+                    method_name,
+                    params_str
                 ));
 
                 ctx.push_indent();
@@ -194,12 +245,24 @@ impl LanguageBackend for DartBackend {
                 result
             }
 
-            CodegenNode::Constructor { params, body, super_call } => {
+            CodegenNode::Constructor {
+                params,
+                body,
+                super_call,
+            } => {
                 let mut result = String::new();
-                let class_name = ctx.system_name.clone().unwrap_or_else(|| "Unknown".to_string());
+                let class_name = ctx
+                    .system_name
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string());
 
                 let params_str = self.emit_params(params);
-                result.push_str(&format!("{}{}({}) {{\n", ctx.get_indent(), class_name, params_str));
+                result.push_str(&format!(
+                    "{}{}({}) {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    params_str
+                ));
 
                 ctx.push_indent();
 
@@ -223,10 +286,15 @@ impl LanguageBackend for DartBackend {
             }
 
             // ===== Statements =====
-
-            CodegenNode::VarDecl { name, type_annotation, init, is_const } => {
+            CodegenNode::VarDecl {
+                name,
+                type_annotation,
+                init,
+                is_const,
+            } => {
                 let keyword = if *is_const { "final" } else { "var" };
-                let type_ann = type_annotation.as_ref()
+                let type_ann = type_annotation
+                    .as_ref()
                     .map(|t| format!("{} ", self.convert_type(t)))
                     .unwrap_or_default();
 
@@ -263,7 +331,11 @@ impl LanguageBackend for DartBackend {
                 }
             }
 
-            CodegenNode::If { condition, then_block, else_block } => {
+            CodegenNode::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let mut result = String::new();
                 let cond_str = self.emit(condition, ctx);
                 result.push_str(&format!("{}if ({}) {{\n", ctx.get_indent(), cond_str));
@@ -300,7 +372,11 @@ impl LanguageBackend for DartBackend {
             CodegenNode::Match { scrutinee, arms } => {
                 let mut result = String::new();
                 let scrutinee_str = self.emit(scrutinee, ctx);
-                result.push_str(&format!("{}switch ({}) {{\n", ctx.get_indent(), scrutinee_str));
+                result.push_str(&format!(
+                    "{}switch ({}) {{\n",
+                    ctx.get_indent(),
+                    scrutinee_str
+                ));
 
                 ctx.push_indent();
                 for arm in arms {
@@ -345,10 +421,19 @@ impl LanguageBackend for DartBackend {
                 result
             }
 
-            CodegenNode::For { var, iterable, body } => {
+            CodegenNode::For {
+                var,
+                iterable,
+                body,
+            } => {
                 let mut result = String::new();
                 let iter_str = self.emit(iterable, ctx);
-                result.push_str(&format!("{}for (final {} in {}) {{\n", ctx.get_indent(), var, iter_str));
+                result.push_str(&format!(
+                    "{}for (final {} in {}) {{\n",
+                    ctx.get_indent(),
+                    var,
+                    iter_str
+                ));
 
                 ctx.push_indent();
                 for stmt in body {
@@ -383,18 +468,13 @@ impl LanguageBackend for DartBackend {
             CodegenNode::Empty => String::new(),
 
             // ===== Expressions =====
-
             CodegenNode::Ident(name) => name.clone(),
 
             CodegenNode::Literal(lit) => self.emit_literal(lit, ctx),
 
-            CodegenNode::BinaryOp { op, left, right } => {
-                self.emit_binary_op(op, left, right, ctx)
-            }
+            CodegenNode::BinaryOp { op, left, right } => self.emit_binary_op(op, left, right, ctx),
 
-            CodegenNode::UnaryOp { op, operand } => {
-                self.emit_unary_op(op, operand, ctx)
-            }
+            CodegenNode::UnaryOp { op, operand } => self.emit_unary_op(op, operand, ctx),
 
             CodegenNode::Call { target, args } => {
                 let target_str = self.emit(target, ctx);
@@ -402,7 +482,11 @@ impl LanguageBackend for DartBackend {
                 format!("{}({})", target_str, args_str.join(", "))
             }
 
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let obj_str = self.emit(object, ctx);
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
                 format!("{}.{}({})", obj_str, method, args_str.join(", "))
@@ -431,14 +515,19 @@ impl LanguageBackend for DartBackend {
                     // Dart: empty {} is a Set literal; use typed map literal
                     "<String, dynamic>{}".to_string()
                 } else {
-                    let pairs_str: Vec<String> = pairs.iter().map(|(k, v)| {
-                        format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx))
-                    }).collect();
+                    let pairs_str: Vec<String> = pairs
+                        .iter()
+                        .map(|(k, v)| format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx)))
+                        .collect();
                     format!("{{ {} }}", pairs_str.join(", "))
                 }
             }
 
-            CodegenNode::Ternary { condition, then_expr, else_expr } => {
+            CodegenNode::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond = self.emit(condition, ctx);
                 let then_val = self.emit(then_expr, ctx);
                 let else_val = self.emit(else_expr, ctx);
@@ -446,7 +535,11 @@ impl LanguageBackend for DartBackend {
             }
 
             CodegenNode::Lambda { params, body } => {
-                let params_str = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ");
+                let params_str = params
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let body_str = self.emit(body, ctx);
                 format!("({}) => {}", params_str, body_str)
             }
@@ -463,40 +556,61 @@ impl LanguageBackend for DartBackend {
             }
 
             // ===== Frame-Specific =====
-
-            CodegenNode::Transition { target_state, exit_args, enter_args, state_args, indent } => {
+            CodegenNode::Transition {
+                target_state,
+                exit_args,
+                enter_args,
+                state_args,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 let mut args = vec![format!("this.{}", target_state)];
 
                 if !exit_args.is_empty() || !enter_args.is_empty() || !state_args.is_empty() {
-                    let exit_str: Vec<String> = exit_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let exit_str: Vec<String> =
+                        exit_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", exit_str.join(", ")));
                 }
 
                 if !enter_args.is_empty() || !state_args.is_empty() {
-                    let enter_str: Vec<String> = enter_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let enter_str: Vec<String> =
+                        enter_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", enter_str.join(", ")));
                 }
 
                 if !state_args.is_empty() {
-                    let state_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let state_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", state_str.join(", ")));
                 }
 
                 format!("{}this._transition({})", ind, args.join(", "))
             }
 
-            CodegenNode::ChangeState { target_state, state_args, indent } => {
+            CodegenNode::ChangeState {
+                target_state,
+                state_args,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 if state_args.is_empty() {
                     format!("{}this._changeState(this.{})", ind, target_state)
                 } else {
-                    let args_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
-                    format!("{}this._changeState(this.{}, [{}])", ind, target_state, args_str.join(", "))
+                    let args_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    format!(
+                        "{}this._changeState(this.{}, [{}])",
+                        ind,
+                        target_state,
+                        args_str.join(", ")
+                    )
                 }
             }
 
-            CodegenNode::Forward { to_parent: _, indent } => {
+            CodegenNode::Forward {
+                to_parent: _,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 format!("{}return", ind)
             }
@@ -520,12 +634,16 @@ impl LanguageBackend for DartBackend {
                 if args_str.is_empty() {
                     format!("{}this.{}()", ctx.get_indent(), event)
                 } else {
-                    format!("{}this.{}({})", ctx.get_indent(), event, args_str.join(", "))
+                    format!(
+                        "{}this.{}({})",
+                        ctx.get_indent(),
+                        event,
+                        args_str.join(", ")
+                    )
                 }
             }
 
             // ===== Native Code Preservation =====
-
             CodegenNode::NativeBlock { code, span: _ } => {
                 let indent = ctx.get_indent();
                 code.lines()
@@ -593,12 +711,19 @@ impl DartBackend {
         let mut optional: Vec<String> = Vec::new();
 
         for p in params {
-            let type_str = p.type_annotation.as_ref()
+            let type_str = p
+                .type_annotation
+                .as_ref()
                 .map(|t| self.convert_type(t))
                 .unwrap_or_else(|| "dynamic".to_string());
             if let Some(ref d) = p.default_value {
                 let mut ctx = EmitContext::new();
-                optional.push(format!("{} {} = {}", type_str, p.name, self.emit(d, &mut ctx)));
+                optional.push(format!(
+                    "{} {} = {}",
+                    type_str,
+                    p.name,
+                    self.emit(d, &mut ctx)
+                ));
             } else {
                 required.push(format!("{} {}", type_str, p.name));
             }
@@ -614,14 +739,15 @@ impl DartBackend {
     }
 
     fn needs_semicolon(&self, node: &CodegenNode) -> bool {
-        !matches!(node,
-            CodegenNode::If { .. } |
-            CodegenNode::While { .. } |
-            CodegenNode::For { .. } |
-            CodegenNode::Match { .. } |
-            CodegenNode::Comment { .. } |
-            CodegenNode::NativeBlock { .. } |
-            CodegenNode::Empty
+        !matches!(
+            node,
+            CodegenNode::If { .. }
+                | CodegenNode::While { .. }
+                | CodegenNode::For { .. }
+                | CodegenNode::Match { .. }
+                | CodegenNode::Comment { .. }
+                | CodegenNode::NativeBlock { .. }
+                | CodegenNode::Empty
         )
     }
 }

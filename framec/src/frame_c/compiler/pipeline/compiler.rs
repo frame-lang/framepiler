@@ -3,16 +3,22 @@
 //! This module contains the core compilation pipeline for Frame V4.
 //! V4 is a pure preprocessor for @@system blocks.
 
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::utils::RunError;
-use super::config::{PipelineConfig, CompileMode};
-use crate::frame_c::compiler::codegen::{generate_system, generate_rust_compartment_types, generate_c_compartment_types, generate_cpp_compartment_types, generate_java_compartment_types, generate_kotlin_compartment_types, generate_swift_compartment_types, generate_csharp_compartment_types, generate_go_compartment_types, generate_compartment_class, generate_frame_event_class, generate_frame_context_class, get_backend, EmitContext};
+use super::config::{CompileMode, PipelineConfig};
 use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
-use crate::frame_c::compiler::frame_ast::{FrameAst, ModuleAst, Span as AstSpan};
-use crate::frame_c::compiler::segmenter::{self, Segment};
-use crate::frame_c::compiler::pipeline_parser;
 use crate::frame_c::compiler::assembler;
+use crate::frame_c::compiler::codegen::{
+    generate_c_compartment_types, generate_compartment_class, generate_cpp_compartment_types,
+    generate_csharp_compartment_types, generate_frame_context_class, generate_frame_event_class,
+    generate_go_compartment_types, generate_java_compartment_types,
+    generate_kotlin_compartment_types, generate_rust_compartment_types,
+    generate_swift_compartment_types, generate_system, get_backend, EmitContext,
+};
+use crate::frame_c::compiler::frame_ast::{FrameAst, ModuleAst, Span as AstSpan};
 use crate::frame_c::compiler::frame_validator::FrameValidator;
+use crate::frame_c::compiler::pipeline_parser;
+use crate::frame_c::compiler::segmenter::{self, Segment};
+use crate::frame_c::utils::RunError;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Result of module compilation
 #[derive(Debug)]
@@ -70,8 +76,10 @@ impl CompileError {
 pub fn compile_module(source: &[u8], config: &PipelineConfig) -> Result<CompileResult, RunError> {
     // Debug output if enabled
     if config.debug {
-        eprintln!("[compile_module] Starting V4 compilation with mode={:?}, target={:?}",
-            config.mode, config.target);
+        eprintln!(
+            "[compile_module] Starting V4 compilation with mode={:?}, target={:?}",
+            config.mode, config.target
+        );
     }
 
     // Check for validation-only mode
@@ -85,9 +93,9 @@ pub fn compile_module(source: &[u8], config: &PipelineConfig) -> Result<CompileR
 
 /// Validation-only mode
 fn validate_only(source: &[u8], config: &PipelineConfig) -> Result<CompileResult, RunError> {
+    use crate::frame_c::compiler::frame_ast::TargetLanguage as AstTarget;
     use crate::frame_c::compiler::frame_parser::FrameParser;
     use crate::frame_c::compiler::frame_validator::FrameValidator;
-    use crate::frame_c::compiler::frame_ast::TargetLanguage as AstTarget;
 
     // Convert target language
     let ast_target = match config.target {
@@ -125,9 +133,10 @@ fn validate_only(source: &[u8], config: &PipelineConfig) -> Result<CompileResult
     let mut validator = FrameValidator::new();
     let errors = match validator.validate(&ast) {
         Ok(()) => vec![],
-        Err(errs) => errs.iter().map(|e| {
-            CompileError::new(&e.code, &e.message)
-        }).collect(),
+        Err(errs) => errs
+            .iter()
+            .map(|e| CompileError::new(&e.code, &e.message))
+            .collect(),
     };
 
     Ok(CompileResult {
@@ -145,7 +154,10 @@ fn validate_only(source: &[u8], config: &PipelineConfig) -> Result<CompileResult
 /// 1. Segment source into Native/Pragma/System regions (Segmenter)
 /// 2. For each System segment: parse → build Arcanum → validate → generate code
 /// 3. Assemble final output: native pass-through + generated systems + tagged instantiations
-pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<CompileResult, RunError> {
+pub fn compile_ast_based(
+    source: &[u8],
+    config: &PipelineConfig,
+) -> Result<CompileResult, RunError> {
     if config.debug {
         eprintln!("[compile_ast_based] Starting pipeline-based compilation");
     }
@@ -156,7 +168,10 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         Err(e) => {
             return Ok(CompileResult {
                 code: String::new(),
-                errors: vec![CompileError::new("E001", &format!("Segmentation error: {}", e))],
+                errors: vec![CompileError::new(
+                    "E001",
+                    &format!("Segmentation error: {}", e),
+                )],
                 warnings: vec![],
                 source_map: None,
             });
@@ -164,11 +179,16 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
     };
 
     if config.debug {
-        let system_count = source_map.segments.iter()
+        let system_count = source_map
+            .segments
+            .iter()
             .filter(|s| matches!(s, Segment::System { .. }))
             .count();
-        eprintln!("[compile_ast_based] Segmented: {} segments, {} systems",
-            source_map.segments.len(), system_count);
+        eprintln!(
+            "[compile_ast_based] Segmented: {} segments, {} systems",
+            source_map.segments.len(),
+            system_count
+        );
     }
 
     // Check for @@persist pragma
@@ -177,18 +197,29 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
     // Pass 1: Parse all systems into ASTs
     let mut system_asts: Vec<crate::frame_c::compiler::frame_ast::SystemAst> = Vec::new();
     for segment in &source_map.segments {
-        if let Segment::System { name, body_span, header_params_span, .. } = segment {
+        if let Segment::System {
+            name,
+            body_span,
+            header_params_span,
+            ..
+        } = segment
+        {
             let ast_body_span = AstSpan::new(body_span.start, body_span.end);
 
             let mut system_ast = match pipeline_parser::parse_system(
-                &source_map.source, name.clone(), ast_body_span, config.target,
+                &source_map.source,
+                name.clone(),
+                ast_body_span,
+                config.target,
             ) {
                 Ok(ast) => ast,
                 Err(e) => {
                     return Ok(CompileResult {
                         code: String::new(),
-                        errors: vec![CompileError::new("E002",
-                            &format!("Parse error in system '{}': {}", name, e))],
+                        errors: vec![CompileError::new(
+                            "E002",
+                            &format!("Parse error in system '{}': {}", name, e),
+                        )],
                         warnings: vec![],
                         source_map: None,
                     });
@@ -201,15 +232,15 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
             // reads system.params to build constructors).
             if let Some(hp_span) = header_params_span {
                 let ast_hp_span = AstSpan::new(hp_span.start, hp_span.end);
-                match pipeline_parser::parse_system_header_params(
-                    &source_map.source, ast_hp_span,
-                ) {
+                match pipeline_parser::parse_system_header_params(&source_map.source, ast_hp_span) {
                     Ok(params) => system_ast.params = params,
                     Err(e) => {
                         return Ok(CompileResult {
                             code: String::new(),
-                            errors: vec![CompileError::new("E002",
-                                &format!("Parse error in system '{}' header params: {}", name, e))],
+                            errors: vec![CompileError::new(
+                                "E002",
+                                &format!("Parse error in system '{}' header params: {}", name, e),
+                            )],
                             warnings: vec![],
                             source_map: None,
                         });
@@ -227,10 +258,16 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
             }
 
             if config.debug {
-                eprintln!("[compile_ast_based] Parsed system '{}': {} states, {} interface methods",
+                eprintln!(
+                    "[compile_ast_based] Parsed system '{}': {} states, {} interface methods",
                     name,
-                    system_ast.machine.as_ref().map(|m| m.states.len()).unwrap_or(0),
-                    system_ast.interface.len());
+                    system_ast
+                        .machine
+                        .as_ref()
+                        .map(|m| m.states.len())
+                        .unwrap_or(0),
+                    system_ast.interface.len()
+                );
             }
 
             system_asts.push(system_ast);
@@ -242,12 +279,15 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         let names: Vec<&str> = system_asts.iter().map(|s| s.name.as_str()).collect();
         return Ok(CompileResult {
             code: String::new(),
-            errors: vec![CompileError::new("E406",
+            errors: vec![CompileError::new(
+                "E406",
                 &format!(
                     "Erlang requires one module per file, but this file contains {} systems: {}. \
                      Split into separate files (one @@system per file).",
-                    system_asts.len(), names.join(", ")
-                ))],
+                    system_asts.len(),
+                    names.join(", ")
+                ),
+            )],
             warnings: vec![],
             source_map: None,
         });
@@ -273,7 +313,10 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
             let frame_ast = FrameAst::System(system_ast.clone());
             let mut validator = FrameValidator::new();
             if let Err(errs) = validator.validate_with_arcanum(&frame_ast, &arcanum) {
-                let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+                let errors = errs
+                    .iter()
+                    .map(|e| CompileError::new(&e.code, &e.message))
+                    .collect();
                 return Ok(CompileResult {
                     code: String::new(),
                     errors,
@@ -283,7 +326,10 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
             }
             // @@:self.method() validation against interface
             if let Err(errs) = validator.validate_self_calls(&frame_ast, source) {
-                let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+                let errors = errs
+                    .iter()
+                    .map(|e| CompileError::new(&e.code, &e.message))
+                    .collect();
                 return Ok(CompileResult {
                     code: String::new(),
                     errors,
@@ -293,7 +339,10 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
             }
             // Target-specific checks
             if let Err(errs) = validator.validate_target_specific(&frame_ast, config.target) {
-                let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+                let errors = errs
+                    .iter()
+                    .map(|e| CompileError::new(&e.code, &e.message))
+                    .collect();
                 return Ok(CompileResult {
                     code: String::new(),
                     errors,
@@ -312,8 +361,11 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         let code = graphviz::emit_multi_system(&dot_systems);
 
         if config.debug {
-            eprintln!("[compile_ast_based] GraphViz: generated {} bytes of DOT for {} systems",
-                code.len(), dot_systems.len());
+            eprintln!(
+                "[compile_ast_based] GraphViz: generated {} bytes of DOT for {} systems",
+                code.len(),
+                dot_systems.len()
+            );
         }
 
         return Ok(CompileResult {
@@ -341,7 +393,10 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         let frame_ast = FrameAst::System(system_ast.clone());
         let mut validator = FrameValidator::new();
         if let Err(errs) = validator.validate_with_arcanum(&frame_ast, &arcanum) {
-            let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+            let errors = errs
+                .iter()
+                .map(|e| CompileError::new(&e.code, &e.message))
+                .collect();
             return Ok(CompileResult {
                 code: String::new(),
                 errors,
@@ -351,7 +406,10 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         }
         // @@:self.method() validation against interface
         if let Err(errs) = validator.validate_self_calls(&frame_ast, source) {
-            let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+            let errors = errs
+                .iter()
+                .map(|e| CompileError::new(&e.code, &e.message))
+                .collect();
             return Ok(CompileResult {
                 code: String::new(),
                 errors,
@@ -363,7 +421,10 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         // TypeScript global shadowing). Run after the general validator
         // so structural errors surface first.
         if let Err(errs) = validator.validate_target_specific(&frame_ast, config.target) {
-            let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+            let errors = errs
+                .iter()
+                .map(|e| CompileError::new(&e.code, &e.message))
+                .collect();
             return Ok(CompileResult {
                 code: String::new(),
                 errors,
@@ -458,9 +519,20 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
     // Runtime imports are emitted first (before any native prolog) to fix import ordering.
     // Pass each system's declared params so the assembler can resolve sigil-tagged
     // call sites (`@@Robot($(10), $>(80), "R2D2")`) and substitute Frame defaults.
-    let system_params: Vec<(String, Vec<crate::frame_c::compiler::frame_ast::SystemParam>)> =
-        system_asts.iter().map(|s| (s.name.clone(), s.params.clone())).collect();
-    let code = match assembler::assemble(&source_map, &generated_systems, &system_params, config.target, &runtime_imports) {
+    let system_params: Vec<(
+        String,
+        Vec<crate::frame_c::compiler::frame_ast::SystemParam>,
+    )> = system_asts
+        .iter()
+        .map(|s| (s.name.clone(), s.params.clone()))
+        .collect();
+    let code = match assembler::assemble(
+        &source_map,
+        &generated_systems,
+        &system_params,
+        config.target,
+        &runtime_imports,
+    ) {
         Ok(output) => output,
         Err(e) => {
             return Ok(CompileResult {
@@ -502,8 +574,7 @@ mod tests {
 
     #[test]
     fn test_compile_error_with_location() {
-        let error = CompileError::new("E001", "test error")
-            .with_location(10, 5);
+        let error = CompileError::new("E001", "test error").with_location(10, 5);
         assert_eq!(error.line, Some(10));
         assert_eq!(error.column, Some(5));
     }
@@ -578,6 +649,9 @@ mod tests {
         let result = compile_module(source, &config);
         assert!(result.is_ok());
         let output = result.unwrap();
-        assert!(!output.errors.is_empty(), "Expected parse errors for invalid system content");
+        assert!(
+            !output.errors.is_empty(),
+            "Expected parse errors for invalid system content"
+        );
     }
 }

@@ -3,9 +3,9 @@
 //! Functions and types used across multiple codegen modules:
 //! system_codegen, frame_expansion, runtime, erlang_system.
 
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::frame_ast::{Type, Expression, Literal, BinaryOp, UnaryOp};
 use super::ast::CodegenNode;
+use crate::frame_c::compiler::frame_ast::{BinaryOp, Expression, Literal, Type, UnaryOp};
+use crate::frame_c::visitors::TargetLanguage;
 
 #[derive(Clone, Default)]
 pub(crate) struct HandlerContext {
@@ -37,8 +37,6 @@ pub(crate) struct HandlerContext {
     pub state_exit_param_names: std::collections::HashMap<String, Vec<String>>,
 }
 
-
-
 /// Get default initialization value for a type
 pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> String {
     match var_type {
@@ -48,11 +46,22 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                 "float" | "f32" | "f64" => "0.0".to_string(),
                 "bool" | "boolean" => match lang {
                     TargetLanguage::Python3 => "False".to_string(),
-                    TargetLanguage::GDScript | TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Rust
-                        | TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java
-                        | TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::CSharp
-                        | TargetLanguage::Go | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang
-                    | TargetLanguage::Lua | TargetLanguage::Dart => "false".to_string(),
+                    TargetLanguage::GDScript
+                    | TargetLanguage::TypeScript
+                    | TargetLanguage::JavaScript
+                    | TargetLanguage::Rust
+                    | TargetLanguage::C
+                    | TargetLanguage::Cpp
+                    | TargetLanguage::Java
+                    | TargetLanguage::Kotlin
+                    | TargetLanguage::Swift
+                    | TargetLanguage::CSharp
+                    | TargetLanguage::Go
+                    | TargetLanguage::Php
+                    | TargetLanguage::Ruby
+                    | TargetLanguage::Erlang
+                    | TargetLanguage::Lua
+                    | TargetLanguage::Dart => "false".to_string(),
                     TargetLanguage::Graphviz => unreachable!(),
                 },
                 "str" | "string" => match lang {
@@ -67,11 +76,20 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                 _ => match lang {
                     TargetLanguage::Python3 | TargetLanguage::Rust => "None".to_string(),
                     TargetLanguage::Cpp => "nullptr".to_string(),
-                    TargetLanguage::Go | TargetLanguage::Swift | TargetLanguage::Ruby | TargetLanguage::Lua => "nil".to_string(),
+                    TargetLanguage::Go
+                    | TargetLanguage::Swift
+                    | TargetLanguage::Ruby
+                    | TargetLanguage::Lua => "nil".to_string(),
                     TargetLanguage::C => "NULL".to_string(),
                     TargetLanguage::Erlang => "undefined".to_string(),
-                    TargetLanguage::GDScript | TargetLanguage::Dart | TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Java
-                        | TargetLanguage::Kotlin | TargetLanguage::CSharp | TargetLanguage::Php => "null".to_string(),
+                    TargetLanguage::GDScript
+                    | TargetLanguage::Dart
+                    | TargetLanguage::TypeScript
+                    | TargetLanguage::JavaScript
+                    | TargetLanguage::Java
+                    | TargetLanguage::Kotlin
+                    | TargetLanguage::CSharp
+                    | TargetLanguage::Php => "null".to_string(),
                     TargetLanguage::Graphviz => unreachable!(),
                 },
             }
@@ -79,16 +97,24 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
         Type::Unknown => match lang {
             TargetLanguage::Python3 | TargetLanguage::Rust => "None".to_string(),
             TargetLanguage::Cpp => "nullptr".to_string(),
-            TargetLanguage::Go | TargetLanguage::Swift | TargetLanguage::Ruby | TargetLanguage::Lua => "nil".to_string(),
+            TargetLanguage::Go
+            | TargetLanguage::Swift
+            | TargetLanguage::Ruby
+            | TargetLanguage::Lua => "nil".to_string(),
             TargetLanguage::C => "NULL".to_string(),
             TargetLanguage::Erlang => "undefined".to_string(),
-            TargetLanguage::GDScript | TargetLanguage::Dart | TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Java
-                | TargetLanguage::Kotlin | TargetLanguage::CSharp | TargetLanguage::Php => "null".to_string(),
+            TargetLanguage::GDScript
+            | TargetLanguage::Dart
+            | TargetLanguage::TypeScript
+            | TargetLanguage::JavaScript
+            | TargetLanguage::Java
+            | TargetLanguage::Kotlin
+            | TargetLanguage::CSharp
+            | TargetLanguage::Php => "null".to_string(),
             TargetLanguage::Graphviz => unreachable!(),
         },
     }
 }
-
 
 /// Convert a state var init expression to a type-correct value for the
 /// target language. Frame source uses portable expressions (`""` for
@@ -110,15 +136,16 @@ pub(crate) fn typed_init_expr(expr: &Expression, var_type: &Type, lang: TargetLa
 
     match lang {
         // Rust: struct field is `String`, literal `""` is `&str` → wrap
-        TargetLanguage::Rust if is_string_type && is_string_literal =>
-            format!("String::from({})", raw),
+        TargetLanguage::Rust if is_string_type && is_string_literal => {
+            format!("String::from({})", raw)
+        }
         // Rust: parser fallback — String field got Integer(0) because it
         // couldn't parse a Rust-specific constructor. Substitute default.
-        TargetLanguage::Rust if is_string_type && is_int_literal =>
-            "String::new()".to_string(),
+        TargetLanguage::Rust if is_string_type && is_int_literal => "String::new()".to_string(),
         // C++: std::any storage needs std::string, not const char*
-        TargetLanguage::Cpp if is_string_type && is_string_literal =>
-            format!("std::string({})", raw),
+        TargetLanguage::Cpp if is_string_type && is_string_literal => {
+            format!("std::string({})", raw)
+        }
         // All other languages: portable expression works as-is
         _ => raw,
     }
@@ -132,46 +159,89 @@ pub(crate) fn expression_to_string(expr: &Expression, lang: TargetLanguage) -> S
             Literal::Float(f) => f.to_string(),
             Literal::String(s) => format!("\"{}\"", s),
             Literal::Bool(b) => match lang {
-                TargetLanguage::Python3 => if *b { "True".to_string() } else { "False".to_string() },
-                TargetLanguage::GDScript | TargetLanguage::Dart | TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Rust
-                    | TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java
-                    | TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::CSharp
-                    | TargetLanguage::Go | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang
-                    | TargetLanguage::Lua => {
-                    if *b { "true".to_string() } else { "false".to_string() }
+                TargetLanguage::Python3 => {
+                    if *b {
+                        "True".to_string()
+                    } else {
+                        "False".to_string()
+                    }
+                }
+                TargetLanguage::GDScript
+                | TargetLanguage::Dart
+                | TargetLanguage::TypeScript
+                | TargetLanguage::JavaScript
+                | TargetLanguage::Rust
+                | TargetLanguage::C
+                | TargetLanguage::Cpp
+                | TargetLanguage::Java
+                | TargetLanguage::Kotlin
+                | TargetLanguage::Swift
+                | TargetLanguage::CSharp
+                | TargetLanguage::Go
+                | TargetLanguage::Php
+                | TargetLanguage::Ruby
+                | TargetLanguage::Erlang
+                | TargetLanguage::Lua => {
+                    if *b {
+                        "true".to_string()
+                    } else {
+                        "false".to_string()
+                    }
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             },
             Literal::Null => match lang {
                 TargetLanguage::Python3 | TargetLanguage::Rust => "None".to_string(),
                 TargetLanguage::Cpp => "nullptr".to_string(),
-                TargetLanguage::Go | TargetLanguage::Swift | TargetLanguage::Ruby | TargetLanguage::Lua => "nil".to_string(),
+                TargetLanguage::Go
+                | TargetLanguage::Swift
+                | TargetLanguage::Ruby
+                | TargetLanguage::Lua => "nil".to_string(),
                 TargetLanguage::C => "NULL".to_string(),
                 TargetLanguage::Erlang => "undefined".to_string(),
-                TargetLanguage::GDScript | TargetLanguage::Dart | TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Java
-                    | TargetLanguage::Kotlin | TargetLanguage::CSharp | TargetLanguage::Php => "null".to_string(),
+                TargetLanguage::GDScript
+                | TargetLanguage::Dart
+                | TargetLanguage::TypeScript
+                | TargetLanguage::JavaScript
+                | TargetLanguage::Java
+                | TargetLanguage::Kotlin
+                | TargetLanguage::CSharp
+                | TargetLanguage::Php => "null".to_string(),
                 TargetLanguage::Graphviz => unreachable!(),
             },
         },
         Expression::Var(name) => name.clone(),
         Expression::Binary { left, op, right } => {
             let op_str = match op {
-                BinaryOp::Add => "+", BinaryOp::Sub => "-", BinaryOp::Mul => "*",
-                BinaryOp::Div => "/", BinaryOp::Mod => "%",
-                BinaryOp::Eq => "==", BinaryOp::Ne => "!=",
-                BinaryOp::Lt => "<", BinaryOp::Le => "<=",
-                BinaryOp::Gt => ">", BinaryOp::Ge => ">=",
-                BinaryOp::And => "&&", BinaryOp::Or => "||",
-                BinaryOp::BitAnd => "&", BinaryOp::BitOr => "|", BinaryOp::BitXor => "^",
+                BinaryOp::Add => "+",
+                BinaryOp::Sub => "-",
+                BinaryOp::Mul => "*",
+                BinaryOp::Div => "/",
+                BinaryOp::Mod => "%",
+                BinaryOp::Eq => "==",
+                BinaryOp::Ne => "!=",
+                BinaryOp::Lt => "<",
+                BinaryOp::Le => "<=",
+                BinaryOp::Gt => ">",
+                BinaryOp::Ge => ">=",
+                BinaryOp::And => "&&",
+                BinaryOp::Or => "||",
+                BinaryOp::BitAnd => "&",
+                BinaryOp::BitOr => "|",
+                BinaryOp::BitXor => "^",
             };
-            format!("{} {} {}",
+            format!(
+                "{} {} {}",
                 expression_to_string(left, lang),
                 op_str,
-                expression_to_string(right, lang))
+                expression_to_string(right, lang)
+            )
         }
         Expression::Unary { op, expr } => {
             let op_str = match op {
-                UnaryOp::Not => "!", UnaryOp::Neg => "-", UnaryOp::BitNot => "~",
+                UnaryOp::Not => "!",
+                UnaryOp::Neg => "-",
+                UnaryOp::BitNot => "~",
             };
             format!("{}{}", op_str, expression_to_string(expr, lang))
         }
@@ -186,7 +256,6 @@ pub(crate) fn type_to_string(t: &Type) -> String {
         Type::Unknown => "Any".to_string(),
     }
 }
-
 
 /// Convert Expression AST to CodegenNode
 pub(crate) fn convert_expression(expr: &Expression) -> CodegenNode {
@@ -229,29 +298,20 @@ pub(crate) fn convert_expression(expr: &Expression) -> CodegenNode {
                 operand: Box::new(convert_expression(expr)),
             }
         }
-        Expression::Call { func, args } => {
-            CodegenNode::Call {
-                target: Box::new(CodegenNode::ident(func)),
-                args: args.iter().map(convert_expression).collect(),
-            }
-        }
-        Expression::Index { object, index } => {
-            CodegenNode::IndexAccess {
-                object: Box::new(convert_expression(object)),
-                index: Box::new(convert_expression(index)),
-            }
-        }
-        Expression::Member { object, field } => {
-            CodegenNode::FieldAccess {
-                object: Box::new(convert_expression(object)),
-                field: field.clone(),
-            }
-        }
+        Expression::Call { func, args } => CodegenNode::Call {
+            target: Box::new(CodegenNode::ident(func)),
+            args: args.iter().map(convert_expression).collect(),
+        },
+        Expression::Index { object, index } => CodegenNode::IndexAccess {
+            object: Box::new(convert_expression(object)),
+            index: Box::new(convert_expression(index)),
+        },
+        Expression::Member { object, field } => CodegenNode::FieldAccess {
+            object: Box::new(convert_expression(object)),
+            field: field.clone(),
+        },
         Expression::Assign { target, value } => {
-            CodegenNode::assign(
-                convert_expression(target),
-                convert_expression(value),
-            )
+            CodegenNode::assign(convert_expression(target), convert_expression(value))
         }
         Expression::NativeExpr(code) => {
             // Pass through native expression verbatim
@@ -259,7 +319,6 @@ pub(crate) fn convert_expression(expr: &Expression) -> CodegenNode {
         }
     }
 }
-
 
 /// Convert Literal to CodegenNode
 pub(crate) fn convert_literal(lit: &Literal) -> CodegenNode {
@@ -271,7 +330,6 @@ pub(crate) fn convert_literal(lit: &Literal) -> CodegenNode {
         Literal::Null => CodegenNode::null(),
     }
 }
-
 
 /// Extract type from raw domain declaration
 /// Handles formats: "name: type = init" (Frame) or "type name = init" (C-style)
@@ -300,32 +358,44 @@ pub(crate) fn extract_type_from_raw_domain(raw_code: &Option<String>, name: &str
     }
 }
 
-
 /// Check if type string represents an integer type
 pub(crate) fn is_int_type(type_str: &str) -> bool {
-    matches!(type_str, "int" | "i32" | "i64" | "i8" | "i16" | "u8" | "u16" | "u32" | "u64"
-             | "int8_t" | "int16_t" | "int32_t" | "int64_t"
-             | "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t")
+    matches!(
+        type_str,
+        "int"
+            | "i32"
+            | "i64"
+            | "i8"
+            | "i16"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "int8_t"
+            | "int16_t"
+            | "int32_t"
+            | "int64_t"
+            | "uint8_t"
+            | "uint16_t"
+            | "uint32_t"
+            | "uint64_t"
+    )
 }
-
 
 /// Check if type string represents a float type
 pub(crate) fn is_float_type(type_str: &str) -> bool {
     matches!(type_str, "float" | "double" | "f32" | "f64")
 }
 
-
 /// Check if type string represents a boolean type
 pub(crate) fn is_bool_type(type_str: &str) -> bool {
     matches!(type_str, "bool" | "boolean" | "_Bool")
 }
 
-
 /// Check if type string represents a string type
 pub(crate) fn is_string_type(type_str: &str) -> bool {
     matches!(type_str, "str" | "string" | "String" | "char*" | "&str")
 }
-
 
 /// Map a Frame type string to C# type for (Type) cast
 pub(crate) fn csharp_map_type(t: &str) -> String {
@@ -340,7 +410,6 @@ pub(crate) fn csharp_map_type(t: &str) -> String {
     }
 }
 
-
 /// Map a Frame type string to Java type for (Type) cast
 pub(crate) fn java_map_type(t: &str) -> String {
     match t {
@@ -354,7 +423,6 @@ pub(crate) fn java_map_type(t: &str) -> String {
     }
 }
 
-
 /// Map a Frame type string to Kotlin type for cast
 pub(crate) fn kotlin_map_type(t: &str) -> String {
     match t {
@@ -367,7 +435,6 @@ pub(crate) fn kotlin_map_type(t: &str) -> String {
         other => other.to_string(),
     }
 }
-
 
 /// Map a Frame type string to Swift type for cast
 pub(crate) fn swift_map_type(t: &str) -> String {
@@ -395,7 +462,6 @@ pub(crate) fn swift_map_type(t: &str) -> String {
     }
 }
 
-
 /// Map a Frame type string to Go type for type assertion
 pub(crate) fn go_map_type(t: &str) -> String {
     match t {
@@ -408,7 +474,6 @@ pub(crate) fn go_map_type(t: &str) -> String {
         other => other.to_string(),
     }
 }
-
 
 /// Map a Frame type string to C++ type for std::any_cast<T>
 pub(crate) fn cpp_map_type(t: &str) -> String {
@@ -423,7 +488,6 @@ pub(crate) fn cpp_map_type(t: &str) -> String {
     }
 }
 
-
 /// Wrap a C++ argument value for std::any storage.
 /// String literals ("...") must be wrapped in std::string() because
 /// std::any("literal") stores const char*, not std::string.
@@ -436,24 +500,20 @@ pub(crate) fn cpp_wrap_any_arg(arg: &str) -> String {
     }
 }
 
-
 /// Convert Frame Type to C++ type string
 pub(crate) fn type_to_cpp_string(t: &crate::frame_c::compiler::frame_ast::Type) -> String {
     match t {
         crate::frame_c::compiler::frame_ast::Type::Unknown => "void".to_string(),
-        crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
-            match s.as_str() {
-                "str" | "string" | "String" => "std::string".to_string(),
-                "int" | "i32" | "i64" => "int".to_string(),
-                "float" | "f64" | "f32" => "double".to_string(),
-                "bool" => "bool".to_string(),
-                "void" => "void".to_string(),
-                other => other.to_string(),
-            }
-        }
+        crate::frame_c::compiler::frame_ast::Type::Custom(s) => match s.as_str() {
+            "str" | "string" | "String" => "std::string".to_string(),
+            "int" | "i32" | "i64" => "int".to_string(),
+            "float" | "f64" | "f32" => "double".to_string(),
+            "bool" => "bool".to_string(),
+            "void" => "void".to_string(),
+            other => other.to_string(),
+        },
     }
 }
-
 
 /// Convert CamelCase to snake_case for Erlang naming
 
@@ -474,8 +534,8 @@ pub(crate) fn to_snake_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame_c::compiler::frame_ast::{Expression, Literal, Type};
     use crate::frame_c::visitors::TargetLanguage;
-    use crate::frame_c::compiler::frame_ast::{Type, Expression, Literal};
 
     // =========================================================
     // state_var_init_value — type-correct defaults per language
@@ -483,46 +543,82 @@ mod tests {
 
     #[test]
     fn test_state_var_init_string_rust() {
-        assert_eq!(state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Rust), "String::new()");
-        assert_eq!(state_var_init_value(&Type::Custom("string".into()), TargetLanguage::Rust), "String::new()");
+        assert_eq!(
+            state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Rust),
+            "String::new()"
+        );
+        assert_eq!(
+            state_var_init_value(&Type::Custom("string".into()), TargetLanguage::Rust),
+            "String::new()"
+        );
     }
 
     #[test]
     fn test_state_var_init_string_cpp() {
-        assert_eq!(state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Cpp), "std::string()");
-        assert_eq!(state_var_init_value(&Type::Custom("string".into()), TargetLanguage::Cpp), "std::string()");
+        assert_eq!(
+            state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Cpp),
+            "std::string()"
+        );
+        assert_eq!(
+            state_var_init_value(&Type::Custom("string".into()), TargetLanguage::Cpp),
+            "std::string()"
+        );
     }
 
     #[test]
     fn test_state_var_init_string_python() {
-        assert_eq!(state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Python3), "\"\"");
+        assert_eq!(
+            state_var_init_value(&Type::Custom("str".into()), TargetLanguage::Python3),
+            "\"\""
+        );
     }
 
     #[test]
     fn test_state_var_init_int() {
-        assert_eq!(state_var_init_value(&Type::Custom("int".into()), TargetLanguage::Rust), "0");
-        assert_eq!(state_var_init_value(&Type::Custom("i64".into()), TargetLanguage::Cpp), "0");
-        assert_eq!(state_var_init_value(&Type::Custom("number".into()), TargetLanguage::Python3), "0");
+        assert_eq!(
+            state_var_init_value(&Type::Custom("int".into()), TargetLanguage::Rust),
+            "0"
+        );
+        assert_eq!(
+            state_var_init_value(&Type::Custom("i64".into()), TargetLanguage::Cpp),
+            "0"
+        );
+        assert_eq!(
+            state_var_init_value(&Type::Custom("number".into()), TargetLanguage::Python3),
+            "0"
+        );
     }
 
     #[test]
     fn test_state_var_init_bool_python() {
-        assert_eq!(state_var_init_value(&Type::Custom("bool".into()), TargetLanguage::Python3), "False");
+        assert_eq!(
+            state_var_init_value(&Type::Custom("bool".into()), TargetLanguage::Python3),
+            "False"
+        );
     }
 
     #[test]
     fn test_state_var_init_bool_rust() {
-        assert_eq!(state_var_init_value(&Type::Custom("bool".into()), TargetLanguage::Rust), "false");
+        assert_eq!(
+            state_var_init_value(&Type::Custom("bool".into()), TargetLanguage::Rust),
+            "false"
+        );
     }
 
     #[test]
     fn test_state_var_init_unknown_rust() {
-        assert_eq!(state_var_init_value(&Type::Unknown, TargetLanguage::Rust), "None");
+        assert_eq!(
+            state_var_init_value(&Type::Unknown, TargetLanguage::Rust),
+            "None"
+        );
     }
 
     #[test]
     fn test_state_var_init_unknown_python() {
-        assert_eq!(state_var_init_value(&Type::Unknown, TargetLanguage::Python3), "None");
+        assert_eq!(
+            state_var_init_value(&Type::Unknown, TargetLanguage::Python3),
+            "None"
+        );
     }
 
     // =========================================================
@@ -555,7 +651,10 @@ mod tests {
     fn test_typed_init_expr_python_string_no_wrap() {
         let expr = Expression::Literal(Literal::String("hello".into()));
         let result = typed_init_expr(&expr, &Type::Custom("str".into()), TargetLanguage::Python3);
-        assert_eq!(result, "\"hello\"", "Python should not wrap string literals");
+        assert_eq!(
+            result, "\"hello\"",
+            "Python should not wrap string literals"
+        );
     }
 
     #[test]
@@ -615,4 +714,3 @@ mod tests {
         assert_eq!(cpp_wrap_any_arg("  \"hello\"  "), "std::string(\"hello\")");
     }
 }
-

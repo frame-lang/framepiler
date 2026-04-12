@@ -87,14 +87,13 @@ impl StructuralPass {
                 issues.push(
                     ValidationIssue::error(
                         "E113",
-                        format!(
-                            "System '{}' blocks out of order",
-                            system.name
-                        )
+                        format!("System '{}' blocks out of order", system.name),
                     )
                     .with_span(system.span.clone())
-                    .with_note("Expected order: operations:, interface:, machine:, actions:, domain:")
-                    .with_fix("Reorder sections to match canonical order")
+                    .with_note(
+                        "Expected order: operations:, interface:, machine:, actions:, domain:",
+                    )
+                    .with_fix("Reorder sections to match canonical order"),
                 );
                 break; // Only report once per system
             }
@@ -118,10 +117,10 @@ impl StructuralPass {
                     format!(
                         "Duplicate '{}' section in system '{}'",
                         section_name, system.name
-                    )
+                    ),
                 )
                 .with_span(system.span.clone())
-                .with_fix(format!("Remove one of the '{}' sections", section_name))
+                .with_fix(format!("Remove one of the '{}' sections", section_name)),
             );
         }
     }
@@ -137,10 +136,13 @@ impl StructuralPass {
                         format!(
                             "Duplicate parameter '{}' in system '{}'",
                             param.name, system.name
-                        )
+                        ),
                     )
                     .with_span(param.span.clone())
-                    .with_fix(format!("Remove or rename the duplicate '{}' parameter", param.name))
+                    .with_fix(format!(
+                        "Remove or rename the duplicate '{}' parameter",
+                        param.name
+                    )),
                 );
             }
         }
@@ -158,11 +160,14 @@ impl StructuralPass {
                             format!(
                                 "Duplicate state '{}' in system '{}'",
                                 state.name, system.name
-                            )
+                            ),
                         )
                         .with_span(state.span.clone())
                         .with_note(format!("State '{}' was first defined earlier", state.name))
-                        .with_fix(format!("Remove or rename one of the '${}' states", state.name))
+                        .with_fix(format!(
+                            "Remove or rename one of the '${}' states",
+                            state.name
+                        )),
                     );
                 } else {
                     seen.insert(state.name.clone(), state.span.clone());
@@ -182,7 +187,12 @@ impl StructuralPass {
     }
 
     /// E117: Validate no duplicate handlers in a state
-    fn validate_duplicate_handlers(&self, system: &SystemAst, state: &crate::frame_c::compiler::frame_ast::StateAst, issues: &mut Vec<ValidationIssue>) {
+    fn validate_duplicate_handlers(
+        &self,
+        system: &SystemAst,
+        state: &crate::frame_c::compiler::frame_ast::StateAst,
+        issues: &mut Vec<ValidationIssue>,
+    ) {
         let mut seen = std::collections::HashMap::new();
         for handler in &state.handlers {
             if let Some(_first_span) = seen.get(&handler.event) {
@@ -192,11 +202,14 @@ impl StructuralPass {
                         format!(
                             "Duplicate handler '{}' in state '{}' of system '{}'",
                             handler.event, state.name, system.name
-                        )
+                        ),
                     )
                     .with_span(handler.span.clone())
-                    .with_note(format!("Handler '{}' was defined earlier in this state", handler.event))
-                    .with_fix(format!("Remove one of the '{}' handlers", handler.event))
+                    .with_note(format!(
+                        "Handler '{}' was defined earlier in this state",
+                        handler.event
+                    ))
+                    .with_fix(format!("Remove one of the '{}' handlers", handler.event)),
                 );
             } else {
                 seen.insert(handler.event.clone(), handler.span.clone());
@@ -205,7 +218,12 @@ impl StructuralPass {
     }
 
     /// E410: Validate no duplicate state variables in a state
-    fn validate_duplicate_state_vars(&self, system: &SystemAst, state: &crate::frame_c::compiler::frame_ast::StateAst, issues: &mut Vec<ValidationIssue>) {
+    fn validate_duplicate_state_vars(
+        &self,
+        system: &SystemAst,
+        state: &crate::frame_c::compiler::frame_ast::StateAst,
+        issues: &mut Vec<ValidationIssue>,
+    ) {
         let mut seen = std::collections::HashMap::new();
         for var in &state.state_vars {
             if let Some(_first_span) = seen.get(&var.name) {
@@ -215,11 +233,14 @@ impl StructuralPass {
                         format!(
                             "Duplicate state variable '$.{}' in state '{}' of system '{}'",
                             var.name, state.name, system.name
-                        )
+                        ),
                     )
                     .with_span(var.span.clone())
-                    .with_note(format!("State variable '$.{}' was declared earlier", var.name))
-                    .with_fix(format!("Remove one of the '$.{}' declarations", var.name))
+                    .with_note(format!(
+                        "State variable '$.{}' was declared earlier",
+                        var.name
+                    ))
+                    .with_fix(format!("Remove one of the '$.{}' declarations", var.name)),
                 );
             } else {
                 seen.insert(var.name.clone(), var.span.clone());
@@ -254,7 +275,7 @@ mod tests {
         let mut system = SystemAst::new("Test".to_string(), Span::new(0, 100));
         system.section_order = vec![
             SystemSectionKind::Machine,
-            SystemSectionKind::Interface,  // Wrong - should come before machine
+            SystemSectionKind::Interface, // Wrong - should come before machine
         ];
 
         let ast = FrameAst::System(system);
@@ -272,7 +293,7 @@ mod tests {
         system.section_order = vec![
             SystemSectionKind::Machine,
             SystemSectionKind::Actions,
-            SystemSectionKind::Machine,  // Duplicate!
+            SystemSectionKind::Machine, // Duplicate!
         ];
 
         let ast = FrameAst::System(system);
@@ -312,7 +333,7 @@ mod tests {
         system.machine = Some(MachineAst {
             states: vec![
                 StateAst::new("Idle".to_string(), Span::new(10, 20)),
-                StateAst::new("Idle".to_string(), Span::new(30, 40)),  // Duplicate!
+                StateAst::new("Idle".to_string(), Span::new(30, 40)), // Duplicate!
             ],
             span: Span::new(5, 50),
         });
@@ -327,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_e117_duplicate_handler() {
-        use crate::frame_c::compiler::frame_ast::{MachineAst, StateAst, HandlerAst, HandlerBody};
+        use crate::frame_c::compiler::frame_ast::{HandlerAst, HandlerBody, MachineAst, StateAst};
 
         let pass = StructuralPass;
         let mut system = SystemAst::new("Test".to_string(), Span::new(0, 100));
@@ -342,7 +363,7 @@ mod tests {
                 span: Span::new(12, 25),
             },
             HandlerAst {
-                event: "go".to_string(),  // Duplicate!
+                event: "go".to_string(), // Duplicate!
                 params: vec![],
                 return_type: None,
                 return_init: None,

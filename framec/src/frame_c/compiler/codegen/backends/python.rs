@@ -2,9 +2,9 @@
 //!
 //! This is the reference implementation of the LanguageBackend trait.
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Python backend for code generation
 pub struct PythonBackend;
@@ -13,7 +13,6 @@ impl LanguageBackend for PythonBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
             // ===== Structural =====
-
             CodegenNode::Module { imports, items } => {
                 let mut result = String::new();
 
@@ -38,7 +37,11 @@ impl LanguageBackend for PythonBackend {
                 result
             }
 
-            CodegenNode::Import { module, items, alias } => {
+            CodegenNode::Import {
+                module,
+                items,
+                alias,
+            } => {
                 if items.is_empty() {
                     if let Some(alias) = alias {
                         format!("import {} as {}", module, alias)
@@ -50,7 +53,14 @@ impl LanguageBackend for PythonBackend {
                 }
             }
 
-            CodegenNode::Class { name, fields, methods, base_classes, is_abstract: _, .. } => {
+            CodegenNode::Class {
+                name,
+                fields,
+                methods,
+                base_classes,
+                is_abstract: _,
+                ..
+            } => {
                 let mut result = String::new();
 
                 // Class declaration
@@ -94,7 +104,12 @@ impl LanguageBackend for PythonBackend {
                             self.emit(value, ctx)
                         ));
                     } else {
-                        result.push_str(&format!("{}{} = \"{}\"\n", ctx.get_indent(), variant.name, variant.name));
+                        result.push_str(&format!(
+                            "{}{} = \"{}\"\n",
+                            ctx.get_indent(),
+                            variant.name,
+                            variant.name
+                        ));
                     }
                 }
 
@@ -103,8 +118,16 @@ impl LanguageBackend for PythonBackend {
             }
 
             // ===== Methods =====
-
-            CodegenNode::Method { name, params, return_type, body, is_async, is_static, visibility: _, decorators } => {
+            CodegenNode::Method {
+                name,
+                params,
+                return_type,
+                body,
+                is_async,
+                is_static,
+                visibility: _,
+                decorators,
+            } => {
                 let mut result = String::new();
 
                 // Decorators
@@ -152,7 +175,7 @@ impl LanguageBackend for PythonBackend {
                                 let trimmed = line.trim();
                                 !trimmed.is_empty() && !trimmed.starts_with('#')
                             })
-                        },
+                        }
                         _ => true,
                     }
                 });
@@ -170,7 +193,15 @@ impl LanguageBackend for PythonBackend {
                 } else {
                     for stmt in body {
                         result.push_str(&self.emit(stmt, ctx));
-                        if !matches!(stmt, CodegenNode::Comment { .. } | CodegenNode::Empty | CodegenNode::If { .. } | CodegenNode::While { .. } | CodegenNode::For { .. } | CodegenNode::Match { .. }) {
+                        if !matches!(
+                            stmt,
+                            CodegenNode::Comment { .. }
+                                | CodegenNode::Empty
+                                | CodegenNode::If { .. }
+                                | CodegenNode::While { .. }
+                                | CodegenNode::For { .. }
+                                | CodegenNode::Match { .. }
+                        ) {
                             result.push('\n');
                         }
                     }
@@ -180,11 +211,19 @@ impl LanguageBackend for PythonBackend {
                 result
             }
 
-            CodegenNode::Constructor { params, body, super_call } => {
+            CodegenNode::Constructor {
+                params,
+                body,
+                super_call,
+            } => {
                 let mut result = String::new();
 
                 let params_str = self.emit_params(params, true);
-                result.push_str(&format!("{}def __init__({}):\n", ctx.get_indent(), params_str));
+                result.push_str(&format!(
+                    "{}def __init__({}):\n",
+                    ctx.get_indent(),
+                    params_str
+                ));
 
                 ctx.push_indent();
 
@@ -200,7 +239,15 @@ impl LanguageBackend for PythonBackend {
                 } else {
                     for stmt in body {
                         result.push_str(&self.emit(stmt, ctx));
-                        if !matches!(stmt, CodegenNode::Comment { .. } | CodegenNode::Empty | CodegenNode::If { .. } | CodegenNode::While { .. } | CodegenNode::For { .. } | CodegenNode::Match { .. }) {
+                        if !matches!(
+                            stmt,
+                            CodegenNode::Comment { .. }
+                                | CodegenNode::Empty
+                                | CodegenNode::If { .. }
+                                | CodegenNode::While { .. }
+                                | CodegenNode::For { .. }
+                                | CodegenNode::Match { .. }
+                        ) {
                             result.push('\n');
                         }
                     }
@@ -211,8 +258,12 @@ impl LanguageBackend for PythonBackend {
             }
 
             // ===== Statements =====
-
-            CodegenNode::VarDecl { name, type_annotation: _, init, is_const: _ } => {
+            CodegenNode::VarDecl {
+                name,
+                type_annotation: _,
+                init,
+                is_const: _,
+            } => {
                 let indent = ctx.get_indent();
                 if let Some(init_expr) = init {
                     let init_str = self.emit(init_expr, ctx);
@@ -237,7 +288,11 @@ impl LanguageBackend for PythonBackend {
                 }
             }
 
-            CodegenNode::If { condition, then_block, else_block } => {
+            CodegenNode::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let mut result = String::new();
                 let cond_str = self.emit(condition, ctx);
                 result.push_str(&format!("{}if {}:\n", ctx.get_indent(), cond_str));
@@ -315,10 +370,19 @@ impl LanguageBackend for PythonBackend {
                 result
             }
 
-            CodegenNode::For { var, iterable, body } => {
+            CodegenNode::For {
+                var,
+                iterable,
+                body,
+            } => {
                 let mut result = String::new();
                 let iter_str = self.emit(iterable, ctx);
-                result.push_str(&format!("{}for {} in {}:\n", ctx.get_indent(), var, iter_str));
+                result.push_str(&format!(
+                    "{}for {} in {}:\n",
+                    ctx.get_indent(),
+                    var,
+                    iter_str
+                ));
 
                 ctx.push_indent();
                 if body.is_empty() {
@@ -356,18 +420,13 @@ impl LanguageBackend for PythonBackend {
             CodegenNode::Empty => String::new(),
 
             // ===== Expressions =====
-
             CodegenNode::Ident(name) => name.clone(),
 
             CodegenNode::Literal(lit) => self.emit_literal(lit, ctx),
 
-            CodegenNode::BinaryOp { op, left, right } => {
-                self.emit_binary_op(op, left, right, ctx)
-            }
+            CodegenNode::BinaryOp { op, left, right } => self.emit_binary_op(op, left, right, ctx),
 
-            CodegenNode::UnaryOp { op, operand } => {
-                self.emit_unary_op(op, operand, ctx)
-            }
+            CodegenNode::UnaryOp { op, operand } => self.emit_unary_op(op, operand, ctx),
 
             CodegenNode::Call { target, args } => {
                 let target_str = self.emit(target, ctx);
@@ -375,7 +434,11 @@ impl LanguageBackend for PythonBackend {
                 format!("{}({})", target_str, args_str.join(", "))
             }
 
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let obj_str = self.emit(object, ctx);
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
                 format!("{}.{}({})", obj_str, method, args_str.join(", "))
@@ -400,13 +463,18 @@ impl LanguageBackend for PythonBackend {
             }
 
             CodegenNode::Dict(pairs) => {
-                let pairs_str: Vec<String> = pairs.iter().map(|(k, v)| {
-                    format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx))
-                }).collect();
+                let pairs_str: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx)))
+                    .collect();
                 format!("{{{}}}", pairs_str.join(", "))
             }
 
-            CodegenNode::Ternary { condition, then_expr, else_expr } => {
+            CodegenNode::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond = self.emit(condition, ctx);
                 let then_val = self.emit(then_expr, ctx);
                 let else_val = self.emit(else_expr, ctx);
@@ -431,8 +499,13 @@ impl LanguageBackend for PythonBackend {
             }
 
             // ===== Frame-Specific =====
-
-            CodegenNode::Transition { target_state, exit_args, enter_args, state_args, indent } => {
+            CodegenNode::Transition {
+                target_state,
+                exit_args,
+                enter_args,
+                state_args,
+                indent,
+            } => {
                 // Generate Frame transition call with string-based state dispatch
                 // self._transition("TargetState", exit_args, enter_args)
                 // Add relative indent to context indent (relative indent is how much more
@@ -443,28 +516,35 @@ impl LanguageBackend for PythonBackend {
                 let mut args = vec![format!("\"{}\"", target_state)];
 
                 if !exit_args.is_empty() {
-                    let exit_str: Vec<String> = exit_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let exit_str: Vec<String> =
+                        exit_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", exit_str.join(", ")));
                 } else {
                     args.push("None".to_string());
                 }
 
                 if !enter_args.is_empty() {
-                    let enter_str: Vec<String> = enter_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let enter_str: Vec<String> =
+                        enter_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", enter_str.join(", ")));
                 } else {
                     args.push("None".to_string());
                 }
 
                 if !state_args.is_empty() {
-                    let state_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let state_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", state_str.join(", ")));
                 }
 
                 format!("{}self._transition({})", ind, args.join(", "))
             }
 
-            CodegenNode::ChangeState { target_state, state_args, indent } => {
+            CodegenNode::ChangeState {
+                target_state,
+                state_args,
+                indent,
+            } => {
                 // Add relative indent to context indent
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
 
@@ -472,8 +552,14 @@ impl LanguageBackend for PythonBackend {
                 if state_args.is_empty() {
                     format!("{}self._change_state(\"{}\")", ind, target_state)
                 } else {
-                    let args_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
-                    format!("{}self._change_state(\"{}\", [{}])", ind, target_state, args_str.join(", "))
+                    let args_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    format!(
+                        "{}self._change_state(\"{}\", [{}])",
+                        ind,
+                        target_state,
+                        args_str.join(", ")
+                    )
                 }
             }
 
@@ -510,12 +596,16 @@ impl LanguageBackend for PythonBackend {
                 if args_str.is_empty() {
                     format!("{}self.{}()", ctx.get_indent(), event)
                 } else {
-                    format!("{}self.{}({})", ctx.get_indent(), event, args_str.join(", "))
+                    format!(
+                        "{}self.{}({})",
+                        ctx.get_indent(),
+                        event,
+                        args_str.join(", ")
+                    )
                 }
             }
 
             // ===== Native Code Preservation =====
-
             CodegenNode::NativeBlock { code, span: _ } => {
                 // Re-indent native code to current context
                 let lines: Vec<&str> = code.lines().collect();
@@ -524,7 +614,8 @@ impl LanguageBackend for PythonBackend {
                 }
 
                 // Find minimum non-empty line indentation
-                let min_indent = lines.iter()
+                let min_indent = lines
+                    .iter()
                     .filter(|line| !line.trim().is_empty())
                     .map(|line| line.len() - line.trim_start().len())
                     .min()
@@ -561,9 +652,7 @@ impl LanguageBackend for PythonBackend {
     }
 
     fn runtime_imports(&self) -> Vec<String> {
-        vec![
-            "from typing import Any, Optional, List, Dict, Callable".to_string(),
-        ]
+        vec!["from typing import Any, Optional, List, Dict, Callable".to_string()]
     }
 
     fn class_syntax(&self) -> ClassSyntax {
@@ -574,12 +663,24 @@ impl LanguageBackend for PythonBackend {
         TargetLanguage::Python3
     }
 
-    fn true_keyword(&self) -> &'static str { "True" }
-    fn false_keyword(&self) -> &'static str { "False" }
-    fn null_keyword(&self) -> &'static str { "None" }
-    fn and_operator(&self) -> &'static str { "and" }
-    fn or_operator(&self) -> &'static str { "or" }
-    fn not_operator(&self) -> &'static str { "not " }
+    fn true_keyword(&self) -> &'static str {
+        "True"
+    }
+    fn false_keyword(&self) -> &'static str {
+        "False"
+    }
+    fn null_keyword(&self) -> &'static str {
+        "None"
+    }
+    fn and_operator(&self) -> &'static str {
+        "and"
+    }
+    fn or_operator(&self) -> &'static str {
+        "or"
+    }
+    fn not_operator(&self) -> &'static str {
+        "not "
+    }
 }
 
 impl PythonBackend {
@@ -608,7 +709,11 @@ impl PythonBackend {
 
     /// Emit parameters for a lambda
     fn emit_lambda_params(&self, params: &[Param]) -> String {
-        params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ")
+        params
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -622,7 +727,10 @@ mod tests {
         let mut ctx = EmitContext::new();
 
         assert_eq!(backend.emit(&CodegenNode::int(42), &mut ctx), "42");
-        assert_eq!(backend.emit(&CodegenNode::string("hello"), &mut ctx), "\"hello\"");
+        assert_eq!(
+            backend.emit(&CodegenNode::string("hello"), &mut ctx),
+            "\"hello\""
+        );
         assert_eq!(backend.emit(&CodegenNode::bool(true), &mut ctx), "True");
         assert_eq!(backend.emit(&CodegenNode::null(), &mut ctx), "None");
     }

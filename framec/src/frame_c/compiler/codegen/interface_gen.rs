@@ -6,17 +6,17 @@
 //! - Operation method bodies (static/class methods)
 //! - Persistence serialization/deserialization methods
 
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::frame_ast::{SystemAst, ActionAst, OperationAst, Type, InterfaceMethod, MethodParam, Span};
 use super::ast::{CodegenNode, Param, Visibility};
 use super::codegen_utils::{
-    HandlerContext, expression_to_string, type_to_string, to_snake_case,
-    cpp_map_type, cpp_wrap_any_arg, java_map_type, kotlin_map_type,
-    swift_map_type, csharp_map_type, go_map_type, type_to_cpp_string,
-    extract_type_from_raw_domain, is_int_type, is_float_type, is_bool_type, is_string_type,
+    cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string,
+    extract_type_from_raw_domain, go_map_type, is_bool_type, is_float_type, is_int_type,
+    is_string_type, java_map_type, kotlin_map_type, swift_map_type, to_snake_case,
+    type_to_cpp_string, type_to_string, HandlerContext,
 };
-
-
+use crate::frame_c::compiler::frame_ast::{
+    ActionAst, InterfaceMethod, MethodParam, OperationAst, Span, SystemAst, Type,
+};
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Generate interface wrapper methods
 ///
@@ -25,7 +25,10 @@ use super::codegen_utils::{
 ///
 /// If no explicit interface is defined, auto-generate interface methods from
 /// unique event handlers found in the machine states (excluding lifecycle events).
-pub(crate) fn generate_interface_wrappers(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> Vec<CodegenNode> {
+pub(crate) fn generate_interface_wrappers(
+    system: &SystemAst,
+    syntax: &super::backend::ClassSyntax,
+) -> Vec<CodegenNode> {
     // Get the target language from the syntax
     let lang = syntax.language;
     let event_class = format!("{}FrameEvent", system.name);
@@ -37,42 +40,53 @@ pub(crate) fn generate_interface_wrappers(system: &SystemAst, syntax: &super::ba
     } else {
         // Auto-generate interface from event handlers
         let mut events: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut method_info: std::collections::HashMap<String, (Vec<MethodParam>, Option<Type>)> = std::collections::HashMap::new();
+        let mut method_info: std::collections::HashMap<String, (Vec<MethodParam>, Option<Type>)> =
+            std::collections::HashMap::new();
 
         if let Some(ref machine) = system.machine {
             for state in &machine.states {
                 for handler in &state.handlers {
                     // Skip lifecycle events
-                    if handler.event == "$>" || handler.event == "<$" || handler.event == "$>|" || handler.event == "<$|" {
+                    if handler.event == "$>"
+                        || handler.event == "<$"
+                        || handler.event == "$>|"
+                        || handler.event == "<$|"
+                    {
                         continue;
                     }
                     if events.insert(handler.event.clone()) {
                         // First time seeing this event - capture its params and return type
-                        let params: Vec<MethodParam> = handler.params.iter().map(|p| {
-                            MethodParam {
+                        let params: Vec<MethodParam> = handler
+                            .params
+                            .iter()
+                            .map(|p| MethodParam {
                                 name: p.name.clone(),
                                 param_type: p.param_type.clone(),
                                 default: None,
                                 span: Span::new(0, 0),
-                            }
-                        }).collect();
-                        method_info.insert(handler.event.clone(), (params, handler.return_type.clone()));
+                            })
+                            .collect();
+                        method_info
+                            .insert(handler.event.clone(), (params, handler.return_type.clone()));
                     }
                 }
             }
         }
 
-        events.into_iter().map(|event| {
-            let (params, return_type) = method_info.get(&event).cloned().unwrap_or_default();
-            InterfaceMethod {
-                name: event,
-                params,
-                return_type,
-                return_init: None,
-                is_async: false,
-                span: Span::new(0, 0),
-            }
-        }).collect()
+        events
+            .into_iter()
+            .map(|event| {
+                let (params, return_type) = method_info.get(&event).cloned().unwrap_or_default();
+                InterfaceMethod {
+                    name: event,
+                    params,
+                    return_type,
+                    return_init: None,
+                    is_async: false,
+                    span: Span::new(0, 0),
+                }
+            })
+            .collect()
     };
 
     interface_methods.iter().map(|method| {
@@ -827,11 +841,19 @@ self._context_stack.pop_back()"#,
 /// Generate action method
 ///
 /// Extracts native code from source using the body span
-pub(crate) fn generate_action(action: &ActionAst, _syntax: &super::backend::ClassSyntax, source: &[u8]) -> CodegenNode {
-    let params: Vec<Param> = action.params.iter().map(|p| {
-        let type_str = type_to_string(&p.param_type);
-        Param::new(&p.name).with_type(&type_str)
-    }).collect();
+pub(crate) fn generate_action(
+    action: &ActionAst,
+    _syntax: &super::backend::ClassSyntax,
+    source: &[u8],
+) -> CodegenNode {
+    let params: Vec<Param> = action
+        .params
+        .iter()
+        .map(|p| {
+            let type_str = type_to_string(&p.param_type);
+            Param::new(&p.name).with_type(&type_str)
+        })
+        .collect();
 
     // Extract native code from source using span (oceans model)
     let code = extract_body_content(source, &action.body.span);
@@ -839,7 +861,7 @@ pub(crate) fn generate_action(action: &ActionAst, _syntax: &super::backend::Clas
     CodegenNode::Method {
         name: action.name.clone(),
         params,
-        return_type: None,  // Actions don't have explicit return types
+        return_type: None, // Actions don't have explicit return types
         body: vec![CodegenNode::NativeBlock {
             code,
             span: Some(action.body.span.clone()),
@@ -854,11 +876,19 @@ pub(crate) fn generate_action(action: &ActionAst, _syntax: &super::backend::Clas
 /// Generate operation method
 ///
 /// Extracts native code from source using the body span
-pub(crate) fn generate_operation(operation: &OperationAst, _syntax: &super::backend::ClassSyntax, source: &[u8]) -> CodegenNode {
-    let params: Vec<Param> = operation.params.iter().map(|p| {
-        let type_str = type_to_string(&p.param_type);
-        Param::new(&p.name).with_type(&type_str)
-    }).collect();
+pub(crate) fn generate_operation(
+    operation: &OperationAst,
+    _syntax: &super::backend::ClassSyntax,
+    source: &[u8],
+) -> CodegenNode {
+    let params: Vec<Param> = operation
+        .params
+        .iter()
+        .map(|p| {
+            let type_str = type_to_string(&p.param_type);
+            Param::new(&p.name).with_type(&type_str)
+        })
+        .collect();
 
     // Extract native code from source using span (oceans model)
     let code = extract_body_content(source, &operation.body.span);
@@ -886,7 +916,10 @@ pub(crate) fn generate_operation(operation: &OperationAst, _syntax: &super::back
 ///
 /// Strips the outer braces and extracts the inner content while preserving
 /// consistent line-by-line indentation for proper re-indentation by backends.
-pub(crate) fn extract_body_content(source: &[u8], span: &crate::frame_c::compiler::frame_ast::Span) -> String {
+pub(crate) fn extract_body_content(
+    source: &[u8],
+    span: &crate::frame_c::compiler::frame_ast::Span,
+) -> String {
     let bytes = &source[span.start..span.end];
     let content = String::from_utf8_lossy(bytes).to_string();
 
@@ -894,14 +927,18 @@ pub(crate) fn extract_body_content(source: &[u8], span: &crate::frame_c::compile
     let trimmed = content.trim();
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         // Extract content between braces
-        let inner = &trimmed[1..trimmed.len()-1];
+        let inner = &trimmed[1..trimmed.len() - 1];
 
         // Split into lines, preserving structure
         let lines: Vec<&str> = inner.lines().collect();
 
         // Skip leading and trailing empty lines, but preserve internal structure
         let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
-        let end = lines.iter().rposition(|l| !l.trim().is_empty()).map(|i| i + 1).unwrap_or(lines.len());
+        let end = lines
+            .iter()
+            .rposition(|l| !l.trim().is_empty())
+            .map(|i| i + 1)
+            .unwrap_or(lines.len());
 
         if start >= end {
             return String::new();
@@ -915,7 +952,10 @@ pub(crate) fn extract_body_content(source: &[u8], span: &crate::frame_c::compile
 }
 
 /// Generate persistence methods (save_state, restore_state) for @@persist
-pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> Vec<CodegenNode> {
+pub(crate) fn generate_persistence_methods(
+    system: &SystemAst,
+    syntax: &super::backend::ClassSyntax,
+) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
 
     match syntax.language {
@@ -970,16 +1010,21 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             save_body.push_str("        enter_args: {...c.enter_args},\n");
             save_body.push_str("        exit_args: {...c.exit_args},\n");
             save_body.push_str("        forward_event: c.forward_event,\n");
-            save_body.push_str("        parent_compartment: serializeComp(c.parent_compartment),\n");
+            save_body
+                .push_str("        parent_compartment: serializeComp(c.parent_compartment),\n");
             save_body.push_str("    };\n");
             save_body.push_str("};\n");
             save_body.push_str("return JSON.stringify({\n");
             save_body.push_str("    _compartment: serializeComp(this.__compartment),\n");
             // Stack stores compartment objects - serialize each with its parent chain
             if is_ts {
-                save_body.push_str("    _state_stack: this._state_stack.map((c: any) => serializeComp(c)),\n");
+                save_body.push_str(
+                    "    _state_stack: this._state_stack.map((c: any) => serializeComp(c)),\n",
+                );
             } else {
-                save_body.push_str("    _state_stack: this._state_stack.map((c) => serializeComp(c)),\n");
+                save_body.push_str(
+                    "    _state_stack: this._state_stack.map((c) => serializeComp(c)),\n",
+                );
             }
 
             // Add domain variables
@@ -992,7 +1037,7 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             methods.push(CodegenNode::Method {
                 name: "saveState".to_string(),
                 params: vec![],
-                return_type: Some("string".to_string()),  // Returns JSON string
+                return_type: Some("string".to_string()), // Returns JSON string
                 body: vec![CodegenNode::NativeBlock {
                     code: save_body,
                     span: None,
@@ -1008,22 +1053,33 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             let mut restore_body = String::new();
             // Helper to deserialize compartment chain recursively
             if is_ts {
-                restore_body.push_str(&format!("const deserializeComp = (data: any): {}Compartment | null => {{\n", system.name));
+                restore_body.push_str(&format!(
+                    "const deserializeComp = (data: any): {}Compartment | null => {{\n",
+                    system.name
+                ));
             } else {
                 restore_body.push_str("const deserializeComp = (data) => {\n");
             }
             restore_body.push_str("    if (!data) return null;\n");
-            restore_body.push_str(&format!("    const comp = new {}Compartment(data.state);\n", system.name));
+            restore_body.push_str(&format!(
+                "    const comp = new {}Compartment(data.state);\n",
+                system.name
+            ));
             restore_body.push_str("    comp.state_args = {...(data.state_args || {})};\n");
             restore_body.push_str("    comp.state_vars = {...(data.state_vars || {})};\n");
             restore_body.push_str("    comp.enter_args = {...(data.enter_args || {})};\n");
             restore_body.push_str("    comp.exit_args = {...(data.exit_args || {})};\n");
             restore_body.push_str("    comp.forward_event = data.forward_event;\n");
-            restore_body.push_str("    comp.parent_compartment = deserializeComp(data.parent_compartment);\n");
+            restore_body.push_str(
+                "    comp.parent_compartment = deserializeComp(data.parent_compartment);\n",
+            );
             restore_body.push_str("    return comp;\n");
             restore_body.push_str("};\n");
             restore_body.push_str("const data = JSON.parse(json);\n");
-            restore_body.push_str(&format!("const instance = Object.create({}.prototype);\n", system.name));
+            restore_body.push_str(&format!(
+                "const instance = Object.create({}.prototype);\n",
+                system.name
+            ));
             // Restore compartment with full parent chain
             restore_body.push_str("instance.__compartment = deserializeComp(data._compartment);\n");
             restore_body.push_str("instance.__next_compartment = null;\n");
@@ -1066,7 +1122,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 let mut save_body = String::new();
 
                 // Helper: serialize state_context enum to JSON
-                save_body.push_str(&format!("fn serialize_state_context(ctx: &{}StateContext) -> serde_json::Value {{\n", system.name));
+                save_body.push_str(&format!(
+                    "fn serialize_state_context(ctx: &{}StateContext) -> serde_json::Value {{\n",
+                    system.name
+                ));
                 save_body.push_str("    match ctx {\n");
                 if let Some(ref machine) = system.machine {
                     for state in &machine.states {
@@ -1090,25 +1149,35 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                         }
                     }
                 }
-                save_body.push_str(&format!("        {}StateContext::Empty => serde_json::json!({{}}),\n", system.name));
+                save_body.push_str(&format!(
+                    "        {}StateContext::Empty => serde_json::json!({{}}),\n",
+                    system.name
+                ));
                 save_body.push_str("    }\n");
                 save_body.push_str("}\n");
 
                 // Helper function to serialize a compartment and its parent chain
-                save_body.push_str(&format!("fn serialize_comp(comp: &{}Compartment) -> serde_json::Value {{\n", system.name));
+                save_body.push_str(&format!(
+                    "fn serialize_comp(comp: &{}Compartment) -> serde_json::Value {{\n",
+                    system.name
+                ));
                 save_body.push_str("    let parent = match &comp.parent_compartment {\n");
                 save_body.push_str("        Some(p) => serialize_comp(p),\n");
                 save_body.push_str("        None => serde_json::Value::Null,\n");
                 save_body.push_str("    };\n");
                 save_body.push_str("    serde_json::json!({\n");
                 save_body.push_str("        \"state\": comp.state,\n");
-                save_body.push_str("        \"state_context\": serialize_state_context(&comp.state_context),\n");
+                save_body.push_str(
+                    "        \"state_context\": serialize_state_context(&comp.state_context),\n",
+                );
                 save_body.push_str("        \"parent_compartment\": parent,\n");
                 save_body.push_str("    })\n");
                 save_body.push_str("}\n");
 
                 save_body.push_str("let compartment_data = serialize_comp(&self.__compartment);\n");
-                save_body.push_str("let stack_data: Vec<serde_json::Value> = self._state_stack.iter()\n");
+                save_body.push_str(
+                    "let stack_data: Vec<serde_json::Value> = self._state_stack.iter()\n",
+                );
                 save_body.push_str("    .map(|comp| serialize_comp(comp))\n");
                 save_body.push_str("    .collect();\n");
                 save_body.push_str("serde_json::json!({\n");
@@ -1138,7 +1207,9 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
                 // Generate restore_state that recursively deserializes compartment chain
                 let mut restore_body = String::new();
-                restore_body.push_str("let data: serde_json::Value = serde_json::from_str(json).unwrap();\n");
+                restore_body.push_str(
+                    "let data: serde_json::Value = serde_json::from_str(json).unwrap();\n",
+                );
 
                 // Helper: deserialize state_context from JSON based on state name
                 restore_body.push_str(&format!("fn deserialize_state_context(state: &str, data: &serde_json::Value) -> {}StateContext {{\n", system.name));
@@ -1169,23 +1240,39 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                                     }
                                     _ => format!("serde_json::from_value(data[\"{}\"].clone()).unwrap_or_default()", var.name),
                                 };
-                                restore_body.push_str(&format!("            {}: {},\n", var.name, json_extract));
+                                restore_body.push_str(&format!(
+                                    "            {}: {},\n",
+                                    var.name, json_extract
+                                ));
                             }
                             restore_body.push_str("        }),\n");
                         }
                     }
                 }
-                restore_body.push_str(&format!("        _ => {}StateContext::Empty,\n", system.name));
+                restore_body.push_str(&format!(
+                    "        _ => {}StateContext::Empty,\n",
+                    system.name
+                ));
                 restore_body.push_str("    }\n");
                 restore_body.push_str("}\n");
 
                 // Helper function to deserialize a compartment and its parent chain
-                restore_body.push_str(&format!("fn deserialize_comp(data: &serde_json::Value) -> {}Compartment {{\n", system.name));
-                restore_body.push_str(&format!("    let state = data[\"state\"].as_str().unwrap();\n"));
-                restore_body.push_str(&format!("    let mut comp = {}Compartment::new(state);\n", system.name));
+                restore_body.push_str(&format!(
+                    "fn deserialize_comp(data: &serde_json::Value) -> {}Compartment {{\n",
+                    system.name
+                ));
+                restore_body.push_str(&format!(
+                    "    let state = data[\"state\"].as_str().unwrap();\n"
+                ));
+                restore_body.push_str(&format!(
+                    "    let mut comp = {}Compartment::new(state);\n",
+                    system.name
+                ));
                 restore_body.push_str("    let ctx_data = &data[\"state_context\"];\n");
                 restore_body.push_str("    if !ctx_data.is_null() {\n");
-                restore_body.push_str(&format!("        comp.state_context = deserialize_state_context(state, ctx_data);\n"));
+                restore_body.push_str(&format!(
+                    "        comp.state_context = deserialize_state_context(state, ctx_data);\n"
+                ));
                 restore_body.push_str("    }\n");
                 restore_body.push_str("    if !data[\"parent_compartment\"].is_null() {\n");
                 restore_body.push_str("        comp.parent_compartment = Some(Box::new(deserialize_comp(&data[\"parent_compartment\"])));\n");
@@ -1194,14 +1281,18 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 restore_body.push_str("}\n");
 
                 // Restore stack as Vec<Compartment>
-                restore_body.push_str(&format!("let stack: Vec<{}Compartment> = data[\"_state_stack\"].as_array()\n", system.name));
+                restore_body.push_str(&format!(
+                    "let stack: Vec<{}Compartment> = data[\"_state_stack\"].as_array()\n",
+                    system.name
+                ));
                 restore_body.push_str("    .map(|arr| arr.iter()\n");
                 restore_body.push_str("        .map(|v| deserialize_comp(v))\n");
                 restore_body.push_str("        .collect())\n");
                 restore_body.push_str("    .unwrap_or_default();\n");
 
                 // Deserialize compartment
-                restore_body.push_str("let compartment = deserialize_comp(&data[\"_compartment\"]);\n");
+                restore_body
+                    .push_str("let compartment = deserialize_comp(&data[\"_compartment\"]);\n");
 
                 restore_body.push_str(&format!("let instance = {} {{\n", system.name));
                 restore_body.push_str("    _state_stack: stack,\n");
@@ -1213,17 +1304,27 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 for var in &system.domain {
                     let _type_str = type_to_string(&var.var_type);
                     let json_extract = match &var.var_type {
-                        Type::Custom(name) => {
-                            match name.to_lowercase().as_str() {
-                                "int" | "i32" => format!("data[\"{}\"].as_i64().unwrap() as i32", var.name),
-                                "i64" => format!("data[\"{}\"].as_i64().unwrap()", var.name),
-                                "float" | "f32" | "f64" => format!("data[\"{}\"].as_f64().unwrap()", var.name),
-                                "bool" => format!("data[\"{}\"].as_bool().unwrap()", var.name),
-                                "str" | "string" => format!("data[\"{}\"].as_str().unwrap().to_string()", var.name),
-                                _ => format!("serde_json::from_value(data[\"{}\"].clone()).unwrap()", var.name),
+                        Type::Custom(name) => match name.to_lowercase().as_str() {
+                            "int" | "i32" => {
+                                format!("data[\"{}\"].as_i64().unwrap() as i32", var.name)
                             }
-                        }
-                        _ => format!("serde_json::from_value(data[\"{}\"].clone()).unwrap()", var.name),
+                            "i64" => format!("data[\"{}\"].as_i64().unwrap()", var.name),
+                            "float" | "f32" | "f64" => {
+                                format!("data[\"{}\"].as_f64().unwrap()", var.name)
+                            }
+                            "bool" => format!("data[\"{}\"].as_bool().unwrap()", var.name),
+                            "str" | "string" => {
+                                format!("data[\"{}\"].as_str().unwrap().to_string()", var.name)
+                            }
+                            _ => format!(
+                                "serde_json::from_value(data[\"{}\"].clone()).unwrap()",
+                                var.name
+                            ),
+                        },
+                        _ => format!(
+                            "serde_json::from_value(data[\"{}\"].clone()).unwrap()",
+                            var.name
+                        ),
                     };
                     restore_body.push_str(&format!("    {}: {},\n", var.name, json_extract));
                 }
@@ -1255,16 +1356,26 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             // Generate serialize_compartment helper
             let mut serialize_helper = String::new();
-            serialize_helper.push_str(&format!("static cJSON* {}_serialize_compartment({}_Compartment* comp) {{\n", system.name, system.name));
+            serialize_helper.push_str(&format!(
+                "static cJSON* {}_serialize_compartment({}_Compartment* comp) {{\n",
+                system.name, system.name
+            ));
             serialize_helper.push_str("    if (!comp) return cJSON_CreateNull();\n");
             serialize_helper.push_str("    cJSON* obj = cJSON_CreateObject();\n");
-            serialize_helper.push_str("    cJSON_AddStringToObject(obj, \"state\", comp->state);\n");
+            serialize_helper
+                .push_str("    cJSON_AddStringToObject(obj, \"state\", comp->state);\n");
             // Serialize state_vars (iterate over bucket-based linked list)
             serialize_helper.push_str("    cJSON* vars = cJSON_CreateObject();\n");
-            serialize_helper.push_str(&format!("    {}_FrameDict* sv = comp->state_vars;\n", system.name));
+            serialize_helper.push_str(&format!(
+                "    {}_FrameDict* sv = comp->state_vars;\n",
+                system.name
+            ));
             serialize_helper.push_str("    if (sv) {\n");
             serialize_helper.push_str("        for (int i = 0; i < sv->bucket_count; i++) {\n");
-            serialize_helper.push_str(&format!("            {}_FrameDictEntry* entry = sv->buckets[i];\n", system.name));
+            serialize_helper.push_str(&format!(
+                "            {}_FrameDictEntry* entry = sv->buckets[i];\n",
+                system.name
+            ));
             serialize_helper.push_str("            while (entry) {\n");
             serialize_helper.push_str("                cJSON_AddNumberToObject(vars, entry->key, (double)(intptr_t)entry->value);\n");
             serialize_helper.push_str("                entry = entry->next;\n");
@@ -1279,13 +1390,21 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             // Generate deserialize_compartment helper
             let mut deserialize_helper = String::new();
-            deserialize_helper.push_str(&format!("static {}_Compartment* {}_deserialize_compartment(cJSON* data) {{\n", system.name, system.name));
+            deserialize_helper.push_str(&format!(
+                "static {}_Compartment* {}_deserialize_compartment(cJSON* data) {{\n",
+                system.name, system.name
+            ));
             deserialize_helper.push_str("    if (!data || cJSON_IsNull(data)) return NULL;\n");
-            deserialize_helper.push_str("    cJSON* state_item = cJSON_GetObjectItem(data, \"state\");\n");
+            deserialize_helper
+                .push_str("    cJSON* state_item = cJSON_GetObjectItem(data, \"state\");\n");
             // strdup the state string since cJSON memory will be freed
-            deserialize_helper.push_str(&format!("    {}_Compartment* comp = {}_Compartment_new(strdup(state_item->valuestring));\n", system.name, system.name));
+            deserialize_helper.push_str(&format!(
+                "    {}_Compartment* comp = {}_Compartment_new(strdup(state_item->valuestring));\n",
+                system.name, system.name
+            ));
             // Deserialize state_vars
-            deserialize_helper.push_str("    cJSON* vars = cJSON_GetObjectItem(data, \"state_vars\");\n");
+            deserialize_helper
+                .push_str("    cJSON* vars = cJSON_GetObjectItem(data, \"state_vars\");\n");
             deserialize_helper.push_str("    if (vars) {\n");
             deserialize_helper.push_str("        cJSON* var_item;\n");
             deserialize_helper.push_str("        cJSON_ArrayForEach(var_item, vars) {\n");
@@ -1293,8 +1412,13 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             deserialize_helper.push_str("        }\n");
             deserialize_helper.push_str("    }\n");
             // Recursively deserialize parent
-            deserialize_helper.push_str("    cJSON* parent = cJSON_GetObjectItem(data, \"parent_compartment\");\n");
-            deserialize_helper.push_str(&format!("    comp->parent_compartment = {}_deserialize_compartment(parent);\n", system.name));
+            deserialize_helper.push_str(
+                "    cJSON* parent = cJSON_GetObjectItem(data, \"parent_compartment\");\n",
+            );
+            deserialize_helper.push_str(&format!(
+                "    comp->parent_compartment = {}_deserialize_compartment(parent);\n",
+                system.name
+            ));
             deserialize_helper.push_str("    return comp;\n");
             deserialize_helper.push_str("}\n\n");
 
@@ -1312,7 +1436,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             // Serialize state stack (simplified - just states for now)
             save_body.push_str("cJSON* stack_arr = cJSON_CreateArray();\n");
-            save_body.push_str(&format!("for (int i = 0; i < {}_FrameVec_size(self->_state_stack); i++) {{\n", system.name));
+            save_body.push_str(&format!(
+                "for (int i = 0; i < {}_FrameVec_size(self->_state_stack); i++) {{\n",
+                system.name
+            ));
             save_body.push_str(&format!("    {}_Compartment* comp = ({}_Compartment*){}_FrameVec_get(self->_state_stack, i);\n",
                 system.name, system.name, system.name));
             save_body.push_str("    cJSON* stack_obj = cJSON_CreateObject();\n");
@@ -1326,15 +1453,30 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 let type_str = extract_type_from_raw_domain(&var.raw_code, &var.name);
 
                 let json_add = if is_int_type(&type_str) {
-                    format!("cJSON_AddNumberToObject(root, \"{}\", (double)self->{});\n", var.name, var.name)
+                    format!(
+                        "cJSON_AddNumberToObject(root, \"{}\", (double)self->{});\n",
+                        var.name, var.name
+                    )
                 } else if is_float_type(&type_str) {
-                    format!("cJSON_AddNumberToObject(root, \"{}\", self->{});\n", var.name, var.name)
+                    format!(
+                        "cJSON_AddNumberToObject(root, \"{}\", self->{});\n",
+                        var.name, var.name
+                    )
                 } else if is_bool_type(&type_str) {
-                    format!("cJSON_AddBoolToObject(root, \"{}\", self->{});\n", var.name, var.name)
+                    format!(
+                        "cJSON_AddBoolToObject(root, \"{}\", self->{});\n",
+                        var.name, var.name
+                    )
                 } else if is_string_type(&type_str) {
-                    format!("cJSON_AddStringToObject(root, \"{}\", self->{});\n", var.name, var.name)
+                    format!(
+                        "cJSON_AddStringToObject(root, \"{}\", self->{});\n",
+                        var.name, var.name
+                    )
                 } else {
-                    format!("cJSON_AddNumberToObject(root, \"{}\", (double)(intptr_t)self->{});\n", var.name, var.name)
+                    format!(
+                        "cJSON_AddNumberToObject(root, \"{}\", (double)(intptr_t)self->{});\n",
+                        var.name, var.name
+                    )
                 };
                 save_body.push_str(&json_add);
             }
@@ -1362,24 +1504,43 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             restore_body.push_str("cJSON* root = cJSON_Parse(json);\n");
             restore_body.push_str("if (!root) return NULL;\n\n");
 
-            restore_body.push_str(&format!("{}* instance = malloc(sizeof({}));\n", system.name, system.name));
-            restore_body.push_str(&format!("instance->_state_stack = {}_FrameVec_new();\n", system.name));
-            restore_body.push_str(&format!("instance->_context_stack = {}_FrameVec_new();\n", system.name));
+            restore_body.push_str(&format!(
+                "{}* instance = malloc(sizeof({}));\n",
+                system.name, system.name
+            ));
+            restore_body.push_str(&format!(
+                "instance->_state_stack = {}_FrameVec_new();\n",
+                system.name
+            ));
+            restore_body.push_str(&format!(
+                "instance->_context_stack = {}_FrameVec_new();\n",
+                system.name
+            ));
             restore_body.push_str("instance->__next_compartment = NULL;\n\n");
 
             // Restore entire compartment chain
-            restore_body.push_str("cJSON* comp_data = cJSON_GetObjectItem(root, \"_compartment\");\n");
-            restore_body.push_str(&format!("instance->__compartment = {}_deserialize_compartment(comp_data);\n\n", system.name));
+            restore_body
+                .push_str("cJSON* comp_data = cJSON_GetObjectItem(root, \"_compartment\");\n");
+            restore_body.push_str(&format!(
+                "instance->__compartment = {}_deserialize_compartment(comp_data);\n\n",
+                system.name
+            ));
 
             // Restore state stack
-            restore_body.push_str("cJSON* stack_arr = cJSON_GetObjectItem(root, \"_state_stack\");\n");
+            restore_body
+                .push_str("cJSON* stack_arr = cJSON_GetObjectItem(root, \"_state_stack\");\n");
             restore_body.push_str("if (stack_arr) {\n");
             restore_body.push_str("    cJSON* stack_item;\n");
             restore_body.push_str("    cJSON_ArrayForEach(stack_item, stack_arr) {\n");
-            restore_body.push_str("        cJSON* state_obj = cJSON_GetObjectItem(stack_item, \"state\");\n");
+            restore_body.push_str(
+                "        cJSON* state_obj = cJSON_GetObjectItem(stack_item, \"state\");\n",
+            );
             restore_body.push_str(&format!("        {}_Compartment* comp = {}_Compartment_new(strdup(state_obj->valuestring));\n",
                 system.name, system.name));
-            restore_body.push_str(&format!("        {}_FrameVec_push(instance->_state_stack, comp);\n", system.name));
+            restore_body.push_str(&format!(
+                "        {}_FrameVec_push(instance->_state_stack, comp);\n",
+                system.name
+            ));
             restore_body.push_str("    }\n");
             restore_body.push_str("}\n\n");
 
@@ -1388,15 +1549,30 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 let type_str = extract_type_from_raw_domain(&var.raw_code, &var.name);
 
                 let json_get = if is_int_type(&type_str) {
-                    format!("instance->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n", var.name, var.name)
+                    format!(
+                        "instance->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
+                        var.name, var.name
+                    )
                 } else if is_float_type(&type_str) {
-                    format!("instance->{} = cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n", var.name, var.name)
+                    format!(
+                        "instance->{} = cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
+                        var.name, var.name
+                    )
                 } else if is_bool_type(&type_str) {
-                    format!("instance->{} = cJSON_IsTrue(cJSON_GetObjectItem(root, \"{}\"));\n", var.name, var.name)
+                    format!(
+                        "instance->{} = cJSON_IsTrue(cJSON_GetObjectItem(root, \"{}\"));\n",
+                        var.name, var.name
+                    )
                 } else if is_string_type(&type_str) {
-                    format!("instance->{} = strdup(cJSON_GetObjectItem(root, \"{}\")->valuestring);\n", var.name, var.name)
+                    format!(
+                        "instance->{} = strdup(cJSON_GetObjectItem(root, \"{}\")->valuestring);\n",
+                        var.name, var.name
+                    )
                 } else {
-                    format!("instance->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n", var.name, var.name)
+                    format!(
+                        "instance->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
+                        var.name, var.name
+                    )
                 };
                 restore_body.push_str(&json_get);
             }
@@ -1423,16 +1599,25 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             let compartment_class = format!("{}Compartment", sys);
 
             // Collect all state vars with their types for serialization
-            let all_state_vars: Vec<(&str, &str, &str)> = system.machine.as_ref()
-                .map(|m| m.states.iter().flat_map(|s| {
-                    s.state_vars.iter().map(move |sv| {
-                        let type_str = match &sv.var_type {
-                            crate::frame_c::compiler::frame_ast::Type::Custom(t) => t.as_str(),
-                            crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
-                        };
-                        (s.name.as_str(), sv.name.as_str(), type_str)
-                    })
-                }).collect())
+            let all_state_vars: Vec<(&str, &str, &str)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .flat_map(|s| {
+                            s.state_vars.iter().map(move |sv| {
+                                let type_str = match &sv.var_type {
+                                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                                        t.as_str()
+                                    }
+                                    crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
+                                };
+                                (s.name.as_str(), sv.name.as_str(), type_str)
+                            })
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
 
             // save_state() — recursive compartment chain serialization
@@ -1466,7 +1651,8 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             // Serialize state stack
             save_body.push_str("nlohmann::json __stack = nlohmann::json::array();\n");
-            save_body.push_str("for (auto& c : _state_stack) { __stack.push_back(__ser(c.get())); }\n");
+            save_body
+                .push_str("for (auto& c : _state_stack) { __stack.push_back(__ser(c.get())); }\n");
             save_body.push_str("__j[\"_state_stack\"] = __stack;\n");
 
             // Serialize domain vars
@@ -1480,7 +1666,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "save_state".to_string(),
                 params: vec![],
                 return_type: Some("std::string".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: save_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Public,
@@ -1510,7 +1699,8 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 ));
             }
             restore_body.push_str("    }\n");
-            restore_body.push_str("    if (d.contains(\"parent\") && !d[\"parent\"].is_null()) {\n");
+            restore_body
+                .push_str("    if (d.contains(\"parent\") && !d[\"parent\"].is_null()) {\n");
             restore_body.push_str("        c->parent_compartment = __deser(d[\"parent\"]);\n");
             restore_body.push_str("    }\n");
             restore_body.push_str("    return c;\n");
@@ -1541,7 +1731,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "restore_state".to_string(),
                 params: vec![Param::new("json").with_type("const std::string&")],
                 return_type: Some(sys.clone()),
-                body: vec![CodegenNode::NativeBlock { code: restore_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: true,
                 visibility: Visibility::Public,
@@ -1553,16 +1746,25 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             let compartment_class = format!("{}Compartment", sys);
 
             // Collect state vars with types
-            let all_state_vars: Vec<(&str, &str, &str)> = system.machine.as_ref()
-                .map(|m| m.states.iter().flat_map(|s| {
-                    s.state_vars.iter().map(move |sv| {
-                        let type_str = match &sv.var_type {
-                            crate::frame_c::compiler::frame_ast::Type::Custom(t) => t.as_str(),
-                            crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
-                        };
-                        (s.name.as_str(), sv.name.as_str(), type_str)
-                    })
-                }).collect())
+            let all_state_vars: Vec<(&str, &str, &str)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .flat_map(|s| {
+                            s.state_vars.iter().map(move |sv| {
+                                let type_str = match &sv.var_type {
+                                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                                        t.as_str()
+                                    }
+                                    crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
+                                };
+                                (s.name.as_str(), sv.name.as_str(), type_str)
+                            })
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
 
             // Private helper method for recursive compartment serialization
@@ -1571,7 +1773,9 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             ser_body.push_str("var j = new org.json.JSONObject();\n");
             ser_body.push_str("j.put(\"state\", comp.state);\n");
             ser_body.push_str("var sv = new org.json.JSONObject();\n");
-            ser_body.push_str("for (var e : comp.state_vars.entrySet()) { sv.put(e.getKey(), e.getValue()); }\n");
+            ser_body.push_str(
+                "for (var e : comp.state_vars.entrySet()) { sv.put(e.getKey(), e.getValue()); }\n",
+            );
             ser_body.push_str("j.put(\"state_vars\", sv);\n");
             ser_body.push_str("j.put(\"parent\", __serComp(comp.parent_compartment));\n");
             ser_body.push_str("return j;");
@@ -1580,7 +1784,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__serComp".to_string(),
                 params: vec![Param::new("comp").with_type(&compartment_class)],
                 return_type: Some("org.json.JSONObject".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: ser_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: ser_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -1589,12 +1796,18 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             // Private helper for deserialization
             let mut deser_body = String::new();
-            deser_body.push_str("if (obj == null || obj.equals(org.json.JSONObject.NULL)) return null;\n");
+            deser_body.push_str(
+                "if (obj == null || obj.equals(org.json.JSONObject.NULL)) return null;\n",
+            );
             deser_body.push_str("var d = (org.json.JSONObject) obj;\n");
-            deser_body.push_str(&format!("var c = new {}(d.getString(\"state\"));\n", compartment_class));
+            deser_body.push_str(&format!(
+                "var c = new {}(d.getString(\"state\"));\n",
+                compartment_class
+            ));
             deser_body.push_str("if (d.has(\"state_vars\")) {\n");
             deser_body.push_str("    var sv = d.getJSONObject(\"state_vars\");\n");
-            deser_body.push_str("    for (var k : sv.keySet()) { c.state_vars.put(k, sv.get(k)); }\n");
+            deser_body
+                .push_str("    for (var k : sv.keySet()) { c.state_vars.put(k, sv.get(k)); }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (d.has(\"parent\") && !d.isNull(\"parent\")) {\n");
             deser_body.push_str("    c.parent_compartment = __deserComp(d.get(\"parent\"));\n");
@@ -1605,7 +1818,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__deserComp".to_string(),
                 params: vec![Param::new("obj").with_type("Object")],
                 return_type: Some(compartment_class.clone()),
-                body: vec![CodegenNode::NativeBlock { code: deser_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: deser_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: true,
                 visibility: Visibility::Private,
@@ -1630,7 +1846,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "save_state".to_string(),
                 params: vec![],
                 return_type: Some("String".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: save_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Public,
@@ -1641,7 +1860,8 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             let mut restore_body = String::new();
             restore_body.push_str("var __j = new org.json.JSONObject(json);\n");
             restore_body.push_str(&format!("var __instance = new {}();\n", sys));
-            restore_body.push_str("__instance.__compartment = __deserComp(__j.get(\"_compartment\"));\n");
+            restore_body
+                .push_str("__instance.__compartment = __deserComp(__j.get(\"_compartment\"));\n");
             restore_body.push_str("if (__j.has(\"_state_stack\")) {\n");
             restore_body.push_str("    var __stack = __j.getJSONArray(\"_state_stack\");\n");
             restore_body.push_str("    __instance._state_stack = new ArrayList<>();\n");
@@ -1653,24 +1873,48 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 // Try to determine Java type from raw_code (e.g., "int x = 0" → "int")
                 let java_type = if let Some(ref raw) = var.raw_code {
                     let trimmed = raw.trim();
-                    if trimmed.starts_with("int ") { "int" }
-                    else if trimmed.starts_with("double ") || trimmed.starts_with("float ") { "double" }
-                    else if trimmed.starts_with("boolean ") { "boolean" }
-                    else if trimmed.starts_with("String ") { "String" }
-                    else if trimmed.starts_with("long ") { "long" }
-                    else { "Object" }
+                    if trimmed.starts_with("int ") {
+                        "int"
+                    } else if trimmed.starts_with("double ") || trimmed.starts_with("float ") {
+                        "double"
+                    } else if trimmed.starts_with("boolean ") {
+                        "boolean"
+                    } else if trimmed.starts_with("String ") {
+                        "String"
+                    } else if trimmed.starts_with("long ") {
+                        "long"
+                    } else {
+                        "Object"
+                    }
                 } else {
                     match &var.var_type {
-                        crate::frame_c::compiler::frame_ast::Type::Custom(t) => java_map_type(t).leak(),
+                        crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                            java_map_type(t).leak()
+                        }
                         _ => "Object",
                     }
                 };
                 match java_type {
-                    "int" => restore_body.push_str(&format!("if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getInt(\"{0}\"); }}\n", var.name)),
-                    "double" | "float" => restore_body.push_str(&format!("if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getDouble(\"{0}\"); }}\n", var.name)),
-                    "boolean" => restore_body.push_str(&format!("if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getBoolean(\"{0}\"); }}\n", var.name)),
-                    "String" => restore_body.push_str(&format!("if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getString(\"{0}\"); }}\n", var.name)),
-                    _ => restore_body.push_str(&format!("if (__j.has(\"{0}\")) {{ __instance.{0} = __j.get(\"{0}\"); }}\n", var.name)),
+                    "int" => restore_body.push_str(&format!(
+                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getInt(\"{0}\"); }}\n",
+                        var.name
+                    )),
+                    "double" | "float" => restore_body.push_str(&format!(
+                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getDouble(\"{0}\"); }}\n",
+                        var.name
+                    )),
+                    "boolean" => restore_body.push_str(&format!(
+                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getBoolean(\"{0}\"); }}\n",
+                        var.name
+                    )),
+                    "String" => restore_body.push_str(&format!(
+                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getString(\"{0}\"); }}\n",
+                        var.name
+                    )),
+                    _ => restore_body.push_str(&format!(
+                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.get(\"{0}\"); }}\n",
+                        var.name
+                    )),
                 }
             }
 
@@ -1680,7 +1924,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "restore_state".to_string(),
                 params: vec![Param::new("json").with_type("String")],
                 return_type: Some(sys.clone()),
-                body: vec![CodegenNode::NativeBlock { code: restore_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: true,
                 visibility: Visibility::Public,
@@ -1705,7 +1952,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__SerComp".to_string(),
                 params: vec![Param::new("comp").with_type(&compartment_class)],
                 return_type: Some("object".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: ser_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: ser_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -1714,8 +1964,13 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             // Private helper for deserialization — uses JsonElement
             let mut deser_body = String::new();
-            deser_body.push_str("if (el.ValueKind == System.Text.Json.JsonValueKind.Null) return null;\n");
-            deser_body.push_str(&format!("var c = new {}(el.GetProperty(\"state\").GetString());\n", compartment_class));
+            deser_body.push_str(
+                "if (el.ValueKind == System.Text.Json.JsonValueKind.Null) return null;\n",
+            );
+            deser_body.push_str(&format!(
+                "var c = new {}(el.GetProperty(\"state\").GetString());\n",
+                compartment_class
+            ));
             deser_body.push_str("if (el.TryGetProperty(\"state_vars\", out var sv) && sv.ValueKind == System.Text.Json.JsonValueKind.Object) {\n");
             deser_body.push_str("    foreach (var kv in sv.EnumerateObject()) {\n");
             deser_body.push_str("        if (kv.Value.ValueKind == System.Text.Json.JsonValueKind.Number) c.state_vars[kv.Name] = kv.Value.GetInt32();\n");
@@ -1732,7 +1987,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__DeserComp".to_string(),
                 params: vec![Param::new("el").with_type("System.Text.Json.JsonElement")],
                 return_type: Some(compartment_class.clone()),
-                body: vec![CodegenNode::NativeBlock { code: deser_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: deser_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: true,
                 visibility: Visibility::Private,
@@ -1758,7 +2016,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "SaveState".to_string(),
                 params: vec![],
                 return_type: Some("string".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: save_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Public,
@@ -1770,9 +2031,15 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             restore_body.push_str("var __doc = System.Text.Json.JsonDocument.Parse(json);\n");
             restore_body.push_str("var __root = __doc.RootElement;\n");
             restore_body.push_str(&format!("var __instance = new {}();\n", sys));
-            restore_body.push_str("__instance.__compartment = __DeserComp(__root.GetProperty(\"_compartment\"));\n");
-            restore_body.push_str("if (__root.TryGetProperty(\"_state_stack\", out var __stack)) {\n");
-            restore_body.push_str(&format!("    __instance._state_stack = new List<{}>();\n", compartment_class));
+            restore_body.push_str(
+                "__instance.__compartment = __DeserComp(__root.GetProperty(\"_compartment\"));\n",
+            );
+            restore_body
+                .push_str("if (__root.TryGetProperty(\"_state_stack\", out var __stack)) {\n");
+            restore_body.push_str(&format!(
+                "    __instance._state_stack = new List<{}>();\n",
+                compartment_class
+            ));
             restore_body.push_str("    foreach (var item in __stack.EnumerateArray()) { __instance._state_stack.Add(__DeserComp(item)); }\n");
             restore_body.push_str("}\n");
 
@@ -1780,12 +2047,20 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             for var in &system.domain {
                 let cs_type = if let Some(ref raw) = var.raw_code {
                     let trimmed = raw.trim();
-                    if trimmed.starts_with("int ") { "int" }
-                    else if trimmed.starts_with("double ") || trimmed.starts_with("float ") { "double" }
-                    else if trimmed.starts_with("bool ") { "bool" }
-                    else if trimmed.starts_with("string ") || trimmed.starts_with("String ") { "string" }
-                    else { "object" }
-                } else { "object" };
+                    if trimmed.starts_with("int ") {
+                        "int"
+                    } else if trimmed.starts_with("double ") || trimmed.starts_with("float ") {
+                        "double"
+                    } else if trimmed.starts_with("bool ") {
+                        "bool"
+                    } else if trimmed.starts_with("string ") || trimmed.starts_with("String ") {
+                        "string"
+                    } else {
+                        "object"
+                    }
+                } else {
+                    "object"
+                };
                 match cs_type {
                     "int" => restore_body.push_str(&format!(
                         "if (__root.TryGetProperty(\"{0}\", out var __{0})) {{ __instance.{0} = __{0}.GetInt32(); }}\n", var.name)),
@@ -1806,7 +2081,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "RestoreState".to_string(),
                 params: vec![Param::new("json").with_type("string")],
                 return_type: Some(sys.clone()),
-                body: vec![CodegenNode::NativeBlock { code: restore_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: true,
                 visibility: Visibility::Public,
@@ -1820,7 +2098,8 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             // Private helper for recursive compartment serialization
             let mut ser_body = String::new();
             ser_body.push_str("if ($comp === null) return null;\n");
-            ser_body.push_str("$j = ['state' => $comp->state, 'state_vars' => $comp->state_vars];\n");
+            ser_body
+                .push_str("$j = ['state' => $comp->state, 'state_vars' => $comp->state_vars];\n");
             ser_body.push_str("$j['parent'] = $this->__serComp($comp->parent_compartment);\n");
             ser_body.push_str("return $j;");
 
@@ -1828,7 +2107,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__serComp".to_string(),
                 params: vec![Param::new("comp")],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: ser_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: ser_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -1838,8 +2120,13 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             // Private helper for deserialization
             let mut deser_body = String::new();
             deser_body.push_str("if ($data === null) return null;\n");
-            deser_body.push_str(&format!("$c = new {}($data['state']);\n", compartment_class));
-            deser_body.push_str("if (isset($data['state_vars'])) $c->state_vars = $data['state_vars'];\n");
+            deser_body.push_str(&format!(
+                "$c = new {}($data['state']);\n",
+                compartment_class
+            ));
+            deser_body.push_str(
+                "if (isset($data['state_vars'])) $c->state_vars = $data['state_vars'];\n",
+            );
             deser_body.push_str("if (isset($data['parent'])) $c->parent_compartment = self::__deserComp($data['parent']);\n");
             deser_body.push_str("return $c;");
 
@@ -1847,7 +2134,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__deserComp".to_string(),
                 params: vec![Param::new("data")],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: deser_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: deser_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: true,
                 visibility: Visibility::Private,
@@ -1859,7 +2149,9 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             save_body.push_str("$j = [];\n");
             save_body.push_str("$j['_compartment'] = $this->__serComp($this->__compartment);\n");
             save_body.push_str("$stack = [];\n");
-            save_body.push_str("foreach ($this->_state_stack as $c) { $stack[] = $this->__serComp($c); }\n");
+            save_body.push_str(
+                "foreach ($this->_state_stack as $c) { $stack[] = $this->__serComp($c); }\n",
+            );
             save_body.push_str("$j['_state_stack'] = $stack;\n");
             for var in &system.domain {
                 save_body.push_str(&format!("$j['{}'] = $this->{};\n", var.name, var.name));
@@ -1870,7 +2162,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "save_state".to_string(),
                 params: vec![],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: save_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Public,
@@ -1881,13 +2176,17 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             let mut restore_body = String::new();
             restore_body.push_str("$j = json_decode($json, true);\n");
             restore_body.push_str(&format!("$instance = new {}();\n", sys));
-            restore_body.push_str("$instance->__compartment = self::__deserComp($j['_compartment']);\n");
+            restore_body
+                .push_str("$instance->__compartment = self::__deserComp($j['_compartment']);\n");
             restore_body.push_str("if (isset($j['_state_stack'])) {\n");
             restore_body.push_str("    $instance->_state_stack = [];\n");
             restore_body.push_str("    foreach ($j['_state_stack'] as $sc) { $instance->_state_stack[] = self::__deserComp($sc); }\n");
             restore_body.push_str("}\n");
             for var in &system.domain {
-                restore_body.push_str(&format!("if (isset($j['{}'])) $instance->{} = $j['{}'];\n", var.name, var.name, var.name));
+                restore_body.push_str(&format!(
+                    "if (isset($j['{}'])) $instance->{} = $j['{}'];\n",
+                    var.name, var.name, var.name
+                ));
             }
             restore_body.push_str("return $instance;");
 
@@ -1895,7 +2194,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "restore_state".to_string(),
                 params: vec![Param::new("json")],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: restore_body, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: true,
                 visibility: Visibility::Public,
@@ -1922,14 +2224,24 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__serComp".to_string(),
                 params: vec![Param::new("comp").with_type(&format!("{}?", compartment_class))],
                 return_type: Some("org.json.JSONObject?".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: ser_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: ser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
             });
 
             let mut deser_body = String::new();
-            deser_body.push_str("if (obj == null || obj == org.json.JSONObject.NULL) return null\n");
+            deser_body
+                .push_str("if (obj == null || obj == org.json.JSONObject.NULL) return null\n");
             deser_body.push_str("val d = obj as org.json.JSONObject\n");
-            deser_body.push_str(&format!("val c = {}(d.getString(\"state\"))\n", compartment_class));
+            deser_body.push_str(&format!(
+                "val c = {}(d.getString(\"state\"))\n",
+                compartment_class
+            ));
             deser_body.push_str("if (d.has(\"state_vars\")) {\n");
             deser_body.push_str("    val sv = d.getJSONObject(\"state_vars\")\n");
             deser_body.push_str("    for (k in sv.keys()) { c.state_vars[k] = sv.get(k) }\n");
@@ -1943,8 +2255,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__deserComp".to_string(),
                 params: vec![Param::new("obj").with_type("Any?")],
                 return_type: Some(format!("{}?", compartment_class)),
-                body: vec![CodegenNode::NativeBlock { code: deser_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: deser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
             });
 
             // save_state()
@@ -1961,9 +2279,16 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             methods.push(CodegenNode::Method {
                 name: "save_state".to_string(),
-                params: vec![], return_type: Some("String".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: save_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Public, decorators: vec![],
+                params: vec![],
+                return_type: Some("String".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Public,
+                decorators: vec![],
             });
 
             // restore_state — companion object static method
@@ -1974,7 +2299,9 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             let mut restore_body = String::new();
             restore_body.push_str("val j = org.json.JSONObject(json)\n");
             restore_body.push_str(&format!("val instance = {}()\n", sys));
-            restore_body.push_str("instance.__compartment = instance.__deserComp(j.get(\"_compartment\"))!!\n");
+            restore_body.push_str(
+                "instance.__compartment = instance.__deserComp(j.get(\"_compartment\"))!!\n",
+            );
             restore_body.push_str("if (j.has(\"_state_stack\")) {\n");
             restore_body.push_str("    val stack = j.getJSONArray(\"_state_stack\")\n");
             restore_body.push_str("    instance._state_stack = mutableListOf()\n");
@@ -1986,31 +2313,55 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                     // Check for numeric integer initialization (= 0, = 42, = -1, etc.)
                     let is_int = t.contains("Int") || {
                         if let Some(eq_pos) = t.find('=') {
-                            let val = t[eq_pos+1..].trim();
+                            let val = t[eq_pos + 1..].trim();
                             val.parse::<i64>().is_ok()
                         } else {
                             false
                         }
                     };
-                    if is_int { "Int" }
-                    else if t.contains("String") || t.contains("= \"") { "String" }
-                    else if t.contains("Boolean") || t.contains("= true") || t.contains("= false") { "Boolean" }
-                    else if t.contains("Double") || {
+                    if is_int {
+                        "Int"
+                    } else if t.contains("String") || t.contains("= \"") {
+                        "String"
+                    } else if t.contains("Boolean") || t.contains("= true") || t.contains("= false")
+                    {
+                        "Boolean"
+                    } else if t.contains("Double") || {
                         if let Some(eq_pos) = t.find('=') {
-                            let val = t[eq_pos+1..].trim();
+                            let val = t[eq_pos + 1..].trim();
                             val.contains('.') && val.parse::<f64>().is_ok()
                         } else {
                             false
                         }
-                    } { "Double" }
-                    else { "Any" }
-                } else { "Any" };
+                    } {
+                        "Double"
+                    } else {
+                        "Any"
+                    }
+                } else {
+                    "Any"
+                };
                 match kt_type {
-                    "Int" => restore_body.push_str(&format!("if (j.has(\"{0}\")) instance.{0} = j.getInt(\"{0}\")\n", var.name)),
-                    "String" => restore_body.push_str(&format!("if (j.has(\"{0}\")) instance.{0} = j.getString(\"{0}\")\n", var.name)),
-                    "Boolean" => restore_body.push_str(&format!("if (j.has(\"{0}\")) instance.{0} = j.getBoolean(\"{0}\")\n", var.name)),
-                    "Double" => restore_body.push_str(&format!("if (j.has(\"{0}\")) instance.{0} = j.getDouble(\"{0}\")\n", var.name)),
-                    _ => restore_body.push_str(&format!("if (j.has(\"{0}\")) instance.{0} = j.get(\"{0}\")\n", var.name)),
+                    "Int" => restore_body.push_str(&format!(
+                        "if (j.has(\"{0}\")) instance.{0} = j.getInt(\"{0}\")\n",
+                        var.name
+                    )),
+                    "String" => restore_body.push_str(&format!(
+                        "if (j.has(\"{0}\")) instance.{0} = j.getString(\"{0}\")\n",
+                        var.name
+                    )),
+                    "Boolean" => restore_body.push_str(&format!(
+                        "if (j.has(\"{0}\")) instance.{0} = j.getBoolean(\"{0}\")\n",
+                        var.name
+                    )),
+                    "Double" => restore_body.push_str(&format!(
+                        "if (j.has(\"{0}\")) instance.{0} = j.getDouble(\"{0}\")\n",
+                        var.name
+                    )),
+                    _ => restore_body.push_str(&format!(
+                        "if (j.has(\"{0}\")) instance.{0} = j.get(\"{0}\")\n",
+                        var.name
+                    )),
                 }
             }
             restore_body.push_str("return instance");
@@ -2019,8 +2370,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "restore_state".to_string(),
                 params: vec![Param::new("json").with_type("String")],
                 return_type: Some(sys.clone()),
-                body: vec![CodegenNode::NativeBlock { code: restore_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Public, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Public,
+                decorators: vec![],
             });
         }
         TargetLanguage::Swift => {
@@ -2043,8 +2400,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__serComp".to_string(),
                 params: vec![Param::new("comp").with_type(&format!("{}?", compartment_class))],
                 return_type: Some("[String: Any]?".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: ser_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: ser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
             });
 
             let mut deser_body = String::new();
@@ -2063,8 +2426,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__deserComp".to_string(),
                 params: vec![Param::new("dict").with_type("[String: Any]?")],
                 return_type: Some(format!("{}?", compartment_class)),
-                body: vec![CodegenNode::NativeBlock { code: deser_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: deser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
             });
 
             // save_state()
@@ -2072,7 +2441,9 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             save_body.push_str("var j: [String: Any] = [:]\n");
             save_body.push_str("j[\"_compartment\"] = __serComp(__compartment) as Any\n");
             save_body.push_str("var stack: [[String: Any]] = []\n");
-            save_body.push_str("for c in _state_stack { if let s = __serComp(c) { stack.append(s) } }\n");
+            save_body.push_str(
+                "for c in _state_stack { if let s = __serComp(c) { stack.append(s) } }\n",
+            );
             save_body.push_str("j[\"_state_stack\"] = stack\n");
             for var in &system.domain {
                 save_body.push_str(&format!("j[\"{}\"] = {}\n", var.name, var.name));
@@ -2082,15 +2453,24 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             methods.push(CodegenNode::Method {
                 name: "saveState".to_string(),
-                params: vec![], return_type: Some("String".to_string()),
-                body: vec![CodegenNode::NativeBlock { code: save_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Public, decorators: vec![],
+                params: vec![],
+                return_type: Some("String".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Public,
+                decorators: vec![],
             });
 
             // restoreState — static method
             let mut restore_body = String::new();
             restore_body.push_str("let data = json.data(using: .utf8)!\n");
-            restore_body.push_str("let j = try! JSONSerialization.jsonObject(with: data) as! [String: Any]\n");
+            restore_body.push_str(
+                "let j = try! JSONSerialization.jsonObject(with: data) as! [String: Any]\n",
+            );
             restore_body.push_str(&format!("let instance = {}()\n", sys));
             restore_body.push_str("instance.__compartment = instance.__deserComp(j[\"_compartment\"] as? [String: Any])!\n");
             restore_body.push_str("if let stack = j[\"_state_stack\"] as? [[String: Any]] {\n");
@@ -2104,45 +2484,98 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                     let is_array = t.contains("[]") || t.contains("= []");
                     if is_array {
                         // Determine element type
-                        if t.contains("string[]") || t.contains("String[]") { "[String]" }
-                        else if t.contains("number[]") || t.contains("Int[]") { "[Int]" }
-                        else if t.contains("bool[]") || t.contains("Bool[]") { "[Bool]" }
-                        else if t.contains("Double[]") || t.contains("float[]") { "[Double]" }
-                        else { "[Any]" }
+                        if t.contains("string[]") || t.contains("String[]") {
+                            "[String]"
+                        } else if t.contains("number[]") || t.contains("Int[]") {
+                            "[Int]"
+                        } else if t.contains("bool[]") || t.contains("Bool[]") {
+                            "[Bool]"
+                        } else if t.contains("Double[]") || t.contains("float[]") {
+                            "[Double]"
+                        } else {
+                            "[Any]"
+                        }
                     } else {
                         let is_int = t.contains("Int") || t.contains("number") || {
                             if let Some(eq_pos) = t.find('=') {
-                                let val = t[eq_pos+1..].trim();
+                                let val = t[eq_pos + 1..].trim();
                                 val.parse::<i64>().is_ok()
                             } else {
                                 false
                             }
                         };
-                        if is_int { "Int" }
-                        else if t.contains("String") || t.contains("string") || t.contains("= \"") { "String" }
-                        else if t.contains("Bool") || t.contains("bool") || t.contains("= true") || t.contains("= false") { "Bool" }
-                        else if t.contains("Double") || t.contains("float") || t.contains("double") || {
-                            if let Some(eq_pos) = t.find('=') {
-                                let val = t[eq_pos+1..].trim();
-                                val.contains('.') && val.parse::<f64>().is_ok()
-                            } else {
-                                false
+                        if is_int {
+                            "Int"
+                        } else if t.contains("String") || t.contains("string") || t.contains("= \"")
+                        {
+                            "String"
+                        } else if t.contains("Bool")
+                            || t.contains("bool")
+                            || t.contains("= true")
+                            || t.contains("= false")
+                        {
+                            "Bool"
+                        } else if t.contains("Double")
+                            || t.contains("float")
+                            || t.contains("double")
+                            || {
+                                if let Some(eq_pos) = t.find('=') {
+                                    let val = t[eq_pos + 1..].trim();
+                                    val.contains('.') && val.parse::<f64>().is_ok()
+                                } else {
+                                    false
+                                }
                             }
-                        } { "Double" }
-                        else { "Any" }
+                        {
+                            "Double"
+                        } else {
+                            "Any"
+                        }
                     }
-                } else { "Any" };
+                } else {
+                    "Any"
+                };
                 match swift_type {
-                    "Int" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? Int {{ instance.{0} = v }}\n", var.name)),
-                    "String" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? String {{ instance.{0} = v }}\n", var.name)),
-                    "Bool" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? Bool {{ instance.{0} = v }}\n", var.name)),
-                    "Double" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? Double {{ instance.{0} = v }}\n", var.name)),
-                    "[String]" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? [String] {{ instance.{0} = v }}\n", var.name)),
-                    "[Int]" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? [Int] {{ instance.{0} = v }}\n", var.name)),
-                    "[Bool]" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? [Bool] {{ instance.{0} = v }}\n", var.name)),
-                    "[Double]" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? [Double] {{ instance.{0} = v }}\n", var.name)),
-                    "[Any]" => restore_body.push_str(&format!("if let v = j[\"{0}\"] as? [Any] {{ instance.{0} = v }}\n", var.name)),
-                    _ => restore_body.push_str(&format!("if let v = j[\"{0}\"] {{ instance.{0} = v }}\n", var.name)),
+                    "Int" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? Int {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    "String" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? String {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    "Bool" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? Bool {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    "Double" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? Double {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    "[String]" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? [String] {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    "[Int]" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? [Int] {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    "[Bool]" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? [Bool] {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    "[Double]" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? [Double] {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    "[Any]" => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] as? [Any] {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
+                    _ => restore_body.push_str(&format!(
+                        "if let v = j[\"{0}\"] {{ instance.{0} = v }}\n",
+                        var.name
+                    )),
                 }
             }
             restore_body.push_str("return instance");
@@ -2151,8 +2584,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "restoreState".to_string(),
                 params: vec![Param::new("json").with_type("String")],
                 return_type: Some(sys.clone()),
-                body: vec![CodegenNode::NativeBlock { code: restore_body, span: None }],
-                is_async: false, is_static: true, visibility: Visibility::Public, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Public,
+                decorators: vec![],
             });
         }
         TargetLanguage::Ruby => {
@@ -2175,8 +2614,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__ser_comp".to_string(),
                 params: vec![Param::new("comp")],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: ser_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: ser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
             });
 
             // Private helper: deserialize compartment chain
@@ -2195,8 +2640,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "__deser_comp".to_string(),
                 params: vec![Param::new("data")],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: deser_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: deser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
             });
 
             // save_state()
@@ -2215,8 +2666,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "save_state".to_string(),
                 params: vec![],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: save_body, span: None }],
-                is_async: false, is_static: false, visibility: Visibility::Public, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Public,
+                decorators: vec![],
             });
 
             // restore_state(json) — class method (static)
@@ -2228,7 +2685,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             restore_body.push_str("  instance.instance_variable_set(:@_state_stack, j[\"_state_stack\"].map { |sc| instance.send(:__deser_comp, sc) })\n");
             restore_body.push_str("end\n");
             for var in &system.domain {
-                restore_body.push_str(&format!("instance.{} = j[\"{}\"] if j.key?(\"{}\")\n", var.name, var.name, var.name));
+                restore_body.push_str(&format!(
+                    "instance.{} = j[\"{}\"] if j.key?(\"{}\")\n",
+                    var.name, var.name, var.name
+                ));
             }
             restore_body.push_str("instance");
 
@@ -2236,8 +2696,14 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
                 name: "restore_state".to_string(),
                 params: vec![Param::new("json")],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: restore_body, span: None }],
-                is_async: false, is_static: true, visibility: Visibility::Public, decorators: vec![],
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Public,
+                decorators: vec![],
             });
         }
         TargetLanguage::Go => {
@@ -2276,7 +2742,8 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             save_body.push_str("        result = d\n");
             save_body.push_str("    return result\n");
             save_body.push_str("var state_data = {}\n");
-            save_body.push_str("state_data[\"_compartment\"] = _ser_chain.call(self.__compartment)\n");
+            save_body
+                .push_str("state_data[\"_compartment\"] = _ser_chain.call(self.__compartment)\n");
             save_body.push_str("var stack_arr = []\n");
             save_body.push_str("for c in self._state_stack:\n");
             save_body.push_str("    stack_arr.append(_ser_chain.call(c))\n");
@@ -2284,7 +2751,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
 
             // Add domain variables
             for var in &system.domain {
-                save_body.push_str(&format!("state_data[\"{}\"] = self.{}\n", var.name, var.name));
+                save_body.push_str(&format!(
+                    "state_data[\"{}\"] = self.{}\n",
+                    var.name, var.name
+                ));
             }
 
             save_body.push_str("return var_to_bytes(state_data)");
@@ -2319,7 +2789,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             restore_body.push_str("    chain.reverse()\n");
             restore_body.push_str("    var result = null\n");
             restore_body.push_str("    for cd in chain:\n");
-            restore_body.push_str(&format!("        var comp = {}.new(cd[\"state\"])\n", compartment_type));
+            restore_body.push_str(&format!(
+                "        var comp = {}.new(cd[\"state\"])\n",
+                compartment_type
+            ));
             restore_body.push_str("        comp.state_args = cd.get(\"state_args\", {})\n");
             restore_body.push_str("        comp.state_vars = cd.get(\"state_vars\", {})\n");
             restore_body.push_str("        comp.enter_args = cd.get(\"enter_args\", {})\n");
@@ -2329,7 +2802,9 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             restore_body.push_str("    return result\n");
 
             restore_body.push_str(&format!("var instance = {}.new()\n", system.name));
-            restore_body.push_str("instance.__compartment = _deser_chain.call(state_data[\"_compartment\"])\n");
+            restore_body.push_str(
+                "instance.__compartment = _deser_chain.call(state_data[\"_compartment\"])\n",
+            );
             restore_body.push_str("instance.__next_compartment = null\n");
             restore_body.push_str("instance._state_stack = []\n");
             restore_body.push_str("for c in state_data.get(\"_state_stack\", []):\n");
@@ -2337,7 +2812,10 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
             restore_body.push_str("instance._context_stack = []\n");
 
             for var in &system.domain {
-                restore_body.push_str(&format!("instance.{} = state_data.get(\"{}\", null)\n", var.name, var.name));
+                restore_body.push_str(&format!(
+                    "instance.{} = state_data.get(\"{}\", null)\n",
+                    var.name, var.name
+                ));
             }
 
             restore_body.push_str("return instance");
@@ -2362,8 +2840,6 @@ pub(crate) fn generate_persistence_methods(system: &SystemAst, syntax: &super::b
     methods
 }
 
-
 // ============================================================================
 // Erlang gen_statem code generation
 // ============================================================================
-

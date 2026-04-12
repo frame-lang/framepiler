@@ -243,11 +243,18 @@ impl FrameConfig {
             return Err("frame.toml is missing [project.entry]".to_string());
         }
         if cfg.paths.modules.is_empty() && cfg.build.source_dirs.is_empty() {
-            return Err("frame.toml is missing module paths (paths.modules or build.source_dirs)".to_string());
+            return Err(
+                "frame.toml is missing module paths (paths.modules or build.source_dirs)"
+                    .to_string(),
+            );
         }
         // Validate that configured module/source paths exist (relative to config dir).
-        let cfg_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
-        let mut module_paths: Vec<PathBuf> = cfg.paths.modules.iter().map(|p| PathBuf::from(p)).collect();
+        let cfg_dir = path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let mut module_paths: Vec<PathBuf> =
+            cfg.paths.modules.iter().map(|p| PathBuf::from(p)).collect();
         module_paths.extend(cfg.build.source_dirs.iter().cloned());
         for p in module_paths {
             let abs = cfg_dir.join(p);

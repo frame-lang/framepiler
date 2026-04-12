@@ -53,8 +53,8 @@ pub fn transform_blocks(text: &str, mode: BlockTransformMode) -> String {
 
     // Configure lexer for the target language
     let (comment_char, comment_double) = match mode {
-        BlockTransformMode::Lua => (b'-', true),      // -- comments
-        BlockTransformMode::Erlang => (b'%', false),   // % comments
+        BlockTransformMode::Lua => (b'-', true),     // -- comments
+        BlockTransformMode::Erlang => (b'%', false), // % comments
     };
 
     // Stage 1: Lex

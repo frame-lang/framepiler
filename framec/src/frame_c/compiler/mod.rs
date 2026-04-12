@@ -1,51 +1,49 @@
-use crate::frame_c::utils::{frame_exitcode, RunError};
-pub use crate::frame_c::visitors::TargetLanguage;
+use crate::frame_c::compiler::interface_parser::InterfaceParser;
+use crate::frame_c::compiler::mir_assembler::MirAssembler;
 use crate::frame_c::compiler::native_region_scanner as nscan;
 use crate::frame_c::compiler::native_region_scanner::NativeRegionScanner;
-use crate::frame_c::compiler::mir_assembler::MirAssembler;
 use crate::frame_c::compiler::splice::Splicer;
-use crate::frame_c::compiler::validator::{Validator, ValidationResult, ValidatorPolicy, BodyKind};
 use crate::frame_c::compiler::system_parser::SystemParser;
-use crate::frame_c::compiler::interface_parser::InterfaceParser;
+use crate::frame_c::compiler::validator::{BodyKind, ValidationResult, Validator, ValidatorPolicy};
+use crate::frame_c::utils::{frame_exitcode, RunError};
+pub use crate::frame_c::visitors::TargetLanguage;
 
+pub mod arcanum;
+pub mod ast;
 pub mod body_closer;
-pub mod native_region_scanner;
-pub mod pragma_scanner;
+pub mod expander;
+pub mod facade;
 pub mod frame_statement_parser;
+pub mod import_scanner;
 pub mod mir;
 pub mod mir_assembler;
-pub mod expander;
+pub mod module_partitioner;
+pub mod native_region_scanner;
+pub mod outline_scanner;
+pub mod pragma_scanner;
+pub mod prolog_scanner;
 pub mod splice;
 pub mod validator;
-pub mod module_partitioner;
-pub mod prolog_scanner;
-pub mod import_scanner;
-pub mod outline_scanner;
-pub mod facade;
-pub mod ast;
-pub mod arcanum;
 
-pub mod interface_parser;
-pub mod system_parser;
-pub mod machine_parser;
-pub mod system_param_semantics;
+pub mod assembler;
+pub mod codegen;
 pub mod frame_ast;
 pub mod frame_parser;
 pub mod frame_validator;
-pub mod segmenter;
-pub mod lexer;
-pub mod pipeline_parser;
-pub mod assembler;
-pub mod pipeline;
-pub mod codegen;
 pub mod graphviz;
-pub mod validation;
+pub mod interface_parser;
+pub mod lexer;
+pub mod machine_parser;
 pub mod model;
+pub mod pipeline;
+pub mod pipeline_parser;
+pub mod segmenter;
+pub mod system_param_semantics;
+pub mod system_parser;
+pub mod validation;
 
-pub use pipeline::{
-    PipelineConfig, CompileMode, compile_ast_based, CompileResult, CompileError,
-};
-pub use codegen::{CodegenNode, LanguageBackend, get_backend, generate_system};
+pub use codegen::{generate_system, get_backend, CodegenNode, LanguageBackend};
+pub use pipeline::{compile_ast_based, CompileError, CompileMode, CompileResult, PipelineConfig};
 
 #[cfg(test)]
 #[cfg(test)]
@@ -58,8 +56,8 @@ mod compile_tests;
 ///
 /// All Frame code is processed through the pipeline: parse -> validate -> codegen.
 pub fn compile_module(content_str: &str, lang: TargetLanguage) -> Result<String, RunError> {
-    use crate::frame_c::compiler::pipeline::config::PipelineConfig;
     use crate::frame_c::compiler::pipeline::compiler;
+    use crate::frame_c::compiler::pipeline::config::PipelineConfig;
 
     // Create config from environment, falling back to production defaults
     let config = PipelineConfig::from_env(lang);
@@ -83,24 +81,32 @@ pub fn compile_module(content_str: &str, lang: TargetLanguage) -> Result<String,
                 eprintln!("Warning: {}: {}", w.code, w.message);
             }
             // Return validation/compilation errors
-            let error_msgs: Vec<String> = result.errors
+            let error_msgs: Vec<String> = result
+                .errors
                 .iter()
                 .map(|e| format!("{}: {}", e.code, e.message))
                 .collect();
             Err(RunError::new(
                 frame_exitcode::CONFIG_ERR,
-                &format!("Compilation failed:\n{}", error_msgs.join("\n"))
+                &format!("Compilation failed:\n{}", error_msgs.join("\n")),
             ))
         }
-        Err(e) => Err(e)
+        Err(e) => Err(e),
     }
 }
 
-pub fn validate_module(content_str: &str, lang: TargetLanguage) -> Result<ValidationResult, RunError> {
+pub fn validate_module(
+    content_str: &str,
+    lang: TargetLanguage,
+) -> Result<ValidationResult, RunError> {
     validate_module_with_mode(content_str, lang, false)
 }
 
-pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict_native: bool) -> Result<ValidationResult, RunError> {
+pub fn validate_module_with_mode(
+    content_str: &str,
+    lang: TargetLanguage,
+    strict_native: bool,
+) -> Result<ValidationResult, RunError> {
     let bytes = content_str.as_bytes();
     // Partition the module. If partitioning fails due to outline issues (e.g., missing '{' after a header),
     // fall back to a tolerant outline scan to surface structured diagnostics (E-codes) instead of a hard error.
@@ -119,31 +125,59 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
                 } else {
                     "E105: invalid @@target prolog"
                 };
-                issues.push(crate::frame_c::compiler::validator::ValidationIssue{ message: msg.into() });
+                issues.push(crate::frame_c::compiler::validator::ValidationIssue {
+                    message: msg.into(),
+                });
                 return Ok(ValidationResult { ok: false, issues });
             }
             if emsg.starts_with("body close error:") {
-                let mapped = if emsg.contains("UnterminatedComment") || emsg.to_lowercase().contains("unterminated comment") {
-                    vec![crate::frame_c::compiler::validator::ValidationIssue{ message: "E106: unterminated comment".into() }]
-                } else if emsg.contains("UnterminatedString") || emsg.to_lowercase().contains("unterminated string") {
-                    vec![crate::frame_c::compiler::validator::ValidationIssue{ message: "E100: unterminated string".into() }]
-                } else if emsg.contains("UnmatchedBraces") || emsg.to_lowercase().contains("body not closed") {
-                    vec![crate::frame_c::compiler::validator::ValidationIssue{ message: "E103: unterminated body".into() }]
+                let mapped = if emsg.contains("UnterminatedComment")
+                    || emsg.to_lowercase().contains("unterminated comment")
+                {
+                    vec![crate::frame_c::compiler::validator::ValidationIssue {
+                        message: "E106: unterminated comment".into(),
+                    }]
+                } else if emsg.contains("UnterminatedString")
+                    || emsg.to_lowercase().contains("unterminated string")
+                {
+                    vec![crate::frame_c::compiler::validator::ValidationIssue {
+                        message: "E100: unterminated string".into(),
+                    }]
+                } else if emsg.contains("UnmatchedBraces")
+                    || emsg.to_lowercase().contains("body not closed")
+                {
+                    vec![crate::frame_c::compiler::validator::ValidationIssue {
+                        message: "E103: unterminated body".into(),
+                    }]
                 } else {
                     Vec::new()
                 };
                 if !mapped.is_empty() {
-                    return Ok(ValidationResult { ok: false, issues: mapped });
+                    return Ok(ValidationResult {
+                        ok: false,
+                        issues: mapped,
+                    });
                 }
             }
             // Tolerant outline scan will collect E111 and similar diagnostics.
             let outline_start = 0usize; // tolerant scan will walk whole file
-            let (_items, outline_issues) = crate::frame_c::compiler::outline_scanner::OutlineScanner.scan_collect(bytes, outline_start, lang);
+            let (_items, outline_issues) =
+                crate::frame_c::compiler::outline_scanner::OutlineScanner.scan_collect(
+                    bytes,
+                    outline_start,
+                    lang,
+                );
             if !outline_issues.is_empty() {
-                return Ok(ValidationResult { ok: false, issues: outline_issues });
+                return Ok(ValidationResult {
+                    ok: false,
+                    issues: outline_issues,
+                });
             } else {
                 // If we couldn't recover any diagnostics, return the original partition error
-                return Err(RunError::new(frame_exitcode::PARSE_ERR, "module partition error"));
+                return Err(RunError::new(
+                    frame_exitcode::PARSE_ERR,
+                    "module partition error",
+                ));
             }
         }
     };
@@ -161,7 +195,8 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
     // Collect known state names and per-module context for validations that
     // depend on Arcanum or system-wide information.
     let (known_states, system_name, interface_methods, arcanum_symtab) = {
-        let (items, outline_issues) = crate::frame_c::compiler::outline_scanner::OutlineScanner.scan_collect(bytes, outline_start, lang);
+        let (items, outline_issues) = crate::frame_c::compiler::outline_scanner::OutlineScanner
+            .scan_collect(bytes, outline_start, lang);
         all_issues.extend(outline_issues);
         let outer_issues = validator.validate_outer_grammar(bytes, outline_start, lang, &items);
         all_issues.extend(outer_issues);
@@ -187,8 +222,13 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
         // continue to use a coarse known-state set for E402.
         let known_states = validator.collect_machine_state_names(bytes, outline_start);
         let arcanum_symtab = Some(arc_for_ctx.clone());
-        let sys_param_issues =
-            validator.validate_system_param_semantics(bytes, outline_start, lang, &arc_for_ctx, &items);
+        let sys_param_issues = validator.validate_system_param_semantics(
+            bytes,
+            outline_start,
+            lang,
+            &arc_for_ctx,
+            &items,
+        );
         all_issues.extend(sys_param_issues);
         // Collect interface method names for system.method(...) validation using the system parser.
         let interface_methods =
@@ -203,18 +243,37 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
         // scan and assemble
         let scan_res = match lang {
             TargetLanguage::Python3 => nscan::python::NativeRegionScannerPy.scan(body_bytes, 0),
-            TargetLanguage::TypeScript => nscan::typescript::NativeRegionScannerTs.scan(body_bytes, 0),
+            TargetLanguage::TypeScript => {
+                nscan::typescript::NativeRegionScannerTs.scan(body_bytes, 0)
+            }
             TargetLanguage::CSharp => nscan::csharp::NativeRegionScannerCs.scan(body_bytes, 0),
             TargetLanguage::C => nscan::c::NativeRegionScannerC.scan(body_bytes, 0),
             TargetLanguage::Cpp => nscan::cpp::NativeRegionScannerCpp.scan(body_bytes, 0),
             TargetLanguage::Java => nscan::java::NativeRegionScannerJava.scan(body_bytes, 0),
             TargetLanguage::Rust => nscan::rust::NativeRegionScannerRust.scan(body_bytes, 0),
-            _ => return Err(RunError::new(frame_exitcode::PARSE_ERR, "target not supported")),
+            _ => {
+                return Err(RunError::new(
+                    frame_exitcode::PARSE_ERR,
+                    "target not supported",
+                ))
+            }
         };
-        let scan = match scan_res { Ok(s) => s, Err(e) => return Err(RunError::new(frame_exitcode::PARSE_ERR, &format!("Scan error: {:?}", e))) };
+        let scan = match scan_res {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(RunError::new(
+                    frame_exitcode::PARSE_ERR,
+                    &format!("Scan error: {:?}", e),
+                ))
+            }
+        };
         let (mir, parse_issues) = MirAssembler.assemble_collect(body_bytes, &scan.regions);
-        if !parse_issues.is_empty() { all_issues.extend(parse_issues); }
-        let policy = ValidatorPolicy { body_kind: Some(b.kind) };
+        if !parse_issues.is_empty() {
+            all_issues.extend(parse_issues);
+        }
+        let policy = ValidatorPolicy {
+            body_kind: Some(b.kind),
+        };
         let mut res = validator.validate_regions_mir_with_policy(&scan.regions, &mir, policy);
         // Validate that transition targets refer to known states.
         match lang {
@@ -222,41 +281,55 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
                 if let Some(ref arc) = arcanum_symtab {
                     let sys = system_name.as_deref();
                     if !known_states.is_empty() {
-                        res.issues.extend(
-                            validator.validate_transition_targets_arcanum(&mir, arc, &known_states, sys)
-                        );
+                        res.issues
+                            .extend(validator.validate_transition_targets_arcanum(
+                                &mir,
+                                arc,
+                                &known_states,
+                                sys,
+                            ));
                     }
                 }
             }
             _ => {
                 if !known_states.is_empty() {
-                    res.issues.extend(
-                        validator.validate_transition_targets(&mir, &known_states)
-                    );
+                    res.issues
+                        .extend(validator.validate_transition_targets(&mir, &known_states));
                 }
             }
         }
         // Optional advisory policy: state parameter arity (Stage 10B).
-        if std::env::var("FRAME_VALIDATE_NATIVE_POLICY").ok().as_deref() == Some("1") {
+        if std::env::var("FRAME_VALIDATE_NATIVE_POLICY")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
             if let Some(ref arc) = arcanum_symtab {
                 let sys = system_name.as_deref();
-                res.issues.extend(validator.validate_transition_state_arity_arcanum(&mir, arc, sys));
+                res.issues
+                    .extend(validator.validate_transition_state_arity_arcanum(&mir, arc, sys));
             }
         }
         // Parent-forward rule: require a parent for the enclosing state
         if validator.has_machine_section(bytes, outline_start) {
             if matches!(b.kind, BodyKind::Handler | BodyKind::Unknown) {
-                if mir.iter().any(|m| matches!(m, crate::frame_c::compiler::mir::MirItem::Forward { .. })) {
+                if mir
+                    .iter()
+                    .any(|m| matches!(m, crate::frame_c::compiler::mir::MirItem::Forward { .. }))
+                {
                     let enclosing_state = b.state_id.as_deref();
                     let mut ok_parent = false;
                     if let Some(state_name) = enclosing_state {
                         if let Some(ref arc) = arcanum_symtab {
                             let sys = system_name.as_deref().unwrap_or("_");
-                            ok_parent = arc.has_parent(sys, state_name) || arc.has_parent("_", state_name);
+                            ok_parent =
+                                arc.has_parent(sys, state_name) || arc.has_parent("_", state_name);
                         }
                     }
                     if !ok_parent {
-                        all_issues.push(crate::frame_c::compiler::validator::ValidationIssue{ message: "E403: Cannot forward to parent: no parent available".into() });
+                        all_issues.push(crate::frame_c::compiler::validator::ValidationIssue {
+                            message: "E403: Cannot forward to parent: no parent available".into(),
+                        });
                     }
                 }
             }
@@ -265,8 +338,15 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
         let extra = validator.validate_terminal_last_native(body_bytes, &scan.regions, &mir, lang);
         res.issues.extend(extra);
         // Enforce that system.method(...) calls target interface methods.
-        if matches!(b.kind, BodyKind::Handler | BodyKind::Action | BodyKind::Operation) {
-            let sys_issues = validator.validate_system_calls_interface(body_bytes, &scan.regions, &interface_methods);
+        if matches!(
+            b.kind,
+            BodyKind::Handler | BodyKind::Action | BodyKind::Operation
+        ) {
+            let sys_issues = validator.validate_system_calls_interface(
+                body_bytes,
+                &scan.regions,
+                &interface_methods,
+            );
             res.issues.extend(sys_issues);
         }
         res.ok = res.issues.is_empty();
@@ -274,15 +354,25 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
 
         // Stage 07 (native facade parsing):
         // Enable by default for Python/TypeScript/Rust (hermetic parsers), or when strict_native is requested.
-        let enable_native = strict_native || matches!(lang, TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::Rust);
+        let enable_native = strict_native
+            || matches!(
+                lang,
+                TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::Rust
+            );
         if enable_native {
             let exps: Vec<String> = {
                 use crate::frame_c::compiler::expander::*;
                 let mut v = Vec::new();
                 let mut mi = 0usize;
                 for r in &scan.regions {
-                    if let crate::frame_c::compiler::native_region_scanner::Region::FrameSegment{ indent, .. } = r {
-                        if mi >= mir.len() { break; }
+                    if let crate::frame_c::compiler::native_region_scanner::Region::FrameSegment {
+                        indent,
+                        ..
+                    } = r
+                    {
+                        if mi >= mir.len() {
+                            break;
+                        }
                         let m = &mir[mi];
                         mi += 1;
                         let s = match lang {
@@ -304,10 +394,20 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
             // Wrapper-call validation
             for d in crate::frame_c::compiler::facade::validate_wrappers(&spliced.text, lang) {
                 if let Some((origin, src)) = spliced.map_spliced_range_to_origin(d.start, d.end) {
-                    let origin_str = match origin { crate::frame_c::compiler::splice::Origin::Frame{..} => "frame", crate::frame_c::compiler::splice::Origin::Native{..} => "native" };
-                    all_issues.push(crate::frame_c::compiler::validator::ValidationIssue{ message: format!("native syntax ({}:{}-{}): {}", origin_str, src.start, src.end, d.message) });
+                    let origin_str = match origin {
+                        crate::frame_c::compiler::splice::Origin::Frame { .. } => "frame",
+                        crate::frame_c::compiler::splice::Origin::Native { .. } => "native",
+                    };
+                    all_issues.push(crate::frame_c::compiler::validator::ValidationIssue {
+                        message: format!(
+                            "native syntax ({}:{}-{}): {}",
+                            origin_str, src.start, src.end, d.message
+                        ),
+                    });
                 } else {
-                    all_issues.push(crate::frame_c::compiler::validator::ValidationIssue{ message: format!("native syntax: {}", d.message) });
+                    all_issues.push(crate::frame_c::compiler::validator::ValidationIssue {
+                        message: format!("native syntax: {}", d.message),
+                    });
                 }
             }
         }
@@ -315,11 +415,16 @@ pub fn validate_module_with_mode(content_str: &str, lang: TargetLanguage, strict
     let ok = all_issues.is_empty();
     if strict_native && !ok {
         // In strict/native mode, surface native diagnostics as a failing status for callers that want to gate on facades
-        return Err(RunError::new(exitcode::DATAERR, "native facade validation failed"));
+        return Err(RunError::new(
+            exitcode::DATAERR,
+            "native facade validation failed",
+        ));
     }
-    Ok(ValidationResult { ok, issues: all_issues })
+    Ok(ValidationResult {
+        ok,
+        issues: all_issues,
+    })
 }
-
 
 // SOL-anchored scan for `system <Ident> {` ignoring common comments
 pub fn find_system_name(bytes: &[u8], start: usize) -> Option<String> {
@@ -327,38 +432,71 @@ pub fn find_system_name(bytes: &[u8], start: usize) -> Option<String> {
     let mut i = start;
     while i < n {
         // skip whitespace
-        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n') { i += 1; }
-        if i >= n { break; }
-        // skip line comments
-        if bytes[i] == b'/' && i+1 < n && bytes[i+1] == b'/' { while i < n && bytes[i] != b'\n' { i += 1; } continue; }
-        if bytes[i] == b'#' { while i < n && bytes[i] != b'\n' { i += 1; } continue; }
-        // skip block comments
-        if bytes[i] == b'/' && i+1 < n && bytes[i+1] == b'*' {
-            i += 2; while i+1 < n && !(bytes[i] == b'*' && bytes[i+1] == b'/') { i += 1; } if i+1 < n { i += 2; } continue;
+        while i < n
+            && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
+        {
+            i += 1;
         }
-        
+        if i >= n {
+            break;
+        }
+        // skip line comments
+        if bytes[i] == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'#' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // skip block comments
+        if bytes[i] == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < n && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            if i + 1 < n {
+                i += 2;
+            }
+            continue;
+        }
+
         // Check for @@system
-        if i + 8 < n && &bytes[i..i+8] == b"@@system" {
+        if i + 8 < n && &bytes[i..i + 8] == b"@@system" {
             i += 8;
             // skip whitespace
-            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') { i += 1; }
+            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
             // read system name
             let name_start = i;
-            while i < n && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; }
+            while i < n && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
             if i > name_start {
                 return Some(String::from_utf8_lossy(&bytes[name_start..i]).to_string());
             }
         }
-        
+
         // read ident (for compatibility)
         let mut j = i;
-        while j < n && ((bytes[j] as char).is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
+        while j < n && ((bytes[j] as char).is_ascii_alphanumeric() || bytes[j] == b'_') {
+            j += 1;
+        }
         if j > i {
             let kw = String::from_utf8_lossy(&bytes[i..j]).to_ascii_lowercase();
             if kw == "system" {
-                while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
+                while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                    j += 1;
+                }
                 let name_start = j;
-                while j < n && ((bytes[j] as char).is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
+                while j < n && ((bytes[j] as char).is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
                 if j > name_start {
                     return Some(String::from_utf8_lossy(&bytes[name_start..j]).to_string());
                 }
@@ -383,13 +521,18 @@ impl FrameCompiler {
     pub fn new(target: TargetLanguage) -> Self {
         Self { target }
     }
-    
+
     /// Compile to semantic JSON model (--format model).
     /// Runs segmenter + parser but skips codegen.
-    pub fn compile_to_model(&self, source: &str, _file_path: &str, target_ext: &str) -> Result<String, String> {
-        use crate::frame_c::compiler::pipeline::config::PipelineConfig;
-        use crate::frame_c::compiler::pipeline::compiler;
+    pub fn compile_to_model(
+        &self,
+        source: &str,
+        _file_path: &str,
+        target_ext: &str,
+    ) -> Result<String, String> {
         use crate::frame_c::compiler::model::{build_system_model, emit_model_json};
+        use crate::frame_c::compiler::pipeline::compiler;
+        use crate::frame_c::compiler::pipeline::config::PipelineConfig;
 
         let config = PipelineConfig::from_env(self.target);
         let bytes = source.as_bytes();
@@ -403,10 +546,16 @@ impl FrameCompiler {
         // Pass 1: Parse all systems into ASTs
         let mut models = Vec::new();
         for segment in &source_map.segments {
-            if let segmenter::Segment::System { name, body_span, .. } = segment {
+            if let segmenter::Segment::System {
+                name, body_span, ..
+            } = segment
+            {
                 let ast_span = frame_ast::Span::new(body_span.start, body_span.end);
                 let system_ast = match pipeline_parser::parse_system(
-                    &source_map.source, name.clone(), ast_span, config.target,
+                    &source_map.source,
+                    name.clone(),
+                    ast_span,
+                    config.target,
                 ) {
                     Ok(ast) => ast,
                     Err(e) => return Err(format!("Parse error in system '{}': {}", name, e)),
@@ -452,11 +601,11 @@ impl ErrorsAcc {
     pub fn new() -> Self {
         Self { errors: Vec::new() }
     }
-    
+
     pub fn push_error(&mut self, error: String) {
         self.errors.push(error);
     }
-    
+
     pub fn errors(&self) -> &[String] {
         &self.errors
     }

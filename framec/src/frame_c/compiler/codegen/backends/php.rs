@@ -9,9 +9,9 @@
 //! - Member access: `$this->method()`, `$this->field`
 //! - `null` for null, `[]` for arrays/dicts
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// PHP backend for code generation
 pub struct PhpBackend;
@@ -20,7 +20,6 @@ impl LanguageBackend for PhpBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
             // ===== Structural =====
-
             CodegenNode::Module { imports, items } => {
                 let mut result = String::new();
                 for import in imports {
@@ -39,7 +38,11 @@ impl LanguageBackend for PhpBackend {
                 result
             }
 
-            CodegenNode::Import { module, items, alias } => {
+            CodegenNode::Import {
+                module,
+                items,
+                alias,
+            } => {
                 if items.is_empty() {
                     if let Some(alias) = alias {
                         format!("use {} as {};", module, alias)
@@ -51,7 +54,14 @@ impl LanguageBackend for PhpBackend {
                 }
             }
 
-            CodegenNode::Class { name, fields, methods, base_classes, is_abstract: _, .. } => {
+            CodegenNode::Class {
+                name,
+                fields,
+                methods,
+                base_classes,
+                is_abstract: _,
+                ..
+            } => {
                 let mut result = String::new();
 
                 let extends = if base_classes.is_empty() {
@@ -60,7 +70,12 @@ impl LanguageBackend for PhpBackend {
                     format!(" extends {}", base_classes[0])
                 };
 
-                result.push_str(&format!("{}class {}{} {{\n", ctx.get_indent(), name, extends));
+                result.push_str(&format!(
+                    "{}class {}{} {{\n",
+                    ctx.get_indent(),
+                    name,
+                    extends
+                ));
                 ctx.push_indent();
 
                 // Fields
@@ -72,11 +87,22 @@ impl LanguageBackend for PhpBackend {
                         let vis = self.emit_visibility(field.visibility);
                         let static_kw = if field.is_static { "static " } else { "" };
                         if let Some(ref init) = field.initializer {
-                            result.push_str(&format!("{}{} {}${} = {};\n",
-                                ctx.get_indent(), vis, static_kw, field.name, self.emit(init, ctx)));
+                            result.push_str(&format!(
+                                "{}{} {}${} = {};\n",
+                                ctx.get_indent(),
+                                vis,
+                                static_kw,
+                                field.name,
+                                self.emit(init, ctx)
+                            ));
                         } else {
-                            result.push_str(&format!("{}{} {}${};\n",
-                                ctx.get_indent(), vis, static_kw, field.name));
+                            result.push_str(&format!(
+                                "{}{} {}${};\n",
+                                ctx.get_indent(),
+                                vis,
+                                static_kw,
+                                field.name
+                            ));
                         }
                     }
                 }
@@ -103,8 +129,12 @@ impl LanguageBackend for PhpBackend {
                 ctx.push_indent();
                 for variant in variants {
                     if let Some(ref value) = variant.value {
-                        result.push_str(&format!("{}const {} = {};\n",
-                            ctx.get_indent(), variant.name, self.emit(value, ctx)));
+                        result.push_str(&format!(
+                            "{}const {} = {};\n",
+                            ctx.get_indent(),
+                            variant.name,
+                            self.emit(value, ctx)
+                        ));
                     } else {
                         result.push_str(&format!("{}const {};\n", ctx.get_indent(), variant.name));
                     }
@@ -115,14 +145,28 @@ impl LanguageBackend for PhpBackend {
             }
 
             // ===== Methods =====
-
-            CodegenNode::Method { name, params, body, is_async: _, is_static, visibility, return_type: _, decorators: _ } => {
+            CodegenNode::Method {
+                name,
+                params,
+                body,
+                is_async: _,
+                is_static,
+                visibility,
+                return_type: _,
+                decorators: _,
+            } => {
                 let vis = self.emit_visibility(*visibility);
                 let static_kw = if *is_static { "static " } else { "" };
                 let params_str = self.emit_params(params);
 
-                let mut result = format!("{}{} {}function {}({}) {{\n",
-                    ctx.get_indent(), vis, static_kw, name, params_str);
+                let mut result = format!(
+                    "{}{} {}function {}({}) {{\n",
+                    ctx.get_indent(),
+                    vis,
+                    static_kw,
+                    name,
+                    params_str
+                );
 
                 ctx.push_indent();
                 for stmt in body {
@@ -138,10 +182,18 @@ impl LanguageBackend for PhpBackend {
                 result
             }
 
-            CodegenNode::Constructor { params, body, super_call } => {
+            CodegenNode::Constructor {
+                params,
+                body,
+                super_call,
+            } => {
                 let params_str = self.emit_params(params);
 
-                let mut result = format!("{}public function __construct({}) {{\n", ctx.get_indent(), params_str);
+                let mut result = format!(
+                    "{}public function __construct({}) {{\n",
+                    ctx.get_indent(),
+                    params_str
+                );
                 ctx.push_indent();
 
                 if let Some(super_call) = super_call {
@@ -163,8 +215,12 @@ impl LanguageBackend for PhpBackend {
             }
 
             // ===== Statements =====
-
-            CodegenNode::VarDecl { name, init, is_const: _, type_annotation: _ } => {
+            CodegenNode::VarDecl {
+                name,
+                init,
+                is_const: _,
+                type_annotation: _,
+            } => {
                 // PHP local vars: $name = value
                 if let Some(init_expr) = init {
                     let init_str = self.emit(init_expr, ctx);
@@ -188,7 +244,11 @@ impl LanguageBackend for PhpBackend {
                 }
             }
 
-            CodegenNode::If { condition, then_block, else_block } => {
+            CodegenNode::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let mut result = String::new();
                 let cond_str = self.emit(condition, ctx);
                 result.push_str(&format!("{}if ({}) {{\n", ctx.get_indent(), cond_str));
@@ -225,7 +285,11 @@ impl LanguageBackend for PhpBackend {
             CodegenNode::Match { scrutinee, arms } => {
                 let mut result = String::new();
                 let scrutinee_str = self.emit(scrutinee, ctx);
-                result.push_str(&format!("{}switch ({}) {{\n", ctx.get_indent(), scrutinee_str));
+                result.push_str(&format!(
+                    "{}switch ({}) {{\n",
+                    ctx.get_indent(),
+                    scrutinee_str
+                ));
 
                 ctx.push_indent();
                 for arm in arms {
@@ -270,10 +334,19 @@ impl LanguageBackend for PhpBackend {
                 result
             }
 
-            CodegenNode::For { var, iterable, body } => {
+            CodegenNode::For {
+                var,
+                iterable,
+                body,
+            } => {
                 let mut result = String::new();
                 let iter_str = self.emit(iterable, ctx);
-                result.push_str(&format!("{}foreach ({} as ${}) {{\n", ctx.get_indent(), iter_str, var));
+                result.push_str(&format!(
+                    "{}foreach ({} as ${}) {{\n",
+                    ctx.get_indent(),
+                    iter_str,
+                    var
+                ));
 
                 ctx.push_indent();
                 for stmt in body {
@@ -313,18 +386,13 @@ impl LanguageBackend for PhpBackend {
             CodegenNode::Empty => String::new(),
 
             // ===== Expressions =====
-
             CodegenNode::Ident(name) => name.clone(),
 
             CodegenNode::Literal(lit) => self.emit_literal(lit, ctx),
 
-            CodegenNode::BinaryOp { op, left, right } => {
-                self.emit_binary_op(op, left, right, ctx)
-            }
+            CodegenNode::BinaryOp { op, left, right } => self.emit_binary_op(op, left, right, ctx),
 
-            CodegenNode::UnaryOp { op, operand } => {
-                self.emit_unary_op(op, operand, ctx)
-            }
+            CodegenNode::UnaryOp { op, operand } => self.emit_unary_op(op, operand, ctx),
 
             CodegenNode::Call { target, args } => {
                 let target_str = self.emit(target, ctx);
@@ -332,7 +400,11 @@ impl LanguageBackend for PhpBackend {
                 format!("{}({})", target_str, args_str.join(", "))
             }
 
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let obj_str = self.emit(object, ctx);
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
                 format!("{}->{}({})", obj_str, method, args_str.join(", "))
@@ -357,13 +429,18 @@ impl LanguageBackend for PhpBackend {
             }
 
             CodegenNode::Dict(pairs) => {
-                let pairs_str: Vec<String> = pairs.iter().map(|(k, v)| {
-                    format!("{} => {}", self.emit(k, ctx), self.emit(v, ctx))
-                }).collect();
+                let pairs_str: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{} => {}", self.emit(k, ctx), self.emit(v, ctx)))
+                    .collect();
                 format!("[{}]", pairs_str.join(", "))
             }
 
-            CodegenNode::Ternary { condition, then_expr, else_expr } => {
+            CodegenNode::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond = self.emit(condition, ctx);
                 let then_val = self.emit(then_expr, ctx);
                 let else_val = self.emit(else_expr, ctx);
@@ -371,7 +448,11 @@ impl LanguageBackend for PhpBackend {
             }
 
             CodegenNode::Lambda { params, body } => {
-                let params_str = params.iter().map(|p| format!("${}", p.name)).collect::<Vec<_>>().join(", ");
+                let params_str = params
+                    .iter()
+                    .map(|p| format!("${}", p.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let body_str = self.emit(body, ctx);
                 format!("function({}) {{ return {}; }}", params_str, body_str)
             }
@@ -386,16 +467,25 @@ impl LanguageBackend for PhpBackend {
             }
 
             // ===== Frame-Specific =====
-
-            CodegenNode::Transition { target_state, indent, .. } => {
+            CodegenNode::Transition {
+                target_state,
+                indent,
+                ..
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
-                format!("{}$this->__transition(new {}Compartment({}))",
+                format!(
+                    "{}$this->__transition(new {}Compartment({}))",
                     ind,
                     ctx.system_name.as_deref().unwrap_or(""),
-                    target_state)
+                    target_state
+                )
             }
 
-            CodegenNode::ChangeState { target_state, indent, .. } => {
+            CodegenNode::ChangeState {
+                target_state,
+                indent,
+                ..
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 format!("{}$this->_changeState($this->{})", ind, target_state)
             }
@@ -407,7 +497,10 @@ impl LanguageBackend for PhpBackend {
 
             CodegenNode::StackPush { indent } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
-                format!("{}$this->_state_stack[] = $this->__compartment->copy()", ind)
+                format!(
+                    "{}$this->_state_stack[] = $this->__compartment->copy()",
+                    ind
+                )
             }
 
             CodegenNode::StackPop { indent } => {
@@ -424,12 +517,16 @@ impl LanguageBackend for PhpBackend {
                 if args_str.is_empty() {
                     format!("{}$this->{}()", ctx.get_indent(), event)
                 } else {
-                    format!("{}$this->{}({})", ctx.get_indent(), event, args_str.join(", "))
+                    format!(
+                        "{}$this->{}({})",
+                        ctx.get_indent(),
+                        event,
+                        args_str.join(", ")
+                    )
                 }
             }
 
             // ===== Native Code Preservation =====
-
             CodegenNode::NativeBlock { code, span: _ } => {
                 let indent = ctx.get_indent();
                 code.lines()
@@ -462,19 +559,25 @@ impl LanguageBackend for PhpBackend {
         TargetLanguage::Php
     }
 
-    fn null_keyword(&self) -> &'static str { "null" }
+    fn null_keyword(&self) -> &'static str {
+        "null"
+    }
 }
 
 impl PhpBackend {
     fn emit_params(&self, params: &[Param]) -> String {
-        params.iter().map(|p| {
-            let mut s = format!("${}", p.name);
-            if let Some(ref d) = p.default_value {
-                let mut ctx = EmitContext::new();
-                s.push_str(&format!(" = {}", self.emit(d, &mut ctx)));
-            }
-            s
-        }).collect::<Vec<_>>().join(", ")
+        params
+            .iter()
+            .map(|p| {
+                let mut s = format!("${}", p.name);
+                if let Some(ref d) = p.default_value {
+                    let mut ctx = EmitContext::new();
+                    s.push_str(&format!(" = {}", self.emit(d, &mut ctx)));
+                }
+                s
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     fn emit_visibility(&self, vis: Visibility) -> &'static str {
@@ -499,14 +602,15 @@ impl PhpBackend {
     }
 
     fn needs_semicolon(&self, node: &CodegenNode) -> bool {
-        !matches!(node,
-            CodegenNode::If { .. } |
-            CodegenNode::While { .. } |
-            CodegenNode::For { .. } |
-            CodegenNode::Match { .. } |
-            CodegenNode::Comment { .. } |
-            CodegenNode::NativeBlock { .. } |
-            CodegenNode::Empty
+        !matches!(
+            node,
+            CodegenNode::If { .. }
+                | CodegenNode::While { .. }
+                | CodegenNode::For { .. }
+                | CodegenNode::Match { .. }
+                | CodegenNode::Comment { .. }
+                | CodegenNode::NativeBlock { .. }
+                | CodegenNode::Empty
         )
     }
 }

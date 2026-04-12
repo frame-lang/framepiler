@@ -4,10 +4,10 @@
 //! runtime types for all target languages. These are the infrastructure
 //! classes that every Frame system needs at runtime.
 
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::frame_ast::{SystemAst, Type, Expression};
 use super::ast::{CodegenNode, Field, Param, Visibility};
 use super::codegen_utils::{expression_to_string, state_var_init_value, type_to_string};
+use crate::frame_c::compiler::frame_ast::{Expression, SystemAst, Type};
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Map a Frame `Type` to a Rust-native type spelling for use inside
 /// generated structs (e.g. the per-state `XContext`). Mirrors the
@@ -46,7 +46,6 @@ fn frame_type_to_rust_default(t: &Type) -> String {
         Type::Unknown => "String::new()".to_string(),
     }
 }
-
 
 /// Generate Rust runtime types for a system
 ///
@@ -105,13 +104,15 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
             Param::new("message"),
             Param::new("parameters").with_default(CodegenNode::Dict(vec![])),
         ],
-        TargetLanguage::Lua => vec![
-            Param::new("message"),
-            Param::new("parameters"),
-        ],
+        TargetLanguage::Lua => vec![Param::new("message"), Param::new("parameters")],
         // Static-typed languages generate FrameEvent as NativeBlock in generate_*_compartment_types()
-        TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java | TargetLanguage::Kotlin
-            | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go => vec![],
+        TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Java
+        | TargetLanguage::Kotlin
+        | TargetLanguage::Swift
+        | TargetLanguage::CSharp
+        | TargetLanguage::Go => vec![],
         TargetLanguage::Rust => vec![], // Rust returns None earlier, but be explicit
         TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
         TargetLanguage::Graphviz => unreachable!(),
@@ -149,12 +150,11 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
                 CodegenNode::ident("parameters"),
             ),
         ],
-        TargetLanguage::Php => vec![
-            CodegenNode::NativeBlock {
-                code: "$this->_message = $message;\n$this->_parameters = $parameters ?? [];".to_string(),
-                span: None,
-            },
-        ],
+        TargetLanguage::Php => vec![CodegenNode::NativeBlock {
+            code: "$this->_message = $message;\n$this->_parameters = $parameters ?? [];"
+                .to_string(),
+            span: None,
+        }],
         TargetLanguage::Ruby => vec![
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "_message"),
@@ -165,15 +165,18 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
                 CodegenNode::ident("parameters"),
             ),
         ],
-        TargetLanguage::Lua => vec![
-            CodegenNode::NativeBlock {
-                code: "self._message = message\nself._parameters = parameters or {}".to_string(),
-                span: None,
-            },
-        ],
+        TargetLanguage::Lua => vec![CodegenNode::NativeBlock {
+            code: "self._message = message\nself._parameters = parameters or {}".to_string(),
+            span: None,
+        }],
         // Static-typed languages generate FrameEvent body as NativeBlock
-        TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java | TargetLanguage::Kotlin
-            | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go => vec![],
+        TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Java
+        | TargetLanguage::Kotlin
+        | TargetLanguage::Swift
+        | TargetLanguage::CSharp
+        | TargetLanguage::Go => vec![],
         TargetLanguage::Rust => vec![],
         TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
         TargetLanguage::Graphviz => unreachable!(),
@@ -181,17 +184,31 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
 
     // Fields for TypeScript/Dart (Python doesn't need field declarations)
     // Note: no _return field - that's on FrameContext for proper reentrancy
-    let fields = if matches!(lang, TargetLanguage::TypeScript | TargetLanguage::JavaScript) {
+    let fields = if matches!(
+        lang,
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript
+    ) {
         vec![
-            Field::new("_message").with_type("string").with_visibility(Visibility::Public),
-            Field::new("_parameters").with_type("Record<string, any> | null").with_visibility(Visibility::Public),
+            Field::new("_message")
+                .with_type("string")
+                .with_visibility(Visibility::Public),
+            Field::new("_parameters")
+                .with_type("Record<string, any> | null")
+                .with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Dart) {
         vec![
-            Field::new("_message").with_type("String").with_visibility(Visibility::Public),
-            Field::new("_parameters").with_type("Map<String, dynamic>?").with_visibility(Visibility::Public),
+            Field::new("_message")
+                .with_type("String")
+                .with_visibility(Visibility::Public),
+            Field::new("_parameters")
+                .with_type("Map<String, dynamic>?")
+                .with_visibility(Visibility::Public),
         ]
-    } else if matches!(lang, TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang) {
+    } else if matches!(
+        lang,
+        TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang
+    ) {
         vec![
             Field::new("_message").with_visibility(Visibility::Public),
             Field::new("_parameters").with_visibility(Visibility::Public),
@@ -208,13 +225,11 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
     Some(CodegenNode::Class {
         name: class_name,
         fields,
-        methods: vec![
-            CodegenNode::Constructor {
-                params: constructor_params,
-                body: constructor_body,
-                super_call: None,
-            },
-        ],
+        methods: vec![CodegenNode::Constructor {
+            params: constructor_params,
+            body: constructor_body,
+            super_call: None,
+        }],
         base_classes: vec![],
         is_abstract: false,
         derives: vec![],
@@ -232,7 +247,10 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
 /// Lifecycle events ($>, <$) use the existing context without push/pop.
 ///
 /// Returns None for Rust (which uses a different pattern)
-pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) -> Option<CodegenNode> {
+pub fn generate_frame_context_class(
+    system: &SystemAst,
+    lang: TargetLanguage,
+) -> Option<CodegenNode> {
     // Rust uses a different pattern - return None
     if matches!(lang, TargetLanguage::Rust) {
         return None;
@@ -263,13 +281,15 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
             Param::new("event"),
             Param::new("default_return").with_default(CodegenNode::null()),
         ],
-        TargetLanguage::Lua => vec![
-            Param::new("event"),
-            Param::new("default_return"),
-        ],
+        TargetLanguage::Lua => vec![Param::new("event"), Param::new("default_return")],
         // Static-typed languages generate FrameContext as NativeBlock
-        TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java | TargetLanguage::Kotlin
-            | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go => vec![],
+        TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Java
+        | TargetLanguage::Kotlin
+        | TargetLanguage::Swift
+        | TargetLanguage::CSharp
+        | TargetLanguage::Go => vec![],
         TargetLanguage::Rust => vec![],
         TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
         TargetLanguage::Graphviz => unreachable!(),
@@ -388,19 +408,38 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
     };
 
     // Fields for TypeScript/JavaScript/Dart (Python doesn't need field declarations)
-    let fields = if matches!(lang, TargetLanguage::TypeScript | TargetLanguage::JavaScript) {
+    let fields = if matches!(
+        lang,
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript
+    ) {
         vec![
-            Field::new("event").with_type(&event_class).with_visibility(Visibility::Public),
-            Field::new("_return").with_type("any").with_visibility(Visibility::Public),
-            Field::new("_data").with_type("Record<string, any>").with_visibility(Visibility::Public),
-            Field::new("_transitioned").with_type("boolean").with_visibility(Visibility::Public),
+            Field::new("event")
+                .with_type(&event_class)
+                .with_visibility(Visibility::Public),
+            Field::new("_return")
+                .with_type("any")
+                .with_visibility(Visibility::Public),
+            Field::new("_data")
+                .with_type("Record<string, any>")
+                .with_visibility(Visibility::Public),
+            Field::new("_transitioned")
+                .with_type("boolean")
+                .with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Dart) {
         vec![
-            Field::new("event").with_type(&event_class).with_visibility(Visibility::Public),
-            Field::new("_return").with_type("dynamic").with_visibility(Visibility::Public),
-            Field::new("_data").with_type("Map<String, dynamic>").with_visibility(Visibility::Public),
-            Field::new("_transitioned").with_type("bool").with_visibility(Visibility::Public),
+            Field::new("event")
+                .with_type(&event_class)
+                .with_visibility(Visibility::Public),
+            Field::new("_return")
+                .with_type("dynamic")
+                .with_visibility(Visibility::Public),
+            Field::new("_data")
+                .with_type("Map<String, dynamic>")
+                .with_visibility(Visibility::Public),
+            Field::new("_transitioned")
+                .with_type("bool")
+                .with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Php) {
         vec![
@@ -430,13 +469,11 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
     Some(CodegenNode::Class {
         name: class_name,
         fields,
-        methods: vec![
-            CodegenNode::Constructor {
-                params: constructor_params,
-                body: constructor_body,
-                super_call: None,
-            },
-        ],
+        methods: vec![CodegenNode::Constructor {
+            params: constructor_params,
+            body: constructor_body,
+            super_call: None,
+        }],
         base_classes: vec![],
         is_abstract: false,
         derives: vec![],
@@ -475,11 +512,15 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
         ],
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => vec![
             Param::new("state").with_type("string"),
-            Param::new("parent_compartment").with_type(&format!("{} | null", class_name)).with_default(CodegenNode::null()),
+            Param::new("parent_compartment")
+                .with_type(&format!("{} | null", class_name))
+                .with_default(CodegenNode::null()),
         ],
         TargetLanguage::Dart => vec![
             Param::new("state").with_type("String"),
-            Param::new("parent_compartment").with_type(&format!("{}?", class_name)).with_default(CodegenNode::null()),
+            Param::new("parent_compartment")
+                .with_type(&format!("{}?", class_name))
+                .with_default(CodegenNode::null()),
         ],
         TargetLanguage::Php => vec![
             Param::new("state"),
@@ -489,15 +530,15 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             Param::new("state"),
             Param::new("parent_compartment").with_default(CodegenNode::null()),
         ],
-        TargetLanguage::Lua => vec![
-            Param::new("state"),
-            Param::new("parent_compartment"),
-        ],
+        TargetLanguage::Lua => vec![Param::new("state"), Param::new("parent_compartment")],
         // Static-typed languages generate Compartment as NativeBlock
-        TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java | TargetLanguage::Kotlin
-            | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go => vec![
-            Param::new("state").with_type("str"),
-        ],
+        TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Java
+        | TargetLanguage::Kotlin
+        | TargetLanguage::Swift
+        | TargetLanguage::CSharp
+        | TargetLanguage::Go => vec![Param::new("state").with_type("str")],
         TargetLanguage::Rust => vec![Param::new("state").with_type("str")],
         TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
         TargetLanguage::Graphviz => unreachable!(),
@@ -659,27 +700,61 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
     ];
 
     // Fields for TypeScript/JavaScript/Dart (Python doesn't need field declarations)
-    let fields = if matches!(lang, TargetLanguage::TypeScript | TargetLanguage::JavaScript) {
+    let fields = if matches!(
+        lang,
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript
+    ) {
         vec![
-            Field::new("state").with_type("string").with_visibility(Visibility::Public),
-            Field::new("state_args").with_type("Record<string, any>").with_visibility(Visibility::Public),
-            Field::new("state_vars").with_type("Record<string, any>").with_visibility(Visibility::Public),
-            Field::new("enter_args").with_type("Record<string, any>").with_visibility(Visibility::Public),
-            Field::new("exit_args").with_type("Record<string, any>").with_visibility(Visibility::Public),
-            Field::new("forward_event").with_type("any").with_visibility(Visibility::Public),
-            Field::new("parent_compartment").with_type(&format!("{} | null", class_name)).with_visibility(Visibility::Public),
+            Field::new("state")
+                .with_type("string")
+                .with_visibility(Visibility::Public),
+            Field::new("state_args")
+                .with_type("Record<string, any>")
+                .with_visibility(Visibility::Public),
+            Field::new("state_vars")
+                .with_type("Record<string, any>")
+                .with_visibility(Visibility::Public),
+            Field::new("enter_args")
+                .with_type("Record<string, any>")
+                .with_visibility(Visibility::Public),
+            Field::new("exit_args")
+                .with_type("Record<string, any>")
+                .with_visibility(Visibility::Public),
+            Field::new("forward_event")
+                .with_type("any")
+                .with_visibility(Visibility::Public),
+            Field::new("parent_compartment")
+                .with_type(&format!("{} | null", class_name))
+                .with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Dart) {
         vec![
-            Field::new("state").with_type("String").with_visibility(Visibility::Public),
-            Field::new("state_args").with_type("Map<String, dynamic>").with_visibility(Visibility::Public),
-            Field::new("state_vars").with_type("Map<String, dynamic>").with_visibility(Visibility::Public),
-            Field::new("enter_args").with_type("Map<String, dynamic>").with_visibility(Visibility::Public),
-            Field::new("exit_args").with_type("Map<String, dynamic>").with_visibility(Visibility::Public),
-            Field::new("forward_event").with_type("dynamic").with_visibility(Visibility::Public),
-            Field::new("parent_compartment").with_type(&format!("{}?", class_name)).with_visibility(Visibility::Public),
+            Field::new("state")
+                .with_type("String")
+                .with_visibility(Visibility::Public),
+            Field::new("state_args")
+                .with_type("Map<String, dynamic>")
+                .with_visibility(Visibility::Public),
+            Field::new("state_vars")
+                .with_type("Map<String, dynamic>")
+                .with_visibility(Visibility::Public),
+            Field::new("enter_args")
+                .with_type("Map<String, dynamic>")
+                .with_visibility(Visibility::Public),
+            Field::new("exit_args")
+                .with_type("Map<String, dynamic>")
+                .with_visibility(Visibility::Public),
+            Field::new("forward_event")
+                .with_type("dynamic")
+                .with_visibility(Visibility::Public),
+            Field::new("parent_compartment")
+                .with_type(&format!("{}?", class_name))
+                .with_visibility(Visibility::Public),
         ]
-    } else if matches!(lang, TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang) {
+    } else if matches!(
+        lang,
+        TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang
+    ) {
         vec![
             Field::new("state").with_visibility(Visibility::Public),
             Field::new("state_args").with_visibility(Visibility::Public),
@@ -830,9 +905,16 @@ return c"#,
             }]
         }
         // Static-typed languages generate copy() as NativeBlock in their own functions
-        TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java | TargetLanguage::Kotlin
-            | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go => {
-            vec![CodegenNode::comment("copy() generated in language-specific compartment types")]
+        TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Java
+        | TargetLanguage::Kotlin
+        | TargetLanguage::Swift
+        | TargetLanguage::CSharp
+        | TargetLanguage::Go => {
+            vec![CodegenNode::comment(
+                "copy() generated in language-specific compartment types",
+            )]
         }
         TargetLanguage::Rust => vec![],
         TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
@@ -841,13 +923,22 @@ return c"#,
 
     // Use string annotation for Python to avoid forward reference issues
     let return_type = match lang {
-        TargetLanguage::Python3 => format!("'{}'", class_name),  // 'ClassName' forward reference
-        TargetLanguage::GDScript => class_name.to_string(),  // GDScript doesn't use string forward references
-        TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Php | TargetLanguage::Dart
-            | TargetLanguage::Ruby | TargetLanguage::Java | TargetLanguage::Kotlin
-            | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go
-            | TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Rust
-            | TargetLanguage::Lua => class_name.to_string(),
+        TargetLanguage::Python3 => format!("'{}'", class_name), // 'ClassName' forward reference
+        TargetLanguage::GDScript => class_name.to_string(), // GDScript doesn't use string forward references
+        TargetLanguage::TypeScript
+        | TargetLanguage::JavaScript
+        | TargetLanguage::Php
+        | TargetLanguage::Dart
+        | TargetLanguage::Ruby
+        | TargetLanguage::Java
+        | TargetLanguage::Kotlin
+        | TargetLanguage::Swift
+        | TargetLanguage::CSharp
+        | TargetLanguage::Go
+        | TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Rust
+        | TargetLanguage::Lua => class_name.to_string(),
         TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
         TargetLanguage::Graphviz => unreachable!(),
     };
@@ -937,12 +1028,17 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     // so that transitions of the form `-> $Counter(42)` can populate the
     // state's params via the typed enum-of-structs StateContext.
     if let Some(ref machine) = system.machine {
-        let states_with_storage: Vec<_> = machine.states.iter()
+        let states_with_storage: Vec<_> = machine
+            .states
+            .iter()
             .filter(|s| !s.state_vars.is_empty() || !s.params.is_empty())
             .collect();
 
         for state in &states_with_storage {
-            code.push_str(&format!("#[derive(Clone)]\nstruct {}Context {{\n", state.name));
+            code.push_str(&format!(
+                "#[derive(Clone)]\nstruct {}Context {{\n",
+                state.name
+            ));
             // State params first (they come from transitions or system header).
             // Rust requires concrete types, so we map Frame's portable
             // type names (`int`/`str`/`bool`) to Rust-native spellings
@@ -989,7 +1085,10 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     // StateContext enum — typed state variable storage on the compartment.
     // A state has a context variant if it declares EITHER state vars or
     // state params. The variant carries the state's `XContext` struct.
-    code.push_str(&format!("#[derive(Clone)]\nenum {}StateContext {{\n", system_name));
+    code.push_str(&format!(
+        "#[derive(Clone)]\nenum {}StateContext {{\n",
+        system_name
+    ));
     if let Some(ref machine) = system.machine {
         for state in &machine.states {
             if state.state_vars.is_empty() && state.params.is_empty() {
@@ -1005,13 +1104,21 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     // Default impl for StateContext
     if let Some(ref machine) = system.machine {
         if let Some(first_state) = machine.states.first() {
-            code.push_str(&format!("impl Default for {}StateContext {{\n", system_name));
+            code.push_str(&format!(
+                "impl Default for {}StateContext {{\n",
+                system_name
+            ));
             code.push_str("    fn default() -> Self {\n");
             if first_state.state_vars.is_empty() && first_state.params.is_empty() {
-                code.push_str(&format!("        {}StateContext::{}\n", system_name, first_state.name));
+                code.push_str(&format!(
+                    "        {}StateContext::{}\n",
+                    system_name, first_state.name
+                ));
             } else {
-                code.push_str(&format!("        {}StateContext::{}({}Context::default())\n",
-                    system_name, first_state.name, first_state.name));
+                code.push_str(&format!(
+                    "        {}StateContext::{}({}Context::default())\n",
+                    system_name, first_state.name, first_state.name
+                ));
             }
             code.push_str("    }\n");
             code.push_str("}\n\n");
@@ -1019,13 +1126,25 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     }
 
     // Generate Compartment struct
-    code.push_str(&format!("#[allow(dead_code)]\n#[derive(Clone)]\nstruct {}Compartment {{\n", system_name));
+    code.push_str(&format!(
+        "#[allow(dead_code)]\n#[derive(Clone)]\nstruct {}Compartment {{\n",
+        system_name
+    ));
     code.push_str("    state: String,\n");
-    code.push_str(&format!("    state_context: {}StateContext,\n", system_name));
+    code.push_str(&format!(
+        "    state_context: {}StateContext,\n",
+        system_name
+    ));
     code.push_str("    enter_args: std::collections::HashMap<String, String>,\n");
     code.push_str("    exit_args: std::collections::HashMap<String, String>,\n");
-    code.push_str(&format!("    forward_event: Option<{}FrameEvent>,\n", system_name));
-    code.push_str(&format!("    parent_compartment: Option<Box<{}Compartment>>,\n", system_name));
+    code.push_str(&format!(
+        "    forward_event: Option<{}FrameEvent>,\n",
+        system_name
+    ));
+    code.push_str(&format!(
+        "    parent_compartment: Option<Box<{}Compartment>>,\n",
+        system_name
+    ));
     code.push_str("}\n\n");
 
     // Generate Compartment impl with new()
@@ -1038,15 +1157,22 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     if let Some(ref machine) = system.machine {
         for state in &machine.states {
             if state.state_vars.is_empty() && state.params.is_empty() {
-                code.push_str(&format!("            \"{}\" => {}StateContext::{},\n",
-                    state.name, system_name, state.name));
+                code.push_str(&format!(
+                    "            \"{}\" => {}StateContext::{},\n",
+                    state.name, system_name, state.name
+                ));
             } else {
-                code.push_str(&format!("            \"{}\" => {}StateContext::{}({}Context::default()),\n",
-                    state.name, system_name, state.name, state.name));
+                code.push_str(&format!(
+                    "            \"{}\" => {}StateContext::{}({}Context::default()),\n",
+                    state.name, system_name, state.name, state.name
+                ));
             }
         }
     }
-    code.push_str(&format!("            _ => {}StateContext::Empty,\n", system_name));
+    code.push_str(&format!(
+        "            _ => {}StateContext::Empty,\n",
+        system_name
+    ));
     code.push_str("        };\n");
     code.push_str("        Self {\n");
     code.push_str("            state: state.to_string(),\n");
@@ -1084,7 +1210,9 @@ pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("public:\n");
     code.push_str("    std::string _message;\n");
-    code.push_str(&format!("    std::unordered_map<std::string, std::any> _parameters;\n"));
+    code.push_str(&format!(
+        "    std::unordered_map<std::string, std::any> _parameters;\n"
+    ));
     code.push_str(&format!("\n    {sys}FrameEvent(const std::string& message, std::unordered_map<std::string, std::any> params = {{}})\n"));
     code.push_str("        : _message(message), _parameters(std::move(params)) {}\n");
     code.push_str("};\n\n");
@@ -1096,7 +1224,9 @@ pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
     code.push_str("    std::any _return;\n");
     code.push_str("    std::unordered_map<std::string, std::any> _data;\n");
     code.push_str("    bool _transitioned = false;\n");
-    code.push_str(&format!("\n    {sys}FrameContext({sys}FrameEvent event, std::any default_return = {{}})\n"));
+    code.push_str(&format!(
+        "\n    {sys}FrameContext({sys}FrameEvent event, std::any default_return = {{}})\n"
+    ));
     code.push_str("        : _event(std::move(event)), _return(std::move(default_return)) {}\n");
     code.push_str("};\n\n");
 
@@ -1108,11 +1238,17 @@ pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
     code.push_str("    std::unordered_map<std::string, std::any> state_vars;\n");
     code.push_str("    std::unordered_map<std::string, std::any> enter_args;\n");
     code.push_str("    std::unordered_map<std::string, std::any> exit_args;\n");
-    code.push_str(&format!("    std::unique_ptr<{sys}FrameEvent> forward_event;\n"));
+    code.push_str(&format!(
+        "    std::unique_ptr<{sys}FrameEvent> forward_event;\n"
+    ));
     // shared_ptr: parent_compartment is shared across HSM siblings
     // and state stack entries. shared_ptr ref counting handles cleanup.
-    code.push_str(&format!("    std::shared_ptr<{sys}Compartment> parent_compartment;\n"));
-    code.push_str(&format!("\n    explicit {sys}Compartment(const std::string& state) : state(state) {{}}\n"));
+    code.push_str(&format!(
+        "    std::shared_ptr<{sys}Compartment> parent_compartment;\n"
+    ));
+    code.push_str(&format!(
+        "\n    explicit {sys}Compartment(const std::string& state) : state(state) {{}}\n"
+    ));
     code.push_str("};\n\n");
 
     code
@@ -1131,7 +1267,9 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     code.push_str("        this._message = message;\n");
     code.push_str("        this._parameters = null;\n");
     code.push_str("    }\n\n");
-    code.push_str(&format!("    {sys}FrameEvent(String message, HashMap<String, Object> parameters) {{\n"));
+    code.push_str(&format!(
+        "    {sys}FrameEvent(String message, HashMap<String, Object> parameters) {{\n"
+    ));
     code.push_str("        this._message = message;\n");
     code.push_str("        this._parameters = parameters;\n");
     code.push_str("    }\n");
@@ -1143,7 +1281,9 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     code.push_str("    Object _return;\n");
     code.push_str("    HashMap<String, Object> _data;\n");
     code.push_str("    boolean _transitioned = false;\n");
-    code.push_str(&format!("\n    {sys}FrameContext({sys}FrameEvent event, Object defaultReturn) {{\n"));
+    code.push_str(&format!(
+        "\n    {sys}FrameContext({sys}FrameEvent event, Object defaultReturn) {{\n"
+    ));
     code.push_str("        this._event = event;\n");
     code.push_str("        this._return = defaultReturn;\n");
     code.push_str("        this._data = new HashMap<>();\n");
@@ -1170,7 +1310,9 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     code.push_str("        this.parent_compartment = null;\n");
     code.push_str("    }\n\n");
     code.push_str(&format!("    {sys}Compartment copy() {{\n"));
-    code.push_str(&format!("        {sys}Compartment c = new {sys}Compartment(this.state);\n"));
+    code.push_str(&format!(
+        "        {sys}Compartment c = new {sys}Compartment(this.state);\n"
+    ));
     code.push_str("        c.state_args = new HashMap<>(this.state_args);\n");
     code.push_str("        c.state_vars = new HashMap<>(this.state_vars);\n");
     code.push_str("        c.enter_args = new HashMap<>(this.enter_args);\n");
@@ -1193,7 +1335,9 @@ pub fn generate_kotlin_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("class {sys}FrameEvent(val _message: String, val _parameters: MutableMap<String, Any?> = mutableMapOf())\n\n"));
 
     // FrameContext class
-    code.push_str(&format!("class {sys}FrameContext(val _event: {sys}FrameEvent, var _return: Any? = null) {{\n"));
+    code.push_str(&format!(
+        "class {sys}FrameContext(val _event: {sys}FrameEvent, var _return: Any? = null) {{\n"
+    ));
     code.push_str("    val _data: MutableMap<String, Any?> = mutableMapOf()\n");
     code.push_str("    var _transitioned: Boolean = false\n");
     code.push_str("}\n\n");
@@ -1205,7 +1349,9 @@ pub fn generate_kotlin_compartment_types(system: &SystemAst) -> String {
     code.push_str("    val enter_args: MutableMap<String, Any?> = mutableMapOf()\n");
     code.push_str("    val exit_args: MutableMap<String, Any?> = mutableMapOf()\n");
     code.push_str(&format!("    var forward_event: {sys}FrameEvent? = null\n"));
-    code.push_str(&format!("    var parent_compartment: {sys}Compartment? = null\n"));
+    code.push_str(&format!(
+        "    var parent_compartment: {sys}Compartment? = null\n"
+    ));
     code.push_str(&format!("\n    fun copy(): {sys}Compartment {{\n"));
     code.push_str(&format!("        val c = {sys}Compartment(this.state)\n"));
     code.push_str("        c.state_args.putAll(this.state_args)\n");
@@ -1230,7 +1376,9 @@ pub fn generate_swift_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("    var _message: String\n");
     code.push_str("    var _parameters: [String: Any]\n\n");
-    code.push_str(&format!("    init(message: String, parameters: [String: Any] = [:]) {{\n"));
+    code.push_str(&format!(
+        "    init(message: String, parameters: [String: Any] = [:]) {{\n"
+    ));
     code.push_str("        self._message = message\n");
     code.push_str("        self._parameters = parameters\n");
     code.push_str("    }\n");
@@ -1242,7 +1390,9 @@ pub fn generate_swift_compartment_types(system: &SystemAst) -> String {
     code.push_str("    var _return: Any?\n");
     code.push_str("    var _data: [String: Any] = [:]\n");
     code.push_str("    var _transitioned: Bool = false\n\n");
-    code.push_str(&format!("    init(event: {sys}FrameEvent, defaultReturn: Any? = nil) {{\n"));
+    code.push_str(&format!(
+        "    init(event: {sys}FrameEvent, defaultReturn: Any? = nil) {{\n"
+    ));
     code.push_str("        self._event = event\n");
     code.push_str("        self._return = defaultReturn\n");
     code.push_str("    }\n");
@@ -1256,12 +1406,16 @@ pub fn generate_swift_compartment_types(system: &SystemAst) -> String {
     code.push_str("    var enter_args: [String: Any] = [:]\n");
     code.push_str("    var exit_args: [String: Any] = [:]\n");
     code.push_str(&format!("    var forward_event: {sys}FrameEvent?\n"));
-    code.push_str(&format!("    var parent_compartment: {sys}Compartment?\n\n"));
+    code.push_str(&format!(
+        "    var parent_compartment: {sys}Compartment?\n\n"
+    ));
     code.push_str("    init(state: String) {\n");
     code.push_str("        self.state = state\n");
     code.push_str("    }\n\n");
     code.push_str(&format!("    func copy() -> {sys}Compartment {{\n"));
-    code.push_str(&format!("        let c = {sys}Compartment(state: self.state)\n"));
+    code.push_str(&format!(
+        "        let c = {sys}Compartment(state: self.state)\n"
+    ));
     code.push_str("        c.state_args = self.state_args\n");
     code.push_str("        c.state_vars = self.state_vars\n");
     code.push_str("        c.enter_args = self.enter_args\n");
@@ -1284,11 +1438,15 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("    public string _message;\n");
     code.push_str("    public Dictionary<string, object> _parameters;\n");
-    code.push_str(&format!("\n    public {sys}FrameEvent(string message) {{\n"));
+    code.push_str(&format!(
+        "\n    public {sys}FrameEvent(string message) {{\n"
+    ));
     code.push_str("        this._message = message;\n");
     code.push_str("        this._parameters = null;\n");
     code.push_str("    }\n\n");
-    code.push_str(&format!("    public {sys}FrameEvent(string message, Dictionary<string, object> parameters) {{\n"));
+    code.push_str(&format!(
+        "    public {sys}FrameEvent(string message, Dictionary<string, object> parameters) {{\n"
+    ));
     code.push_str("        this._message = message;\n");
     code.push_str("        this._parameters = parameters;\n");
     code.push_str("    }\n");
@@ -1300,7 +1458,9 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     code.push_str("    public object _return;\n");
     code.push_str("    public Dictionary<string, object> _data;\n");
     code.push_str("    public bool _transitioned = false;\n");
-    code.push_str(&format!("\n    public {sys}FrameContext({sys}FrameEvent ev, object defaultReturn) {{\n"));
+    code.push_str(&format!(
+        "\n    public {sys}FrameContext({sys}FrameEvent ev, object defaultReturn) {{\n"
+    ));
     code.push_str("        this._event = ev;\n");
     code.push_str("        this._return = defaultReturn;\n");
     code.push_str("        this._data = new Dictionary<string, object>();\n");
@@ -1316,7 +1476,9 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     code.push_str("    public Dictionary<string, object> enter_args;\n");
     code.push_str("    public Dictionary<string, object> exit_args;\n");
     code.push_str(&format!("    public {sys}FrameEvent forward_event;\n"));
-    code.push_str(&format!("    public {sys}Compartment parent_compartment;\n"));
+    code.push_str(&format!(
+        "    public {sys}Compartment parent_compartment;\n"
+    ));
     code.push_str(&format!("\n    public {sys}Compartment(string state) {{\n"));
     code.push_str("        this.state = state;\n");
     code.push_str("        this.state_args = new Dictionary<string, object>();\n");
@@ -1327,7 +1489,9 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     code.push_str("        this.parent_compartment = null;\n");
     code.push_str("    }\n\n");
     code.push_str(&format!("    public {sys}Compartment Copy() {{\n"));
-    code.push_str(&format!("        {sys}Compartment c = new {sys}Compartment(this.state);\n"));
+    code.push_str(&format!(
+        "        {sys}Compartment c = new {sys}Compartment(this.state);\n"
+    ));
     code.push_str("        c.state_args = new Dictionary<string, object>(this.state_args);\n");
     code.push_str("        c.state_vars = new Dictionary<string, object>(this.state_vars);\n");
     code.push_str("        c.enter_args = new Dictionary<string, object>(this.enter_args);\n");
@@ -1372,7 +1536,10 @@ pub fn generate_go_compartment_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // Compartment constructor helper
-    code.push_str(&format!("func new{}Compartment(state string) *{}Compartment {{\n", sys, sys));
+    code.push_str(&format!(
+        "func new{}Compartment(state string) *{}Compartment {{\n",
+        sys, sys
+    ));
     code.push_str(&format!("    return &{}Compartment{{\n", sys));
     code.push_str("        state:    state,\n");
     code.push_str("        stateArgs: make(map[string]any),\n");
@@ -1383,7 +1550,10 @@ pub fn generate_go_compartment_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // Compartment copy method
-    code.push_str(&format!("func (c *{}Compartment) copy() *{}Compartment {{\n", sys, sys));
+    code.push_str(&format!(
+        "func (c *{}Compartment) copy() *{}Compartment {{\n",
+        sys, sys
+    ));
     code.push_str(&format!("    nc := &{}Compartment{{\n", sys));
     code.push_str("        state: c.state,\n");
     code.push_str("        stateArgs: make(map[string]any),\n");
@@ -1418,9 +1588,13 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     // ============================================================================
     // FrameDict - String-keyed hash map
     // ============================================================================
-    code.push_str(&format!("// ============================================================================\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n"
+    ));
     code.push_str(&format!("// {}_FrameDict - String-keyed dictionary\n", sys));
-    code.push_str(&format!("// ============================================================================\n\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n\n"
+    ));
 
     code.push_str(&format!("typedef struct {}_FrameDictEntry {{\n", sys));
     code.push_str("    char* key;\n");
@@ -1435,7 +1609,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!("}} {}_FrameDict;\n\n", sys));
 
     // Hash function
-    code.push_str(&format!("static unsigned int {}_hash_string(const char* str) {{\n", sys));
+    code.push_str(&format!(
+        "static unsigned int {}_hash_string(const char* str) {{\n",
+        sys
+    ));
     code.push_str("    unsigned int hash = 5381;\n");
     code.push_str("    int c;\n");
     code.push_str("    while ((c = *str++)) {\n");
@@ -1445,18 +1622,36 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameDict_new
-    code.push_str(&format!("static {}_FrameDict* {}_FrameDict_new(void) {{\n", sys, sys));
-    code.push_str(&format!("    {}_FrameDict* d = malloc(sizeof({}_FrameDict));\n", sys, sys));
+    code.push_str(&format!(
+        "static {}_FrameDict* {}_FrameDict_new(void) {{\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "    {}_FrameDict* d = malloc(sizeof({}_FrameDict));\n",
+        sys, sys
+    ));
     code.push_str("    d->bucket_count = 16;\n");
-    code.push_str(&format!("    d->buckets = calloc(d->bucket_count, sizeof({}_FrameDictEntry*));\n", sys));
+    code.push_str(&format!(
+        "    d->buckets = calloc(d->bucket_count, sizeof({}_FrameDictEntry*));\n",
+        sys
+    ));
     code.push_str("    d->size = 0;\n");
     code.push_str("    return d;\n");
     code.push_str("}\n\n");
 
     // FrameDict_set
-    code.push_str(&format!("static void {}_FrameDict_set({}_FrameDict* d, const char* key, void* value) {{\n", sys, sys));
-    code.push_str(&format!("    unsigned int idx = {}_hash_string(key) % d->bucket_count;\n", sys));
-    code.push_str(&format!("    {}_FrameDictEntry* entry = d->buckets[idx];\n", sys));
+    code.push_str(&format!(
+        "static void {}_FrameDict_set({}_FrameDict* d, const char* key, void* value) {{\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "    unsigned int idx = {}_hash_string(key) % d->bucket_count;\n",
+        sys
+    ));
+    code.push_str(&format!(
+        "    {}_FrameDictEntry* entry = d->buckets[idx];\n",
+        sys
+    ));
     code.push_str("    while (entry) {\n");
     code.push_str("        if (strcmp(entry->key, key) == 0) {\n");
     code.push_str("            entry->value = value;\n");
@@ -1464,7 +1659,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("        }\n");
     code.push_str("        entry = entry->next;\n");
     code.push_str("    }\n");
-    code.push_str(&format!("    {}_FrameDictEntry* new_entry = malloc(sizeof({}_FrameDictEntry));\n", sys, sys));
+    code.push_str(&format!(
+        "    {}_FrameDictEntry* new_entry = malloc(sizeof({}_FrameDictEntry));\n",
+        sys, sys
+    ));
     code.push_str("    new_entry->key = strdup(key);\n");
     code.push_str("    new_entry->value = value;\n");
     code.push_str("    new_entry->next = d->buckets[idx];\n");
@@ -1473,9 +1671,18 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameDict_get
-    code.push_str(&format!("static void* {}_FrameDict_get({}_FrameDict* d, const char* key) {{\n", sys, sys));
-    code.push_str(&format!("    unsigned int idx = {}_hash_string(key) % d->bucket_count;\n", sys));
-    code.push_str(&format!("    {}_FrameDictEntry* entry = d->buckets[idx];\n", sys));
+    code.push_str(&format!(
+        "static void* {}_FrameDict_get({}_FrameDict* d, const char* key) {{\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "    unsigned int idx = {}_hash_string(key) % d->bucket_count;\n",
+        sys
+    ));
+    code.push_str(&format!(
+        "    {}_FrameDictEntry* entry = d->buckets[idx];\n",
+        sys
+    ));
     code.push_str("    while (entry) {\n");
     code.push_str("        if (strcmp(entry->key, key) == 0) {\n");
     code.push_str("            return entry->value;\n");
@@ -1486,9 +1693,18 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameDict_has - check if key exists
-    code.push_str(&format!("static int {}_FrameDict_has({}_FrameDict* d, const char* key) {{\n", sys, sys));
-    code.push_str(&format!("    unsigned int idx = {}_hash_string(key) % d->bucket_count;\n", sys));
-    code.push_str(&format!("    {}_FrameDictEntry* entry = d->buckets[idx];\n", sys));
+    code.push_str(&format!(
+        "static int {}_FrameDict_has({}_FrameDict* d, const char* key) {{\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "    unsigned int idx = {}_hash_string(key) % d->bucket_count;\n",
+        sys
+    ));
+    code.push_str(&format!(
+        "    {}_FrameDictEntry* entry = d->buckets[idx];\n",
+        sys
+    ));
     code.push_str("    while (entry) {\n");
     code.push_str("        if (strcmp(entry->key, key) == 0) {\n");
     code.push_str("            return 1;\n");
@@ -1499,12 +1715,24 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameDict_copy
-    code.push_str(&format!("static {}_FrameDict* {}_FrameDict_copy({}_FrameDict* src) {{\n", sys, sys, sys));
-    code.push_str(&format!("    {}_FrameDict* dst = {}_FrameDict_new();\n", sys, sys));
+    code.push_str(&format!(
+        "static {}_FrameDict* {}_FrameDict_copy({}_FrameDict* src) {{\n",
+        sys, sys, sys
+    ));
+    code.push_str(&format!(
+        "    {}_FrameDict* dst = {}_FrameDict_new();\n",
+        sys, sys
+    ));
     code.push_str("    for (int i = 0; i < src->bucket_count; i++) {\n");
-    code.push_str(&format!("        {}_FrameDictEntry* entry = src->buckets[i];\n", sys));
+    code.push_str(&format!(
+        "        {}_FrameDictEntry* entry = src->buckets[i];\n",
+        sys
+    ));
     code.push_str("        while (entry) {\n");
-    code.push_str(&format!("            {}_FrameDict_set(dst, entry->key, entry->value);\n", sys));
+    code.push_str(&format!(
+        "            {}_FrameDict_set(dst, entry->key, entry->value);\n",
+        sys
+    ));
     code.push_str("            entry = entry->next;\n");
     code.push_str("        }\n");
     code.push_str("    }\n");
@@ -1512,11 +1740,20 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameDict_destroy
-    code.push_str(&format!("static void {}_FrameDict_destroy({}_FrameDict* d) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static void {}_FrameDict_destroy({}_FrameDict* d) {{\n",
+        sys, sys
+    ));
     code.push_str("    for (int i = 0; i < d->bucket_count; i++) {\n");
-    code.push_str(&format!("        {}_FrameDictEntry* entry = d->buckets[i];\n", sys));
+    code.push_str(&format!(
+        "        {}_FrameDictEntry* entry = d->buckets[i];\n",
+        sys
+    ));
     code.push_str("        while (entry) {\n");
-    code.push_str(&format!("            {}_FrameDictEntry* next = entry->next;\n", sys));
+    code.push_str(&format!(
+        "            {}_FrameDictEntry* next = entry->next;\n",
+        sys
+    ));
     code.push_str("            free(entry->key);\n");
     code.push_str("            free(entry);\n");
     code.push_str("            entry = next;\n");
@@ -1529,9 +1766,13 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     // ============================================================================
     // FrameVec - Dynamic array
     // ============================================================================
-    code.push_str(&format!("// ============================================================================\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n"
+    ));
     code.push_str(&format!("// {}_FrameVec - Dynamic array\n", sys));
-    code.push_str(&format!("// ============================================================================\n\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n\n"
+    ));
 
     code.push_str(&format!("typedef struct {{\n"));
     code.push_str("    void** items;\n");
@@ -1540,8 +1781,14 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!("}} {}_FrameVec;\n\n", sys));
 
     // FrameVec_new
-    code.push_str(&format!("static {}_FrameVec* {}_FrameVec_new(void) {{\n", sys, sys));
-    code.push_str(&format!("    {}_FrameVec* v = malloc(sizeof({}_FrameVec));\n", sys, sys));
+    code.push_str(&format!(
+        "static {}_FrameVec* {}_FrameVec_new(void) {{\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "    {}_FrameVec* v = malloc(sizeof({}_FrameVec));\n",
+        sys, sys
+    ));
     code.push_str("    v->capacity = 8;\n");
     code.push_str("    v->size = 0;\n");
     code.push_str("    v->items = malloc(sizeof(void*) * v->capacity);\n");
@@ -1549,7 +1796,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameVec_push
-    code.push_str(&format!("static void {}_FrameVec_push({}_FrameVec* v, void* item) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static void {}_FrameVec_push({}_FrameVec* v, void* item) {{\n",
+        sys, sys
+    ));
     code.push_str("    if (v->size >= v->capacity) {\n");
     code.push_str("        v->capacity *= 2;\n");
     code.push_str("        v->items = realloc(v->items, sizeof(void*) * v->capacity);\n");
@@ -1558,30 +1808,45 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameVec_pop
-    code.push_str(&format!("static void* {}_FrameVec_pop({}_FrameVec* v) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static void* {}_FrameVec_pop({}_FrameVec* v) {{\n",
+        sys, sys
+    ));
     code.push_str("    if (v->size == 0) return NULL;\n");
     code.push_str("    return v->items[--v->size];\n");
     code.push_str("}\n\n");
 
     // FrameVec_last
-    code.push_str(&format!("static void* {}_FrameVec_last({}_FrameVec* v) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static void* {}_FrameVec_last({}_FrameVec* v) {{\n",
+        sys, sys
+    ));
     code.push_str("    if (v->size == 0) return NULL;\n");
     code.push_str("    return v->items[v->size - 1];\n");
     code.push_str("}\n\n");
 
     // FrameVec_get (indexed access)
-    code.push_str(&format!("static void* {}_FrameVec_get({}_FrameVec* v, int index) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static void* {}_FrameVec_get({}_FrameVec* v, int index) {{\n",
+        sys, sys
+    ));
     code.push_str("    if (index < 0 || index >= v->size) return NULL;\n");
     code.push_str("    return v->items[index];\n");
     code.push_str("}\n\n");
 
     // FrameVec_size
-    code.push_str(&format!("static int {}_FrameVec_size({}_FrameVec* v) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static int {}_FrameVec_size({}_FrameVec* v) {{\n",
+        sys, sys
+    ));
     code.push_str("    return v->size;\n");
     code.push_str("}\n\n");
 
     // FrameVec_destroy
-    code.push_str(&format!("static void {}_FrameVec_destroy({}_FrameVec* v) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static void {}_FrameVec_destroy({}_FrameVec* v) {{\n",
+        sys, sys
+    ));
     code.push_str("    free(v->items);\n");
     code.push_str("    free(v);\n");
     code.push_str("}\n\n");
@@ -1589,9 +1854,13 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     // ============================================================================
     // FrameEvent - Event routing object
     // ============================================================================
-    code.push_str(&format!("// ============================================================================\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n"
+    ));
     code.push_str(&format!("// {}_FrameEvent - Event routing object\n", sys));
-    code.push_str(&format!("// ============================================================================\n\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n\n"
+    ));
 
     code.push_str(&format!("typedef struct {{\n"));
     code.push_str("    const char* _message;\n");
@@ -1601,7 +1870,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
 
     // FrameEvent_new — owns_parameters=1 means this event allocated the dict
     code.push_str(&format!("static {}_FrameEvent* {}_FrameEvent_new(const char* message, {}_FrameDict* parameters, int owns_parameters) {{\n", sys, sys, sys));
-    code.push_str(&format!("    {}_FrameEvent* e = malloc(sizeof({}_FrameEvent));\n", sys, sys));
+    code.push_str(&format!(
+        "    {}_FrameEvent* e = malloc(sizeof({}_FrameEvent));\n",
+        sys, sys
+    ));
     code.push_str("    e->_message = message;\n");
     code.push_str("    e->_parameters = parameters;\n");
     code.push_str("    e->_owns_parameters = owns_parameters;\n");
@@ -1609,17 +1881,30 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameEvent_destroy — only frees parameters if this event owns them
-    code.push_str(&format!("static void {}_FrameEvent_destroy({}_FrameEvent* e) {{\n", sys, sys));
-    code.push_str(&format!("    if (e->_owns_parameters && e->_parameters) {}_FrameDict_destroy(e->_parameters);\n", sys));
+    code.push_str(&format!(
+        "static void {}_FrameEvent_destroy({}_FrameEvent* e) {{\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "    if (e->_owns_parameters && e->_parameters) {}_FrameDict_destroy(e->_parameters);\n",
+        sys
+    ));
     code.push_str("    free(e);\n");
     code.push_str("}\n\n");
 
     // ============================================================================
     // FrameContext - Interface call context
     // ============================================================================
-    code.push_str(&format!("// ============================================================================\n"));
-    code.push_str(&format!("// {}_FrameContext - Interface call context\n", sys));
-    code.push_str(&format!("// ============================================================================\n\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n"
+    ));
+    code.push_str(&format!(
+        "// {}_FrameContext - Interface call context\n",
+        sys
+    ));
+    code.push_str(&format!(
+        "// ============================================================================\n\n"
+    ));
 
     code.push_str(&format!("typedef struct {{\n"));
     code.push_str(&format!("    {}_FrameEvent* event;\n", sys));
@@ -1630,7 +1915,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
 
     // FrameContext_new
     code.push_str(&format!("static {}_FrameContext* {}_FrameContext_new({}_FrameEvent* event, void* default_return) {{\n", sys, sys, sys));
-    code.push_str(&format!("    {}_FrameContext* ctx = malloc(sizeof({}_FrameContext));\n", sys, sys));
+    code.push_str(&format!(
+        "    {}_FrameContext* ctx = malloc(sizeof({}_FrameContext));\n",
+        sys, sys
+    ));
     code.push_str("    ctx->event = event;\n");
     code.push_str("    ctx->_return = default_return;\n");
     code.push_str(&format!("    ctx->_data = {}_FrameDict_new();\n", sys));
@@ -1639,7 +1927,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // FrameContext_destroy
-    code.push_str(&format!("static void {}_FrameContext_destroy({}_FrameContext* ctx) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static void {}_FrameContext_destroy({}_FrameContext* ctx) {{\n",
+        sys, sys
+    ));
     code.push_str(&format!("    {}_FrameDict_destroy(ctx->_data);\n", sys));
     code.push_str("    free(ctx);\n");
     code.push_str("}\n\n");
@@ -1647,9 +1938,13 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     // ============================================================================
     // Compartment - State closure
     // ============================================================================
-    code.push_str(&format!("// ============================================================================\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n"
+    ));
     code.push_str(&format!("// {}_Compartment - State closure\n", sys));
-    code.push_str(&format!("// ============================================================================\n\n"));
+    code.push_str(&format!(
+        "// ============================================================================\n\n"
+    ));
 
     code.push_str(&format!("typedef struct {}_Compartment {{\n", sys));
     code.push_str("    const char* state;\n");
@@ -1658,13 +1953,22 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!("    {}_FrameDict* enter_args;\n", sys));
     code.push_str(&format!("    {}_FrameDict* exit_args;\n", sys));
     code.push_str(&format!("    {}_FrameEvent* forward_event;\n", sys));
-    code.push_str(&format!("    struct {}_Compartment* parent_compartment;\n", sys));
+    code.push_str(&format!(
+        "    struct {}_Compartment* parent_compartment;\n",
+        sys
+    ));
     code.push_str("    int _ref_count;\n");
     code.push_str(&format!("}} {}_Compartment;\n\n", sys));
 
     // Compartment_new
-    code.push_str(&format!("static {}_Compartment* {}_Compartment_new(const char* state) {{\n", sys, sys));
-    code.push_str(&format!("    {}_Compartment* c = malloc(sizeof({}_Compartment));\n", sys, sys));
+    code.push_str(&format!(
+        "static {}_Compartment* {}_Compartment_new(const char* state) {{\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "    {}_Compartment* c = malloc(sizeof({}_Compartment));\n",
+        sys, sys
+    ));
     code.push_str("    c->state = state;\n");
     code.push_str(&format!("    c->state_args = {}_FrameDict_new();\n", sys));
     code.push_str(&format!("    c->state_vars = {}_FrameDict_new();\n", sys));
@@ -1677,41 +1981,76 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // Compartment_ref — increment reference count
-    code.push_str(&format!("static {sys}_Compartment* {sys}_Compartment_ref({sys}_Compartment* c) {{\n"));
+    code.push_str(&format!(
+        "static {sys}_Compartment* {sys}_Compartment_ref({sys}_Compartment* c) {{\n"
+    ));
     code.push_str("    if (c) c->_ref_count++;\n");
     code.push_str("    return c;\n");
     code.push_str("}\n\n");
 
     // Compartment_unref — decrement reference count, destroy when zero
-    code.push_str(&format!("static void {sys}_Compartment_unref({sys}_Compartment* c);\n"));
-    code.push_str(&format!("static void {sys}_Compartment_unref({sys}_Compartment* c) {{\n"));
+    code.push_str(&format!(
+        "static void {sys}_Compartment_unref({sys}_Compartment* c);\n"
+    ));
+    code.push_str(&format!(
+        "static void {sys}_Compartment_unref({sys}_Compartment* c) {{\n"
+    ));
     code.push_str("    if (c == NULL) return;\n");
     code.push_str("    c->_ref_count--;\n");
     code.push_str("    if (c->_ref_count <= 0) {\n");
-    code.push_str(&format!("        {sys}_Compartment_unref(c->parent_compartment);\n"));
-    code.push_str(&format!("        {sys}_FrameDict_destroy(c->state_args);\n"));
-    code.push_str(&format!("        {sys}_FrameDict_destroy(c->state_vars);\n"));
-    code.push_str(&format!("        {sys}_FrameDict_destroy(c->enter_args);\n"));
+    code.push_str(&format!(
+        "        {sys}_Compartment_unref(c->parent_compartment);\n"
+    ));
+    code.push_str(&format!(
+        "        {sys}_FrameDict_destroy(c->state_args);\n"
+    ));
+    code.push_str(&format!(
+        "        {sys}_FrameDict_destroy(c->state_vars);\n"
+    ));
+    code.push_str(&format!(
+        "        {sys}_FrameDict_destroy(c->enter_args);\n"
+    ));
     code.push_str(&format!("        {sys}_FrameDict_destroy(c->exit_args);\n"));
     code.push_str("        free(c);\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
 
     // Compartment_copy
-    code.push_str(&format!("static {}_Compartment* {}_Compartment_copy({}_Compartment* src) {{\n", sys, sys, sys));
-    code.push_str(&format!("    {}_Compartment* c = malloc(sizeof({}_Compartment));\n", sys, sys));
+    code.push_str(&format!(
+        "static {}_Compartment* {}_Compartment_copy({}_Compartment* src) {{\n",
+        sys, sys, sys
+    ));
+    code.push_str(&format!(
+        "    {}_Compartment* c = malloc(sizeof({}_Compartment));\n",
+        sys, sys
+    ));
     code.push_str("    c->state = src->state;\n");
-    code.push_str(&format!("    c->state_args = {}_FrameDict_copy(src->state_args);\n", sys));
-    code.push_str(&format!("    c->state_vars = {}_FrameDict_copy(src->state_vars);\n", sys));
-    code.push_str(&format!("    c->enter_args = {}_FrameDict_copy(src->enter_args);\n", sys));
-    code.push_str(&format!("    c->exit_args = {}_FrameDict_copy(src->exit_args);\n", sys));
+    code.push_str(&format!(
+        "    c->state_args = {}_FrameDict_copy(src->state_args);\n",
+        sys
+    ));
+    code.push_str(&format!(
+        "    c->state_vars = {}_FrameDict_copy(src->state_vars);\n",
+        sys
+    ));
+    code.push_str(&format!(
+        "    c->enter_args = {}_FrameDict_copy(src->enter_args);\n",
+        sys
+    ));
+    code.push_str(&format!(
+        "    c->exit_args = {}_FrameDict_copy(src->exit_args);\n",
+        sys
+    ));
     code.push_str("    c->forward_event = src->forward_event;  // Shallow copy OK\n");
     code.push_str("    c->parent_compartment = src->parent_compartment;\n");
     code.push_str("    return c;\n");
     code.push_str("}\n\n");
 
     // Compartment_destroy
-    code.push_str(&format!("static void {}_Compartment_destroy({}_Compartment* c) {{\n", sys, sys));
+    code.push_str(&format!(
+        "static void {}_Compartment_destroy({}_Compartment* c) {{\n",
+        sys, sys
+    ));
     code.push_str(&format!("    {}_FrameDict_destroy(c->state_args);\n", sys));
     code.push_str(&format!("    {}_FrameDict_destroy(c->state_vars);\n", sys));
     code.push_str(&format!("    {}_FrameDict_destroy(c->enter_args);\n", sys));
@@ -1721,11 +2060,26 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
 
     // Helper macros for context access
     code.push_str(&format!("// Helper macros for context access\n"));
-    code.push_str(&format!("#define {}_CTX(self) (({}_FrameContext*){}_FrameVec_last((self)->_context_stack))\n", sys, sys, sys));
-    code.push_str(&format!("#define {}_PARAM(self, key) {}_FrameDict_get({}_CTX(self)->event->_parameters, key)\n", sys, sys, sys));
-    code.push_str(&format!("#define {}_RETURN(self) {}_CTX(self)->_return\n", sys, sys));
-    code.push_str(&format!("#define {}_DATA(self, key) {}_FrameDict_get({}_CTX(self)->_data, key)\n", sys, sys, sys));
-    code.push_str(&format!("#define {}_DATA_SET(self, key, val) {}_FrameDict_set({}_CTX(self)->_data, key, val)\n\n", sys, sys, sys));
+    code.push_str(&format!(
+        "#define {}_CTX(self) (({}_FrameContext*){}_FrameVec_last((self)->_context_stack))\n",
+        sys, sys, sys
+    ));
+    code.push_str(&format!(
+        "#define {}_PARAM(self, key) {}_FrameDict_get({}_CTX(self)->event->_parameters, key)\n",
+        sys, sys, sys
+    ));
+    code.push_str(&format!(
+        "#define {}_RETURN(self) {}_CTX(self)->_return\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "#define {}_DATA(self, key) {}_FrameDict_get({}_CTX(self)->_data, key)\n",
+        sys, sys, sys
+    ));
+    code.push_str(&format!(
+        "#define {}_DATA_SET(self, key, val) {}_FrameDict_set({}_CTX(self)->_data, key, val)\n\n",
+        sys, sys, sys
+    ));
 
     // System destroy function (declared as part of forward declarations, defined later)
     // This will be declared as a forward declaration in the class emission

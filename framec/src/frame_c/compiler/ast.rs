@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Span { pub start: usize, pub end: usize }
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
 
 #[derive(Debug, Clone)]
 pub struct SystemDecl {
@@ -26,7 +29,11 @@ pub struct StateDecl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HandlerKind { Handler, Action, Operation }
+pub enum HandlerKind {
+    Handler,
+    Action,
+    Operation,
+}
 
 #[derive(Debug, Clone)]
 pub struct HandlerDecl {

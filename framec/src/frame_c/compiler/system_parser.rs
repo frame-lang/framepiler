@@ -1,6 +1,8 @@
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::ast::{ModuleAst, SystemAst, SystemParamsAst, SystemSectionsAst, Span, SystemSectionKind};
+use crate::frame_c::compiler::ast::{
+    ModuleAst, Span, SystemAst, SystemParamsAst, SystemSectionKind, SystemSectionsAst,
+};
 use crate::frame_c::compiler::body_closer::{self as closer, BodyCloser};
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Parser for outer system headers and section layout.
 ///
@@ -51,25 +53,45 @@ impl SystemParser {
                     .ok()
                     .map(|c| open + c),
                 TargetLanguage::Go => closer::go::BodyCloserGo
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::JavaScript => closer::javascript::BodyCloserJs
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::Php => closer::php::BodyCloserPhp
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::Kotlin => closer::kotlin::BodyCloserKotlin
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::Swift => closer::swift::BodyCloserSwift
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::Ruby => closer::ruby::BodyCloserRuby
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::Erlang => closer::erlang::BodyCloserErlang
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::Lua => closer::lua::BodyCloserLua
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::Dart => closer::dart::BodyCloserDart
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::GDScript => closer::gdscript::BodyCloserGDScript
-                    .close_byte(&bytes[open..], 0).ok().map(|c| open + c),
+                    .close_byte(&bytes[open..], 0)
+                    .ok()
+                    .map(|c| open + c),
                 TargetLanguage::Graphviz => None,
             }
         }
@@ -123,9 +145,9 @@ impl SystemParser {
             while j < n && is_space(bytes[j]) {
                 j += 1;
             }
-            
+
             // Check for @@persist, but first check if it's @@system to avoid misparsing
-            if j + 8 <= n && &bytes[j..j+8] == b"@@system" {
+            if j + 8 <= n && &bytes[j..j + 8] == b"@@system" {
                 // This is @@system, not an attribute, so don't consume it here
                 // j remains at the @@ position for the system check below
             } else if j + 1 < n && bytes[j] == b'@' && bytes[j + 1] == b'@' {
@@ -157,7 +179,7 @@ impl SystemParser {
             }
 
             // Check for @@system keyword
-            if j + 8 <= n && &bytes[j..j+8] == b"@@system" {
+            if j + 8 <= n && &bytes[j..j + 8] == b"@@system" {
                 j += 8; // skip @@system
             } else {
                 // Not a system declaration, skip line
@@ -215,7 +237,8 @@ impl SystemParser {
                                 {
                                     k += 1;
                                 }
-                                let ident = String::from_utf8_lossy(&bytes[ident_start..k]).to_string();
+                                let ident =
+                                    String::from_utf8_lossy(&bytes[ident_start..k]).to_string();
                                 params.start_params.push(ident);
                             } else {
                                 k += 1;
@@ -243,7 +266,8 @@ impl SystemParser {
                                     {
                                         k += 1;
                                     }
-                                    let ident = String::from_utf8_lossy(&bytes[ident_start..k]).to_string();
+                                    let ident =
+                                        String::from_utf8_lossy(&bytes[ident_start..k]).to_string();
                                     params.enter_params.push(ident);
                                 } else {
                                     k += 1;
@@ -312,7 +336,10 @@ impl SystemParser {
             let mut q = open + 1;
             while q < close {
                 while q < close
-                    && (bytes[q] == b' ' || bytes[q] == b'\t' || bytes[q] == b'\r' || bytes[q] == b'\n')
+                    && (bytes[q] == b' '
+                        || bytes[q] == b'\t'
+                        || bytes[q] == b'\r'
+                        || bytes[q] == b'\n')
                 {
                     q += 1;
                 }
@@ -355,8 +382,7 @@ impl SystemParser {
                     s += 1;
                 }
                 if sec_start < s && s < close && bytes[s] == b':' {
-                    let kw_sec =
-                        String::from_utf8_lossy(&bytes[sec_start..s]).to_ascii_lowercase();
+                    let kw_sec = String::from_utf8_lossy(&bytes[sec_start..s]).to_ascii_lowercase();
                     if kw_sec.as_str() == "operations"
                         || kw_sec.as_str() == "interface"
                         || kw_sec.as_str() == "machine"
@@ -417,8 +443,7 @@ impl SystemParser {
             if std::env::var("FRAME_DEBUG_SYSPARAMS").ok().as_deref() == Some("1") {
                 eprintln!(
                     "[sysparams] parsed system name={} machine_span={:?}",
-                    sys_ast.name,
-                    sys_ast.sections.machine
+                    sys_ast.name, sys_ast.sections.machine
                 );
             }
             systems.push(sys_ast);

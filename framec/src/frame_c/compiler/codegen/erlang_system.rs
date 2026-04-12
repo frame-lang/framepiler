@@ -5,30 +5,33 @@
 //! raw Erlang source text with proper gen_statem callbacks, -record(data, {}),
 //! and Frame infrastructure (frame_transition__, frame_dispatch__, etc.).
 
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::frame_ast::{SystemAst, Type, Expression, Literal};
-use crate::frame_c::compiler::arcanum::Arcanum;
-use crate::frame_c::compiler::splice::Splicer;
-use crate::frame_c::compiler::native_region_scanner::erlang::NativeRegionScannerErlang;
 use super::ast::CodegenNode;
 use super::codegen_utils::{
-    HandlerContext, expression_to_string, type_to_string,
-    convert_expression, convert_literal, extract_type_from_raw_domain,
-    is_int_type, is_float_type, is_bool_type, is_string_type, to_snake_case,
+    convert_expression, convert_literal, expression_to_string, extract_type_from_raw_domain,
+    is_bool_type, is_float_type, is_int_type, is_string_type, to_snake_case, type_to_string,
+    HandlerContext,
 };
 use super::frame_expansion::splice_handler_body_from_span;
-
+use crate::frame_c::compiler::arcanum::Arcanum;
+use crate::frame_c::compiler::frame_ast::{Expression, Literal, SystemAst, Type};
+use crate::frame_c::compiler::native_region_scanner::erlang::NativeRegionScannerErlang;
+use crate::frame_c::compiler::splice::Splicer;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Generate a complete Erlang gen_statem module from a Frame system.
 /// This bypasses the standard class-based pipeline entirely.
 /// Result of rewriting a line of native code for Erlang
 enum ErlangRewrite {
     /// A Data-modifying action call: needs `DataN = action(DataPrev)`
-    ActionCall(String),  // The action call expression
+    ActionCall(String), // The action call expression
     /// A Data record update: needs `DataN = DataPrev#data{field = value}`
     RecordUpdate { field: String, value: String },
     /// An interface dispatch call: `{DataN, Result} = frame_dispatch__(method, [args], DataPrev)`
-    InterfaceCall { method: String, args: String, result_var: String },
+    InterfaceCall {
+        method: String,
+        args: String,
+        result_var: String,
+    },
     /// A plain expression (no Data modification)
     Plain(String),
     /// A return-value reply
@@ -36,11 +39,20 @@ enum ErlangRewrite {
 }
 
 /// Rewrite a line of native code for Erlang, classifying the result
-fn erlang_rewrite_native_classified(line: &str, action_names: &[String], data_var: &str) -> ErlangRewrite {
+fn erlang_rewrite_native_classified(
+    line: &str,
+    action_names: &[String],
+    data_var: &str,
+) -> ErlangRewrite {
     erlang_rewrite_native_classified_full(line, action_names, &[], data_var)
 }
 
-fn erlang_rewrite_native_classified_full(line: &str, action_names: &[String], interface_names: &[String], data_var: &str) -> ErlangRewrite {
+fn erlang_rewrite_native_classified_full(
+    line: &str,
+    action_names: &[String],
+    interface_names: &[String],
+    data_var: &str,
+) -> ErlangRewrite {
     let l = line.trim();
 
     // self.method(args) → interface dispatch (for interface methods)
@@ -54,13 +66,21 @@ fn erlang_rewrite_native_classified_full(line: &str, action_names: &[String], in
                 let call_start = l.find(&pattern).map(|p| p + pattern.len()).unwrap_or(0);
                 let call_end = l.rfind(')').unwrap_or(l.len());
                 let args = l[call_start..call_end].trim().to_string();
-                return ErlangRewrite::InterfaceCall { method: method_snake, args, result_var };
+                return ErlangRewrite::InterfaceCall {
+                    method: method_snake,
+                    args,
+                    result_var,
+                };
             } else {
                 // No assignment — just call
                 let call_start = l.find(&pattern).map(|p| p + pattern.len()).unwrap_or(0);
                 let call_end = l.rfind(')').unwrap_or(l.len());
                 let args = l[call_start..call_end].trim().to_string();
-                return ErlangRewrite::InterfaceCall { method: method_snake, args, result_var: "_".to_string() };
+                return ErlangRewrite::InterfaceCall {
+                    method: method_snake,
+                    args,
+                    result_var: "_".to_string(),
+                };
             }
         }
     }
@@ -80,7 +100,9 @@ fn erlang_rewrite_native_classified_full(line: &str, action_names: &[String], in
         let rest = &l[5..]; // skip "self."
         if let Some(eq_pos) = rest.find('=') {
             let field = rest[..eq_pos].trim().to_string();
-            let value = rest[eq_pos+1..].trim().replace("self.", &format!("{}#data.", data_var));
+            let value = rest[eq_pos + 1..]
+                .trim()
+                .replace("self.", &format!("{}#data.", data_var));
             return ErlangRewrite::RecordUpdate { field, value };
         }
     }
@@ -163,7 +185,10 @@ fn erlang_safe_capitalize(name: &str) -> String {
         }
     };
     // Reserved gen_statem variable names
-    if matches!(capitalized.as_str(), "Data" | "From" | "State" | "OldState" | "Pid") {
+    if matches!(
+        capitalized.as_str(),
+        "Data" | "From" | "State" | "OldState" | "Pid"
+    ) {
         format!("{}_Arg", capitalized)
     } else {
         capitalized
@@ -188,8 +213,14 @@ fn erlang_capitalize_params(line: &str, param_names: &[(&str, String)]) -> Strin
                 // Check word boundaries
                 // Don't capitalize identifiers inside record access patterns (#record.field)
                 let prev_byte = result.as_bytes()[i.saturating_sub(1)];
-                let before_ok = i == 0 || !prev_byte.is_ascii_alphanumeric() && prev_byte != b'_' && prev_byte != b'#' && prev_byte != b'.';
-                let after_ok = i + orig_len >= result.len() || !result.as_bytes()[i + orig_len].is_ascii_alphanumeric() && result.as_bytes()[i + orig_len] != b'_';
+                let before_ok = i == 0
+                    || !prev_byte.is_ascii_alphanumeric()
+                        && prev_byte != b'_'
+                        && prev_byte != b'#'
+                        && prev_byte != b'.';
+                let after_ok = i + orig_len >= result.len()
+                    || !result.as_bytes()[i + orig_len].is_ascii_alphanumeric()
+                        && result.as_bytes()[i + orig_len] != b'_';
                 if before_ok && after_ok {
                     new_result.push_str(capitalized);
                     i += orig_len;
@@ -207,15 +238,30 @@ fn erlang_capitalize_params(line: &str, param_names: &[(&str, String)]) -> Strin
 /// Process a sequence of native lines, threading Data through modifications.
 /// Returns (processed_lines, final_data_var) where final_data_var tracks
 /// the most recent Data binding (Data, Data1, Data2, etc.)
-fn erlang_process_body_lines(lines: &[&str], action_names: &[String], initial_data: &str) -> (Vec<String>, String) {
+fn erlang_process_body_lines(
+    lines: &[&str],
+    action_names: &[String],
+    initial_data: &str,
+) -> (Vec<String>, String) {
     erlang_process_body_lines_with_params(lines, action_names, initial_data, &[])
 }
 
-fn erlang_process_body_lines_with_params(lines: &[&str], action_names: &[String], initial_data: &str, param_names: &[(&str, String)]) -> (Vec<String>, String) {
+fn erlang_process_body_lines_with_params(
+    lines: &[&str],
+    action_names: &[String],
+    initial_data: &str,
+    param_names: &[(&str, String)],
+) -> (Vec<String>, String) {
     erlang_process_body_lines_full(lines, action_names, &[], initial_data, param_names)
 }
 
-fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], interface_names: &[String], initial_data: &str, param_names: &[(&str, String)]) -> (Vec<String>, String) {
+fn erlang_process_body_lines_full(
+    lines: &[&str],
+    action_names: &[String],
+    interface_names: &[String],
+    initial_data: &str,
+    param_names: &[(&str, String)],
+) -> (Vec<String>, String) {
     let mut result = Vec::new();
     let mut data_var = initial_data.to_string();
     let mut data_gen = 0;
@@ -225,30 +271,47 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
     // Pre-process: split lines with inline % comments so the comment
     // can't eat trailing syntax (commas, semicolons, record close braces).
     // "code  % comment" → ["code", "% comment"]
-    let preprocessed: Vec<String> = lines.iter().flat_map(|line| {
-        let l = line.trim();
-        // Find % that's not inside a string
-        let mut in_string = false;
-        let mut escape = false;
-        for (i, c) in l.char_indices() {
-            if escape { escape = false; continue; }
-            if c == '\\' { escape = true; continue; }
-            if c == '"' { in_string = !in_string; continue; }
-            if c == '%' && !in_string && i > 0 {
-                let code = l[..i].trim_end();
-                let comment = &l[i..];
-                if !code.is_empty() {
-                    return vec![code.to_string(), comment.to_string()];
+    let preprocessed: Vec<String> = lines
+        .iter()
+        .flat_map(|line| {
+            let l = line.trim();
+            // Find % that's not inside a string
+            let mut in_string = false;
+            let mut escape = false;
+            for (i, c) in l.char_indices() {
+                if escape {
+                    escape = false;
+                    continue;
+                }
+                if c == '\\' {
+                    escape = true;
+                    continue;
+                }
+                if c == '"' {
+                    in_string = !in_string;
+                    continue;
+                }
+                if c == '%' && !in_string && i > 0 {
+                    let code = l[..i].trim_end();
+                    let comment = &l[i..];
+                    if !code.is_empty() {
+                        return vec![code.to_string(), comment.to_string()];
+                    }
                 }
             }
-        }
-        vec![l.to_string()]
-    }).collect();
-    let lines = preprocessed.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
+            vec![l.to_string()]
+        })
+        .collect();
+    let lines = preprocessed
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>();
 
     for line in &lines {
         let l = line.trim();
-        if l.is_empty() { continue; }
+        if l.is_empty() {
+            continue;
+        }
 
         // Capitalize params — but for self.field = expr, only capitalize the expr part
         let l = if param_names.is_empty() {
@@ -256,9 +319,13 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
         } else if l.starts_with("self.") && l.contains('=') {
             // Record update: capitalize only the value part after =
             if let Some(eq_pos) = l.find('=') {
-                let field_part = &l[..eq_pos+1];
-                let value_part = &l[eq_pos+1..];
-                format!("{}{}", field_part, erlang_capitalize_params(value_part, param_names))
+                let field_part = &l[..eq_pos + 1];
+                let value_part = &l[eq_pos + 1..];
+                format!(
+                    "{}{}",
+                    field_part,
+                    erlang_capitalize_params(value_part, param_names)
+                )
             } else {
                 erlang_capitalize_params(l, param_names)
             }
@@ -268,16 +335,21 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
 
         // Pass through Erlang structural lines (case/of/end, return tuples)
         // Check if this is a parent forward call (parent_name({call, From}, ...))
-        let is_forward_call = l.contains("({call, From},") && !l.starts_with("case") && !l.starts_with("{");
+        let is_forward_call =
+            l.contains("({call, From},") && !l.starts_with("case") && !l.starts_with("{");
 
-        let is_structural = l.starts_with("case ") || l.starts_with("case(") ||
-           l.starts_with("true ->") || l.starts_with("; false") ||
-           l == "end" || l == "end," ||
-           l.starts_with("{next_state,") || l.starts_with("{keep_state,") ||
-           l.starts_with("{stop,") ||
-           l.starts_with("[__Popped") ||
-           l.starts_with("frame_transition__(") ||
-           is_forward_call;
+        let is_structural = l.starts_with("case ")
+            || l.starts_with("case(")
+            || l.starts_with("true ->")
+            || l.starts_with("; false")
+            || l == "end"
+            || l == "end,"
+            || l.starts_with("{next_state,")
+            || l.starts_with("{keep_state,")
+            || l.starts_with("{stop,")
+            || l.starts_with("[__Popped")
+            || l.starts_with("frame_transition__(")
+            || is_forward_call;
         if is_structural {
             // Track case branch boundaries for Data variable scoping
             // Both data_var AND data_gen are saved/restored so that both arms
@@ -305,8 +377,10 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
                     // Check if this is a case header with an action call in the condition
                     // e.g., "case (self.validate(self.item)) of" → extract action call
                     if rewritten.starts_with("case ") && rewritten.ends_with(" of") {
-                        let call_replaced = rewritten.replace(&pattern, &format!("{}({}, ", action, data_var));
-                        let call_replaced = call_replaced.replace(&format!("({}, )", data_var), &format!("({})", data_var));
+                        let call_replaced =
+                            rewritten.replace(&pattern, &format!("{}({}, ", action, data_var));
+                        let call_replaced = call_replaced
+                            .replace(&format!("({}, )", data_var), &format!("({})", data_var));
                         // Extract the action call from "case (action_call) of"
                         if let Some(paren_start) = call_replaced.find('(') {
                             if let Some(of_pos) = call_replaced.rfind(") of") {
@@ -316,7 +390,10 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
                                 data_gen += 1;
                                 let new_var = format!("Data{}", data_gen);
                                 let result_var = format!("__ActionResult{}", data_gen);
-                                result.push(format!("    {{{}, {}}} = {}", new_var, result_var, action_expr));
+                                result.push(format!(
+                                    "    {{{}, {}}} = {}",
+                                    new_var, result_var, action_expr
+                                ));
                                 data_var = new_var;
                                 // Replace case condition with the result variable
                                 rewritten = format!("case ({}) of", result_var);
@@ -326,8 +403,10 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
                         }
                     }
                     if !action_extracted {
-                        rewritten = rewritten.replace(&pattern, &format!("{}({}, ", action, data_var));
-                        rewritten = rewritten.replace(&format!("({}, )", data_var), &format!("({})", data_var));
+                        rewritten =
+                            rewritten.replace(&pattern, &format!("{}({}, ", action, data_var));
+                        rewritten = rewritten
+                            .replace(&format!("({}, )", data_var), &format!("({})", data_var));
                     }
                 }
             }
@@ -335,7 +414,8 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
 
             // Replace Data with current data_var in return tuples, expressions, and forward calls
             if data_var != "Data" {
-                rewritten = rewritten.replace(", Data,", &format!(", {},", data_var))
+                rewritten = rewritten
+                    .replace(", Data,", &format!(", {},", data_var))
                     .replace(", Data}", &format!(", {}}}", data_var))
                     .replace(", Data)", &format!(", {})", data_var))
                     .replace("Data#data.", &format!("{}#data.", data_var));
@@ -355,45 +435,70 @@ fn erlang_process_body_lines_full(lines: &[&str], action_names: &[String], inter
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
                 // Actions return {Data, ReturnValue} — destructure the tuple
-                result.push(format!("    {{{}, __ActionResult{}}} = {}", new_var, data_gen, call));
+                result.push(format!(
+                    "    {{{}, __ActionResult{}}} = {}",
+                    new_var, data_gen, call
+                ));
                 data_var = new_var;
             }
             ErlangRewrite::RecordUpdate { field, value } => {
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
                 // Erlang string concat is ++ not + — fix when adjacent to string literals
-                let value = value.replace("\" + \"", "\" ++ \"")
+                let value = value
+                    .replace("\" + \"", "\" ++ \"")
                     .replace("\" + ", "\" ++ ")
                     .replace(" + \"", " ++ \"");
-                result.push(format!("    {} = {}#data{{{} = {}}}", new_var, data_var, field, value));
+                result.push(format!(
+                    "    {} = {}#data{{{} = {}}}",
+                    new_var, data_var, field, value
+                ));
                 data_var = new_var;
             }
-            ErlangRewrite::InterfaceCall { method, args, result_var } => {
+            ErlangRewrite::InterfaceCall {
+                method,
+                args,
+                result_var,
+            } => {
                 // Internal dispatch: {DataN, Result} = frame_dispatch__(method, [args], DataPrev)
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
-                let args_list = if args.is_empty() { "[]".to_string() } else { format!("[{}]", args) };
-                let result_name = if result_var == "_" { "_".to_string() } else {
+                let args_list = if args.is_empty() {
+                    "[]".to_string()
+                } else {
+                    format!("[{}]", args)
+                };
+                let result_name = if result_var == "_" {
+                    "_".to_string()
+                } else {
                     let mut chars = result_var.chars();
                     match chars.next() {
                         None => "_".to_string(),
                         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
                     }
                 };
-                result.push(format!("    {{{}, {}}} = frame_dispatch__({}, {}, {})",
-                    new_var, result_name, method, args_list, data_var));
+                result.push(format!(
+                    "    {{{}, {}}} = frame_dispatch__({}, {}, {})",
+                    new_var, result_name, method, args_list, data_var
+                ));
                 data_var = new_var;
             }
             ErlangRewrite::Plain(text) => {
-                if text.is_empty() { continue; }
+                if text.is_empty() {
+                    continue;
+                }
                 // Erlang string concat is ++ not + — fix when adjacent to string literals
-                let text = text.replace("\" + \"", "\" ++ \"")
+                let text = text
+                    .replace("\" + \"", "\" ++ \"")
                     .replace("\" + ", "\" ++ ")
                     .replace(" + \"", " ++ \"");
                 result.push(format!("    {}", text));
             }
             ErlangRewrite::Reply(expr) => {
-                result.push(format!("    {{keep_state, {}, [{{reply, From, {}}}]}}", data_var, expr));
+                result.push(format!(
+                    "    {{keep_state, {}, [{{reply, From, {}}}]}}",
+                    data_var, expr
+                ));
             }
         }
     }
@@ -427,7 +532,8 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
 
     // Filter out comment-only lines — they contribute nothing to Erlang syntax
     // and break comma/semicolon placement logic when between code lines.
-    let non_comment_lines: Vec<&String> = lines.iter()
+    let non_comment_lines: Vec<&String> = lines
+        .iter()
         .filter(|l| {
             let t = l.trim();
             !t.starts_with('%') || t.is_empty()
@@ -444,10 +550,22 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
                 let mut escape = false;
                 let mut code_end = pt_full.len();
                 for (i, c) in pt_full.char_indices() {
-                    if escape { escape = false; continue; }
-                    if c == '\\' { escape = true; continue; }
-                    if c == '"' { in_string = !in_string; continue; }
-                    if c == '%' && !in_string { code_end = i; break; }
+                    if escape {
+                        escape = false;
+                        continue;
+                    }
+                    if c == '\\' {
+                        escape = true;
+                        continue;
+                    }
+                    if c == '"' {
+                        in_string = !in_string;
+                        continue;
+                    }
+                    if c == '%' && !in_string {
+                        code_end = i;
+                        break;
+                    }
                 }
                 pt_full[..code_end].trim_end()
             };
@@ -462,11 +580,14 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
 
             // No comma after structural introducers
             let prev_is_case_head = pt.ends_with(" of");
-            let prev_is_branch = pt.ends_with("->") || pt.starts_with("; false") || pt.starts_with("; true");
+            let prev_is_branch =
+                pt.ends_with("->") || pt.starts_with("; false") || pt.starts_with("; true");
 
             // No comma before structural closers or branch starts
-            let curr_is_end = lt == "end" || lt == "end," || lt.starts_with("end;") || lt.starts_with("end.");
-            let curr_is_branch = lt.starts_with("true ->") || lt.starts_with("; false") || lt.starts_with("; true");
+            let curr_is_end =
+                lt == "end" || lt == "end," || lt.starts_with("end;") || lt.starts_with("end.");
+            let curr_is_branch =
+                lt.starts_with("true ->") || lt.starts_with("; false") || lt.starts_with("; true");
 
             // Inside case blocks: suppress commas only at structural boundaries
             // (between branches, after case/of, before end). Expressions within
@@ -482,8 +603,14 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
         }
 
         let lt = line.trim();
-        if (lt.starts_with("case ") || lt.contains(" case ") || lt.starts_with("case(")) && lt.ends_with(" of") { case_depth += 1; }
-        if lt == "end" || lt == "end," || lt.starts_with("end;") || lt.starts_with("end.") { case_depth = (case_depth - 1).max(0); }
+        if (lt.starts_with("case ") || lt.contains(" case ") || lt.starts_with("case("))
+            && lt.ends_with(" of")
+        {
+            case_depth += 1;
+        }
+        if lt == "end" || lt == "end," || lt.starts_with("end;") || lt.starts_with("end.") {
+            case_depth = (case_depth - 1).max(0);
+        }
 
         code.push_str(line);
     }
@@ -509,25 +636,34 @@ fn erlang_transform_blocks(text: &str) -> String {
 
         // `if condition {` → `case (condition) of true ->`
         if trimmed.starts_with("if ") && trimmed.ends_with('{') {
-            let condition = trimmed[3..trimmed.len()-1].trim();
-            result.push_str(&format!("{}case ({}) of\n{}    true ->", indent, condition, indent));
+            let condition = trimmed[3..trimmed.len() - 1].trim();
+            result.push_str(&format!(
+                "{}case ({}) of\n{}    true ->",
+                indent, condition, indent
+            ));
             block_depth.push(("if", false));
             result.push('\n');
             continue;
         }
 
         // `} else if condition {` → `; false -> case (condition) of true ->`
-        if (trimmed.starts_with("} else if ") || trimmed.starts_with("}else if ")) && trimmed.ends_with('{') {
+        if (trimmed.starts_with("} else if ") || trimmed.starts_with("}else if "))
+            && trimmed.ends_with('{')
+        {
             let rest = if trimmed.starts_with("} else if ") {
-                &trimmed[10..trimmed.len()-1]
+                &trimmed[10..trimmed.len() - 1]
             } else {
-                &trimmed[9..trimmed.len()-1]
+                &trimmed[9..trimmed.len() - 1]
             };
             let condition = rest.trim();
             // Pop current if, push new nested case
-            if !block_depth.is_empty() { block_depth.pop(); }
-            result.push_str(&format!("{}    ; false ->\n{}        case ({}) of\n{}            true ->",
-                indent, indent, condition, indent));
+            if !block_depth.is_empty() {
+                block_depth.pop();
+            }
+            result.push_str(&format!(
+                "{}    ; false ->\n{}        case ({}) of\n{}            true ->",
+                indent, indent, condition, indent
+            ));
             block_depth.push(("elif", false));
             block_depth.push(("if", false));
             result.push('\n');
@@ -633,7 +769,9 @@ fn erlang_nest_early_exits(lines: &[&str]) -> String {
             if is_false_ok {
                 // Find the matching "end" line after this
                 let mut j = i + 1;
-                while j < output_lines.len() && output_lines[j].trim().is_empty() { j += 1; }
+                while j < output_lines.len() && output_lines[j].trim().is_empty() {
+                    j += 1;
+                }
 
                 let is_end = j < output_lines.len() && {
                     let t = output_lines[j].trim().to_string();
@@ -652,7 +790,11 @@ fn erlang_nest_early_exits(lines: &[&str]) -> String {
                     // Only nest if remaining code has real expressions (not just structural case lines)
                     let has_real_code = remaining.iter().any(|r| {
                         let t = r.trim();
-                        !t.is_empty() && t != "end" && t != "end," && !t.starts_with("; false -> ok") && !t.starts_with("; false ->")
+                        !t.is_empty()
+                            && t != "end"
+                            && t != "end,"
+                            && !t.starts_with("; false -> ok")
+                            && !t.starts_with("; false ->")
                     });
                     if has_real_code {
                         let indent_len = output_lines[i].len() - output_lines[i].trim_start().len();
@@ -693,11 +835,19 @@ fn expand_tagged_in_domain_erlang(text: &str) -> String {
     while let Some(pos) = result.find("@@") {
         let after = pos + 2;
         if after < result.len() && result.as_bytes()[after].is_ascii_uppercase() {
-            let name_end = result[after..].find(|c: char| !c.is_ascii_alphanumeric() && c != '_').map(|p| after + p).unwrap_or(result.len());
+            let name_end = result[after..]
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .map(|p| after + p)
+                .unwrap_or(result.len());
             let name = &result[after..name_end];
             let snake = to_snake_case(name);
             if name_end < result.len() && result.as_bytes()[name_end] == b'(' {
-                result = format!("{}{}:start_link({}", &result[..pos], snake, &result[name_end + 1..]);
+                result = format!(
+                    "{}{}:start_link({}",
+                    &result[..pos],
+                    snake,
+                    &result[name_end + 1..]
+                );
             } else {
                 result = format!("{}{}{}", &result[..pos], snake, &result[name_end..]);
             }
@@ -740,7 +890,9 @@ enum CaseBlockClassification {
 /// Analyze a case block in processed handler lines.
 /// Returns (classification, arms, case_start_line, case_end_line).
 /// Only analyzes the first top-level case block found.
-fn analyze_case_arms(processed: &[String]) -> Option<(CaseBlockClassification, Vec<CaseArmInfo>, usize, usize)> {
+fn analyze_case_arms(
+    processed: &[String],
+) -> Option<(CaseBlockClassification, Vec<CaseArmInfo>, usize, usize)> {
     let mut case_start = None;
     let mut case_end = None;
     let mut depth = 0i32;
@@ -776,9 +928,14 @@ fn analyze_case_arms(processed: &[String]) -> Option<(CaseBlockClassification, V
         if depth != 1 {
             // Still track content for current arm at nested depths
             if let Some(ref mut arm) = current_arm {
-                if t.starts_with("frame_transition__(") { arm.has_transition = true; }
+                if t.starts_with("frame_transition__(") {
+                    arm.has_transition = true;
+                }
                 if t.starts_with("__ReturnVal = ") {
-                    let val = t.trim_start_matches("__ReturnVal = ").trim_end_matches(',').to_string();
+                    let val = t
+                        .trim_start_matches("__ReturnVal = ")
+                        .trim_end_matches(',')
+                        .to_string();
                     arm.return_val = Some(val);
                 }
                 // Track DataN variable assignments
@@ -795,7 +952,8 @@ fn analyze_case_arms(processed: &[String]) -> Option<(CaseBlockClassification, V
         }
 
         // Arm boundary detection at depth 1
-        let is_arm_header = t.starts_with("true ->") || t.starts_with("; false") || t.starts_with("; _");
+        let is_arm_header =
+            t.starts_with("true ->") || t.starts_with("; false") || t.starts_with("; _");
         if is_arm_header {
             // Close previous arm
             if let Some(mut arm) = current_arm.take() {
@@ -816,9 +974,14 @@ fn analyze_case_arms(processed: &[String]) -> Option<(CaseBlockClassification, V
 
         // Content within current arm
         if let Some(ref mut arm) = current_arm {
-            if t.starts_with("frame_transition__(") { arm.has_transition = true; }
+            if t.starts_with("frame_transition__(") {
+                arm.has_transition = true;
+            }
             if t.starts_with("__ReturnVal = ") {
-                let val = t.trim_start_matches("__ReturnVal = ").trim_end_matches(',').to_string();
+                let val = t
+                    .trim_start_matches("__ReturnVal = ")
+                    .trim_end_matches(',')
+                    .to_string();
                 arm.return_val = Some(val);
             }
             if t.starts_with("Data") && t.contains(" = ") && !t.contains("#data") {
@@ -834,7 +997,9 @@ fn analyze_case_arms(processed: &[String]) -> Option<(CaseBlockClassification, V
 
     let case_start = case_start?;
     let case_end = case_end?;
-    if arms.is_empty() { return None; }
+    if arms.is_empty() {
+        return None;
+    }
 
     // Classify
     let all_terminal = arms.iter().all(|a| a.has_transition);
@@ -902,7 +1067,10 @@ fn rewrite_mixed_case_arms(
         if !arm.has_transition {
             let data = arm.final_data_var.as_deref().unwrap_or(default_data);
             let reply = arm.return_val.as_deref().unwrap_or("ok");
-            result.push(format!("        {{keep_state, {}, [{{reply, From, {}}}]}}", data, reply));
+            result.push(format!(
+                "        {{keep_state, {}, [{{reply, From, {}}}]}}",
+                data, reply
+            ));
         }
     }
 
@@ -914,7 +1082,11 @@ fn rewrite_mixed_case_arms(
 
 // ============================================================================
 
-pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, source: &[u8]) -> CodegenNode {
+pub(crate) fn generate_erlang_system(
+    system: &SystemAst,
+    _arcanum: &Arcanum,
+    source: &[u8],
+) -> CodegenNode {
     let sys = &system.name;
     let module_name = to_snake_case(sys);
     let mut code = String::new();
@@ -933,11 +1105,16 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     code.push_str("-behaviour(gen_statem).\n\n");
 
     // Collect state names
-    let states: Vec<&str> = system.machine.as_ref()
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
         .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
         .unwrap_or_default();
 
-    let first_state = states.first().map(|s| to_snake_case(s)).unwrap_or_else(|| "init_state".to_string());
+    let first_state = states
+        .first()
+        .map(|s| to_snake_case(s))
+        .unwrap_or_else(|| "init_state".to_string());
 
     // State name conversion: $MyState -> my_state
     let state_atom = |name: &str| -> String { to_snake_case(name) };
@@ -966,7 +1143,8 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     code.push_str("-export([callback_mode/0, init/1]).\n");
 
     // Exports — state functions
-    let state_exports: Vec<String> = states.iter()
+    let state_exports: Vec<String> = states
+        .iter()
         .map(|s| format!("{}/3", state_atom(s)))
         .collect();
     if !state_exports.is_empty() {
@@ -1051,7 +1229,9 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
 
     // Interface functions — public API
     for method in &system.interface {
-        let params: Vec<String> = method.params.iter()
+        let params: Vec<String> = method
+            .params
+            .iter()
             .map(|p| erlang_safe_capitalize(&p.name))
             .collect();
         let all_params = {
@@ -1065,10 +1245,12 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
         } else {
             format!("{{{}, {}}}", method_snake, params.join(", "))
         };
-        code.push_str(&format!("{}({}) ->\n    gen_statem:call(Pid, {}).\n\n",
+        code.push_str(&format!(
+            "{}({}) ->\n    gen_statem:call(Pid, {}).\n\n",
             method_snake,
             all_params.join(", "),
-            call_args));
+            call_args
+        ));
     }
 
     // callback_mode/0
@@ -1154,7 +1336,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 // Extract enter params from frame_enter_args
                 for (i, p) in enter.params.iter().enumerate() {
                     let var_name = erlang_safe_capitalize(&p.name);
-                    code.push_str(&format!("    {} = maps:get(<<\"{}\">>, Data#data.frame_enter_args, undefined),\n", var_name, i));
+                    code.push_str(&format!(
+                        "    {} = maps:get(<<\"{}\">>, Data#data.frame_enter_args, undefined),\n",
+                        var_name, i
+                    ));
                 }
                 // Use splicer for proper $.var expansion
                 let enter_ctx = HandlerContext {
@@ -1174,22 +1359,34 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     end: enter.body.span.end,
                 };
                 let raw_enter = splice_handler_body_from_span(
-                    &enter_span, source, TargetLanguage::Erlang, &enter_ctx
+                    &enter_span,
+                    source,
+                    TargetLanguage::Erlang,
+                    &enter_ctx,
                 );
                 let enter_body = erlang_transform_blocks(&raw_enter);
 
                 if !enter_body.trim().is_empty() {
-                    let enter_params: Vec<(&str, String)> = enter.params.iter()
+                    let enter_params: Vec<(&str, String)> = enter
+                        .params
+                        .iter()
                         .map(|p| {
                             let cap = erlang_safe_capitalize(&p.name);
                             (p.name.as_str(), cap)
                         })
                         .collect();
                     let lines: Vec<&str> = enter_body.lines().collect();
-                    let (processed, final_data) = erlang_process_body_lines_with_params(&lines, &action_names, "Data", &enter_params);
+                    let (processed, final_data) = erlang_process_body_lines_with_params(
+                        &lines,
+                        &action_names,
+                        "Data",
+                        &enter_params,
+                    );
                     if !processed.is_empty() {
                         // Check if enter handler contains a transition
-                        let has_enter_transition = processed.iter().any(|l| l.trim().starts_with("frame_transition__("));
+                        let has_enter_transition = processed
+                            .iter()
+                            .any(|l| l.trim().starts_with("frame_transition__("));
                         if has_enter_transition {
                             // Enter handlers can't return {next_state,...} in gen_statem state_enter mode,
                             // and {next_event,...} actions are forbidden from a state enter call.
@@ -1200,8 +1397,11 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                             for line in &processed {
                                 let t = line.trim();
                                 if t.starts_with("frame_transition__(") {
-                                    let inner = t.trim_start_matches("frame_transition__(").trim_end_matches(')');
-                                    let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+                                    let inner = t
+                                        .trim_start_matches("frame_transition__(")
+                                        .trim_end_matches(')');
+                                    let parts: Vec<&str> =
+                                        inner.split(',').map(|s| s.trim()).collect();
                                     if !parts.is_empty() {
                                         let target = parts[0];
                                         enter_lines.push(format!(
@@ -1240,7 +1440,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     };
                     gen += 1;
                     let new_var = format!("Data{}", gen);
-                    code.push_str(&format!("    {} = {}#data{{{} = {}}},\n", new_var, data_var, field_name, init_val));
+                    code.push_str(&format!(
+                        "    {} = {}#data{{{} = {}}},\n",
+                        new_var, data_var, field_name, init_val
+                    ));
                     data_var = new_var;
                 }
                 code.push_str(&format!("    {{keep_state, {}}};\n", data_var));
@@ -1250,7 +1453,11 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
 
             // Event handlers
             for handler in &state.handlers {
-                if handler.event == "$>" || handler.event == "enter" || handler.event == "<$" || handler.event == "exit" {
+                if handler.event == "$>"
+                    || handler.event == "enter"
+                    || handler.event == "<$"
+                    || handler.event == "exit"
+                {
                     continue; // Skip lifecycle handlers
                 }
 
@@ -1260,13 +1467,18 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 let call_pattern = if handler.params.is_empty() {
                     event_atom.clone()
                 } else {
-                    let param_names: Vec<String> = handler.params.iter()
+                    let param_names: Vec<String> = handler
+                        .params
+                        .iter()
                         .map(|p| erlang_safe_capitalize(&p.name))
                         .collect();
                     format!("{{{}, {}}}", event_atom, param_names.join(", "))
                 };
 
-                code.push_str(&format!("{}({{call, From}}, {}, Data) ->\n", state_name, call_pattern));
+                code.push_str(&format!(
+                    "{}({{call, From}}, {}, Data) ->\n",
+                    state_name, call_pattern
+                ));
 
                 // State params: bind frame_state_args[name] to a local
                 // Erlang variable so handler bodies can read state params
@@ -1299,7 +1511,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     end: handler.body.span.end,
                 };
                 let raw_spliced = splice_handler_body_from_span(
-                    &body_span, source, TargetLanguage::Erlang, &handler_ctx
+                    &body_span,
+                    source,
+                    TargetLanguage::Erlang,
+                    &handler_ctx,
                 );
 
                 // Transform if/else { } blocks to Erlang case/of/end
@@ -1309,7 +1524,9 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 // Include both handler params AND state params (declared via
                 // `$Start(x: int)`) so the body can reference state-args
                 // bound at the top of the clause by their declared name.
-                let handler_params: Vec<(&str, String)> = handler.params.iter()
+                let handler_params: Vec<(&str, String)> = handler
+                    .params
+                    .iter()
                     .map(|p| {
                         let capitalized = erlang_safe_capitalize(&p.name);
                         (p.name.as_str(), capitalized)
@@ -1323,11 +1540,12 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 // Check if the spliced body contains a gen_statem return tuple, forward, or frame_transition
                 let has_forward_call = spliced_body.contains("({call, From},");
                 let has_frame_transition = spliced_body.contains("frame_transition__(");
-                let has_return_tuple = spliced_body.contains("{next_state,") ||
-                                       spliced_body.contains("{keep_state,") ||
-                                       has_forward_call ||
-                                       has_frame_transition;
-                let has_case_block = spliced_body.contains("case (") || spliced_body.contains("case(");
+                let has_return_tuple = spliced_body.contains("{next_state,")
+                    || spliced_body.contains("{keep_state,")
+                    || has_forward_call
+                    || has_frame_transition;
+                let has_case_block =
+                    spliced_body.contains("case (") || spliced_body.contains("case(");
 
                 if has_return_tuple {
                     // Exit handler is now handled by __frame_transition — no inlining needed
@@ -1335,11 +1553,17 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     // Process through Data threading (handles both simple and case-block bodies)
                     let lines: Vec<&str> = spliced_body.lines().collect();
                     let (processed, _final_data) = erlang_process_body_lines_full(
-                        &lines, &action_names, &interface_names, "Data", &handler_params
+                        &lines,
+                        &action_names,
+                        &interface_names,
+                        "Data",
+                        &handler_params,
                     );
                     if !processed.is_empty() {
                         // Use structured case arm analysis when a case block exists
-                        if let Some((classification, arms, case_start, case_end)) = analyze_case_arms(&processed) {
+                        if let Some((classification, arms, case_start, case_end)) =
+                            analyze_case_arms(&processed)
+                        {
                             match classification {
                                 CaseBlockClassification::AllTerminal => {
                                     // All arms have transitions — case is terminal, use as handler return
@@ -1354,7 +1578,11 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                                 CaseBlockClassification::Mixed => {
                                     // Some arms transition, some don't — per-arm rewrite
                                     let rewritten = rewrite_mixed_case_arms(
-                                        &processed, &arms, case_start, case_end, &_final_data
+                                        &processed,
+                                        &arms,
+                                        case_start,
+                                        case_end,
+                                        &_final_data,
                                     );
                                     erlang_smart_join(&rewritten, &mut code);
                                 }
@@ -1368,10 +1596,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                             // No case block — use existing terminal detection for linear handlers
                             let is_terminal = |l: &str| -> bool {
                                 let t = l.trim();
-                                t.contains("({call, From},") ||
-                                t.starts_with("frame_transition__(") ||
-                                t.starts_with("{next_state,") ||
-                                t.starts_with("{keep_state,")
+                                t.contains("({call, From},")
+                                    || t.starts_with("frame_transition__(")
+                                    || t.starts_with("{next_state,")
+                                    || t.starts_with("{keep_state,")
                             };
                             let mut terminal_idx: Option<usize> = None;
                             for (idx, line) in processed.iter().enumerate() {
@@ -1397,15 +1625,23 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     // No return tuple — process through Data threading and add return
                     let lines: Vec<&str> = spliced_body.lines().collect();
                     let (processed, final_data) = erlang_process_body_lines_full(
-                        &lines, &action_names, &interface_names, "Data", &handler_params
+                        &lines,
+                        &action_names,
+                        &interface_names,
+                        "Data",
+                        &handler_params,
                     );
                     if processed.is_empty() {
                         code.push_str("    {keep_state, Data, [{reply, From, ok}]};\n");
                     } else {
                         // Check if @@:return was used (sets __ReturnVal)
                         let has_return_val = processed.iter().any(|l| l.contains("__ReturnVal"));
-                        let has_transition = processed.iter().any(|l| l.trim().starts_with("frame_transition__("));
-                        let has_case = processed.iter().any(|l| l.trim().starts_with("case ") || l.contains(" case "));
+                        let has_transition = processed
+                            .iter()
+                            .any(|l| l.trim().starts_with("frame_transition__("));
+                        let has_case = processed
+                            .iter()
+                            .any(|l| l.trim().starts_with("case ") || l.contains(" case "));
                         let reply_val = if has_return_val { "__ReturnVal" } else { "ok" };
 
                         if has_case && has_transition {
@@ -1430,12 +1666,19 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                                     continue;
                                 }
 
-                                if in_case && (trimmed.starts_with("true ->") || trimmed.starts_with("; false") || trimmed.starts_with("; _")) {
+                                if in_case
+                                    && (trimmed.starts_with("true ->")
+                                        || trimmed.starts_with("; false")
+                                        || trimmed.starts_with("; _"))
+                                {
                                     // Entering a new arm — flush previous arm's keep_state if needed
                                     if trimmed.starts_with("; ") && !arm_has_transition {
                                         // Previous arm had no transition — inject keep_state
                                         let rv = arm_return_val.as_deref().unwrap_or("ok");
-                                        rewritten.push(format!("        {{keep_state, {}, [{{reply, From, {}}}]}}", final_data, rv));
+                                        rewritten.push(format!(
+                                            "        {{keep_state, {}, [{{reply, From, {}}}]}}",
+                                            final_data, rv
+                                        ));
                                     }
                                     arm_has_transition = false;
                                     arm_return_val = None;
@@ -1444,7 +1687,9 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                                 }
 
                                 if in_case && trimmed.starts_with("__ReturnVal = ") {
-                                    let val = trimmed.trim_start_matches("__ReturnVal = ").trim_end_matches(',');
+                                    let val = trimmed
+                                        .trim_start_matches("__ReturnVal = ")
+                                        .trim_end_matches(',');
                                     arm_return_val = Some(val.to_string());
                                     // Don't emit the assignment — embed the value in the reply tuple
                                     continue;
@@ -1461,7 +1706,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                                     // Last arm ending — inject keep_state if no transition
                                     if !arm_has_transition {
                                         let rv = arm_return_val.as_deref().unwrap_or("ok");
-                                        rewritten.push(format!("        {{keep_state, {}, [{{reply, From, {}}}]}}", final_data, rv));
+                                        rewritten.push(format!(
+                                            "        {{keep_state, {}, [{{reply, From, {}}}]}}",
+                                            final_data, rv
+                                        ));
                                     }
                                     rewritten.push(format!("    end"));
                                     in_case = false;
@@ -1497,11 +1745,17 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                             }
                             erlang_smart_join(&rewritten, &mut code);
                             code.push_str(",\n");
-                            code.push_str(&format!("    {{keep_state, {}, [{{reply, From, {}}}]}};\n", final_data, reply_val));
+                            code.push_str(&format!(
+                                "    {{keep_state, {}, [{{reply, From, {}}}]}};\n",
+                                final_data, reply_val
+                            ));
                         } else {
                             erlang_smart_join(&processed, &mut code);
                             code.push_str(",\n");
-                            code.push_str(&format!("    {{keep_state, {}, [{{reply, From, {}}}]}};\n", final_data, reply_val));
+                            code.push_str(&format!(
+                                "    {{keep_state, {}, [{{reply, From, {}}}]}};\n",
+                                final_data, reply_val
+                            ));
                         }
                     }
                 }
@@ -1521,17 +1775,25 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
             if let Some(ref parent) = state.parent {
                 let parent_atom = state_atom(parent);
                 code.push_str(&format!("{}({{call, From}}, __Event, Data) ->\n    {}({{call, From}}, __Event, Data);\n", state_name, parent_atom));
-                code.push_str(&format!("{}(_EventType, _Event, Data) ->\n    {{keep_state, Data}}.\n\n", state_name));
+                code.push_str(&format!(
+                    "{}(_EventType, _Event, Data) ->\n    {{keep_state, Data}}.\n\n",
+                    state_name
+                ));
             } else {
                 // Catch-all for call events — must reply to avoid caller deadlock
                 code.push_str(&format!("{}({{call, From}}, _Event, Data) ->\n    {{keep_state, Data, [{{reply, From, ok}}]}};\n", state_name));
-                code.push_str(&format!("{}(_EventType, _Event, Data) ->\n    {{keep_state, Data}}.\n\n", state_name));
+                code.push_str(&format!(
+                    "{}(_EventType, _Event, Data) ->\n    {{keep_state, Data}}.\n\n",
+                    state_name
+                ));
             }
         }
     }
 
     // Frame transition helper — orchestrates exit → arg passing → gen_statem transition
-    code.push_str("frame_transition__(TargetState, Data, ExitArgs, EnterArgs, StateArgs, From) ->\n");
+    code.push_str(
+        "frame_transition__(TargetState, Data, ExitArgs, EnterArgs, StateArgs, From) ->\n",
+    );
     code.push_str("    Data1 = Data#data{frame_exit_args = ExitArgs},\n");
     code.push_str("    Data2 = frame_exit_dispatch__(Data1),\n");
     code.push_str("    Data3 = Data2#data{frame_enter_args = EnterArgs, frame_state_args = StateArgs, frame_current_state = TargetState},\n");
@@ -1544,7 +1806,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
         for state in &machine.states {
             if state.exit.is_some() {
                 let sname = state_atom(&state.name);
-                code.push_str(&format!("        {} -> frame_exit__{}(Data);\n", sname, sname));
+                code.push_str(&format!(
+                    "        {} -> frame_exit__{}(Data);\n",
+                    sname, sname
+                ));
             }
         }
     }
@@ -1561,7 +1826,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                 // Extract exit params
                 for (i, p) in exit.params.iter().enumerate() {
                     let var_name = erlang_safe_capitalize(&p.name);
-                    code.push_str(&format!("    {} = maps:get(<<\"{}\">>, Data#data.frame_exit_args, undefined),\n", var_name, i));
+                    code.push_str(&format!(
+                        "    {} = maps:get(<<\"{}\">>, Data#data.frame_exit_args, undefined),\n",
+                        var_name, i
+                    ));
                 }
 
                 // Exit handler body via splicer
@@ -1582,17 +1850,27 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     end: exit.body.span.end,
                 };
                 let raw_exit = splice_handler_body_from_span(
-                    &exit_span, source, TargetLanguage::Erlang, &exit_ctx
+                    &exit_span,
+                    source,
+                    TargetLanguage::Erlang,
+                    &exit_ctx,
                 );
 
-                let exit_params: Vec<(&str, String)> = exit.params.iter()
+                let exit_params: Vec<(&str, String)> = exit
+                    .params
+                    .iter()
                     .map(|p| {
                         let cap = erlang_safe_capitalize(&p.name);
                         (p.name.as_str(), cap)
                     })
                     .collect();
                 let lines: Vec<&str> = raw_exit.lines().collect();
-                let (processed, final_data) = erlang_process_body_lines_with_params(&lines, &action_names, "Data", &exit_params);
+                let (processed, final_data) = erlang_process_body_lines_with_params(
+                    &lines,
+                    &action_names,
+                    "Data",
+                    &exit_params,
+                );
 
                 if !processed.is_empty() {
                     erlang_smart_join(&processed, &mut code);
@@ -1608,7 +1886,9 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     // Pushes/pops context stack for reentrancy
     code.push_str("frame_dispatch__(EventName, Args, Data) ->\n");
     code.push_str("    Ctx = #{return_val => undefined, data => #{}},\n");
-    code.push_str("    Data1 = Data#data{frame_context_stack = [Ctx | Data#data.frame_context_stack]},\n");
+    code.push_str(
+        "    Data1 = Data#data{frame_context_stack = [Ctx | Data#data.frame_context_stack]},\n",
+    );
     code.push_str("    Msg = case Args of\n");
     code.push_str("        [] -> EventName;\n");
     code.push_str("        _ -> list_to_tuple([EventName | Args])\n");
@@ -1642,7 +1922,9 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     // Action functions
     for action in &system.actions {
         code.push_str(&format!("{}(", action.name));
-        let params: Vec<String> = action.params.iter()
+        let params: Vec<String> = action
+            .params
+            .iter()
             .map(|p| erlang_safe_capitalize(&p.name))
             .collect();
         // Actions receive Data as first param
@@ -1656,25 +1938,31 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
             let body_text = std::str::from_utf8(body_bytes).unwrap_or("    ok");
             let trimmed = body_text.trim();
             let inner = if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                trimmed[1..trimmed.len()-1].trim()
+                trimmed[1..trimmed.len() - 1].trim()
             } else {
                 trimmed
             };
             // Build param name mappings for capitalization
-            let act_params: Vec<(&str, String)> = action.params.iter()
+            let act_params: Vec<(&str, String)> = action
+                .params
+                .iter()
                 .map(|p| {
                     let cap = erlang_safe_capitalize(&p.name);
                     (p.name.as_str(), cap)
                 })
                 .collect();
             let lines: Vec<&str> = inner.lines().collect();
-            let (processed, final_data) = erlang_process_body_lines_with_params(&lines, &action_names, "Data", &act_params);
+            let (processed, final_data) =
+                erlang_process_body_lines_with_params(&lines, &action_names, "Data", &act_params);
             if processed.is_empty() {
                 // No body — return {Data, ok}
                 code.push_str("    {Data, ok}");
             } else {
                 // Check if last processed line is a value expression (not a Data assignment)
-                let last_line = processed.last().map(|l| l.trim().to_string()).unwrap_or_default();
+                let last_line = processed
+                    .last()
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_default();
                 let last_is_value = !last_line.starts_with("Data")
                     && !last_line.starts_with("__")
                     && !last_line.is_empty()
@@ -1703,7 +1991,9 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     // Operations
     for op in &system.operations {
         code.push_str(&format!("{}(", op.name));
-        let params: Vec<String> = op.params.iter()
+        let params: Vec<String> = op
+            .params
+            .iter()
             .map(|p| erlang_safe_capitalize(&p.name))
             .collect();
         if !op.is_static {
@@ -1720,12 +2010,14 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
             let body_text = std::str::from_utf8(body_bytes).unwrap_or("    ok");
             let trimmed = body_text.trim();
             let inner = if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                trimmed[1..trimmed.len()-1].trim()
+                trimmed[1..trimmed.len() - 1].trim()
             } else {
                 trimmed
             };
             // Build param name mappings for capitalization
-            let op_params: Vec<(&str, String)> = op.params.iter()
+            let op_params: Vec<(&str, String)> = op
+                .params
+                .iter()
                 .map(|p| {
                     let cap = erlang_safe_capitalize(&p.name);
                     (p.name.as_str(), cap)
@@ -1736,7 +2028,9 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
             let mut processed_lines: Vec<String> = Vec::new();
             for line in inner.lines() {
                 let l = line.trim();
-                if l.is_empty() { continue; }
+                if l.is_empty() {
+                    continue;
+                }
                 let l = if l.starts_with("return ") {
                     l.trim_start_matches("return ").trim().to_string()
                 } else if l == "return" {
@@ -1745,7 +2039,11 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
                     l.to_string()
                 };
                 let l = l.replace("self.", "Data#data.");
-                let l = if op_params.is_empty() { l } else { erlang_capitalize_params(&l, &op_params) };
+                let l = if op_params.is_empty() {
+                    l
+                } else {
+                    erlang_capitalize_params(&l, &op_params)
+                };
                 processed_lines.push(format!("    {}", l));
             }
             if processed_lines.is_empty() {
@@ -1780,7 +2078,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
         code.push_str("    #{state => State,\n");
         for (i, field) in field_names.iter().enumerate() {
             let comma = if i < field_names.len() - 1 { "," } else { "" };
-            code.push_str(&format!("      {} => Data#data.{}{}\n", field, field, comma));
+            code.push_str(&format!(
+                "      {} => Data#data.{}{}\n",
+                field, field, comma
+            ));
         }
         code.push_str("    }.\n\n");
 
@@ -1790,7 +2091,10 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
         code.push_str("    Data = #data{\n");
         for (i, field) in field_names.iter().enumerate() {
             let comma = if i < field_names.len() - 1 { "," } else { "" };
-            code.push_str(&format!("        {} = maps:get({}, Map, undefined){}\n", field, field, comma));
+            code.push_str(&format!(
+                "        {} = maps:get({}, Map, undefined){}\n",
+                field, field, comma
+            ));
         }
         code.push_str("    },\n");
         code.push_str("    {ok, Pid} = gen_statem:start_link(?MODULE, [], []),\n");
@@ -1810,9 +2114,5 @@ pub(crate) fn generate_erlang_system(system: &SystemAst, _arcanum: &Arcanum, sou
     }
 
     // Wrap in a NativeBlock — the assembler will stitch prolog + this + epilog
-    CodegenNode::NativeBlock {
-        code,
-        span: None,
-    }
+    CodegenNode::NativeBlock { code, span: None }
 }
-

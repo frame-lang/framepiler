@@ -28,8 +28,14 @@ impl BodyCloser for BodyCloserPy {
         fsm.scan();
         match fsm.error_kind {
             0 => Ok(fsm.result_pos),
-            1 => Err(CloseError { kind: CloseErrorKind::UnterminatedString, message: fsm.error_msg }),
-            _ => Err(CloseError { kind: CloseErrorKind::UnmatchedBraces, message: fsm.error_msg }),
+            1 => Err(CloseError {
+                kind: CloseErrorKind::UnterminatedString,
+                message: fsm.error_msg,
+            }),
+            _ => Err(CloseError {
+                kind: CloseErrorKind::UnmatchedBraces,
+                message: fsm.error_msg,
+            }),
         }
     }
 }

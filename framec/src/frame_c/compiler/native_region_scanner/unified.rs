@@ -13,21 +13,27 @@
 #[allow(dead_code)]
 #[allow(non_snake_case)]
 #[allow(unused_variables)]
-mod _expr_scanner { include!("expr_scanner.gen.rs"); }
+mod _expr_scanner {
+    include!("expr_scanner.gen.rs");
+}
 
 #[allow(unreachable_patterns)]
 #[allow(unused_mut)]
 #[allow(dead_code)]
 #[allow(non_snake_case)]
 #[allow(unused_variables)]
-mod _context_parser { include!("context_parser.gen.rs"); }
+mod _context_parser {
+    include!("context_parser.gen.rs");
+}
 
 #[allow(unreachable_patterns)]
 #[allow(unused_mut)]
 #[allow(dead_code)]
 #[allow(non_snake_case)]
 #[allow(unused_variables)]
-mod _state_var_parser { include!("state_var_parser.gen.rs"); }
+mod _state_var_parser {
+    include!("state_var_parser.gen.rs");
+}
 
 use _context_parser::ContextParserFsm;
 use _state_var_parser::StateVarParserFsm;
@@ -73,10 +79,11 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
     open_brace_index: usize,
 ) -> Result<ScanResult, ScanError> {
     let mut closer = skipper.body_closer();
-    let close = closer.close_byte(bytes, open_brace_index)
+    let close = closer
+        .close_byte(bytes, open_brace_index)
         .map_err(|e| ScanError {
             kind: ScanErrorKind::UnterminatedProtected,
-            message: format!("{:?}", e)
+            message: format!("{:?}", e),
         })?;
 
     let mut regions: Vec<Region> = Vec::new();
@@ -135,12 +142,17 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 if seg_start < i {
                     // Trim trailing whitespace from native text (it's indentation for the Frame statement)
                     let mut native_end = i;
-                    while native_end > seg_start && (bytes[native_end - 1] == b' ' || bytes[native_end - 1] == b'\t') {
+                    while native_end > seg_start
+                        && (bytes[native_end - 1] == b' ' || bytes[native_end - 1] == b'\t')
+                    {
                         native_end -= 1;
                     }
                     if seg_start < native_end {
                         regions.push(Region::NativeText {
-                            span: RegionSpan { start: seg_start, end: native_end }
+                            span: RegionSpan {
+                                start: seg_start,
+                                end: native_end,
+                            },
                         });
                     }
                 }
@@ -149,7 +161,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 let stmt_end = skipper.find_line_end(bytes, i, end);
 
                 regions.push(Region::FrameSegment {
-                    span: RegionSpan { start: i, end: stmt_end },
+                    span: RegionSpan {
+                        start: i,
+                        end: stmt_end,
+                    },
                     kind,
                     indent,
                 });
@@ -186,7 +201,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
             b'$' if i + 1 < end && bytes[i + 1] == b'.' => {
                 if seg_start < i {
                     regions.push(Region::NativeText {
-                        span: RegionSpan { start: seg_start, end: i }
+                        span: RegionSpan {
+                            start: seg_start,
+                            end: i,
+                        },
                     });
                 }
                 let var_start = i;
@@ -202,7 +220,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     FrameSegmentKind::StateVar
                 };
                 regions.push(Region::FrameSegment {
-                    span: RegionSpan { start: var_start, end: parser.result_end },
+                    span: RegionSpan {
+                        start: var_start,
+                        end: parser.result_end,
+                    },
                     kind,
                     indent: 0,
                 });
@@ -216,7 +237,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
             b'@' if i + 1 < end && bytes[i + 1] == b'@' => {
                 if seg_start < i {
                     regions.push(Region::NativeText {
-                        span: RegionSpan { start: seg_start, end: i }
+                        span: RegionSpan {
+                            start: seg_start,
+                            end: i,
+                        },
                     });
                 }
                 let ctx_start = i;
@@ -227,7 +251,9 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 let mut precomputed_paren_end: usize = 0;
                 if after_at < end && bytes[after_at].is_ascii_uppercase() {
                     let mut name_end = after_at;
-                    while name_end < end && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'_') {
+                    while name_end < end
+                        && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'_')
+                    {
                         name_end += 1;
                     }
                     if name_end < end && bytes[name_end] == b'(' {
@@ -308,12 +334,11 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     // carries the correct indentation.
                     let computed_indent = if kind == FrameSegmentKind::ContextReturnExpr
                         || kind == FrameSegmentKind::ReturnCall
-                        || kind == FrameSegmentKind::ContextSelfCall {
+                        || kind == FrameSegmentKind::ContextSelfCall
+                    {
                         // Find the start of this line
                         let mut line_start = ctx_start;
-                        while line_start > open_brace_index + 1
-                            && bytes[line_start - 1] != b'\n'
-                        {
+                        while line_start > open_brace_index + 1 && bytes[line_start - 1] != b'\n' {
                             line_start -= 1;
                         }
                         if kind == FrameSegmentKind::ContextSelfCall {
@@ -334,7 +359,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     };
 
                     regions.push(Region::FrameSegment {
-                        span: RegionSpan { start: ctx_start, end: seg_end },
+                        span: RegionSpan {
+                            start: ctx_start,
+                            end: seg_end,
+                        },
                         kind,
                         indent: computed_indent,
                     });
@@ -342,7 +370,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 } else {
                     // No match — treat as native text
                     regions.push(Region::NativeText {
-                        span: RegionSpan { start: ctx_start, end: parser.result_end }
+                        span: RegionSpan {
+                            start: ctx_start,
+                            end: parser.result_end,
+                        },
                     });
                     i = parser.result_end;
                 }
@@ -359,11 +390,17 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
     // Emit any remaining native text
     if seg_start < end {
         regions.push(Region::NativeText {
-            span: RegionSpan { start: seg_start, end }
+            span: RegionSpan {
+                start: seg_start,
+                end,
+            },
         });
     }
 
-    Ok(ScanResult { close_byte: close, regions })
+    Ok(ScanResult {
+        close_byte: close,
+        regions,
+    })
 }
 
 /// Match Frame statements at start of line.
@@ -401,7 +438,12 @@ fn match_frame_statement<S: SyntaxSkipper>(
         }
 
         // Check for -> pop$ (pop transition — this IS a transition, not standalone pop)
-        if k + 3 < end && bytes[k] == b'p' && bytes[k + 1] == b'o' && bytes[k + 2] == b'p' && bytes[k + 3] == b'$' {
+        if k + 3 < end
+            && bytes[k] == b'p'
+            && bytes[k + 1] == b'o'
+            && bytes[k + 2] == b'p'
+            && bytes[k + 3] == b'$'
+        {
             return Some((k + 4, FrameSegmentKind::Transition));
         }
 
@@ -417,9 +459,15 @@ fn match_frame_statement<S: SyntaxSkipper>(
             let quote = bytes[k];
             k += 1;
             while k < end && bytes[k] != quote {
-                if bytes[k] == b'\\' && k + 1 < end { k += 2; } else { k += 1; }
+                if bytes[k] == b'\\' && k + 1 < end {
+                    k += 2;
+                } else {
+                    k += 1;
+                }
             }
-            if k < end { k += 1; } // Skip closing quote
+            if k < end {
+                k += 1;
+            } // Skip closing quote
             k = skip_ws(bytes, k, end);
         }
 
@@ -463,14 +511,15 @@ fn match_frame_statement<S: SyntaxSkipper>(
     // form `mypush$` would otherwise match `push$` as a suffix and
     // produce a spurious StackPush region. Require a leading word
     // boundary so the scanner only matches a standalone `push$`.
-    if b == b'p' && pos + 4 < end
+    if b == b'p'
+        && pos + 4 < end
         && bytes[pos + 1] == b'u'
         && bytes[pos + 2] == b's'
         && bytes[pos + 3] == b'h'
         && bytes[pos + 4] == b'$'
     {
-        let leading_boundary = pos == 0
-            || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
+        let leading_boundary =
+            pos == 0 || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
         if leading_boundary {
             return Some((pos + 5, FrameSegmentKind::StackPush));
         }
@@ -480,13 +529,14 @@ fn match_frame_statement<S: SyntaxSkipper>(
     //
     // Same rationale as `push$`: require a leading word boundary so
     // a JS-style identifier ending in `pop$` doesn't get misclassified.
-    if b == b'p' && pos + 3 < end
+    if b == b'p'
+        && pos + 3 < end
         && bytes[pos + 1] == b'o'
         && bytes[pos + 2] == b'p'
         && bytes[pos + 3] == b'$'
     {
-        let leading_boundary = pos == 0
-            || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
+        let leading_boundary =
+            pos == 0 || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
         if leading_boundary {
             return Some((pos + 4, FrameSegmentKind::StackPop));
         }
@@ -509,18 +559,19 @@ fn match_frame_statement<S: SyntaxSkipper>(
     // Closures are already skipped by `skip_nested_scope()`, so this
     // is at handler scope. Position 0 is treated as a valid leading
     // boundary (start-of-buffer counts).
-    if b == b'r' && pos + 5 < end
+    if b == b'r'
+        && pos + 5 < end
         && bytes[pos + 1] == b'e'
         && bytes[pos + 2] == b't'
         && bytes[pos + 3] == b'u'
         && bytes[pos + 4] == b'r'
         && bytes[pos + 5] == b'n'
     {
-        let leading_boundary = pos == 0
-            || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
+        let leading_boundary =
+            pos == 0 || (!bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_');
         let after = pos + 6;
-        let trailing_boundary = after >= end
-            || (!bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_');
+        let trailing_boundary =
+            after >= end || (!bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_');
         if leading_boundary && trailing_boundary {
             return Some((after, FrameSegmentKind::ReturnStatement));
         }
@@ -932,10 +983,7 @@ pub fn skip_php_heredoc(bytes: &[u8], i: usize, end: usize) -> Option<usize> {
         if remaining >= identifier.len() && &bytes[j..j + identifier.len()] == identifier {
             let after_id = j + identifier.len();
             // Must be followed by ; or newline or EOF
-            if after_id >= end
-                || bytes[after_id] == b'\n'
-                || bytes[after_id] == b';'
-            {
+            if after_id >= end || bytes[after_id] == b'\n' || bytes[after_id] == b';' {
                 // Found the end — skip past the identifier + optional semicolon + newline
                 let mut result = after_id;
                 if result < end && bytes[result] == b';' {
@@ -976,7 +1024,10 @@ pub fn skip_ruby_percent_literal(bytes: &[u8], i: usize, end: usize) -> Option<u
     let next = bytes[j];
     if next.is_ascii_alphabetic() {
         // Must be a recognized qualifier
-        if !matches!(next, b'Q' | b'q' | b'w' | b'W' | b'i' | b'I' | b's' | b'x' | b'r') {
+        if !matches!(
+            next,
+            b'Q' | b'q' | b'w' | b'W' | b'i' | b'I' | b's' | b'x' | b'r'
+        ) {
             return None;
         }
         j += 1;
@@ -1045,9 +1096,9 @@ mod tests {
     /// the matching close brace via the body closer.
     fn scan_for_kinds(body: &str) -> Vec<FrameSegmentKind> {
         let bytes = body.as_bytes();
-        let result = scan_native_regions(&RustSkipper, bytes, 0)
-            .expect("scan should succeed");
-        result.regions
+        let result = scan_native_regions(&RustSkipper, bytes, 0).expect("scan should succeed");
+        result
+            .regions
             .iter()
             .filter_map(|r| match r {
                 Region::FrameSegment { kind, .. } => Some(*kind),
@@ -1209,15 +1260,21 @@ mod tests {
     fn test_system_state_word_boundary() {
         // @@:system.stateX should NOT match — 'stateX' is not 'state'
         let kinds = scan_for_kinds("{ let s = @@:system.stateX; }");
-        assert!(!kinds.contains(&FrameSegmentKind::ContextSystemState),
-            "stateX should not match @@:system.state, got: {:?}", kinds);
+        assert!(
+            !kinds.contains(&FrameSegmentKind::ContextSystemState),
+            "stateX should not match @@:system.state, got: {:?}",
+            kinds
+        );
     }
 
     #[test]
     fn test_system_unknown_property() {
         // @@:system.foo should not produce a match
         let kinds = scan_for_kinds("{ let s = @@:system.foo; }");
-        assert!(!kinds.contains(&FrameSegmentKind::ContextSystemState),
-            "@@:system.foo should not match, got: {:?}", kinds);
+        assert!(
+            !kinds.contains(&FrameSegmentKind::ContextSystemState),
+            "@@:system.foo should not match, got: {:?}",
+            kinds
+        );
     }
 }

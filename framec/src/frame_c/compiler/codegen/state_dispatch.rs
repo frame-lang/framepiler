@@ -4,22 +4,30 @@
 //! Each language gets a per-language dispatch function that generates the
 //! if/elif/switch/match chain routing events to handler bodies.
 
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::frame_ast::{SystemAst, MachineAst, StateVarAst, Type};
-use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
 use super::ast::{CodegenNode, Param, Visibility};
 use super::codegen_utils::{
-    HandlerContext, expression_to_string, state_var_init_value, to_snake_case,
-    cpp_map_type, cpp_wrap_any_arg, java_map_type, kotlin_map_type,
-    swift_map_type, csharp_map_type, go_map_type, type_to_cpp_string,
+    cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string, go_map_type,
+    java_map_type, kotlin_map_type, state_var_init_value, swift_map_type, to_snake_case,
+    type_to_cpp_string, HandlerContext,
 };
-use super::frame_expansion::{splice_handler_body_from_span, normalize_indentation, get_native_scanner};
-
+use super::frame_expansion::{
+    get_native_scanner, normalize_indentation, splice_handler_body_from_span,
+};
+use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
+use crate::frame_c::compiler::frame_ast::{MachineAst, StateVarAst, SystemAst, Type};
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Generate handler return_init code: sets the context return value at handler entry.
 /// Returns empty string if handler has no return_init.
-fn emit_handler_return_init(handler: &HandlerEntry, lang: TargetLanguage, indent: &str, system_name: &str) -> String {
-    let Some(ref init_expr) = handler.return_init else { return String::new() };
+fn emit_handler_return_init(
+    handler: &HandlerEntry,
+    lang: TargetLanguage,
+    indent: &str,
+    system_name: &str,
+) -> String {
+    let Some(ref init_expr) = handler.return_init else {
+        return String::new();
+    };
     let assign = match lang {
         TargetLanguage::Python3 => format!("{}self._context_stack[-1]._return = {}\n", indent, init_expr),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._return = {};\n", indent, init_expr),
@@ -46,11 +54,19 @@ fn emit_handler_return_init(handler: &HandlerEntry, lang: TargetLanguage, indent
 ///
 /// For all languages: Generates `_state_{StateName}(__e)` methods that dispatch internally
 /// based on the event message, plus individual handler methods
-pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &MachineAst, arcanum: &Arcanum, source: &[u8], lang: TargetLanguage, has_state_vars: bool) -> Vec<CodegenNode> {
+pub(crate) fn generate_state_handlers_via_arcanum(
+    system_name: &str,
+    machine: &MachineAst,
+    arcanum: &Arcanum,
+    source: &[u8],
+    lang: TargetLanguage,
+    has_state_vars: bool,
+) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
 
     // Collect all defined system names for @@System() validation
-    let defined_systems: std::collections::HashSet<String> = arcanum.systems.keys().cloned().collect();
+    let defined_systems: std::collections::HashSet<String> =
+        arcanum.systems.keys().cloned().collect();
 
     // Build state→param-names lookup so transition codegen can convert
     // positional state args (`-> $S(42)`) into named writes
@@ -61,7 +77,12 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
     let state_param_names: std::collections::HashMap<String, Vec<String>> = machine
         .states
         .iter()
-        .map(|s| (s.name.clone(), s.params.iter().map(|p| p.name.clone()).collect()))
+        .map(|s| {
+            (
+                s.name.clone(),
+                s.params.iter().map(|p| p.name.clone()).collect(),
+            )
+        })
         .collect();
     // Mirror for enter handler params: maps target state name to its
     // declared `$>(name: type)` enter handler param names. Lets transition
@@ -181,13 +202,18 @@ pub(crate) fn generate_state_handlers_via_arcanum(system_name: &str, machine: &M
                 .iter()
                 .find(|s| s.name == state_entry.name)
                 .map(|s| {
-                    s.state_vars.iter().map(|sv| {
-                        let type_str = match &sv.var_type {
-                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
-                            crate::frame_c::compiler::frame_ast::Type::Unknown => "int".to_string(),
-                        };
-                        (sv.name.clone(), type_str)
-                    }).collect()
+                    s.state_vars
+                        .iter()
+                        .map(|sv| {
+                            let type_str = match &sv.var_type {
+                                crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
+                                crate::frame_c::compiler::frame_ast::Type::Unknown => {
+                                    "int".to_string()
+                                }
+                            };
+                            (sv.name.clone(), type_str)
+                        })
+                        .collect()
                 })
                 .unwrap_or_default();
             for (_event, handler_entry) in &state_entry.handlers {
@@ -248,7 +274,8 @@ pub(crate) fn generate_state_method(
 
     // Build context for HSM forwarding
     // use_sv_comp is true when this state has state vars - we'll navigate to correct compartment
-    let state_var_types: std::collections::HashMap<String, String> = state_vars.iter()
+    let state_var_types: std::collections::HashMap<String, String> = state_vars
+        .iter()
         .map(|sv| {
             let type_str = match &sv.var_type {
                 crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
@@ -273,21 +300,158 @@ pub(crate) fn generate_state_method(
 
     // Generate the dispatch body based on __e._message / __e.message
     let body_code = match lang {
-        TargetLanguage::Python3 => generate_python_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::GDScript => generate_gdscript_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::TypeScript | TargetLanguage::JavaScript => generate_typescript_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward, lang),
-        TargetLanguage::Dart => generate_dart_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Rust => generate_rust_state_dispatch(_system_name, state_name, handlers, state_vars, parent_state, default_forward, is_start_state),
-        TargetLanguage::C => generate_c_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Cpp => generate_cpp_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Java => generate_java_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Kotlin => generate_kotlin_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Swift => generate_swift_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::CSharp => generate_csharp_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Go => generate_go_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Php => generate_php_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Ruby => generate_ruby_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
-        TargetLanguage::Lua => generate_lua_state_dispatch(_system_name, state_name, handlers, state_vars, state_params, source, &ctx, default_forward),
+        TargetLanguage::Python3 => generate_python_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::GDScript => generate_gdscript_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
+            generate_typescript_state_dispatch(
+                _system_name,
+                state_name,
+                handlers,
+                state_vars,
+                state_params,
+                source,
+                &ctx,
+                default_forward,
+                lang,
+            )
+        }
+        TargetLanguage::Dart => generate_dart_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Rust => generate_rust_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            parent_state,
+            default_forward,
+            is_start_state,
+        ),
+        TargetLanguage::C => generate_c_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Cpp => generate_cpp_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Java => generate_java_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Kotlin => generate_kotlin_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Swift => generate_swift_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::CSharp => generate_csharp_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Go => generate_go_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Php => generate_php_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Ruby => generate_ruby_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
+        TargetLanguage::Lua => generate_lua_state_dispatch(
+            _system_name,
+            state_name,
+            handlers,
+            state_vars,
+            state_params,
+            source,
+            &ctx,
+            default_forward,
+        ),
         TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
         TargetLanguage::Graphviz => unreachable!(),
     };
@@ -309,7 +473,10 @@ pub(crate) fn generate_state_method(
             let event_type = format!("{}FrameEvent&", _system_name);
             vec![Param::new("__e").with_type(&event_type)]
         }
-        TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp | TargetLanguage::Swift => {
+        TargetLanguage::Java
+        | TargetLanguage::Kotlin
+        | TargetLanguage::CSharp
+        | TargetLanguage::Swift => {
             let event_type = format!("{}FrameEvent", _system_name);
             vec![Param::new("__e").with_type(&event_type)]
         }
@@ -318,8 +485,12 @@ pub(crate) fn generate_state_method(
             vec![Param::new("__e").with_type(&event_type)]
         }
         // Dynamic languages: untyped event parameter
-        TargetLanguage::Python3 | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang | TargetLanguage::GDScript
-            | TargetLanguage::Lua => {
+        TargetLanguage::Python3
+        | TargetLanguage::Php
+        | TargetLanguage::Ruby
+        | TargetLanguage::Erlang
+        | TargetLanguage::GDScript
+        | TargetLanguage::Lua => {
             vec![Param::new("__e")]
         }
         TargetLanguage::Graphviz => unreachable!(),
@@ -378,7 +549,9 @@ pub(crate) fn generate_python_state_dispatch(
 __sv_comp = self.__compartment
 while __sv_comp is not None and __sv_comp.state != "{}":
     __sv_comp = __sv_comp.parent_compartment
-"#, state_name));
+"#,
+            state_name
+        ));
     }
 
     // If state has state variables but no explicit $> handler, generate one
@@ -393,8 +566,14 @@ while __sv_comp is not None and __sv_comp.state != "{}":
                 state_var_init_value(&var.var_type, TargetLanguage::Python3)
             };
             // Only initialize if not already set (preserves pop-restored values)
-            code.push_str(&format!("    if \"{}\" not in __sv_comp.state_vars:\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if \"{}\" not in __sv_comp.state_vars:\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                var.name, init_val
+            ));
         }
         first = false;
     }
@@ -432,8 +611,14 @@ while __sv_comp is not None and __sv_comp.state != "{}":
                     state_var_init_value(&var.var_type, TargetLanguage::Python3)
                 };
                 // Only initialize if not already set (preserves pop-restored values)
-                code.push_str(&format!("    if \"{}\" not in __sv_comp.state_vars:\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if \"{}\" not in __sv_comp.state_vars:\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                    var.name, init_val
+                ));
             }
         }
 
@@ -443,13 +628,18 @@ while __sv_comp is not None and __sv_comp.state != "{}":
         // and interface handlers use the name-key form. The transition codegen
         // and the system constructor both write under the name; this read side
         // matches.
-        let _is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let _is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for param in handler.params.iter() {
-            code.push_str(&format!("    {} = __e._parameters[\"{}\"]\n", param.name, param.name));
+            code.push_str(&format!(
+                "    {} = __e._parameters[\"{}\"]\n",
+                param.name, param.name
+            ));
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Python3, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Python3, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -457,7 +647,12 @@ while __sv_comp is not None and __sv_comp.state != "{}":
         // Generate the handler body
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Python3, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Python3,
+            &handler_ctx,
+        );
 
         // Indent the body
         let mut body_has_content = !return_init_code.is_empty();
@@ -530,7 +725,9 @@ pub(crate) fn generate_gdscript_state_dispatch(
 var __sv_comp = self.__compartment
 while __sv_comp != null and __sv_comp.state != "{}":
     __sv_comp = __sv_comp.parent_compartment
-"#, state_name));
+"#,
+            state_name
+        ));
     }
 
     // If state has state variables but no explicit $> handler, generate one
@@ -542,8 +739,14 @@ while __sv_comp != null and __sv_comp.state != "{}":
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::GDScript)
             };
-            code.push_str(&format!("    if not \"{}\" in __sv_comp.state_vars:\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if not \"{}\" in __sv_comp.state_vars:\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                var.name, init_val
+            ));
         }
         first = false;
     }
@@ -577,21 +780,32 @@ while __sv_comp != null and __sv_comp.state != "{}":
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::GDScript)
                 };
-                code.push_str(&format!("    if not \"{}\" in __sv_comp.state_vars:\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if not \"{}\" in __sv_comp.state_vars:\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                    var.name, init_val
+                ));
             }
         }
 
         // Generate parameter unpacking — all params (lifecycle and interface)
         // are now keyed by declared name; the write side stores under the
         // declared name for both transition-passed and constructor-passed args.
-        let _is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let _is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for param in handler.params.iter() {
-            code.push_str(&format!("    var {} = __e._parameters[\"{}\"]\n", param.name, param.name));
+            code.push_str(&format!(
+                "    var {} = __e._parameters[\"{}\"]\n",
+                param.name, param.name
+            ));
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::GDScript, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::GDScript, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -599,7 +813,12 @@ while __sv_comp != null and __sv_comp.state != "{}":
         // Generate the handler body
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::GDScript, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::GDScript,
+            &handler_ctx,
+        );
 
         // Indent the body
         let mut body_has_content = !return_init_code.is_empty();
@@ -655,7 +874,11 @@ pub(crate) fn generate_typescript_state_dispatch(
     // dict value comes back as `any` and the user can refine it in the
     // handler body if needed.
     for sp in state_params {
-        let type_ann = if matches!(lang, TargetLanguage::TypeScript) { ": any" } else { "" };
+        let type_ann = if matches!(lang, TargetLanguage::TypeScript) {
+            ": any"
+        } else {
+            ""
+        };
         code.push_str(&format!(
             "const {0}{1} = this.__compartment.state_args[\"{0}\"];\n",
             sp.name, type_ann
@@ -667,7 +890,11 @@ pub(crate) fn generate_typescript_state_dispatch(
     // from a child state, __compartment points to the child's compartment, not this state's.
     // Navigate the parent_compartment chain to find this state's compartment.
     if !state_vars.is_empty() {
-        let type_ann = if matches!(lang, TargetLanguage::TypeScript) { ": any" } else { "" };
+        let type_ann = if matches!(lang, TargetLanguage::TypeScript) {
+            ": any"
+        } else {
+            ""
+        };
         code.push_str(&format!(
             "// HSM: Navigate to this state's compartment for state var access\nlet __sv_comp{} = this.__compartment;\nwhile (__sv_comp !== null && __sv_comp.state !== \"{}\") {{\n    __sv_comp = __sv_comp.parent_compartment;\n}}\n",
             type_ann, state_name));
@@ -684,8 +911,14 @@ pub(crate) fn generate_typescript_state_dispatch(
                 state_var_init_value(&var.var_type, lang)
             };
             // Only initialize if not already set (preserves pop-restored values)
-            code.push_str(&format!("    if (!(\"{0}\" in __sv_comp.state_vars)) {{\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {};\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if (!(\"{0}\" in __sv_comp.state_vars)) {{\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {};\n",
+                var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -724,8 +957,14 @@ pub(crate) fn generate_typescript_state_dispatch(
                     state_var_init_value(&var.var_type, lang)
                 };
                 // Only initialize if not already set (preserves pop-restored values)
-                code.push_str(&format!("    if (!(\"{0}\" in __sv_comp.state_vars)) {{\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {};\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if (!(\"{0}\" in __sv_comp.state_vars)) {{\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {};\n",
+                    var.name, init_val
+                ));
                 code.push_str("    }\n");
             }
         }
@@ -733,10 +972,14 @@ pub(crate) fn generate_typescript_state_dispatch(
         // Generate parameter unpacking if handler has params
         // For enter/exit handlers, use positional indices (transition args are positional)
         // For other handlers, use parameter names as keys (matching interface method generation)
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         // All params keyed by declared name (lifecycle and interface)
         for param in handler.params.iter() {
-            code.push_str(&format!("    const {} = __e._parameters?.[\"{}\"];\n", param.name, param.name));
+            code.push_str(&format!(
+                "    const {} = __e._parameters?.[\"{}\"];\n",
+                param.name, param.name
+            ));
         }
         let _ = is_lifecycle_handler;
 
@@ -842,8 +1085,14 @@ pub(crate) fn generate_dart_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, lang)
             };
-            code.push_str(&format!("    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {};\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {};\n",
+                var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -879,17 +1128,27 @@ pub(crate) fn generate_dart_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, lang)
                 };
-                code.push_str(&format!("    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {};\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {};\n",
+                    var.name, init_val
+                ));
                 code.push_str("    }\n");
             }
         }
 
         // Generate parameter unpacking
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         // All params keyed by declared name (lifecycle and interface)
         for param in handler.params.iter() {
-            code.push_str(&format!("    final {} = __e._parameters?[\"{}\"];\n", param.name, param.name));
+            code.push_str(&format!(
+                "    final {} = __e._parameters?[\"{}\"];\n",
+                param.name, param.name
+            ));
         }
         let _ = is_lifecycle_handler;
 
@@ -973,8 +1232,14 @@ pub(crate) fn generate_php_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::Php)
             };
-            code.push_str(&format!("    if (!array_key_exists(\"{0}\", $__sv_comp->state_vars)) {{\n", var.name));
-            code.push_str(&format!("        $__sv_comp->state_vars[\"{}\"] = {};\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if (!array_key_exists(\"{0}\", $__sv_comp->state_vars)) {{\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        $__sv_comp->state_vars[\"{}\"] = {};\n",
+                var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -1008,22 +1273,33 @@ pub(crate) fn generate_php_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::Php)
                 };
-                code.push_str(&format!("    if (!array_key_exists(\"{0}\", $__sv_comp->state_vars)) {{\n", var.name));
-                code.push_str(&format!("        $__sv_comp->state_vars[\"{}\"] = {};\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if (!array_key_exists(\"{0}\", $__sv_comp->state_vars)) {{\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        $__sv_comp->state_vars[\"{}\"] = {};\n",
+                    var.name, init_val
+                ));
                 code.push_str("    }\n");
             }
         }
 
         // Parameter unpacking
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         // All params keyed by declared name (lifecycle and interface)
         for param in handler.params.iter() {
-            code.push_str(&format!("    ${} = $__e->_parameters[\"{}\"] ?? null;\n", param.name, param.name));
+            code.push_str(&format!(
+                "    ${} = $__e->_parameters[\"{}\"] ?? null;\n",
+                param.name, param.name
+            ));
         }
         let _ = is_lifecycle_handler;
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Php, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Php, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -1031,7 +1307,12 @@ pub(crate) fn generate_php_state_dispatch(
         // Handler body via splicer
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Php, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Php,
+            &handler_ctx,
+        );
 
         for line in body.lines() {
             if !line.trim().is_empty() {
@@ -1102,8 +1383,14 @@ pub(crate) fn generate_ruby_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::Ruby)
             };
-            code.push_str(&format!("    if !__sv_comp.state_vars.key?(\"{}\")\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if !__sv_comp.state_vars.key?(\"{}\")\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                var.name, init_val
+            ));
             code.push_str("    end\n");
         }
         first = false;
@@ -1137,14 +1424,21 @@ pub(crate) fn generate_ruby_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::Ruby)
                 };
-                code.push_str(&format!("    if !__sv_comp.state_vars.key?(\"{}\")\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if !__sv_comp.state_vars.key?(\"{}\")\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                    var.name, init_val
+                ));
                 code.push_str("    end\n");
             }
         }
 
         // Parameter unpacking (no type casts — dynamic typing)
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for param in handler.params.iter() {
             if is_lifecycle_handler {
                 let args_source = if event == "$>" || event == "enter" {
@@ -1152,14 +1446,21 @@ pub(crate) fn generate_ruby_state_dispatch(
                 } else {
                     "@__compartment.exit_args"
                 };
-                code.push_str(&format!("    {} = {}[\"{}\"]\n", param.name, args_source, param.name));
+                code.push_str(&format!(
+                    "    {} = {}[\"{}\"]\n",
+                    param.name, args_source, param.name
+                ));
             } else {
-                code.push_str(&format!("    {} = __e._parameters[\"{}\"]\n", param.name, param.name));
+                code.push_str(&format!(
+                    "    {} = __e._parameters[\"{}\"]\n",
+                    param.name, param.name
+                ));
             }
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Ruby, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Ruby, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -1167,7 +1468,12 @@ pub(crate) fn generate_ruby_state_dispatch(
         // Handler body via splicer
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Ruby, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Ruby,
+            &handler_ctx,
+        );
 
         for line in body.lines() {
             if !line.trim().is_empty() {
@@ -1289,9 +1595,12 @@ pub(crate) fn generate_cpp_state_dispatch(
         }
 
         // Parameter unpacking
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for (i, param) in handler.params.iter().enumerate() {
-            let param_type = param.symbol_type.as_ref()
+            let param_type = param
+                .symbol_type
+                .as_ref()
                 .map(|s| cpp_map_type(s))
                 .unwrap_or_else(|| "std::any".to_string());
             // Both lifecycle and interface handlers now read by declared
@@ -1306,25 +1615,34 @@ pub(crate) fn generate_cpp_state_dispatch(
                     "__compartment->exit_args"
                 };
                 if param_type == "std::any" {
-                    code.push_str(&format!("    auto {} = {}[\"{}\"];\n",
-                        param.name, args_source, key));
+                    code.push_str(&format!(
+                        "    auto {} = {}[\"{}\"];\n",
+                        param.name, args_source, key
+                    ));
                 } else {
-                    code.push_str(&format!("    auto {} = std::any_cast<{}>({}[\"{}\"]);\n",
-                        param.name, param_type, args_source, key));
+                    code.push_str(&format!(
+                        "    auto {} = std::any_cast<{}>({}[\"{}\"]);\n",
+                        param.name, param_type, args_source, key
+                    ));
                 }
             } else {
                 if param_type == "std::any" {
-                    code.push_str(&format!("    auto {} = __e._parameters.at(\"{}\");\n",
-                        param.name, key));
+                    code.push_str(&format!(
+                        "    auto {} = __e._parameters.at(\"{}\");\n",
+                        param.name, key
+                    ));
                 } else {
-                    code.push_str(&format!("    auto {} = std::any_cast<{}>(__e._parameters.at(\"{}\"));\n",
-                        param.name, param_type, key));
+                    code.push_str(&format!(
+                        "    auto {} = std::any_cast<{}>(__e._parameters.at(\"{}\"));\n",
+                        param.name, param_type, key
+                    ));
                 }
             }
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Cpp, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Cpp, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -1332,7 +1650,12 @@ pub(crate) fn generate_cpp_state_dispatch(
         // Handler body via splicer
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Cpp, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Cpp,
+            &handler_ctx,
+        );
 
         for line in body.lines() {
             if !line.trim().is_empty() {
@@ -1420,8 +1743,14 @@ pub(crate) fn generate_java_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::Java)
             };
-            code.push_str(&format!("    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars.put(\"{}\", {});\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars.put(\"{}\", {});\n",
+                var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -1456,16 +1785,25 @@ pub(crate) fn generate_java_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::Java)
                 };
-                code.push_str(&format!("    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars.put(\"{}\", {});\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars.put(\"{}\", {});\n",
+                    var.name, init_val
+                ));
                 code.push_str("    }\n");
             }
         }
 
         // Parameter unpacking
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for (i, param) in handler.params.iter().enumerate() {
-            let param_type = param.symbol_type.as_ref()
+            let param_type = param
+                .symbol_type
+                .as_ref()
                 .map(|s| java_map_type(s))
                 .unwrap_or_else(|| "Object".to_string());
             // Both lifecycle and interface handlers now read by declared
@@ -1478,16 +1816,21 @@ pub(crate) fn generate_java_state_dispatch(
                 } else {
                     "__compartment.exit_args"
                 };
-                code.push_str(&format!("    var {} = ({}) {}.get(\"{}\");\n",
-                    param.name, param_type, args_source, key));
+                code.push_str(&format!(
+                    "    var {} = ({}) {}.get(\"{}\");\n",
+                    param.name, param_type, args_source, key
+                ));
             } else {
-                code.push_str(&format!("    var {} = ({}) __e._parameters.get(\"{}\");\n",
-                    param.name, param_type, key));
+                code.push_str(&format!(
+                    "    var {} = ({}) __e._parameters.get(\"{}\");\n",
+                    param.name, param_type, key
+                ));
             }
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Java, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Java, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -1495,7 +1838,12 @@ pub(crate) fn generate_java_state_dispatch(
         // Handler body via splicer
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Java, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Java,
+            &handler_ctx,
+        );
         // Java: strip ;; (unreachable empty statement after return)
         let body = body.replace(";;", ";");
 
@@ -1574,8 +1922,14 @@ pub(crate) fn generate_kotlin_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::Kotlin)
             };
-            code.push_str(&format!("    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -1610,16 +1964,25 @@ pub(crate) fn generate_kotlin_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::Kotlin)
                 };
-                code.push_str(&format!("    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if (!__sv_comp.state_vars.containsKey(\"{0}\")) {{\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                    var.name, init_val
+                ));
                 code.push_str("    }\n");
             }
         }
 
         // Parameter unpacking — Kotlin: `as Type` instead of `(Type)`, no semicolons
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for (i, param) in handler.params.iter().enumerate() {
-            let param_type = param.symbol_type.as_ref()
+            let param_type = param
+                .symbol_type
+                .as_ref()
                 .map(|s| kotlin_map_type(s))
                 .unwrap_or_else(|| "Any?".to_string());
             // Both lifecycle and interface handlers now read by declared
@@ -1632,16 +1995,21 @@ pub(crate) fn generate_kotlin_state_dispatch(
                 } else {
                     "__compartment.exit_args"
                 };
-                code.push_str(&format!("    val {} = {}[\"{}\"] as {}\n",
-                    param.name, args_source, key, param_type));
+                code.push_str(&format!(
+                    "    val {} = {}[\"{}\"] as {}\n",
+                    param.name, args_source, key, param_type
+                ));
             } else {
-                code.push_str(&format!("    val {} = __e._parameters[\"{}\"] as {}\n",
-                    param.name, key, param_type));
+                code.push_str(&format!(
+                    "    val {} = __e._parameters[\"{}\"] as {}\n",
+                    param.name, key, param_type
+                ));
             }
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Kotlin, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Kotlin, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -1649,7 +2017,12 @@ pub(crate) fn generate_kotlin_state_dispatch(
         // Handler body via splicer
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Kotlin, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Kotlin,
+            &handler_ctx,
+        );
 
         for line in body.lines() {
             if !line.trim().is_empty() {
@@ -1727,8 +2100,14 @@ pub(crate) fn generate_swift_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::Swift)
             };
-            code.push_str(&format!("    if __sv_comp.state_vars[\"{0}\"] == nil {{\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if __sv_comp.state_vars[\"{0}\"] == nil {{\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -1763,16 +2142,25 @@ pub(crate) fn generate_swift_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::Swift)
                 };
-                code.push_str(&format!("    if __sv_comp.state_vars[\"{0}\"] == nil {{\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if __sv_comp.state_vars[\"{0}\"] == nil {{\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                    var.name, init_val
+                ));
                 code.push_str("    }\n");
             }
         }
 
         // Parameter unpacking — Swift: `as! Type` for cast, no semicolons
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for (i, param) in handler.params.iter().enumerate() {
-            let param_type = param.symbol_type.as_ref()
+            let param_type = param
+                .symbol_type
+                .as_ref()
                 .map(|s| swift_map_type(s))
                 .unwrap_or_else(|| "Any".to_string());
             // Both lifecycle and interface handlers now read by declared
@@ -1785,16 +2173,21 @@ pub(crate) fn generate_swift_state_dispatch(
                 } else {
                     "__compartment.exit_args"
                 };
-                code.push_str(&format!("    let {} = {}[\"{}\"] as! {}\n",
-                    param.name, args_source, key, param_type));
+                code.push_str(&format!(
+                    "    let {} = {}[\"{}\"] as! {}\n",
+                    param.name, args_source, key, param_type
+                ));
             } else {
-                code.push_str(&format!("    let {} = __e._parameters[\"{}\"] as! {}\n",
-                    param.name, key, param_type));
+                code.push_str(&format!(
+                    "    let {} = __e._parameters[\"{}\"] as! {}\n",
+                    param.name, key, param_type
+                ));
             }
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Swift, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Swift, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -1802,7 +2195,12 @@ pub(crate) fn generate_swift_state_dispatch(
         // Handler body via splicer
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Swift, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Swift,
+            &handler_ctx,
+        );
 
         for line in body.lines() {
             if !line.trim().is_empty() {
@@ -1887,8 +2285,14 @@ pub(crate) fn generate_go_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::Go)
             };
-            code.push_str(&format!("    if _, ok := __sv_comp.stateVars[\"{}\"]; !ok {{\n", var.name));
-            code.push_str(&format!("        __sv_comp.stateVars[\"{}\"] = {}\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if _, ok := __sv_comp.stateVars[\"{}\"]; !ok {{\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.stateVars[\"{}\"] = {}\n",
+                var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -1923,16 +2327,25 @@ pub(crate) fn generate_go_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::Go)
                 };
-                code.push_str(&format!("    if _, ok := __sv_comp.stateVars[\"{}\"]; !ok {{\n", var.name));
-                code.push_str(&format!("        __sv_comp.stateVars[\"{}\"] = {}\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if _, ok := __sv_comp.stateVars[\"{}\"]; !ok {{\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.stateVars[\"{}\"] = {}\n",
+                    var.name, init_val
+                ));
                 code.push_str("    }\n");
             }
         }
 
         // Parameter unpacking
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for (i, param) in handler.params.iter().enumerate() {
-            let param_type = param.symbol_type.as_ref()
+            let param_type = param
+                .symbol_type
+                .as_ref()
                 .map(|s| go_map_type(s))
                 .unwrap_or_else(|| "any".to_string());
             // Both lifecycle and interface handlers now read by declared
@@ -1946,19 +2359,27 @@ pub(crate) fn generate_go_state_dispatch(
                     "s.__compartment.exitArgs"
                 };
                 if param_type == "any" {
-                    code.push_str(&format!("    {} := {}[\"{}\"]\n",
-                        param.name, args_source, key));
+                    code.push_str(&format!(
+                        "    {} := {}[\"{}\"]\n",
+                        param.name, args_source, key
+                    ));
                 } else {
-                    code.push_str(&format!("    {} := {}[\"{}\"].({})\n",
-                        param.name, args_source, key, param_type));
+                    code.push_str(&format!(
+                        "    {} := {}[\"{}\"].({})\n",
+                        param.name, args_source, key, param_type
+                    ));
                 }
             } else {
                 if param_type == "any" {
-                    code.push_str(&format!("    {} := __e._parameters[\"{}\"]\n",
-                        param.name, key));
+                    code.push_str(&format!(
+                        "    {} := __e._parameters[\"{}\"]\n",
+                        param.name, key
+                    ));
                 } else {
-                    code.push_str(&format!("    {} := __e._parameters[\"{}\"].({})\n",
-                        param.name, key, param_type));
+                    code.push_str(&format!(
+                        "    {} := __e._parameters[\"{}\"].({})\n",
+                        param.name, key, param_type
+                    ));
                 }
             }
             // Suppress Go "declared but not used" error
@@ -1966,7 +2387,8 @@ pub(crate) fn generate_go_state_dispatch(
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Go, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Go, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -1974,7 +2396,12 @@ pub(crate) fn generate_go_state_dispatch(
         // Handler body via splicer
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Go, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Go,
+            &handler_ctx,
+        );
 
         for line in body.lines() {
             if !line.trim().is_empty() {
@@ -2050,8 +2477,14 @@ pub(crate) fn generate_csharp_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::CSharp)
             };
-            code.push_str(&format!("    if (!__sv_comp.state_vars.ContainsKey(\"{0}\")) {{\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {};\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if (!__sv_comp.state_vars.ContainsKey(\"{0}\")) {{\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {};\n",
+                var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -2086,16 +2519,25 @@ pub(crate) fn generate_csharp_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::CSharp)
                 };
-                code.push_str(&format!("    if (!__sv_comp.state_vars.ContainsKey(\"{0}\")) {{\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {};\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if (!__sv_comp.state_vars.ContainsKey(\"{0}\")) {{\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {};\n",
+                    var.name, init_val
+                ));
                 code.push_str("    }\n");
             }
         }
 
         // Parameter unpacking
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for (i, param) in handler.params.iter().enumerate() {
-            let param_type = param.symbol_type.as_ref()
+            let param_type = param
+                .symbol_type
+                .as_ref()
                 .map(|s| csharp_map_type(s))
                 .unwrap_or_else(|| "object".to_string());
             // Both lifecycle and interface handlers now read by declared
@@ -2108,16 +2550,21 @@ pub(crate) fn generate_csharp_state_dispatch(
                 } else {
                     "__compartment.exit_args"
                 };
-                code.push_str(&format!("    var {} = ({}) {}[\"{}\"];\n",
-                    param.name, param_type, args_source, key));
+                code.push_str(&format!(
+                    "    var {} = ({}) {}[\"{}\"];\n",
+                    param.name, param_type, args_source, key
+                ));
             } else {
-                code.push_str(&format!("    var {} = ({}) __e._parameters[\"{}\"];\n",
-                    param.name, param_type, key));
+                code.push_str(&format!(
+                    "    var {} = ({}) __e._parameters[\"{}\"];\n",
+                    param.name, param_type, key
+                ));
             }
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::CSharp, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::CSharp, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -2125,7 +2572,12 @@ pub(crate) fn generate_csharp_state_dispatch(
         // Handler body via splicer
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::CSharp, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::CSharp,
+            &handler_ctx,
+        );
         // C#: strip ;; (unreachable empty statement after return)
         let body = body.replace(";;", ";");
 
@@ -2208,7 +2660,9 @@ pub(crate) fn generate_c_state_dispatch(
 while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
     __sv_comp = __sv_comp->parent_compartment;
 }}
-"#, system_name, state_name));
+"#,
+            system_name, state_name
+        ));
     }
 
     // If state has state variables but no explicit $> handler, generate one
@@ -2223,10 +2677,14 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
             };
             // Only initialize if not already set (preserves pop-restored values)
             // Use __sv_comp which was set up in preamble for HSM compartment navigation
-            code.push_str(&format!("    if (!{}_FrameDict_has(__sv_comp->state_vars, \"{}\")) {{\n",
-                system_name, var.name));
-            code.push_str(&format!("        {}_FrameDict_set(__sv_comp->state_vars, \"{}\", (void*)(intptr_t){});\n",
-                system_name, var.name, init_val));
+            code.push_str(&format!(
+                "    if (!{}_FrameDict_has(__sv_comp->state_vars, \"{}\")) {{\n",
+                system_name, var.name
+            ));
+            code.push_str(&format!(
+                "        {}_FrameDict_set(__sv_comp->state_vars, \"{}\", (void*)(intptr_t){});\n",
+                system_name, var.name, init_val
+            ));
             code.push_str("    }\n");
         }
         first = false;
@@ -2247,7 +2705,10 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
         let condition = if first {
             format!("if (strcmp(__e->_message, \"{}\") == 0) {{", message)
         } else {
-            format!("}} else if (strcmp(__e->_message, \"{}\") == 0) {{", message)
+            format!(
+                "}} else if (strcmp(__e->_message, \"{}\") == 0) {{",
+                message
+            )
         };
         first = false;
 
@@ -2265,8 +2726,10 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
                     state_var_init_value(&var.var_type, TargetLanguage::C)
                 };
                 // Only initialize if not already set (preserves pop-restored values)
-                code.push_str(&format!("    if (!{}_FrameDict_has(__sv_comp->state_vars, \"{}\")) {{\n",
-                    system_name, var.name));
+                code.push_str(&format!(
+                    "    if (!{}_FrameDict_has(__sv_comp->state_vars, \"{}\")) {{\n",
+                    system_name, var.name
+                ));
                 code.push_str(&format!("        {}_FrameDict_set(__sv_comp->state_vars, \"{}\", (void*)(intptr_t){});\n",
                     system_name, var.name, init_val));
                 code.push_str("    }\n");
@@ -2276,9 +2739,14 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
         // Generate parameter unpacking if handler has params
         // For enter/exit handlers, use positional indices (transition args are positional)
         // For other handlers, use parameter names as keys (matching interface method generation)
-        let is_lifecycle_handler = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle_handler =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for param in handler.params.iter() {
-            let param_type = param.symbol_type.as_ref().map(|s| s.as_str()).unwrap_or("int");
+            let param_type = param
+                .symbol_type
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or("int");
             let c_type = match param_type {
                 "int" | "i32" | "i64" => "int",
                 "bool" | "boolean" => "bool",
@@ -2286,15 +2754,22 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
                 "str" | "string" | "String" => "char*",
                 _ => "void*",
             };
-            let cast = if c_type == "int" || c_type == "bool" { "(intptr_t)" } else { "" };
+            let cast = if c_type == "int" || c_type == "bool" {
+                "(intptr_t)"
+            } else {
+                ""
+            };
             // All params (lifecycle and interface) keyed by declared name.
-            code.push_str(&format!("    {} {} = ({}){}{}_FrameDict_get(__e->_parameters, \"{}\");\n",
-                c_type, param.name, c_type, cast, system_name, param.name));
+            code.push_str(&format!(
+                "    {} {} = ({}){}{}_FrameDict_get(__e->_parameters, \"{}\");\n",
+                c_type, param.name, c_type, cast, system_name, param.name
+            ));
         }
         let _ = is_lifecycle_handler;
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::C, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::C, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -2302,7 +2777,12 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
         // Generate the handler body
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::C, &handler_ctx);
+        let body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::C,
+            &handler_ctx,
+        );
 
         // Indent the body
         for line in body.lines() {
@@ -2320,7 +2800,10 @@ while (__sv_comp != NULL && strcmp(__sv_comp->state, "{}") != 0) {{
             if !first {
                 // Close previous block and add else clause
                 code.push_str("} else {\n");
-                code.push_str(&format!("    {}_state_{}(self, __e);\n", system_name, parent));
+                code.push_str(&format!(
+                    "    {}_state_{}(self, __e);\n",
+                    system_name, parent
+                ));
                 code.push_str("}");
             } else {
                 // No handlers at all - just forward everything
@@ -2382,10 +2865,14 @@ pub(crate) fn generate_rust_state_dispatch(
         // them. For non-start states, lifecycle params come from
         // transition enter/exit args via the existing mechanism, so we
         // restore the original extraction-and-pass-as-arg path.
-        let is_lifecycle = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         if !handler.params.is_empty() && is_lifecycle {
             if is_start_state {
-                code.push_str(&format!("    \"{}\" => {{ self.{}(__e); }}\n", message, handler_method));
+                code.push_str(&format!(
+                    "    \"{}\" => {{ self.{}(__e); }}\n",
+                    message, handler_method
+                ));
                 continue;
             }
             // Non-start state: extract lifecycle params from event
@@ -2395,7 +2882,11 @@ pub(crate) fn generate_rust_state_dispatch(
                 code.push_str(&format!("        let {0} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n", param.name));
             }
             let param_names: Vec<_> = handler.params.iter().map(|p| p.name.clone()).collect();
-            code.push_str(&format!("        self.{}(__e, {});\n", handler_method, param_names.join(", ")));
+            code.push_str(&format!(
+                "        self.{}(__e, {});\n",
+                handler_method,
+                param_names.join(", ")
+            ));
             code.push_str("    }\n");
             continue;
         }
@@ -2404,7 +2895,9 @@ pub(crate) fn generate_rust_state_dispatch(
         // (The cloned __e has empty parameters due to Box<dyn Any> not being Clone)
         if !handler.params.is_empty() {
             code.push_str(&format!("    \"{}\" => {{\n", message));
-            code.push_str("        let __ctx_event = &self._context_stack.last().unwrap().event;\n");
+            code.push_str(
+                "        let __ctx_event = &self._context_stack.last().unwrap().event;\n",
+            );
             for param in &handler.params {
                 // Extract parameter from context stack event, downcast to the appropriate type
                 let param_type = param.symbol_type.as_deref().unwrap_or("String");
@@ -2433,14 +2926,21 @@ pub(crate) fn generate_rust_state_dispatch(
                 code.push_str(&extraction);
             }
             let param_names: Vec<_> = handler.params.iter().map(|p| p.name.clone()).collect();
-            code.push_str(&format!("        self.{}(__e, {});\n", handler_method, param_names.join(", ")));
+            code.push_str(&format!(
+                "        self.{}(__e, {});\n",
+                handler_method,
+                param_names.join(", ")
+            ));
             code.push_str("    }\n");
             continue;
         }
 
         // State vars live on compartment.state_context — no init needed in enter handler
         // Use block syntax to ignore handler return value (dispatch doesn't return)
-        code.push_str(&format!("    \"{}\" => {{ self.{}(__e); }}\n", message, handler_method));
+        code.push_str(&format!(
+            "    \"{}\" => {{ self.{}(__e); }}\n",
+            message, handler_method
+        ));
     }
 
     // State vars live on compartment.state_context — no auto-generated $> init needed
@@ -2490,7 +2990,9 @@ pub(crate) fn generate_lua_state_dispatch(
              local __sv_comp = self.__compartment\n\
              while __sv_comp ~= nil and __sv_comp.state ~= \"{}\" do\n\
              __sv_comp = __sv_comp.parent_compartment\n\
-             end\n", state_name));
+             end\n",
+            state_name
+        ));
     }
 
     // Auto-generate enter handler for state var init if no explicit one
@@ -2502,8 +3004,14 @@ pub(crate) fn generate_lua_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, TargetLanguage::Lua)
             };
-            code.push_str(&format!("    if __sv_comp.state_vars[\"{}\"] == nil then\n", var.name));
-            code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+            code.push_str(&format!(
+                "    if __sv_comp.state_vars[\"{}\"] == nil then\n",
+                var.name
+            ));
+            code.push_str(&format!(
+                "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                var.name, init_val
+            ));
             code.push_str("    end\n");
         }
         first = false;
@@ -2537,8 +3045,14 @@ pub(crate) fn generate_lua_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, TargetLanguage::Lua)
                 };
-                code.push_str(&format!("    if __sv_comp.state_vars[\"{}\"] == nil then\n", var.name));
-                code.push_str(&format!("        __sv_comp.state_vars[\"{}\"] = {}\n", var.name, init_val));
+                code.push_str(&format!(
+                    "    if __sv_comp.state_vars[\"{}\"] == nil then\n",
+                    var.name
+                ));
+                code.push_str(&format!(
+                    "        __sv_comp.state_vars[\"{}\"] = {}\n",
+                    var.name, init_val
+                ));
                 code.push_str("    end\n");
             }
         }
@@ -2547,7 +3061,8 @@ pub(crate) fn generate_lua_state_dispatch(
         // (enter/exit) and interface handlers. The constructor and
         // transition codegen both write under the declared param name,
         // so the read side matches.
-        let _is_lifecycle = event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let _is_lifecycle =
+            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
         for param in handler.params.iter() {
             code.push_str(&format!(
                 "    local {} = __e._parameters[\"{}\"]\n",
@@ -2556,7 +3071,8 @@ pub(crate) fn generate_lua_state_dispatch(
         }
 
         // Emit handler default return value if present
-        let return_init_code = emit_handler_return_init(handler, TargetLanguage::Lua, "    ", &ctx.system_name);
+        let return_init_code =
+            emit_handler_return_init(handler, TargetLanguage::Lua, "    ", &ctx.system_name);
         if !return_init_code.is_empty() {
             code.push_str(&return_init_code);
         }
@@ -2564,9 +3080,17 @@ pub(crate) fn generate_lua_state_dispatch(
         // Handler body
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let raw_body = splice_handler_body_from_span(&handler.body_span, source, TargetLanguage::Lua, &handler_ctx);
+        let raw_body = splice_handler_body_from_span(
+            &handler.body_span,
+            source,
+            TargetLanguage::Lua,
+            &handler_ctx,
+        );
         // Transform if/else { } blocks to Lua if/then/elseif/else/end
-        let body = super::block_transform::transform_blocks(&raw_body, super::block_transform::BlockTransformMode::Lua);
+        let body = super::block_transform::transform_blocks(
+            &raw_body,
+            super::block_transform::BlockTransformMode::Lua,
+        );
 
         let mut body_has_content = !return_init_code.is_empty();
         for line in body.lines() {
@@ -2706,10 +3230,8 @@ pub(crate) fn generate_handler_from_arcanum(
             // Also bind any enter handler params from `self.__sys_<name>`.
             if handler.is_enter {
                 for p in &handler.params {
-                    sys_param_preamble.push_str(&format!(
-                        "let {0} = self.__sys_{0}.clone();\n",
-                        p.name
-                    ));
+                    sys_param_preamble
+                        .push_str(&format!("let {0} = self.__sys_{0}.clone();\n", p.name));
                 }
             }
         } else if !non_start_state_param_names.is_empty() {
@@ -2728,18 +3250,35 @@ pub(crate) fn generate_handler_from_arcanum(
     // Splice the handler body: preserve native code, expand Frame segments
     let mut body_code = sys_param_preamble;
     body_code.push_str(&return_init_code);
-    body_code.push_str(&splice_handler_body_from_span(&handler.body_span, source, lang, &ctx));
+    body_code.push_str(&splice_handler_body_from_span(
+        &handler.body_span,
+        source,
+        lang,
+        &ctx,
+    ));
 
     // Handler methods are void — returns go through the context stack.
     // Some languages strip the return type from the handler signature.
     let method_return_type = match lang {
         // These languages don't use return types on state handler methods
-        TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript | TargetLanguage::Rust => None,
+        TargetLanguage::TypeScript
+        | TargetLanguage::Dart
+        | TargetLanguage::JavaScript
+        | TargetLanguage::Rust => None,
         // Dynamic languages don't need return type annotations
-        TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby | TargetLanguage::Lua => None,
+        TargetLanguage::Python3
+        | TargetLanguage::GDScript
+        | TargetLanguage::Ruby
+        | TargetLanguage::Lua => None,
         // All others use the declared return type
-        TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java | TargetLanguage::CSharp
-        | TargetLanguage::Go | TargetLanguage::Php | TargetLanguage::Kotlin | TargetLanguage::Swift
+        TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Java
+        | TargetLanguage::CSharp
+        | TargetLanguage::Go
+        | TargetLanguage::Php
+        | TargetLanguage::Kotlin
+        | TargetLanguage::Swift
         | TargetLanguage::Erlang => handler.return_type.clone(),
         TargetLanguage::Graphviz => unreachable!(),
     };

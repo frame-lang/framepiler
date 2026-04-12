@@ -115,7 +115,9 @@ pub fn parse_call_args(args_text: &str) -> Result<Vec<ParsedCallArg>, CallArgsEr
 
     loop {
         // Skip whitespace and commas between args
-        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r') {
+        while i < n
+            && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r')
+        {
             i += 1;
         }
         if i >= n {
@@ -131,7 +133,9 @@ pub fn parse_call_args(args_text: &str) -> Result<Vec<ParsedCallArg>, CallArgsEr
         out.push(arg);
 
         // After an arg, expect either a comma or end-of-input
-        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r') {
+        while i < n
+            && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r')
+        {
             i += 1;
         }
         if i >= n {
@@ -166,10 +170,7 @@ fn parse_one_arg(
         let open_paren_pos = if is_enter { *cursor + 2 } else { *cursor + 1 };
         if open_paren_pos >= end || bytes[open_paren_pos] != b'(' {
             return Err(CallArgsError::ParseError {
-                message: format!(
-                    "expected '(' after '{}'",
-                    if is_enter { "$>" } else { "$" }
-                ),
+                message: format!("expected '(' after '{}'", if is_enter { "$>" } else { "$" }),
                 position: *cursor,
             });
         }
@@ -185,7 +186,11 @@ fn parse_one_arg(
         let (name, value) = split_named_or_positional(&body);
 
         return Ok(ParsedCallArg {
-            group: if is_enter { CallArgGroup::Enter } else { CallArgGroup::State },
+            group: if is_enter {
+                CallArgGroup::Enter
+            } else {
+                CallArgGroup::State
+            },
             name,
             value,
         });
@@ -366,7 +371,9 @@ pub fn resolve_call(
         if parsed.is_empty() {
             return Ok(Vec::new());
         }
-        return Err(CallArgsError::ExtraArgs { count: parsed.len() });
+        return Err(CallArgsError::ExtraArgs {
+            count: parsed.len(),
+        });
     }
 
     // 2. Determine whether the system has state or enter params (which
@@ -400,8 +407,14 @@ pub fn resolve_call(
             .iter()
             .filter(|a| a.group == CallArgGroup::Domain && a.name.is_none())
             .count();
-        let state_count = parsed.iter().filter(|a| a.group == CallArgGroup::State).count();
-        let enter_count = parsed.iter().filter(|a| a.group == CallArgGroup::Enter).count();
+        let state_count = parsed
+            .iter()
+            .filter(|a| a.group == CallArgGroup::State)
+            .count();
+        let enter_count = parsed
+            .iter()
+            .filter(|a| a.group == CallArgGroup::Enter)
+            .count();
         let declared_state = sys_params
             .iter()
             .filter(|p| matches!(p.kind, ParamKind::StateArg))
@@ -756,7 +769,10 @@ mod tests {
             make_param("name", ParamKind::Domain, None),
         ];
         let resolved = resolve_call(&parsed, &sys).unwrap();
-        assert_eq!(resolved, vec!["10".to_string(), "80".to_string(), "\"R2D2\"".to_string()]);
+        assert_eq!(
+            resolved,
+            vec!["10".to_string(), "80".to_string(), "\"R2D2\"".to_string()]
+        );
     }
 
     #[test]
@@ -768,7 +784,10 @@ mod tests {
             make_param("name", ParamKind::Domain, None),
         ];
         let resolved = resolve_call(&parsed, &sys).unwrap();
-        assert_eq!(resolved, vec!["10".to_string(), "80".to_string(), "\"R2D2\"".to_string()]);
+        assert_eq!(
+            resolved,
+            vec!["10".to_string(), "80".to_string(), "\"R2D2\"".to_string()]
+        );
     }
 
     #[test]
@@ -782,7 +801,10 @@ mod tests {
         ];
         let resolved = resolve_call(&parsed, &sys).unwrap();
         // Resolved is ALWAYS in declaration order regardless of call order
-        assert_eq!(resolved, vec!["10".to_string(), "80".to_string(), "\"R2D2\"".to_string()]);
+        assert_eq!(
+            resolved,
+            vec!["10".to_string(), "80".to_string(), "\"R2D2\"".to_string()]
+        );
     }
 
     #[test]

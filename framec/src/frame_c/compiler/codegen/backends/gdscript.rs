@@ -9,9 +9,9 @@
 //! - `ClassName.new()` instead of `ClassName()`
 //! - `Variant` as universal type
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// GDScript backend for code generation
 pub struct GDScriptBackend;
@@ -20,7 +20,6 @@ impl LanguageBackend for GDScriptBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
             // ===== Structural =====
-
             CodegenNode::Module { imports, items } => {
                 let mut result = String::new();
 
@@ -45,7 +44,11 @@ impl LanguageBackend for GDScriptBackend {
                 result
             }
 
-            CodegenNode::Import { module, items, alias } => {
+            CodegenNode::Import {
+                module,
+                items,
+                alias,
+            } => {
                 // GDScript doesn't have Python-style imports, but we pass through for compatibility
                 if items.is_empty() {
                     if let Some(alias) = alias {
@@ -58,7 +61,14 @@ impl LanguageBackend for GDScriptBackend {
                 }
             }
 
-            CodegenNode::Class { name, fields, methods, base_classes, is_abstract: _, .. } => {
+            CodegenNode::Class {
+                name,
+                fields,
+                methods,
+                base_classes,
+                is_abstract: _,
+                ..
+            } => {
                 let mut result = String::new();
 
                 // Class declaration
@@ -82,7 +92,12 @@ impl LanguageBackend for GDScriptBackend {
                         } else {
                             String::new()
                         };
-                        result.push_str(&format!("{}var {}{}\n", ctx.get_indent(), field.name, init));
+                        result.push_str(&format!(
+                            "{}var {}{}\n",
+                            ctx.get_indent(),
+                            field.name,
+                            init
+                        ));
                     }
                     if !fields.is_empty() && !methods.is_empty() {
                         result.push('\n');
@@ -113,7 +128,12 @@ impl LanguageBackend for GDScriptBackend {
                             self.emit(value, ctx)
                         ));
                     } else {
-                        result.push_str(&format!("{}{} = \"{}\"\n", ctx.get_indent(), variant.name, variant.name));
+                        result.push_str(&format!(
+                            "{}{} = \"{}\"\n",
+                            ctx.get_indent(),
+                            variant.name,
+                            variant.name
+                        ));
                     }
                 }
 
@@ -122,8 +142,16 @@ impl LanguageBackend for GDScriptBackend {
             }
 
             // ===== Methods =====
-
-            CodegenNode::Method { name, params, return_type, body, is_async: _, is_static, visibility: _, decorators } => {
+            CodegenNode::Method {
+                name,
+                params,
+                return_type,
+                body,
+                is_async: _,
+                is_static,
+                visibility: _,
+                decorators,
+            } => {
                 let mut result = String::new();
 
                 // Decorators (GDScript uses @annotations too)
@@ -154,17 +182,13 @@ impl LanguageBackend for GDScriptBackend {
                 ctx.push_indent();
 
                 // Method body - check if it only contains comments/empty nodes/empty native blocks
-                let has_executable_code = body.iter().any(|stmt| {
-                    match stmt {
-                        CodegenNode::Comment { .. } | CodegenNode::Empty => false,
-                        CodegenNode::NativeBlock { code, .. } => {
-                            code.lines().any(|line| {
-                                let trimmed = line.trim();
-                                !trimmed.is_empty() && !trimmed.starts_with('#')
-                            })
-                        },
-                        _ => true,
-                    }
+                let has_executable_code = body.iter().any(|stmt| match stmt {
+                    CodegenNode::Comment { .. } | CodegenNode::Empty => false,
+                    CodegenNode::NativeBlock { code, .. } => code.lines().any(|line| {
+                        let trimmed = line.trim();
+                        !trimmed.is_empty() && !trimmed.starts_with('#')
+                    }),
+                    _ => true,
                 });
 
                 if body.is_empty() || !has_executable_code {
@@ -178,7 +202,15 @@ impl LanguageBackend for GDScriptBackend {
                 } else {
                     for stmt in body {
                         result.push_str(&self.emit(stmt, ctx));
-                        if !matches!(stmt, CodegenNode::Comment { .. } | CodegenNode::Empty | CodegenNode::If { .. } | CodegenNode::While { .. } | CodegenNode::For { .. } | CodegenNode::Match { .. }) {
+                        if !matches!(
+                            stmt,
+                            CodegenNode::Comment { .. }
+                                | CodegenNode::Empty
+                                | CodegenNode::If { .. }
+                                | CodegenNode::While { .. }
+                                | CodegenNode::For { .. }
+                                | CodegenNode::Match { .. }
+                        ) {
                             result.push('\n');
                         }
                     }
@@ -188,12 +220,20 @@ impl LanguageBackend for GDScriptBackend {
                 result
             }
 
-            CodegenNode::Constructor { params, body, super_call } => {
+            CodegenNode::Constructor {
+                params,
+                body,
+                super_call,
+            } => {
                 let mut result = String::new();
 
                 // GDScript uses _init instead of __init__
                 let params_str = self.emit_params(params, false);
-                result.push_str(&format!("{}func _init({}):\n", ctx.get_indent(), params_str));
+                result.push_str(&format!(
+                    "{}func _init({}):\n",
+                    ctx.get_indent(),
+                    params_str
+                ));
 
                 ctx.push_indent();
 
@@ -209,7 +249,15 @@ impl LanguageBackend for GDScriptBackend {
                 } else {
                     for stmt in body {
                         result.push_str(&self.emit(stmt, ctx));
-                        if !matches!(stmt, CodegenNode::Comment { .. } | CodegenNode::Empty | CodegenNode::If { .. } | CodegenNode::While { .. } | CodegenNode::For { .. } | CodegenNode::Match { .. }) {
+                        if !matches!(
+                            stmt,
+                            CodegenNode::Comment { .. }
+                                | CodegenNode::Empty
+                                | CodegenNode::If { .. }
+                                | CodegenNode::While { .. }
+                                | CodegenNode::For { .. }
+                                | CodegenNode::Match { .. }
+                        ) {
                             result.push('\n');
                         }
                     }
@@ -220,8 +268,12 @@ impl LanguageBackend for GDScriptBackend {
             }
 
             // ===== Statements =====
-
-            CodegenNode::VarDecl { name, type_annotation: _, init, is_const: _ } => {
+            CodegenNode::VarDecl {
+                name,
+                type_annotation: _,
+                init,
+                is_const: _,
+            } => {
                 let indent = ctx.get_indent();
                 if let Some(init_expr) = init {
                     let init_str = self.emit(init_expr, ctx);
@@ -246,7 +298,11 @@ impl LanguageBackend for GDScriptBackend {
                 }
             }
 
-            CodegenNode::If { condition, then_block, else_block } => {
+            CodegenNode::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let mut result = String::new();
                 let cond_str = self.emit(condition, ctx);
                 result.push_str(&format!("{}if {}:\n", ctx.get_indent(), cond_str));
@@ -324,10 +380,19 @@ impl LanguageBackend for GDScriptBackend {
                 result
             }
 
-            CodegenNode::For { var, iterable, body } => {
+            CodegenNode::For {
+                var,
+                iterable,
+                body,
+            } => {
                 let mut result = String::new();
                 let iter_str = self.emit(iterable, ctx);
-                result.push_str(&format!("{}for {} in {}:\n", ctx.get_indent(), var, iter_str));
+                result.push_str(&format!(
+                    "{}for {} in {}:\n",
+                    ctx.get_indent(),
+                    var,
+                    iter_str
+                ));
 
                 ctx.push_indent();
                 if body.is_empty() {
@@ -362,18 +427,13 @@ impl LanguageBackend for GDScriptBackend {
             CodegenNode::Empty => String::new(),
 
             // ===== Expressions =====
-
             CodegenNode::Ident(name) => name.clone(),
 
             CodegenNode::Literal(lit) => self.emit_literal(lit, ctx),
 
-            CodegenNode::BinaryOp { op, left, right } => {
-                self.emit_binary_op(op, left, right, ctx)
-            }
+            CodegenNode::BinaryOp { op, left, right } => self.emit_binary_op(op, left, right, ctx),
 
-            CodegenNode::UnaryOp { op, operand } => {
-                self.emit_unary_op(op, operand, ctx)
-            }
+            CodegenNode::UnaryOp { op, operand } => self.emit_unary_op(op, operand, ctx),
 
             CodegenNode::Call { target, args } => {
                 let target_str = self.emit(target, ctx);
@@ -381,7 +441,11 @@ impl LanguageBackend for GDScriptBackend {
                 format!("{}({})", target_str, args_str.join(", "))
             }
 
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let obj_str = self.emit(object, ctx);
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
                 format!("{}.{}({})", obj_str, method, args_str.join(", "))
@@ -406,13 +470,18 @@ impl LanguageBackend for GDScriptBackend {
             }
 
             CodegenNode::Dict(pairs) => {
-                let pairs_str: Vec<String> = pairs.iter().map(|(k, v)| {
-                    format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx))
-                }).collect();
+                let pairs_str: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx)))
+                    .collect();
                 format!("{{{}}}", pairs_str.join(", "))
             }
 
-            CodegenNode::Ternary { condition, then_expr, else_expr } => {
+            CodegenNode::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond = self.emit(condition, ctx);
                 let then_val = self.emit(then_expr, ctx);
                 let else_val = self.emit(else_expr, ctx);
@@ -440,42 +509,60 @@ impl LanguageBackend for GDScriptBackend {
             }
 
             // ===== Frame-Specific =====
-
-            CodegenNode::Transition { target_state, exit_args, enter_args, state_args, indent } => {
+            CodegenNode::Transition {
+                target_state,
+                exit_args,
+                enter_args,
+                state_args,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
 
                 let mut args = vec![format!("\"{}\"", target_state)];
 
                 if !exit_args.is_empty() {
-                    let exit_str: Vec<String> = exit_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let exit_str: Vec<String> =
+                        exit_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", exit_str.join(", ")));
                 } else {
                     args.push("null".to_string());
                 }
 
                 if !enter_args.is_empty() {
-                    let enter_str: Vec<String> = enter_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let enter_str: Vec<String> =
+                        enter_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", enter_str.join(", ")));
                 } else {
                     args.push("null".to_string());
                 }
 
                 if !state_args.is_empty() {
-                    let state_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let state_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", state_str.join(", ")));
                 }
 
                 format!("{}self._transition({})", ind, args.join(", "))
             }
 
-            CodegenNode::ChangeState { target_state, state_args, indent } => {
+            CodegenNode::ChangeState {
+                target_state,
+                state_args,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
 
                 if state_args.is_empty() {
                     format!("{}self._change_state(\"{}\")", ind, target_state)
                 } else {
-                    let args_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
-                    format!("{}self._change_state(\"{}\", [{}])", ind, target_state, args_str.join(", "))
+                    let args_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    format!(
+                        "{}self._change_state(\"{}\", [{}])",
+                        ind,
+                        target_state,
+                        args_str.join(", ")
+                    )
                 }
             }
 
@@ -508,19 +595,24 @@ impl LanguageBackend for GDScriptBackend {
                 if args_str.is_empty() {
                     format!("{}self.{}()", ctx.get_indent(), event)
                 } else {
-                    format!("{}self.{}({})", ctx.get_indent(), event, args_str.join(", "))
+                    format!(
+                        "{}self.{}({})",
+                        ctx.get_indent(),
+                        event,
+                        args_str.join(", ")
+                    )
                 }
             }
 
             // ===== Native Code Preservation =====
-
             CodegenNode::NativeBlock { code, span: _ } => {
                 let lines: Vec<&str> = code.lines().collect();
                 if lines.is_empty() {
                     return String::new();
                 }
 
-                let min_indent = lines.iter()
+                let min_indent = lines
+                    .iter()
                     .filter(|line| !line.trim().is_empty())
                     .map(|line| line.len() - line.trim_start().len())
                     .min()
@@ -574,12 +666,24 @@ impl LanguageBackend for GDScriptBackend {
     }
 
     // GDScript uses lowercase true/false/null (not Python's True/False/None)
-    fn true_keyword(&self) -> &'static str { "true" }
-    fn false_keyword(&self) -> &'static str { "false" }
-    fn null_keyword(&self) -> &'static str { "null" }
-    fn and_operator(&self) -> &'static str { "and" }
-    fn or_operator(&self) -> &'static str { "or" }
-    fn not_operator(&self) -> &'static str { "not " }
+    fn true_keyword(&self) -> &'static str {
+        "true"
+    }
+    fn false_keyword(&self) -> &'static str {
+        "false"
+    }
+    fn null_keyword(&self) -> &'static str {
+        "null"
+    }
+    fn and_operator(&self) -> &'static str {
+        "and"
+    }
+    fn or_operator(&self) -> &'static str {
+        "or"
+    }
+    fn not_operator(&self) -> &'static str {
+        "not "
+    }
 }
 
 impl GDScriptBackend {
@@ -621,6 +725,10 @@ impl GDScriptBackend {
 
     /// Emit parameters for a lambda
     fn emit_lambda_params(&self, params: &[Param]) -> String {
-        params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ")
+        params
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }

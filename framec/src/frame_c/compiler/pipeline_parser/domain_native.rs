@@ -150,7 +150,11 @@ fn tokenize(line: &str) -> Result<Vec<PosTok<'_>>, DomainParseError> {
                 i += 1;
             }
             let text = &line[start..i];
-            tokens.push(PosTok { tok: Tok::Ident(text), start, end: i });
+            tokens.push(PosTok {
+                tok: Tok::Ident(text),
+                start,
+                end: i,
+            });
             continue;
         }
 
@@ -159,18 +163,27 @@ fn tokenize(line: &str) -> Result<Vec<PosTok<'_>>, DomainParseError> {
             let start = i;
             i += 1;
             // Hex / binary / octal prefix
-            if i < n && (bytes[i] == b'x' || bytes[i] == b'X' || bytes[i] == b'b' || bytes[i] == b'B' || bytes[i] == b'o' || bytes[i] == b'O') {
+            if i < n
+                && (bytes[i] == b'x'
+                    || bytes[i] == b'X'
+                    || bytes[i] == b'b'
+                    || bytes[i] == b'B'
+                    || bytes[i] == b'o'
+                    || bytes[i] == b'O')
+            {
                 i += 1;
             }
             while i < n
-                && (bytes[i].is_ascii_alphanumeric()
-                    || bytes[i] == b'_'
-                    || bytes[i] == b'.')
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.')
             {
                 i += 1;
             }
             let text = &line[start..i];
-            tokens.push(PosTok { tok: Tok::Number(text), start, end: i });
+            tokens.push(PosTok {
+                tok: Tok::Number(text),
+                start,
+                end: i,
+            });
             continue;
         }
 
@@ -196,7 +209,11 @@ fn tokenize(line: &str) -> Result<Vec<PosTok<'_>>, DomainParseError> {
             }
             i += 1; // consume closing quote
             let text = &line[start..i];
-            tokens.push(PosTok { tok: Tok::StringLit(text), start, end: i });
+            tokens.push(PosTok {
+                tok: Tok::StringLit(text),
+                start,
+                end: i,
+            });
             continue;
         }
 
@@ -204,8 +221,15 @@ fn tokenize(line: &str) -> Result<Vec<PosTok<'_>>, DomainParseError> {
         // `==` (equality, must be distinguished from assignment `=`).
         if i + 1 < n {
             let two = &line[i..i + 2];
-            if matches!(two, "::" | "->" | "==" | "!=" | "<=" | ">=" | "&&" | "||" | "<<" | ">>") {
-                tokens.push(PosTok { tok: Tok::Punct(two), start: i, end: i + 2 });
+            if matches!(
+                two,
+                "::" | "->" | "==" | "!=" | "<=" | ">=" | "&&" | "||" | "<<" | ">>"
+            ) {
+                tokens.push(PosTok {
+                    tok: Tok::Punct(two),
+                    start: i,
+                    end: i + 2,
+                });
                 i += 2;
                 continue;
             }
@@ -213,11 +237,14 @@ fn tokenize(line: &str) -> Result<Vec<PosTok<'_>>, DomainParseError> {
 
         // Single-char punctuation
         match b {
-            b'=' | b':' | b',' | b';' | b'(' | b')' | b'[' | b']'
-            | b'{' | b'}' | b'<' | b'>' | b'&' | b'*' | b'?' | b'!' | b'.'
-            | b'+' | b'-' | b'/' | b'@' | b'|' | b'^' | b'~' => {
+            b'=' | b':' | b',' | b';' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>'
+            | b'&' | b'*' | b'?' | b'!' | b'.' | b'+' | b'-' | b'/' | b'@' | b'|' | b'^' | b'~' => {
                 let text = &line[i..i + 1];
-                tokens.push(PosTok { tok: Tok::Punct(text), start: i, end: i + 1 });
+                tokens.push(PosTok {
+                    tok: Tok::Punct(text),
+                    start: i,
+                    end: i + 1,
+                });
                 i += 1;
                 continue;
             }
@@ -399,7 +426,9 @@ fn try_annotated_name(line: &str) -> Result<ParsedDomainField, DomainParseError>
 
     // Expect identifier (the name)
     let name = match toks.get(cursor) {
-        Some(PosTok { tok: Tok::Ident(s), .. }) => s.to_string(),
+        Some(PosTok {
+            tok: Tok::Ident(s), ..
+        }) => s.to_string(),
         _ => {
             return Err(DomainParseError::ShapeMismatch(
                 "AnnotatedName: expected identifier as field name".to_string(),
@@ -410,7 +439,10 @@ fn try_annotated_name(line: &str) -> Result<ParsedDomainField, DomainParseError>
 
     // Expect `:` immediately after the name
     match toks.get(cursor) {
-        Some(PosTok { tok: Tok::Punct(":"), .. }) => {
+        Some(PosTok {
+            tok: Tok::Punct(":"),
+            ..
+        }) => {
             cursor += 1;
         }
         _ => {
@@ -469,7 +501,9 @@ fn try_go_style(line: &str) -> Result<ParsedDomainField, DomainParseError> {
 
     // First token must be a bare identifier.
     let name = match toks.first() {
-        Some(PosTok { tok: Tok::Ident(s), .. }) => s.to_string(),
+        Some(PosTok {
+            tok: Tok::Ident(s), ..
+        }) => s.to_string(),
         _ => {
             return Err(DomainParseError::ShapeMismatch(
                 "GoStyle: expected identifier as first token".to_string(),
@@ -485,12 +519,18 @@ fn try_go_style(line: &str) -> Result<ParsedDomainField, DomainParseError> {
                 "GoStyle: only one token (would match BareName)".to_string(),
             ));
         }
-        Some(PosTok { tok: Tok::Punct(":"), .. }) => {
+        Some(PosTok {
+            tok: Tok::Punct(":"),
+            ..
+        }) => {
             return Err(DomainParseError::ShapeMismatch(
                 "GoStyle: ':' after name (would match AnnotatedName)".to_string(),
             ));
         }
-        Some(PosTok { tok: Tok::Punct("="), .. }) => {
+        Some(PosTok {
+            tok: Tok::Punct("="),
+            ..
+        }) => {
             return Err(DomainParseError::ShapeMismatch(
                 "GoStyle: '=' after name (would match BareName)".to_string(),
             ));
@@ -547,7 +587,9 @@ fn try_bare_name(line: &str) -> Result<ParsedDomainField, DomainParseError> {
 
     // Expect identifier (the name)
     let name = match toks.get(cursor) {
-        Some(PosTok { tok: Tok::Ident(s), .. }) => s.to_string(),
+        Some(PosTok {
+            tok: Tok::Ident(s), ..
+        }) => s.to_string(),
         _ => {
             return Err(DomainParseError::ShapeMismatch(
                 "BareName: expected identifier as field name".to_string(),
@@ -564,7 +606,10 @@ fn try_bare_name(line: &str) -> Result<ParsedDomainField, DomainParseError> {
             var_type: Type::Unknown,
             init_text: None,
         }),
-        Some(PosTok { tok: Tok::Punct("="), .. }) => {
+        Some(PosTok {
+            tok: Tok::Punct("="),
+            ..
+        }) => {
             let init_text = init_text_from(line, &toks, cursor);
             Ok(ParsedDomainField {
                 name,
@@ -1043,11 +1088,8 @@ mod tests {
 
     #[test]
     fn dispatch_rust_with_generic() {
-        let f = parse_domain_field(
-            "connection: Option<String> = None",
-            TargetLanguage::Rust,
-        )
-        .unwrap();
+        let f =
+            parse_domain_field("connection: Option<String> = None", TargetLanguage::Rust).unwrap();
         assert_eq!(f.name, "connection");
         assert_eq!(f.var_type, Type::Custom("Option<String>".to_string()));
     }
@@ -1062,7 +1104,8 @@ mod tests {
 
     #[test]
     fn dispatch_gdscript_var_prefixed() {
-        let f = parse_domain_field("var current_output: int = 0", TargetLanguage::GDScript).unwrap();
+        let f =
+            parse_domain_field("var current_output: int = 0", TargetLanguage::GDScript).unwrap();
         assert_eq!(f.name, "current_output");
         assert_eq!(f.var_type, Type::Custom("int".to_string()));
     }
@@ -1102,11 +1145,8 @@ mod tests {
 
     #[test]
     fn dispatch_init_calls_function() {
-        let f = parse_domain_field(
-            "auto items = make_vector(1, 2, 3)",
-            TargetLanguage::Cpp,
-        )
-        .unwrap();
+        let f =
+            parse_domain_field("auto items = make_vector(1, 2, 3)", TargetLanguage::Cpp).unwrap();
         assert_eq!(f.name, "items");
         assert_eq!(f.var_type, Type::Custom("auto".to_string()));
         assert_eq!(f.init_text, Some("make_vector(1, 2, 3)".to_string()));

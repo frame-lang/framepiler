@@ -6,55 +6,39 @@
 //! Uses the "oceans model" - native code is preserved exactly, Frame segments
 //! are replaced with generated code using the splicer.
 
-use crate::frame_c::visitors::TargetLanguage;
-use super::codegen_utils::{
-    HandlerContext, expression_to_string, type_to_string, state_var_init_value,
-    convert_expression, convert_literal, extract_type_from_raw_domain,
-    is_int_type, is_float_type, is_bool_type, is_string_type,
-    to_snake_case, cpp_map_type, cpp_wrap_any_arg, java_map_type,
-    kotlin_map_type, swift_map_type, csharp_map_type, go_map_type, type_to_cpp_string,
-};
-use super::interface_gen::{
-    generate_interface_wrappers, generate_action, generate_operation,
-    generate_persistence_methods,
-};
-use super::state_dispatch::{
-    generate_state_handlers_via_arcanum, generate_handler_from_arcanum,
-};
-use super::frame_expansion::{
-    splice_handler_body_from_span, generate_frame_expansion,
-    get_native_scanner, normalize_indentation,
-};
-use crate::frame_c::compiler::frame_ast::{
-    SystemAst, MachineAst,
-    ActionAst, OperationAst, Type,
-    Expression, Literal, BinaryOp, UnaryOp, StateVarAst,
-    InterfaceMethod, MethodParam, Span,
-};
-use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
-use crate::frame_c::compiler::splice::Splicer;
-use crate::frame_c::compiler::native_region_scanner::{
-    NativeRegionScanner, Region, FrameSegmentKind,
-    python::NativeRegionScannerPy,
-    typescript::NativeRegionScannerTs,
-    rust::NativeRegionScannerRust,
-    csharp::NativeRegionScannerCs,
-    c::NativeRegionScannerC,
-    cpp::NativeRegionScannerCpp,
-    java::NativeRegionScannerJava,
-    go::NativeRegionScannerGo,
-    javascript::NativeRegionScannerJs,
-    php::NativeRegionScannerPhp,
-    kotlin::NativeRegionScannerKotlin,
-    swift::NativeRegionScannerSwift,
-    ruby::NativeRegionScannerRuby,
-    erlang::NativeRegionScannerErlang,
-    lua::NativeRegionScannerLua,
-    dart::NativeRegionScannerDart,
-    gdscript::NativeRegionScannerGDScript,
-};
 use super::ast::*;
 use super::backend::get_backend;
+use super::codegen_utils::{
+    convert_expression, convert_literal, cpp_map_type, cpp_wrap_any_arg, csharp_map_type,
+    expression_to_string, extract_type_from_raw_domain, go_map_type, is_bool_type, is_float_type,
+    is_int_type, is_string_type, java_map_type, kotlin_map_type, state_var_init_value,
+    swift_map_type, to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
+};
+use super::frame_expansion::{
+    generate_frame_expansion, get_native_scanner, normalize_indentation,
+    splice_handler_body_from_span,
+};
+use super::interface_gen::{
+    generate_action, generate_interface_wrappers, generate_operation, generate_persistence_methods,
+};
+use super::state_dispatch::{generate_handler_from_arcanum, generate_state_handlers_via_arcanum};
+use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
+use crate::frame_c::compiler::frame_ast::{
+    ActionAst, BinaryOp, Expression, InterfaceMethod, Literal, MachineAst, MethodParam,
+    OperationAst, Span, StateVarAst, SystemAst, Type, UnaryOp,
+};
+use crate::frame_c::compiler::native_region_scanner::{
+    c::NativeRegionScannerC, cpp::NativeRegionScannerCpp, csharp::NativeRegionScannerCs,
+    dart::NativeRegionScannerDart, erlang::NativeRegionScannerErlang,
+    gdscript::NativeRegionScannerGDScript, go::NativeRegionScannerGo,
+    java::NativeRegionScannerJava, javascript::NativeRegionScannerJs,
+    kotlin::NativeRegionScannerKotlin, lua::NativeRegionScannerLua, php::NativeRegionScannerPhp,
+    python::NativeRegionScannerPy, ruby::NativeRegionScannerRuby, rust::NativeRegionScannerRust,
+    swift::NativeRegionScannerSwift, typescript::NativeRegionScannerTs, FrameSegmentKind,
+    NativeRegionScanner, Region,
+};
+use crate::frame_c::compiler::splice::Splicer;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// True iff the init expression text contains any of the supplied param
 /// names as a whole word (identifier-boundary match). Used to detect the
@@ -75,14 +59,13 @@ fn init_references_param(init_text: &str, params: &[String]) -> bool {
         }
         let mut i = 0usize;
         while i + pb.len() <= bytes.len() {
-            if let Some(found) = bytes[i..]
-                .windows(pb.len())
-                .position(|w| w == pb)
-            {
+            if let Some(found) = bytes[i..].windows(pb.len()).position(|w| w == pb) {
                 let start = i + found;
                 let end = start + pb.len();
                 let prev_ok = start == 0
-                    || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_' || bytes[start - 1] == b'.');
+                    || !(bytes[start - 1].is_ascii_alphanumeric()
+                        || bytes[start - 1] == b'_'
+                        || bytes[start - 1] == b'.');
                 let next_ok = end == bytes.len()
                     || !(bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
                 if prev_ok && next_ok {
@@ -116,7 +99,9 @@ fn prefix_php_vars(text: &str, params: &[String]) -> String {
                     let start = i + found;
                     let end = start + pb.len();
                     let prev_ok = start == 0
-                        || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_' || bytes[start - 1] == b'$');
+                        || !(bytes[start - 1].is_ascii_alphanumeric()
+                            || bytes[start - 1] == b'_'
+                            || bytes[start - 1] == b'$');
                     let next_ok = end == bytes.len()
                         || !(bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
                     // Copy text before the match
@@ -147,7 +132,12 @@ fn prefix_php_vars(text: &str, params: &[String]) -> String {
 /// * `arcanum` - Symbol table for the system (used for handler info and validation)
 /// * `lang` - Target language for code generation
 /// * `source` - Original source bytes (used to extract native code via spans)
-pub fn generate_system(system: &SystemAst, arcanum: &Arcanum, lang: TargetLanguage, source: &[u8]) -> CodegenNode {
+pub fn generate_system(
+    system: &SystemAst,
+    arcanum: &Arcanum,
+    lang: TargetLanguage,
+    source: &[u8],
+) -> CodegenNode {
     // Erlang: gen_statem native — completely different codegen path
     if lang == TargetLanguage::Erlang {
         return super::erlang_system::generate_erlang_system(system, arcanum, source);
@@ -175,13 +165,22 @@ pub fn generate_system(system: &SystemAst, arcanum: &Arcanum, lang: TargetLangua
     methods.extend(generate_interface_wrappers(system, &syntax));
 
     // Check if system has states with state variables (for Rust compartment-based push/pop)
-    let has_state_vars = system.machine.as_ref()
+    let has_state_vars = system
+        .machine
+        .as_ref()
         .map(|m| m.states.iter().any(|s| !s.state_vars.is_empty()))
         .unwrap_or(false);
 
     // State handlers - use enhanced Arcanum for clean iteration
     if let Some(ref machine) = system.machine {
-        methods.extend(generate_state_handlers_via_arcanum(&system.name, machine, arcanum, source, lang, has_state_vars));
+        methods.extend(generate_state_handlers_via_arcanum(
+            &system.name,
+            machine,
+            arcanum,
+            source,
+            lang,
+            has_state_vars,
+        ));
     }
 
     // Actions - extract native code from source using spans
@@ -205,7 +204,7 @@ pub fn generate_system(system: &SystemAst, arcanum: &Arcanum, lang: TargetLangua
         methods,
         base_classes: vec![],
         is_abstract: false,
-        derives: vec![],  // Derives not used - we manually build JSON
+        derives: vec![], // Derives not used - we manually build JSON
     };
 
     // Post-process: make dispatch chain async if any interface method is async
@@ -228,10 +227,22 @@ pub fn generate_system(system: &SystemAst, arcanum: &Arcanum, lang: TargetLangua
 /// recognizing Await nodes in the method bodies, or via NativeBlock code
 /// that already contains the dispatch calls.
 fn make_system_async(class_node: &mut CodegenNode, _system_name: &str, lang: TargetLanguage) {
-    if let CodegenNode::Class { ref mut methods, ref name, .. } = class_node {
+    if let CodegenNode::Class {
+        ref mut methods,
+        ref name,
+        ..
+    } = class_node
+    {
         let system_name = name.clone();
         for method in methods.iter_mut() {
-            if let CodegenNode::Method { is_async, is_static, name, body, .. } = method {
+            if let CodegenNode::Method {
+                is_async,
+                is_static,
+                name,
+                body,
+                ..
+            } = method
+            {
                 // Skip static methods and constructors
                 if *is_static || name == "__init__" || name == "new" {
                     continue;
@@ -281,20 +292,25 @@ self._context_stack.pop();"#,
             // Async not supported for these targets — emit a comment placeholder
             TargetLanguage::C | TargetLanguage::Cpp => format!("// async not supported for C/C++"),
             // Languages with async that haven't been implemented yet
-            TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::Swift
-                | TargetLanguage::CSharp | TargetLanguage::Go | TargetLanguage::Php
-                | TargetLanguage::Ruby | TargetLanguage::Lua | TargetLanguage::Dart | TargetLanguage::GDScript => {
+            TargetLanguage::Java
+            | TargetLanguage::Kotlin
+            | TargetLanguage::Swift
+            | TargetLanguage::CSharp
+            | TargetLanguage::Go
+            | TargetLanguage::Php
+            | TargetLanguage::Ruby
+            | TargetLanguage::Lua
+            | TargetLanguage::Dart
+            | TargetLanguage::GDScript => {
                 format!("// async init not yet implemented for {:?}", lang)
             }
             TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
             TargetLanguage::Graphviz => unreachable!(),
         };
-        let init_body = vec![
-            CodegenNode::NativeBlock {
-                code: init_code,
-                span: None,
-            },
-        ];
+        let init_body = vec![CodegenNode::NativeBlock {
+            code: init_code,
+            span: None,
+        }];
 
         methods.push(CodegenNode::Method {
             name: "init".to_string(),
@@ -330,13 +346,19 @@ fn add_await_to_dispatch_calls(body: &mut Vec<CodegenNode>, lang: TargetLanguage
             CodegenNode::NativeBlock { code, .. } => {
                 *code = add_await_to_string(code, lang);
             }
-            CodegenNode::If { then_block, else_block, .. } => {
+            CodegenNode::If {
+                then_block,
+                else_block,
+                ..
+            } => {
                 add_await_to_dispatch_calls(then_block, lang);
                 if let Some(els) = else_block {
                     add_await_to_dispatch_calls(els, lang);
                 }
             }
-            CodegenNode::While { body: while_body, .. } => {
+            CodegenNode::While {
+                body: while_body, ..
+            } => {
                 add_await_to_dispatch_calls(while_body, lang);
             }
             _ => {}
@@ -387,11 +409,22 @@ fn add_await_to_string(code: &str, lang: TargetLanguage) -> String {
                     }
                 }
                 // All other async-capable languages use prefix `await`
-                TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
-                    | TargetLanguage::CSharp | TargetLanguage::Kotlin | TargetLanguage::Swift
-                    | TargetLanguage::Java | TargetLanguage::Go | TargetLanguage::C
-                    | TargetLanguage::Cpp | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang
-                    | TargetLanguage::Lua | TargetLanguage::Dart | TargetLanguage::GDScript => {
+                TargetLanguage::Python3
+                | TargetLanguage::TypeScript
+                | TargetLanguage::JavaScript
+                | TargetLanguage::CSharp
+                | TargetLanguage::Kotlin
+                | TargetLanguage::Swift
+                | TargetLanguage::Java
+                | TargetLanguage::Go
+                | TargetLanguage::C
+                | TargetLanguage::Cpp
+                | TargetLanguage::Php
+                | TargetLanguage::Ruby
+                | TargetLanguage::Erlang
+                | TargetLanguage::Lua
+                | TargetLanguage::Dart
+                | TargetLanguage::GDScript => {
                     // Python/TypeScript/C#/etc: prefix await
                     if !trimmed.starts_with("await ") {
                         result.push_str(indent);
@@ -426,7 +459,9 @@ fn insert_rust_await(line: &str) -> String {
     let mut last_close_paren = None;
     let mut depth = 0;
     for (i, &b) in bytes.iter().enumerate() {
-        if b == b'(' { depth += 1; }
+        if b == b'(' {
+            depth += 1;
+        }
         if b == b')' {
             depth -= 1;
             if depth == 0 {
@@ -463,15 +498,22 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         TargetLanguage::CSharp => format!("List<{}Compartment>", system.name),
         TargetLanguage::Go => format!("[]*{}Compartment", system.name),
         // Dynamic languages: untyped lists — type annotation is for documentation only
-        TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
-            | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang | TargetLanguage::Lua
-            | TargetLanguage::GDScript => "List".to_string(),
+        TargetLanguage::Python3
+        | TargetLanguage::TypeScript
+        | TargetLanguage::JavaScript
+        | TargetLanguage::Php
+        | TargetLanguage::Ruby
+        | TargetLanguage::Erlang
+        | TargetLanguage::Lua
+        | TargetLanguage::GDScript => "List".to_string(),
         TargetLanguage::C => "List".to_string(),
         TargetLanguage::Graphviz => unreachable!(),
     };
-    fields.push(Field::new("_state_stack")
-        .with_visibility(Visibility::Private)
-        .with_type(&stack_type));
+    fields.push(
+        Field::new("_state_stack")
+            .with_visibility(Visibility::Private)
+            .with_type(&stack_type),
+    );
 
     // Compartment field - canonical compartment architecture for ALL languages
     let (comp_field_type, nullable_comp_type) = match syntax.language {
@@ -483,46 +525,45 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             format!("std::shared_ptr<{}>", compartment_type),
             format!("std::shared_ptr<{}>", compartment_type),
         ),
-        TargetLanguage::Java | TargetLanguage::CSharp => (
-            compartment_type.clone(),
-            compartment_type.clone(),
-        ),
-        TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::Dart => (
-            compartment_type.clone(),
-            format!("{}?", compartment_type),
-        ),
+        TargetLanguage::Java | TargetLanguage::CSharp => {
+            (compartment_type.clone(), compartment_type.clone())
+        }
+        TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::Dart => {
+            (compartment_type.clone(), format!("{}?", compartment_type))
+        }
         TargetLanguage::Go => (
             format!("*{}", compartment_type),
             format!("*{}", compartment_type),
         ),
         // Dynamic languages: nullable via language convention (None/null/nil)
-        TargetLanguage::Python3 | TargetLanguage::Ruby | TargetLanguage::Erlang | TargetLanguage::Lua
-            | TargetLanguage::GDScript => (
-            compartment_type.clone(),
-            compartment_type.clone(),
-        ),
+        TargetLanguage::Python3
+        | TargetLanguage::Ruby
+        | TargetLanguage::Erlang
+        | TargetLanguage::Lua
+        | TargetLanguage::GDScript => (compartment_type.clone(), compartment_type.clone()),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => (
             compartment_type.clone(),
             format!("{} | null", compartment_type),
         ),
-        TargetLanguage::Php => (
-            compartment_type.clone(),
-            format!("?{}", compartment_type),
-        ),
+        TargetLanguage::Php => (compartment_type.clone(), format!("?{}", compartment_type)),
         TargetLanguage::C => (
             format!("{}*", compartment_type),
             format!("{}*", compartment_type),
         ),
         TargetLanguage::Graphviz => unreachable!(),
     };
-    fields.push(Field::new("__compartment")
-        .with_visibility(Visibility::Private)
-        .with_type(&comp_field_type));
+    fields.push(
+        Field::new("__compartment")
+            .with_visibility(Visibility::Private)
+            .with_type(&comp_field_type),
+    );
 
     // Next compartment field - for deferred transition caching in __kernel
-    fields.push(Field::new("__next_compartment")
-        .with_visibility(Visibility::Private)
-        .with_type(&nullable_comp_type));
+    fields.push(
+        Field::new("__next_compartment")
+            .with_visibility(Visibility::Private)
+            .with_type(&nullable_comp_type),
+    );
 
     // Context stack for reentrancy - holds FrameContext objects
     let context_stack_type = match syntax.language {
@@ -535,15 +576,22 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         TargetLanguage::CSharp => format!("List<{}FrameContext>", system.name),
         TargetLanguage::Go => format!("[]{}FrameContext", system.name),
         // Dynamic languages: untyped lists
-        TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
-            | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang | TargetLanguage::Lua
-            | TargetLanguage::GDScript => "List".to_string(),
+        TargetLanguage::Python3
+        | TargetLanguage::TypeScript
+        | TargetLanguage::JavaScript
+        | TargetLanguage::Php
+        | TargetLanguage::Ruby
+        | TargetLanguage::Erlang
+        | TargetLanguage::Lua
+        | TargetLanguage::GDScript => "List".to_string(),
         TargetLanguage::C => "List".to_string(),
         TargetLanguage::Graphviz => unreachable!(),
     };
-    fields.push(Field::new("_context_stack")
-        .with_visibility(Visibility::Private)
-        .with_type(&context_stack_type));
+    fields.push(
+        Field::new("_context_stack")
+            .with_visibility(Visibility::Private)
+            .with_type(&context_stack_type),
+    );
 
     /// Render a `DomainVar`'s structured fields back to a single source
     /// line in whichever shape the target language's emit_field expects.
@@ -615,9 +663,7 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         );
         if type_first && !type_text.is_empty() {
             format!("{} {}{}", type_text, var.name, init_suffix)
-        } else if !type_text.is_empty()
-            && !matches!(lang, TargetLanguage::JavaScript)
-        {
+        } else if !type_text.is_empty() && !matches!(lang, TargetLanguage::JavaScript) {
             // AnnotatedName: `<name>: <type>[ = <init>]`
             // JavaScript is excluded — JS class fields don't support
             // `: type` annotations (only TypeScript does). JS falls
@@ -746,9 +792,16 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             });
         }
         // Dynamic languages: empty array literal
-        TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
-            | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang | TargetLanguage::Rust
-            | TargetLanguage::Lua | TargetLanguage::Dart | TargetLanguage::GDScript => {
+        TargetLanguage::Python3
+        | TargetLanguage::TypeScript
+        | TargetLanguage::JavaScript
+        | TargetLanguage::Php
+        | TargetLanguage::Ruby
+        | TargetLanguage::Erlang
+        | TargetLanguage::Rust
+        | TargetLanguage::Lua
+        | TargetLanguage::Dart
+        | TargetLanguage::GDScript => {
             body.push(CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "_state_stack"),
                 CodegenNode::Array(vec![]),
@@ -800,9 +853,16 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             });
         }
         // Dynamic languages: empty array literal
-        TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
-            | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang | TargetLanguage::Rust
-            | TargetLanguage::Lua | TargetLanguage::Dart | TargetLanguage::GDScript => {
+        TargetLanguage::Python3
+        | TargetLanguage::TypeScript
+        | TargetLanguage::JavaScript
+        | TargetLanguage::Php
+        | TargetLanguage::Ruby
+        | TargetLanguage::Erlang
+        | TargetLanguage::Rust
+        | TargetLanguage::Lua
+        | TargetLanguage::Dart
+        | TargetLanguage::GDScript => {
             body.push(CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "_context_stack"),
                 CodegenNode::Array(vec![]),
@@ -942,7 +1002,8 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
         if matches!(syntax.language, TargetLanguage::TypeScript) {
             if init_refs_param {
                 if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::TypeScript);
+                    let init_expanded =
+                        expand_tagged_in_domain(init_text, TargetLanguage::TypeScript);
                     body.push(CodegenNode::NativeBlock {
                         code: format!("this.{} = {};", domain_var.name, init_expanded),
                         span: None,
@@ -957,7 +1018,8 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
         if matches!(syntax.language, TargetLanguage::JavaScript) {
             if init_refs_param {
                 if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::JavaScript);
+                    let init_expanded =
+                        expand_tagged_in_domain(init_text, TargetLanguage::JavaScript);
                     body.push(CodegenNode::NativeBlock {
                         code: format!("this.{} = {};", domain_var.name, init_expanded),
                         span: None,
@@ -975,7 +1037,8 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 if let Some(ref init_text) = init_text_opt {
                     let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Php);
                     // Prefix $ to system param references in the init expression
-                    let init_with_php_vars = prefix_php_vars(&init_expanded, &sys_param_names_for_init);
+                    let init_with_php_vars =
+                        prefix_php_vars(&init_expanded, &sys_param_names_for_init);
                     body.push(CodegenNode::NativeBlock {
                         code: format!("$this->{} = {};", domain_var.name, init_with_php_vars),
                         span: None,
@@ -1079,7 +1142,8 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 continue;
             } else if matches!(syntax.language, TargetLanguage::Rust) {
                 // For Rust, extract initializer from raw_code (after '=')
-                let init_expr = raw_code.split_once('=')
+                let init_expr = raw_code
+                    .split_once('=')
                     .map(|(_, v)| v.trim().to_string())
                     .unwrap_or_else(|| "Default::default()".to_string());
                 body.push(CodegenNode::assign(
@@ -1117,10 +1181,7 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg
                 | crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                     body.push(CodegenNode::assign(
-                        CodegenNode::field(
-                            CodegenNode::self_ref(),
-                            &format!("__sys_{}", p.name),
-                        ),
+                        CodegenNode::field(CodegenNode::self_ref(), &format!("__sys_{}", p.name)),
                         CodegenNode::Ident(p.name.clone()),
                     ));
                 }
@@ -1141,11 +1202,14 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             let has_hsm_parent = first_state.parent.is_some();
 
             // Build ancestor chain from root to leaf (reversed order for creation)
-            let mut ancestor_chain: Vec<&crate::frame_c::compiler::frame_ast::StateAst> = Vec::new();
+            let mut ancestor_chain: Vec<&crate::frame_c::compiler::frame_ast::StateAst> =
+                Vec::new();
             if has_hsm_parent {
                 let mut current_parent = first_state.parent.as_ref();
                 while let Some(parent_name) = current_parent {
-                    if let Some(parent_state) = machine.states.iter().find(|s| &s.name == parent_name) {
+                    if let Some(parent_state) =
+                        machine.states.iter().find(|s| &s.name == parent_name)
+                    {
                         ancestor_chain.push(parent_state);
                         current_parent = parent_state.parent.as_ref();
                     } else {
@@ -1206,7 +1270,10 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         // state_context is auto-set by Compartment::new()
                         body.push(CodegenNode::assign(
                             CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
-                            CodegenNode::Ident(format!("{}Compartment::new(\"{}\")", system.name, first_state.name)),
+                            CodegenNode::Ident(format!(
+                                "{}Compartment::new(\"{}\")",
+                                system.name, first_state.name
+                            )),
                         ));
                         body.push(CodegenNode::assign(
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
@@ -1290,7 +1357,10 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         // No HSM parent - simple compartment creation
                         body.push(CodegenNode::assign(
                             CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
-                            CodegenNode::Ident(format!("{}_Compartment_new(\"{}\")", system.name, first_state.name)),
+                            CodegenNode::Ident(format!(
+                                "{}_Compartment_new(\"{}\")",
+                                system.name, first_state.name
+                            )),
                         ));
                         body.push(CodegenNode::assign(
                             CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
@@ -1719,7 +1789,10 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                             }
                             for var in &ancestor.state_vars {
                                 let init_val = if let Some(ref init) = var.init {
-                                    cpp_wrap_any_arg(&expression_to_string(init, TargetLanguage::Cpp))
+                                    cpp_wrap_any_arg(&expression_to_string(
+                                        init,
+                                        TargetLanguage::Cpp,
+                                    ))
                                 } else {
                                     state_var_init_value(&var.var_type, TargetLanguage::Cpp)
                                 };
@@ -1942,7 +2015,9 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                                 };
                                 hsm_init_code.push_str(&format!(
                                     "{}[\"{}\"] = {}\n",
-                                    format!("{}.state_vars", comp_var), var.name, init_val
+                                    format!("{}.state_vars", comp_var),
+                                    var.name,
+                                    init_val
                                 ));
                             }
                             prev_comp_var = comp_var;
@@ -2518,9 +2593,14 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 }
                 // Dynamic languages and remaining: New expression
                 // (Lua, Erlang, Kotlin — all routed here)
-                TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
-                    | TargetLanguage::Php | TargetLanguage::Ruby | TargetLanguage::Erlang | TargetLanguage::Kotlin
-                    | TargetLanguage::Lua => {
+                TargetLanguage::Python3
+                | TargetLanguage::TypeScript
+                | TargetLanguage::JavaScript
+                | TargetLanguage::Php
+                | TargetLanguage::Ruby
+                | TargetLanguage::Erlang
+                | TargetLanguage::Kotlin
+                | TargetLanguage::Lua => {
                     body.push(CodegenNode::assign(
                         CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
                         CodegenNode::New {
@@ -2721,14 +2801,18 @@ self._context_stack.pop_back()"#,
     }
 
     // Params from system params
-    let params: Vec<Param> = system.params.iter().map(|p| {
-        let type_str = type_to_string(&p.param_type);
-        let mut param = Param::new(&p.name).with_type(&type_str);
-        if let Some(ref def) = p.default {
-            param = param.with_default(CodegenNode::Ident(def.clone()));
-        }
-        param
-    }).collect();
+    let params: Vec<Param> = system
+        .params
+        .iter()
+        .map(|p| {
+            let type_str = type_to_string(&p.param_type);
+            let mut param = Param::new(&p.name).with_type(&type_str);
+            if let Some(ref def) = p.default {
+                param = param.with_default(CodegenNode::Ident(def.clone()));
+            }
+            param
+        })
+        .collect();
 
     CodegenNode::Constructor {
         params,
@@ -2739,7 +2823,11 @@ self._context_stack.pop_back()"#,
 
 /// Generate Frame machinery methods (__kernel, __router, __transition)
 /// for all target languages.
-fn generate_frame_machinery(system: &SystemAst, syntax: &super::backend::ClassSyntax, lang: TargetLanguage) -> Vec<CodegenNode> {
+fn generate_frame_machinery(
+    system: &SystemAst,
+    syntax: &super::backend::ClassSyntax,
+    lang: TargetLanguage,
+) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
     let compartment_class = format!("{}Compartment", system.name);
     let event_class = format!("{}FrameEvent", system.name);
@@ -2804,7 +2892,8 @@ while self.__next_compartment is not None:
 handler_name = f"_state_{state_name}"
 handler = getattr(self, handler_name, None)
 if handler:
-    handler(__e)"#.to_string(),
+    handler(__e)"#
+                        .to_string(),
                     span: None,
                 }],
                 is_async: false,
@@ -2889,14 +2978,16 @@ const handler_name = `_state_${state_name}`;
 const handler = (this as any)[handler_name];
 if (handler) {
     handler.call(this, __e);
-}"#.to_string()
+}"#
+                .to_string()
             } else {
                 r#"const state_name = this.__compartment.state;
 const handler_name = `_state_${state_name}`;
 const handler = this[handler_name];
 if (handler) {
     handler.call(this, __e);
-}"#.to_string()
+}"#
+                .to_string()
             };
             methods.push(CodegenNode::Method {
                 name: "__router".to_string(),
@@ -2989,7 +3080,8 @@ while ($this->__next_compartment !== null) {{
 $handler_name = "_state_" . $state_name;
 if (method_exists($this, $handler_name)) {
     $this->$handler_name($__e);
-}"#.to_string(),
+}"#
+                    .to_string(),
                     span: None,
                 }],
                 is_async: false,
@@ -3016,7 +3108,19 @@ if (method_exists($this, $handler_name)) {
         TargetLanguage::Ruby => {
             methods.push(CodegenNode::Method { name: "__kernel".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: format!("# Route event to current state\n__router(__e)\nwhile @__next_compartment != nil\n    next_compartment = @__next_compartment\n    @__next_compartment = nil\n    exit_event = {0}.new(\"<$\", @__compartment.exit_args)\n    __router(exit_event)\n    @__compartment = next_compartment\n    if next_compartment.forward_event == nil\n        enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n        __router(enter_event)\n    else\n        forward_event = next_compartment.forward_event\n        next_compartment.forward_event = nil\n        if forward_event._message == \"$>\"\n            __router(forward_event)\n        else\n            enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n            __router(enter_event)\n            __router(forward_event)\n        end\n    end\n    # Mark all stacked contexts as transitioned\n    @_context_stack.each {{ |ctx| ctx._transitioned = true }}\nend", event_class), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
             methods.push(CodegenNode::Method { name: "__router".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: "state_name = @__compartment.state\nhandler_name = \"_state_#{state_name}\"\nif respond_to?(handler_name, true)\n    send(handler_name, __e)\nend".to_string(), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
-            methods.push(CodegenNode::Method { name: "__transition".to_string(), params: vec![Param::new("next_compartment")], return_type: None, body: vec![CodegenNode::NativeBlock { code: "@__next_compartment = next_compartment".to_string(), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
+            methods.push(CodegenNode::Method {
+                name: "__transition".to_string(),
+                params: vec![Param::new("next_compartment")],
+                return_type: None,
+                body: vec![CodegenNode::NativeBlock {
+                    code: "@__next_compartment = next_compartment".to_string(),
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
+            });
         }
         TargetLanguage::Rust => {
             // Rust: Full kernel/router/transition pattern matching Python/TypeScript
@@ -3184,7 +3288,9 @@ while (self->__next_compartment != NULL) {{
             // __transition method - caches next compartment (deferred transition)
             methods.push(CodegenNode::Method {
                 name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment").with_type(&format!("{}_Compartment*", sys))],
+                params: vec![
+                    Param::new("next_compartment").with_type(&format!("{}_Compartment*", sys))
+                ],
                 return_type: None,
                 body: vec![CodegenNode::NativeBlock {
                     code: "self->__next_compartment = next_compartment;".to_string(),
@@ -3226,7 +3332,9 @@ free(self);"#,
             });
         }
         TargetLanguage::Cpp => {
-            let states: Vec<&str> = system.machine.as_ref()
+            let states: Vec<&str> = system
+                .machine
+                .as_ref()
                 .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
                 .unwrap_or_default();
 
@@ -3242,11 +3350,16 @@ free(self);"#,
             kernel_code.push_str(&format!("        {} enter_event(\"$>\");\n", event_class));
             kernel_code.push_str("        __router(enter_event);\n");
             kernel_code.push_str("    } else {\n");
-            kernel_code.push_str("        auto forward_event = std::move(__compartment->forward_event);\n");
+            kernel_code.push_str(
+                "        auto forward_event = std::move(__compartment->forward_event);\n",
+            );
             kernel_code.push_str("        if (forward_event->_message == \"$>\") {\n");
             kernel_code.push_str("            __router(*forward_event);\n");
             kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!("            {} enter_event(\"$>\");\n", event_class));
+            kernel_code.push_str(&format!(
+                "            {} enter_event(\"$>\");\n",
+                event_class
+            ));
             kernel_code.push_str("            __router(enter_event);\n");
             kernel_code.push_str("            __router(*forward_event);\n");
             kernel_code.push_str("        }\n");
@@ -3261,7 +3374,10 @@ free(self);"#,
                 name: "__kernel".to_string(),
                 params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: kernel_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: kernel_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3284,7 +3400,10 @@ free(self);"#,
                 name: "__router".to_string(),
                 params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: router_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: router_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3294,7 +3413,8 @@ free(self);"#,
             // __transition
             methods.push(CodegenNode::Method {
                 name: "__transition".to_string(),
-                params: vec![Param::new("next").with_type(&format!("std::shared_ptr<{}>", compartment_class))],
+                params: vec![Param::new("next")
+                    .with_type(&format!("std::shared_ptr<{}>", compartment_class))],
                 return_type: None,
                 body: vec![CodegenNode::NativeBlock {
                     code: "__next_compartment = next;".to_string(),
@@ -3307,7 +3427,9 @@ free(self);"#,
             });
         }
         TargetLanguage::Java => {
-            let states: Vec<&str> = system.machine.as_ref()
+            let states: Vec<&str> = system
+                .machine
+                .as_ref()
                 .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
                 .unwrap_or_default();
 
@@ -3317,11 +3439,17 @@ free(self);"#,
             kernel_code.push_str("while (__next_compartment != null) {\n");
             kernel_code.push_str("    var next_compartment = __next_compartment;\n");
             kernel_code.push_str("    __next_compartment = null;\n");
-            kernel_code.push_str(&format!("    {} exit_event = new {}(\"<$\");\n", event_class, event_class));
+            kernel_code.push_str(&format!(
+                "    {} exit_event = new {}(\"<$\");\n",
+                event_class, event_class
+            ));
             kernel_code.push_str("    __router(exit_event);\n");
             kernel_code.push_str("    __compartment = next_compartment;\n");
             kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
-            kernel_code.push_str(&format!("        {} enter_event = new {}(\"$>\");\n", event_class, event_class));
+            kernel_code.push_str(&format!(
+                "        {} enter_event = new {}(\"$>\");\n",
+                event_class, event_class
+            ));
             kernel_code.push_str("        __router(enter_event);\n");
             kernel_code.push_str("    } else {\n");
             kernel_code.push_str("        var forward_event = __compartment.forward_event;\n");
@@ -3329,7 +3457,10 @@ free(self);"#,
             kernel_code.push_str("        if (forward_event._message.equals(\"$>\")) {\n");
             kernel_code.push_str("            __router(forward_event);\n");
             kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!("            {} enter_event = new {}(\"$>\");\n", event_class, event_class));
+            kernel_code.push_str(&format!(
+                "            {} enter_event = new {}(\"$>\");\n",
+                event_class, event_class
+            ));
             kernel_code.push_str("            __router(enter_event);\n");
             kernel_code.push_str("            __router(forward_event);\n");
             kernel_code.push_str("        }\n");
@@ -3344,7 +3475,10 @@ free(self);"#,
                 name: "__kernel".to_string(),
                 params: vec![Param::new("__e").with_type(&event_class)],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: kernel_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: kernel_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3356,7 +3490,10 @@ free(self);"#,
             router_code.push_str("String state_name = __compartment.state;\n");
             for (i, state) in states.iter().enumerate() {
                 let prefix = if i == 0 { "if" } else { "} else if" };
-                router_code.push_str(&format!("{} (state_name.equals(\"{}\")) {{\n", prefix, state));
+                router_code.push_str(&format!(
+                    "{} (state_name.equals(\"{}\")) {{\n",
+                    prefix, state
+                ));
                 router_code.push_str(&format!("    _state_{}(__e);\n", state));
             }
             if !states.is_empty() {
@@ -3367,7 +3504,10 @@ free(self);"#,
                 name: "__router".to_string(),
                 params: vec![Param::new("__e").with_type(&event_class)],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: router_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: router_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3390,7 +3530,9 @@ free(self);"#,
             });
         }
         TargetLanguage::Kotlin => {
-            let states: Vec<&str> = system.machine.as_ref()
+            let states: Vec<&str> = system
+                .machine
+                .as_ref()
                 .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
                 .unwrap_or_default();
 
@@ -3404,7 +3546,10 @@ free(self);"#,
             kernel_code.push_str("    __router(exit_event)\n");
             kernel_code.push_str("    __compartment = next_compartment\n");
             kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
-            kernel_code.push_str(&format!("        val enter_event = {}(\"$>\")\n", event_class));
+            kernel_code.push_str(&format!(
+                "        val enter_event = {}(\"$>\")\n",
+                event_class
+            ));
             kernel_code.push_str("        __router(enter_event)\n");
             kernel_code.push_str("    } else {\n");
             kernel_code.push_str("        val forward_event = __compartment.forward_event!!\n");
@@ -3412,7 +3557,10 @@ free(self);"#,
             kernel_code.push_str("        if (forward_event._message == \"$>\") {\n");
             kernel_code.push_str("            __router(forward_event)\n");
             kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!("            val enter_event = {}(\"$>\")\n", event_class));
+            kernel_code.push_str(&format!(
+                "            val enter_event = {}(\"$>\")\n",
+                event_class
+            ));
             kernel_code.push_str("            __router(enter_event)\n");
             kernel_code.push_str("            __router(forward_event)\n");
             kernel_code.push_str("        }\n");
@@ -3427,7 +3575,10 @@ free(self);"#,
                 name: "__kernel".to_string(),
                 params: vec![Param::new("__e").with_type(&event_class)],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: kernel_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: kernel_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3450,7 +3601,10 @@ free(self);"#,
                 name: "__router".to_string(),
                 params: vec![Param::new("__e").with_type(&event_class)],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: router_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: router_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3473,7 +3627,9 @@ free(self);"#,
             });
         }
         TargetLanguage::Swift => {
-            let states: Vec<&str> = system.machine.as_ref()
+            let states: Vec<&str> = system
+                .machine
+                .as_ref()
                 .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
                 .unwrap_or_default();
 
@@ -3483,11 +3639,17 @@ free(self);"#,
             kernel_code.push_str("while __next_compartment != nil {\n");
             kernel_code.push_str("    let next_compartment = __next_compartment!\n");
             kernel_code.push_str("    __next_compartment = nil\n");
-            kernel_code.push_str(&format!("    let exit_event = {}(message: \"<$\")\n", event_class));
+            kernel_code.push_str(&format!(
+                "    let exit_event = {}(message: \"<$\")\n",
+                event_class
+            ));
             kernel_code.push_str("    __router(exit_event)\n");
             kernel_code.push_str("    __compartment = next_compartment\n");
             kernel_code.push_str("    if __compartment.forward_event == nil {\n");
-            kernel_code.push_str(&format!("        let enter_event = {}(message: \"$>\")\n", event_class));
+            kernel_code.push_str(&format!(
+                "        let enter_event = {}(message: \"$>\")\n",
+                event_class
+            ));
             kernel_code.push_str("        __router(enter_event)\n");
             kernel_code.push_str("    } else {\n");
             kernel_code.push_str("        let forward_event = __compartment.forward_event!\n");
@@ -3495,7 +3657,10 @@ free(self);"#,
             kernel_code.push_str("        if forward_event._message == \"$>\" {\n");
             kernel_code.push_str("            __router(forward_event)\n");
             kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!("            let enter_event = {}(message: \"$>\")\n", event_class));
+            kernel_code.push_str(&format!(
+                "            let enter_event = {}(message: \"$>\")\n",
+                event_class
+            ));
             kernel_code.push_str("            __router(enter_event)\n");
             kernel_code.push_str("            __router(forward_event)\n");
             kernel_code.push_str("        }\n");
@@ -3510,7 +3675,10 @@ free(self);"#,
                 name: "__kernel".to_string(),
                 params: vec![Param::new("__e").with_type(&event_class)],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: kernel_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: kernel_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3533,7 +3701,10 @@ free(self);"#,
                 name: "__router".to_string(),
                 params: vec![Param::new("__e").with_type(&event_class)],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: router_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: router_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3556,7 +3727,9 @@ free(self);"#,
             });
         }
         TargetLanguage::CSharp => {
-            let states: Vec<&str> = system.machine.as_ref()
+            let states: Vec<&str> = system
+                .machine
+                .as_ref()
                 .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
                 .unwrap_or_default();
 
@@ -3566,11 +3739,17 @@ free(self);"#,
             kernel_code.push_str("while (__next_compartment != null) {\n");
             kernel_code.push_str("    var next_compartment = __next_compartment;\n");
             kernel_code.push_str("    __next_compartment = null;\n");
-            kernel_code.push_str(&format!("    {} exit_event = new {}(\"<$\");\n", event_class, event_class));
+            kernel_code.push_str(&format!(
+                "    {} exit_event = new {}(\"<$\");\n",
+                event_class, event_class
+            ));
             kernel_code.push_str("    __router(exit_event);\n");
             kernel_code.push_str("    __compartment = next_compartment;\n");
             kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
-            kernel_code.push_str(&format!("        {} enter_event = new {}(\"$>\");\n", event_class, event_class));
+            kernel_code.push_str(&format!(
+                "        {} enter_event = new {}(\"$>\");\n",
+                event_class, event_class
+            ));
             kernel_code.push_str("        __router(enter_event);\n");
             kernel_code.push_str("    } else {\n");
             kernel_code.push_str("        var forward_event = __compartment.forward_event;\n");
@@ -3578,7 +3757,10 @@ free(self);"#,
             kernel_code.push_str("        if (forward_event._message == \"$>\") {\n");
             kernel_code.push_str("            __router(forward_event);\n");
             kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!("            {} enter_event = new {}(\"$>\");\n", event_class, event_class));
+            kernel_code.push_str(&format!(
+                "            {} enter_event = new {}(\"$>\");\n",
+                event_class, event_class
+            ));
             kernel_code.push_str("            __router(enter_event);\n");
             kernel_code.push_str("            __router(forward_event);\n");
             kernel_code.push_str("        }\n");
@@ -3593,7 +3775,10 @@ free(self);"#,
                 name: "__kernel".to_string(),
                 params: vec![Param::new("__e").with_type(&event_class)],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: kernel_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: kernel_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3616,7 +3801,10 @@ free(self);"#,
                 name: "__router".to_string(),
                 params: vec![Param::new("__e").with_type(&event_class)],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: router_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: router_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3639,7 +3827,9 @@ free(self);"#,
             });
         }
         TargetLanguage::Go => {
-            let states: Vec<&str> = system.machine.as_ref()
+            let states: Vec<&str> = system
+                .machine
+                .as_ref()
                 .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
                 .unwrap_or_default();
 
@@ -3676,7 +3866,10 @@ free(self);"#,
                 name: "__kernel".to_string(),
                 params: vec![Param::new("__e").with_type(&format!("*{}FrameEvent", system.name))],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: kernel_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: kernel_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3696,7 +3889,10 @@ free(self);"#,
                 name: "__router".to_string(),
                 params: vec![Param::new("__e").with_type(&format!("*{}FrameEvent", system.name))],
                 return_type: None,
-                body: vec![CodegenNode::NativeBlock { code: router_code, span: None }],
+                body: vec![CodegenNode::NativeBlock {
+                    code: router_code,
+                    span: None,
+                }],
                 is_async: false,
                 is_static: false,
                 visibility: Visibility::Private,
@@ -3780,7 +3976,8 @@ end"#,
 local handler = self["_state_" .. state_name]
 if handler then
     handler(self, __e)
-end"#.to_string(),
+end"#
+                        .to_string(),
                     span: None,
                 }],
                 is_async: false,
@@ -3949,7 +4146,8 @@ while self.__next_compartment != null:
                     code: r#"var state_name = self.__compartment.state
 var handler_name = "_state_" + state_name
 if self.has_method(handler_name):
-    self.call(handler_name, __e)"#.to_string(),
+    self.call(handler_name, __e)"#
+                        .to_string(),
                     span: None,
                 }],
                 is_async: false,
@@ -4070,15 +4268,17 @@ fn generate_c_router_dispatch(system: &SystemAst) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame_c::compiler::frame_ast::{SystemAst, DomainVar, Type, Expression, Literal, Span};
+    use crate::frame_c::compiler::codegen::codegen_utils::{
+        convert_expression, convert_literal, cpp_map_type, cpp_wrap_any_arg, csharp_map_type,
+        expression_to_string, extract_type_from_raw_domain, go_map_type, is_bool_type,
+        is_float_type, is_int_type, is_string_type, java_map_type, kotlin_map_type,
+        state_var_init_value, swift_map_type, to_snake_case, type_to_cpp_string, type_to_string,
+        HandlerContext,
+    };
+    use crate::frame_c::compiler::frame_ast::{
+        DomainVar, Expression, Literal, Span, SystemAst, Type,
+    };
     use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::codegen::codegen_utils::{
-    HandlerContext, expression_to_string, type_to_string, state_var_init_value,
-    convert_expression, convert_literal, extract_type_from_raw_domain,
-    is_int_type, is_float_type, is_bool_type, is_string_type,
-    to_snake_case, cpp_map_type, cpp_wrap_any_arg, java_map_type,
-    kotlin_map_type, swift_map_type, csharp_map_type, go_map_type, type_to_cpp_string,
-};
 
     fn create_test_system() -> SystemAst {
         SystemAst::new("TestSystem".to_string(), Span::new(0, 0))
@@ -4148,7 +4348,10 @@ use crate::frame_c::compiler::codegen::codegen_utils::{
     #[test]
     fn test_init_references_param_no_match() {
         assert!(!init_references_param("0", &["balance".into()]));
-        assert!(!init_references_param("mutableListOf<>()", &["balance".into()]));
+        assert!(!init_references_param(
+            "mutableListOf<>()",
+            &["balance".into()]
+        ));
     }
 
     #[test]
@@ -4156,7 +4359,10 @@ use crate::frame_c::compiler::codegen::codegen_utils::{
         // Defaults.count should NOT match param "count" — it's a member access
         assert!(!init_references_param("Defaults.count", &["count".into()]));
         assert!(!init_references_param("obj.balance", &["balance".into()]));
-        assert!(!init_references_param("Config.DEFAULT_VALUE", &["DEFAULT_VALUE".into()]));
+        assert!(!init_references_param(
+            "Config.DEFAULT_VALUE",
+            &["DEFAULT_VALUE".into()]
+        ));
     }
 
     #[test]
@@ -4189,8 +4395,11 @@ fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> String {
 
     while i < bytes.len() {
         // Look for @@ followed by uppercase letter
-        if i + 2 < bytes.len() && bytes[i] == b'@' && bytes[i + 1] == b'@'
-            && i + 2 < bytes.len() && bytes[i + 2].is_ascii_uppercase()
+        if i + 2 < bytes.len()
+            && bytes[i] == b'@'
+            && bytes[i + 1] == b'@'
+            && i + 2 < bytes.len()
+            && bytes[i + 2].is_ascii_uppercase()
         {
             let start = i;
             i += 2;
@@ -4212,30 +4421,43 @@ fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> String {
                         b'"' => {
                             i += 1;
                             while i < bytes.len() && bytes[i] != b'"' {
-                                if bytes[i] == b'\\' { i += 1; }
+                                if bytes[i] == b'\\' {
+                                    i += 1;
+                                }
                                 i += 1;
                             }
                         }
                         _ => {}
                     }
-                    if depth > 0 { i += 1; }
+                    if depth > 0 {
+                        i += 1;
+                    }
                 }
                 if depth == 0 {
                     let args = std::str::from_utf8(&bytes[args_start..i]).unwrap_or("");
                     i += 1; // skip closing )
-                    // Generate native constructor
+                            // Generate native constructor
                     let constructor = match lang {
-                        TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}({})", name, args),
-                        TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Cpp
-                            | TargetLanguage::Java | TargetLanguage::CSharp | TargetLanguage::Dart
-                            | TargetLanguage::Kotlin | TargetLanguage::Php => format!("new {}({})", name, args),
+                        TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                            format!("{}({})", name, args)
+                        }
+                        TargetLanguage::TypeScript
+                        | TargetLanguage::JavaScript
+                        | TargetLanguage::Cpp
+                        | TargetLanguage::Java
+                        | TargetLanguage::CSharp
+                        | TargetLanguage::Dart
+                        | TargetLanguage::Kotlin
+                        | TargetLanguage::Php => format!("new {}({})", name, args),
                         TargetLanguage::Rust => format!("{}::new({})", name, args),
                         TargetLanguage::C => format!("{}_new({})", name, args),
                         TargetLanguage::Go => format!("New{}({})", name, args),
                         TargetLanguage::Swift => format!("{}({})", name, args),
                         TargetLanguage::Ruby => format!("{}.new({})", name, args),
                         TargetLanguage::Lua => format!("{}.new({})", name, args),
-                        TargetLanguage::Erlang => format!("{}:start_link({})", to_snake_case_simple(name), args),
+                        TargetLanguage::Erlang => {
+                            format!("{}:start_link({})", to_snake_case_simple(name), args)
+                        }
                         TargetLanguage::Graphviz => name.to_string(),
                     };
                     result.push_str(&constructor);
@@ -4260,7 +4482,9 @@ fn to_snake_case_simple(name: &str) -> String {
     let mut result = String::new();
     for (i, c) in name.chars().enumerate() {
         if c.is_uppercase() {
-            if i > 0 { result.push('_'); }
+            if i > 0 {
+                result.push('_');
+            }
             result.push(c.to_lowercase().next().unwrap_or(c));
         } else {
             result.push(c);

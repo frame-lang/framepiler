@@ -4,7 +4,10 @@ use crate::frame_c::compiler::arcanum::Arcanum;
 use crate::frame_c::compiler::ast::StateDecl;
 use crate::frame_c::visitors::TargetLanguage;
 // Choose the first declared state for a system via Arcanum spans.
-pub(crate) fn first_state_for_system<'a>(arc: &'a Arcanum, sys_name: &str) -> Option<&'a StateDecl> {
+pub(crate) fn first_state_for_system<'a>(
+    arc: &'a Arcanum,
+    sys_name: &str,
+) -> Option<&'a StateDecl> {
     let sys = arc.systems.get(sys_name)?;
     let mut best: Option<&StateDecl> = None;
     let mut best_start: Option<usize> = None;
@@ -39,7 +42,11 @@ pub(crate) fn header_param_names(hdr: &str) -> Vec<String> {
                 if t.is_empty() {
                     continue;
                 }
-                let base = t.split(|c| c == '=' || c == ':').next().unwrap_or("").trim();
+                let base = t
+                    .split(|c| c == '=' || c == ':')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
                 if !base.is_empty() {
                     names.push(base.to_string());
                 }
@@ -48,7 +55,6 @@ pub(crate) fn header_param_names(hdr: &str) -> Vec<String> {
     }
     names
 }
-
 
 // Collect domain variable names per system by scanning each `domain:` block.
 pub(crate) fn collect_domain_vars_per_system(
@@ -68,7 +74,9 @@ pub(crate) fn collect_domain_vars_per_system(
     let mut i = start;
 
     while i < n {
-        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n') {
+        while i < n
+            && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
+        {
             i += 1;
         }
         if i >= n {
@@ -106,14 +114,14 @@ pub(crate) fn collect_domain_vars_per_system(
             j += 1;
         }
         // Optional system-level attribute: `@@persist`.
-        if j + 9 <= n && &bytes[j..j+9] == b"@@persist" {
+        if j + 9 <= n && &bytes[j..j + 9] == b"@@persist" {
             j += 9;
             while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
                 j += 1;
             }
         }
         // Require `@@system` keyword.
-        if j + 8 > n || &bytes[j..j+8] != b"@@system" {
+        if j + 8 > n || &bytes[j..j + 8] != b"@@system" {
             while i < n && bytes[i] != b'\n' {
                 i += 1;
             }
@@ -161,7 +169,9 @@ pub(crate) fn collect_domain_vars_per_system(
         let mut marks: Vec<(usize, String)> = Vec::new();
         let mut q = open + 1;
         while q < close {
-            while q < close && (bytes[q] == b' ' || bytes[q] == b'\t' || bytes[q] == b'\r' || bytes[q] == b'\n') {
+            while q < close
+                && (bytes[q] == b' ' || bytes[q] == b'\t' || bytes[q] == b'\r' || bytes[q] == b'\n')
+            {
                 q += 1;
             }
             if q >= close {
@@ -219,8 +229,10 @@ pub(crate) fn collect_domain_vars_per_system(
         }
 
         // Find domain block range, if present.
-        if let Some((idx, (_, _))) =
-            marks.iter().enumerate().find(|(_, (_, kw))| kw.as_str() == "domain")
+        if let Some((idx, (_, _))) = marks
+            .iter()
+            .enumerate()
+            .find(|(_, (_, kw))| kw.as_str() == "domain")
         {
             let dom_start = marks[idx].0;
             let dom_end = if idx + 1 < marks.len() {

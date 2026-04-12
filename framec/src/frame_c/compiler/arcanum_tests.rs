@@ -5,64 +5,79 @@ mod tests {
 
     fn create_test_arcanum() -> Arcanum {
         let mut arc = Arcanum::new();
-        
+
         // Create a test system entry
         let mut sys_entry = SystemEntry::default();
-        
+
         // Add interface methods
         sys_entry.interface_methods.insert("timer".to_string());
         sys_entry.interface_methods.insert("getColor".to_string());
-        
+
         // Add actions
         sys_entry.actions.insert("updateDisplay".to_string());
         sys_entry.actions.insert("logTransition".to_string());
-        
+
         // Add operations
         sys_entry.operations.insert("calculate".to_string());
-        
+
         // Add domain variables
-        sys_entry.domain_vars.insert("color".to_string(), VarType::Unknown);
-        sys_entry.domain_vars.insert("count".to_string(), VarType::Unknown);
-        
+        sys_entry
+            .domain_vars
+            .insert("color".to_string(), VarType::Unknown);
+        sys_entry
+            .domain_vars
+            .insert("count".to_string(), VarType::Unknown);
+
         // Add machine with states
         let mut machine_entry = MachineEntry::default();
-        machine_entry.states.insert("Red".to_string(), StateDecl {
-            name: "Red".to_string(),
-            parent: None,
-            params: vec![],
-            span: Span { start: 0, end: 10 },
-        });
-        machine_entry.states.insert("Green".to_string(), StateDecl {
-            name: "Green".to_string(),
-            parent: None,
-            params: vec![],
-            span: Span { start: 20, end: 30 },
-        });
-        machine_entry.states.insert("ConfigState".to_string(), StateDecl {
-            name: "ConfigState".to_string(),
-            parent: None,
-            params: vec!["timeout".to_string(), "mode".to_string()],
-            span: Span { start: 40, end: 50 },
-        });
-        
-        sys_entry.machines.insert("machine".to_string(), machine_entry);
+        machine_entry.states.insert(
+            "Red".to_string(),
+            StateDecl {
+                name: "Red".to_string(),
+                parent: None,
+                params: vec![],
+                span: Span { start: 0, end: 10 },
+            },
+        );
+        machine_entry.states.insert(
+            "Green".to_string(),
+            StateDecl {
+                name: "Green".to_string(),
+                parent: None,
+                params: vec![],
+                span: Span { start: 20, end: 30 },
+            },
+        );
+        machine_entry.states.insert(
+            "ConfigState".to_string(),
+            StateDecl {
+                name: "ConfigState".to_string(),
+                parent: None,
+                params: vec!["timeout".to_string(), "mode".to_string()],
+                span: Span { start: 40, end: 50 },
+            },
+        );
+
+        sys_entry
+            .machines
+            .insert("machine".to_string(), machine_entry);
         arc.systems.insert("TrafficLight".to_string(), sys_entry);
-        
+
         arc
     }
 
     #[test]
     fn test_interface_method_validation() {
         let arc = create_test_arcanum();
-        
+
         // Interface methods should be accessible
         assert!(arc.is_interface_method("TrafficLight", "timer"));
         assert!(arc.is_interface_method("TrafficLight", "getColor"));
-        
+
         // Non-interface methods should not be accessible
         assert!(!arc.is_interface_method("TrafficLight", "updateDisplay"));
         assert!(!arc.is_interface_method("TrafficLight", "nonExistent"));
-        
+
         // Unknown system should return false
         assert!(!arc.is_interface_method("UnknownSystem", "timer"));
     }
@@ -70,11 +85,11 @@ mod tests {
     #[test]
     fn test_action_validation() {
         let arc = create_test_arcanum();
-        
+
         // Actions should exist
         assert!(arc.has_action("TrafficLight", "updateDisplay"));
         assert!(arc.has_action("TrafficLight", "logTransition"));
-        
+
         // Non-actions should not exist
         assert!(!arc.has_action("TrafficLight", "timer"));
         assert!(!arc.has_action("TrafficLight", "nonExistent"));
@@ -83,10 +98,10 @@ mod tests {
     #[test]
     fn test_operation_validation() {
         let arc = create_test_arcanum();
-        
+
         // Operations should exist
         assert!(arc.has_operation("TrafficLight", "calculate"));
-        
+
         // Non-operations should not exist
         assert!(!arc.has_operation("TrafficLight", "timer"));
         assert!(!arc.has_operation("TrafficLight", "nonExistent"));
@@ -95,11 +110,11 @@ mod tests {
     #[test]
     fn test_state_transition_validation() {
         let arc = create_test_arcanum();
-        
+
         // Valid transitions
         assert!(arc.validate_transition("TrafficLight", "Red").is_ok());
         assert!(arc.validate_transition("TrafficLight", "Green").is_ok());
-        
+
         // Invalid transition
         let err = arc.validate_transition("TrafficLight", "Purple");
         assert!(err.is_err());
@@ -112,28 +127,34 @@ mod tests {
     #[test]
     fn test_state_parameter_arity() {
         let arc = create_test_arcanum();
-        
+
         // States without parameters
         assert_eq!(arc.get_state_param_count("TrafficLight", "Red"), Some(0));
         assert_eq!(arc.get_state_param_count("TrafficLight", "Green"), Some(0));
-        
+
         // State with parameters
-        assert_eq!(arc.get_state_param_count("TrafficLight", "ConfigState"), Some(2));
-        
+        assert_eq!(
+            arc.get_state_param_count("TrafficLight", "ConfigState"),
+            Some(2)
+        );
+
         // Non-existent state
-        assert_eq!(arc.get_state_param_count("TrafficLight", "NonExistent"), None);
+        assert_eq!(
+            arc.get_state_param_count("TrafficLight", "NonExistent"),
+            None
+        );
     }
 
     #[test]
     fn test_get_system_states() {
         let arc = create_test_arcanum();
-        
+
         let states = arc.get_system_states("TrafficLight");
         assert_eq!(states.len(), 3);
         assert!(states.contains(&"$ConfigState".to_string()));
         assert!(states.contains(&"$Green".to_string()));
         assert!(states.contains(&"$Red".to_string()));
-        
+
         // Unknown system
         let states = arc.get_system_states("UnknownSystem");
         assert!(states.is_empty());
@@ -147,10 +168,13 @@ mod tests {
                 getColor(): str
                 setState(newState: str, timeout: int): bool
         ";
-        
-        let span = Span { start: 0, end: source.len() };
+
+        let span = Span {
+            start: 0,
+            end: source.len(),
+        };
         let methods = super::super::arcanum::collect_methods_in_section(source, &span);
-        
+
         assert_eq!(methods.len(), 3);
         assert!(methods.contains("timer"));
         assert!(methods.contains("getColor"));
@@ -166,7 +190,10 @@ mod tests {
                 isActive: bool
         ";
 
-        let span = Span { start: 0, end: source.len() };
+        let span = Span {
+            start: 0,
+            end: source.len(),
+        };
         let vars = super::super::arcanum::collect_domain_vars(source, &span);
 
         assert_eq!(vars.len(), 4);
@@ -179,9 +206,8 @@ mod tests {
     #[test]
     fn test_build_arcanum_from_frame_ast() {
         use super::super::frame_ast::{
-            FrameAst, SystemAst as FrameSystemAst, MachineAst, StateAst,
-            InterfaceMethod, ActionAst, OperationAst, DomainVar,
-            Span as FrameSpan, Type, ActionBody, OperationBody,
+            ActionAst, ActionBody, DomainVar, FrameAst, InterfaceMethod, MachineAst, OperationAst,
+            OperationBody, Span as FrameSpan, StateAst, SystemAst as FrameSystemAst, Type,
         };
 
         // Create a Frame AST manually
@@ -274,7 +300,9 @@ mod tests {
         // Check validation methods work
         assert!(arc.validate_transition("TestSystem", "Idle").is_ok());
         assert!(arc.validate_transition("TestSystem", "Running").is_ok());
-        assert!(arc.validate_transition("TestSystem", "NonExistent").is_err());
+        assert!(arc
+            .validate_transition("TestSystem", "NonExistent")
+            .is_err());
     }
 
     // ========================================================================
@@ -284,9 +312,8 @@ mod tests {
     #[test]
     fn test_enhanced_state_with_handlers() {
         use super::super::frame_ast::{
-            FrameAst, SystemAst as FrameSystemAst, MachineAst, StateAst,
-            HandlerAst, HandlerBody, EventParam,
-            Span as FrameSpan, Type,
+            EventParam, FrameAst, HandlerAst, HandlerBody, MachineAst, Span as FrameSpan, StateAst,
+            SystemAst as FrameSystemAst, Type,
         };
 
         // Create system with state that has handlers
@@ -298,13 +325,11 @@ mod tests {
         // Add handler with parameters
         state.handlers.push(HandlerAst {
             event: "tick".to_string(),
-            params: vec![
-                EventParam {
-                    name: "delta".to_string(),
-                    param_type: Type::Custom("int".into()),
-                    span: FrameSpan::new(60, 70),
-                },
-            ],
+            params: vec![EventParam {
+                name: "delta".to_string(),
+                param_type: Type::Custom("int".into()),
+                span: FrameSpan::new(60, 70),
+            }],
             return_type: None,
             return_init: None,
             body: HandlerBody {
@@ -357,9 +382,8 @@ mod tests {
     #[test]
     fn test_scope_resolution_handler_params() {
         use super::super::frame_ast::{
-            FrameAst, SystemAst as FrameSystemAst, MachineAst, StateAst,
-            HandlerAst, HandlerBody, EventParam, DomainVar, StateParam,
-            Span as FrameSpan, Type,
+            DomainVar, EventParam, FrameAst, HandlerAst, HandlerBody, MachineAst,
+            Span as FrameSpan, StateAst, StateParam, SystemAst as FrameSystemAst, Type,
         };
 
         // Create system with domain var, state param, and handler param
@@ -387,13 +411,11 @@ mod tests {
         // Add handler with parameter
         state.handlers.push(HandlerAst {
             event: "process".to_string(),
-            params: vec![
-                EventParam {
-                    name: "data".to_string(),
-                    param_type: Type::Custom("string".into()),
-                    span: FrameSpan::new(80, 90),
-                },
-            ],
+            params: vec![EventParam {
+                name: "data".to_string(),
+                param_type: Type::Custom("string".into()),
+                span: FrameSpan::new(80, 90),
+            }],
             return_type: None,
             return_init: None,
             body: HandlerBody {
@@ -433,9 +455,8 @@ mod tests {
     #[test]
     fn test_scope_resolution_shadowing() {
         use super::super::frame_ast::{
-            FrameAst, SystemAst as FrameSystemAst, MachineAst, StateAst,
-            HandlerAst, HandlerBody, EventParam, StateParam,
-            Span as FrameSpan, Type,
+            EventParam, FrameAst, HandlerAst, HandlerBody, MachineAst, Span as FrameSpan, StateAst,
+            StateParam, SystemAst as FrameSystemAst, Type,
         };
 
         // Create system where handler param shadows state param with same name
@@ -453,13 +474,11 @@ mod tests {
         // Handler param also named "x" with type String
         state.handlers.push(HandlerAst {
             event: "event".to_string(),
-            params: vec![
-                EventParam {
-                    name: "x".to_string(),
-                    param_type: Type::Custom("string".into()),
-                    span: FrameSpan::new(80, 85),
-                },
-            ],
+            params: vec![EventParam {
+                name: "x".to_string(),
+                param_type: Type::Custom("string".into()),
+                span: FrameSpan::new(80, 85),
+            }],
             return_type: None,
             return_init: None,
             body: HandlerBody {
@@ -493,8 +512,7 @@ mod tests {
     #[test]
     fn test_get_enhanced_states() {
         use super::super::frame_ast::{
-            FrameAst, SystemAst as FrameSystemAst, MachineAst, StateAst,
-            Span as FrameSpan,
+            FrameAst, MachineAst, Span as FrameSpan, StateAst, SystemAst as FrameSystemAst,
         };
 
         let mut system = FrameSystemAst::new("MultiState".to_string(), FrameSpan::new(0, 300));
@@ -532,9 +550,8 @@ mod tests {
     #[test]
     fn test_enter_exit_handlers() {
         use super::super::frame_ast::{
-            FrameAst, SystemAst as FrameSystemAst, MachineAst, StateAst,
-            EnterHandler, ExitHandler, HandlerBody, EventParam,
-            Span as FrameSpan, Type,
+            EnterHandler, EventParam, ExitHandler, FrameAst, HandlerBody, MachineAst,
+            Span as FrameSpan, StateAst, SystemAst as FrameSystemAst, Type,
         };
 
         let mut system = FrameSystemAst::new("LifecycleTest".to_string(), FrameSpan::new(0, 300));
@@ -543,13 +560,11 @@ mod tests {
 
         // Add enter handler with param
         state.enter = Some(EnterHandler {
-            params: vec![
-                EventParam {
-                    name: "config".to_string(),
-                    param_type: Type::Custom("string".into()),
-                    span: FrameSpan::new(60, 70),
-                },
-            ],
+            params: vec![EventParam {
+                name: "config".to_string(),
+                param_type: Type::Custom("string".into()),
+                span: FrameSpan::new(60, 70),
+            }],
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(75, 100),
@@ -591,7 +606,7 @@ mod tests {
         let exit = exit.unwrap();
         assert!(!exit.is_enter);
         assert!(exit.is_exit);
-        assert_eq!(exit.params.len(), 0);  // Exit handlers don't have params
+        assert_eq!(exit.params.len(), 0); // Exit handlers don't have params
 
         // Test: Enter param is accessible via scope resolution
         assert!(arc.is_frame_symbol("LifecycleTest", Some("Active"), Some("$>"), "config"));
@@ -600,8 +615,7 @@ mod tests {
     #[test]
     fn test_state_parent_tracking() {
         use super::super::frame_ast::{
-            FrameAst, SystemAst as FrameSystemAst, MachineAst, StateAst,
-            Span as FrameSpan,
+            FrameAst, MachineAst, Span as FrameSpan, StateAst, SystemAst as FrameSystemAst,
         };
 
         let mut system = FrameSystemAst::new("HSMTest".to_string(), FrameSpan::new(0, 300));

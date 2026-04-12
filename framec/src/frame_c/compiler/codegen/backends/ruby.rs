@@ -10,9 +10,9 @@
 //! - `nil` for null, no semicolons
 //! - `ClassName.new(args)` for instantiation
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Ruby backend for code generation
 pub struct RubyBackend;
@@ -21,7 +21,6 @@ impl LanguageBackend for RubyBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
             // ===== Structural =====
-
             CodegenNode::Module { imports, items } => {
                 let mut result = String::new();
                 for import in imports {
@@ -40,7 +39,11 @@ impl LanguageBackend for RubyBackend {
                 result
             }
 
-            CodegenNode::Import { module, items, alias } => {
+            CodegenNode::Import {
+                module,
+                items,
+                alias,
+            } => {
                 if items.is_empty() {
                     if let Some(alias) = alias {
                         format!("require '{}' # as {}", module, alias)
@@ -52,7 +55,14 @@ impl LanguageBackend for RubyBackend {
                 }
             }
 
-            CodegenNode::Class { name, fields, methods, base_classes, is_abstract: _, .. } => {
+            CodegenNode::Class {
+                name,
+                fields,
+                methods,
+                base_classes,
+                is_abstract: _,
+                ..
+            } => {
                 let mut result = String::new();
 
                 let extends = if base_classes.is_empty() {
@@ -70,9 +80,17 @@ impl LanguageBackend for RubyBackend {
                     if let Some(ref raw_code) = field.raw_code {
                         // Domain var raw code: emit as attr_accessor + init in initialize
                         // The constructor handles initialization
-                        result.push_str(&format!("{}attr_accessor :{}\n", ctx.get_indent(), field.name));
+                        result.push_str(&format!(
+                            "{}attr_accessor :{}\n",
+                            ctx.get_indent(),
+                            field.name
+                        ));
                     } else {
-                        result.push_str(&format!("{}attr_accessor :{}\n", ctx.get_indent(), field.name));
+                        result.push_str(&format!(
+                            "{}attr_accessor :{}\n",
+                            ctx.get_indent(),
+                            field.name
+                        ));
                     }
                 }
                 if !fields.is_empty() && !methods.is_empty() {
@@ -98,11 +116,19 @@ impl LanguageBackend for RubyBackend {
                 ctx.push_indent();
                 for variant in variants {
                     if let Some(ref value) = variant.value {
-                        result.push_str(&format!("{}{} = {}\n",
-                            ctx.get_indent(), variant.name, self.emit(value, ctx)));
+                        result.push_str(&format!(
+                            "{}{} = {}\n",
+                            ctx.get_indent(),
+                            variant.name,
+                            self.emit(value, ctx)
+                        ));
                     } else {
-                        result.push_str(&format!("{}{} = \"{}\"\n",
-                            ctx.get_indent(), variant.name, variant.name));
+                        result.push_str(&format!(
+                            "{}{} = \"{}\"\n",
+                            ctx.get_indent(),
+                            variant.name,
+                            variant.name
+                        ));
                     }
                 }
                 ctx.pop_indent();
@@ -111,8 +137,16 @@ impl LanguageBackend for RubyBackend {
             }
 
             // ===== Methods =====
-
-            CodegenNode::Method { name, params, body, is_async: _, is_static, visibility, return_type: _, decorators: _ } => {
+            CodegenNode::Method {
+                name,
+                params,
+                body,
+                is_async: _,
+                is_static,
+                visibility,
+                return_type: _,
+                decorators: _,
+            } => {
                 let mut result = String::new();
 
                 let params_str = self.emit_params(params);
@@ -126,23 +160,24 @@ impl LanguageBackend for RubyBackend {
                     format!("({})", params_str)
                 };
 
-                result.push_str(&format!("{}def {}{}{}\n",
-                    ctx.get_indent(), static_prefix, name, params_part));
+                result.push_str(&format!(
+                    "{}def {}{}{}\n",
+                    ctx.get_indent(),
+                    static_prefix,
+                    name,
+                    params_part
+                ));
 
                 ctx.push_indent();
 
                 // Method body
-                let has_executable_code = body.iter().any(|stmt| {
-                    match stmt {
-                        CodegenNode::Comment { .. } | CodegenNode::Empty => false,
-                        CodegenNode::NativeBlock { code, .. } => {
-                            code.lines().any(|line| {
-                                let trimmed = line.trim();
-                                !trimmed.is_empty() && !trimmed.starts_with('#')
-                            })
-                        },
-                        _ => true,
-                    }
+                let has_executable_code = body.iter().any(|stmt| match stmt {
+                    CodegenNode::Comment { .. } | CodegenNode::Empty => false,
+                    CodegenNode::NativeBlock { code, .. } => code.lines().any(|line| {
+                        let trimmed = line.trim();
+                        !trimmed.is_empty() && !trimmed.starts_with('#')
+                    }),
+                    _ => true,
                 });
 
                 if body.is_empty() || !has_executable_code {
@@ -156,7 +191,15 @@ impl LanguageBackend for RubyBackend {
                 } else {
                     for stmt in body {
                         result.push_str(&self.emit(stmt, ctx));
-                        if !matches!(stmt, CodegenNode::Comment { .. } | CodegenNode::Empty | CodegenNode::If { .. } | CodegenNode::While { .. } | CodegenNode::For { .. } | CodegenNode::Match { .. }) {
+                        if !matches!(
+                            stmt,
+                            CodegenNode::Comment { .. }
+                                | CodegenNode::Empty
+                                | CodegenNode::If { .. }
+                                | CodegenNode::While { .. }
+                                | CodegenNode::For { .. }
+                                | CodegenNode::Match { .. }
+                        ) {
                             result.push('\n');
                         }
                     }
@@ -167,7 +210,11 @@ impl LanguageBackend for RubyBackend {
                 result
             }
 
-            CodegenNode::Constructor { params, body, super_call } => {
+            CodegenNode::Constructor {
+                params,
+                body,
+                super_call,
+            } => {
                 let mut result = String::new();
 
                 let params_str = self.emit_params(params);
@@ -177,7 +224,11 @@ impl LanguageBackend for RubyBackend {
                     format!("({})", params_str)
                 };
 
-                result.push_str(&format!("{}def initialize{}\n", ctx.get_indent(), params_part));
+                result.push_str(&format!(
+                    "{}def initialize{}\n",
+                    ctx.get_indent(),
+                    params_part
+                ));
                 ctx.push_indent();
 
                 if let Some(super_call) = super_call {
@@ -190,7 +241,15 @@ impl LanguageBackend for RubyBackend {
                 } else {
                     for stmt in body {
                         result.push_str(&self.emit(stmt, ctx));
-                        if !matches!(stmt, CodegenNode::Comment { .. } | CodegenNode::Empty | CodegenNode::If { .. } | CodegenNode::While { .. } | CodegenNode::For { .. } | CodegenNode::Match { .. }) {
+                        if !matches!(
+                            stmt,
+                            CodegenNode::Comment { .. }
+                                | CodegenNode::Empty
+                                | CodegenNode::If { .. }
+                                | CodegenNode::While { .. }
+                                | CodegenNode::For { .. }
+                                | CodegenNode::Match { .. }
+                        ) {
                             result.push('\n');
                         }
                     }
@@ -202,8 +261,12 @@ impl LanguageBackend for RubyBackend {
             }
 
             // ===== Statements =====
-
-            CodegenNode::VarDecl { name, init, is_const: _, type_annotation: _ } => {
+            CodegenNode::VarDecl {
+                name,
+                init,
+                is_const: _,
+                type_annotation: _,
+            } => {
                 // Ruby: just name = value (no keyword, no type)
                 if let Some(init_expr) = init {
                     let init_str = self.emit(init_expr, ctx);
@@ -227,7 +290,11 @@ impl LanguageBackend for RubyBackend {
                 }
             }
 
-            CodegenNode::If { condition, then_block, else_block } => {
+            CodegenNode::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let mut result = String::new();
                 let cond_str = self.emit(condition, ctx);
                 result.push_str(&format!("{}if {}\n", ctx.get_indent(), cond_str));
@@ -295,11 +362,20 @@ impl LanguageBackend for RubyBackend {
                 result
             }
 
-            CodegenNode::For { var, iterable, body } => {
+            CodegenNode::For {
+                var,
+                iterable,
+                body,
+            } => {
                 // Ruby: collection.each do |item| ... end
                 let mut result = String::new();
                 let iter_str = self.emit(iterable, ctx);
-                result.push_str(&format!("{}{}.each do |{}|\n", ctx.get_indent(), iter_str, var));
+                result.push_str(&format!(
+                    "{}{}.each do |{}|\n",
+                    ctx.get_indent(),
+                    iter_str,
+                    var
+                ));
 
                 ctx.push_indent();
                 for stmt in body {
@@ -313,7 +389,7 @@ impl LanguageBackend for RubyBackend {
             }
 
             CodegenNode::Break => format!("{}break", ctx.get_indent()),
-            CodegenNode::Continue => format!("{}next", ctx.get_indent()),  // Ruby uses 'next'
+            CodegenNode::Continue => format!("{}next", ctx.get_indent()), // Ruby uses 'next'
 
             CodegenNode::ExprStmt(expr) => {
                 format!("{}{}", ctx.get_indent(), self.emit(expr, ctx))
@@ -335,18 +411,13 @@ impl LanguageBackend for RubyBackend {
             CodegenNode::Empty => String::new(),
 
             // ===== Expressions =====
-
             CodegenNode::Ident(name) => name.clone(),
 
             CodegenNode::Literal(lit) => self.emit_literal(lit, ctx),
 
-            CodegenNode::BinaryOp { op, left, right } => {
-                self.emit_binary_op(op, left, right, ctx)
-            }
+            CodegenNode::BinaryOp { op, left, right } => self.emit_binary_op(op, left, right, ctx),
 
-            CodegenNode::UnaryOp { op, operand } => {
-                self.emit_unary_op(op, operand, ctx)
-            }
+            CodegenNode::UnaryOp { op, operand } => self.emit_unary_op(op, operand, ctx),
 
             CodegenNode::Call { target, args } => {
                 let target_str = self.emit(target, ctx);
@@ -354,7 +425,11 @@ impl LanguageBackend for RubyBackend {
                 format!("{}({})", target_str, args_str.join(", "))
             }
 
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let obj_str = self.emit(object, ctx);
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
                 format!("{}.{}({})", obj_str, method, args_str.join(", "))
@@ -384,13 +459,18 @@ impl LanguageBackend for RubyBackend {
             }
 
             CodegenNode::Dict(pairs) => {
-                let pairs_str: Vec<String> = pairs.iter().map(|(k, v)| {
-                    format!("{} => {}", self.emit(k, ctx), self.emit(v, ctx))
-                }).collect();
+                let pairs_str: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{} => {}", self.emit(k, ctx), self.emit(v, ctx)))
+                    .collect();
                 format!("{{{}}}", pairs_str.join(", "))
             }
 
-            CodegenNode::Ternary { condition, then_expr, else_expr } => {
+            CodegenNode::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond = self.emit(condition, ctx);
                 let then_val = self.emit(then_expr, ctx);
                 let else_val = self.emit(else_expr, ctx);
@@ -398,12 +478,19 @@ impl LanguageBackend for RubyBackend {
             }
 
             CodegenNode::Lambda { params, body } => {
-                let params_str = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ");
+                let params_str = params
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let body_str = self.emit(body, ctx);
                 format!("->({}){{{}}}", params_str, body_str)
             }
 
-            CodegenNode::Cast { expr, target_type: _ } => {
+            CodegenNode::Cast {
+                expr,
+                target_type: _,
+            } => {
                 // Ruby: no casts (dynamic typing)
                 self.emit(expr, ctx)
             }
@@ -415,40 +502,58 @@ impl LanguageBackend for RubyBackend {
             }
 
             // ===== Frame-Specific =====
-
-            CodegenNode::Transition { target_state, exit_args, enter_args, state_args, indent } => {
+            CodegenNode::Transition {
+                target_state,
+                exit_args,
+                enter_args,
+                state_args,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 let mut args = vec![format!("\"{}\"", target_state)];
 
                 if !exit_args.is_empty() {
-                    let exit_str: Vec<String> = exit_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let exit_str: Vec<String> =
+                        exit_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", exit_str.join(", ")));
                 } else {
                     args.push("nil".to_string());
                 }
 
                 if !enter_args.is_empty() {
-                    let enter_str: Vec<String> = enter_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let enter_str: Vec<String> =
+                        enter_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", enter_str.join(", ")));
                 } else {
                     args.push("nil".to_string());
                 }
 
                 if !state_args.is_empty() {
-                    let state_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let state_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", state_str.join(", ")));
                 }
 
                 format!("{}@_transition({})", ind, args.join(", "))
             }
 
-            CodegenNode::ChangeState { target_state, state_args, indent } => {
+            CodegenNode::ChangeState {
+                target_state,
+                state_args,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 if state_args.is_empty() {
                     format!("{}@_change_state(\"{}\")", ind, target_state)
                 } else {
-                    let args_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
-                    format!("{}@_change_state(\"{}\", [{}])", ind, target_state, args_str.join(", "))
+                    let args_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    format!(
+                        "{}@_change_state(\"{}\", [{}])",
+                        ind,
+                        target_state,
+                        args_str.join(", ")
+                    )
                 }
             }
 
@@ -476,12 +581,16 @@ impl LanguageBackend for RubyBackend {
                 if args_str.is_empty() {
                     format!("{}self.{}()", ctx.get_indent(), event)
                 } else {
-                    format!("{}self.{}({})", ctx.get_indent(), event, args_str.join(", "))
+                    format!(
+                        "{}self.{}({})",
+                        ctx.get_indent(),
+                        event,
+                        args_str.join(", ")
+                    )
                 }
             }
 
             // ===== Native Code Preservation =====
-
             CodegenNode::NativeBlock { code, span: _ } => {
                 // Re-indent native code to current context
                 let lines: Vec<&str> = code.lines().collect();
@@ -490,7 +599,8 @@ impl LanguageBackend for RubyBackend {
                 }
 
                 // Find minimum non-empty line indentation
-                let min_indent = lines.iter()
+                let min_indent = lines
+                    .iter()
                     .filter(|line| !line.trim().is_empty())
                     .map(|line| line.len() - line.trim_start().len())
                     .min()
@@ -538,22 +648,34 @@ impl LanguageBackend for RubyBackend {
         TargetLanguage::Ruby
     }
 
-    fn null_keyword(&self) -> &'static str { "nil" }
-    fn and_operator(&self) -> &'static str { "&&" }
-    fn or_operator(&self) -> &'static str { "||" }
-    fn not_operator(&self) -> &'static str { "!" }
+    fn null_keyword(&self) -> &'static str {
+        "nil"
+    }
+    fn and_operator(&self) -> &'static str {
+        "&&"
+    }
+    fn or_operator(&self) -> &'static str {
+        "||"
+    }
+    fn not_operator(&self) -> &'static str {
+        "!"
+    }
 }
 
 impl RubyBackend {
     fn emit_params(&self, params: &[Param]) -> String {
-        params.iter().map(|p| {
-            let mut s = p.name.clone();
-            if let Some(ref d) = p.default_value {
-                let mut ctx = EmitContext::new();
-                s.push_str(&format!(" = {}", self.emit(d, &mut ctx)));
-            }
-            s
-        }).collect::<Vec<_>>().join(", ")
+        params
+            .iter()
+            .map(|p| {
+                let mut s = p.name.clone();
+                if let Some(ref d) = p.default_value {
+                    let mut ctx = EmitContext::new();
+                    s.push_str(&format!(" = {}", self.emit(d, &mut ctx)));
+                }
+                s
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -678,9 +800,7 @@ mod tests {
         let backend = RubyBackend;
         let mut ctx = EmitContext::new();
 
-        let node = CodegenNode::Dict(vec![
-            (CodegenNode::string("a"), CodegenNode::int(1)),
-        ]);
+        let node = CodegenNode::Dict(vec![(CodegenNode::string("a"), CodegenNode::int(1))]);
         assert_eq!(backend.emit(&node, &mut ctx), "{\"a\" => 1}");
     }
 }

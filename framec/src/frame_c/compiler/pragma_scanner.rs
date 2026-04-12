@@ -26,8 +26,8 @@
 //! @@system MySystem {          # PragmaLine(System)
 //! ```
 
-use super::native_region_scanner::RegionSpan;
 use super::native_region_scanner::unified::SyntaxSkipper;
+use super::native_region_scanner::RegionSpan;
 
 /// The kind of Frame pragma
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +106,10 @@ impl PragmaScanner {
                     // Found pragma - emit any preceding native text
                     if seg_start < line_start {
                         regions.push(PragmaRegion::NativeText {
-                            span: RegionSpan { start: seg_start, end: line_start },
+                            span: RegionSpan {
+                                start: seg_start,
+                                end: line_start,
+                            },
                         });
                     }
 
@@ -123,7 +126,10 @@ impl PragmaScanner {
                     };
 
                     regions.push(PragmaRegion::PragmaLine {
-                        span: RegionSpan { start: pragma_start, end: pragma_end },
+                        span: RegionSpan {
+                            start: pragma_start,
+                            end: pragma_end,
+                        },
                         kind,
                     });
 
@@ -161,7 +167,10 @@ impl PragmaScanner {
         // Emit any remaining native text
         if seg_start < n {
             regions.push(PragmaRegion::NativeText {
-                span: RegionSpan { start: seg_start, end: n },
+                span: RegionSpan {
+                    start: seg_start,
+                    end: n,
+                },
             });
         }
 
@@ -205,11 +214,7 @@ impl PragmaScanner {
     }
 
     /// Find end of a pragma block (@@codegen { ... } or @@system Name { ... })
-    fn find_pragma_block_end<S: SyntaxSkipper>(
-        skipper: &S,
-        bytes: &[u8],
-        start: usize,
-    ) -> usize {
+    fn find_pragma_block_end<S: SyntaxSkipper>(skipper: &S, bytes: &[u8], start: usize) -> usize {
         let n = bytes.len();
         let mut i = start;
 
@@ -375,8 +380,20 @@ mod tests {
         let result = scanner.scan(&TestSkipper, source).unwrap();
 
         assert_eq!(result.regions.len(), 3);
-        assert!(matches!(&result.regions[0], PragmaRegion::NativeText { .. }));
-        assert!(matches!(&result.regions[1], PragmaRegion::PragmaLine { kind: PragmaKind::Target, .. }));
-        assert!(matches!(&result.regions[2], PragmaRegion::NativeText { .. }));
+        assert!(matches!(
+            &result.regions[0],
+            PragmaRegion::NativeText { .. }
+        ));
+        assert!(matches!(
+            &result.regions[1],
+            PragmaRegion::PragmaLine {
+                kind: PragmaKind::Target,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &result.regions[2],
+            PragmaRegion::NativeText { .. }
+        ));
     }
 }

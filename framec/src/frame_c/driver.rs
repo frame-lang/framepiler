@@ -26,7 +26,7 @@ impl Exe {
                     .unwrap_or(TargetLanguage::Python3);
                 let target_lang = crate::frame_c::compiler::TargetLanguage::from(lang);
                 let compiler = crate::frame_c::compiler::FrameCompiler::new(target_lang);
-                
+
                 match compiler.compile(&content, input_path.to_str().unwrap_or("<unknown>")) {
                     crate::frame_c::compiler::FrameResult::Ok(output) => Ok(output.code),
                     crate::frame_c::compiler::FrameResult::Err(err) => {
@@ -38,7 +38,10 @@ impl Exe {
                     }
                 }
             }
-            Err(err) => Err(RunError::new(exitcode::NOINPUT, &format!("Cannot read file: {}", err))),
+            Err(err) => Err(RunError::new(
+                exitcode::NOINPUT,
+                &format!("Cannot read file: {}", err),
+            )),
         }
     }
 
@@ -56,7 +59,7 @@ impl Exe {
                     .unwrap_or(TargetLanguage::Python3);
                 let target_lang = crate::frame_c::compiler::TargetLanguage::from(lang);
                 let compiler = crate::frame_c::compiler::FrameCompiler::new(target_lang);
-                
+
                 match compiler.compile(&content, input_path.to_str().unwrap_or("<unknown>")) {
                     crate::frame_c::compiler::FrameResult::Ok(output) => Ok(output.code),
                     crate::frame_c::compiler::FrameResult::Err(err) => {
@@ -68,7 +71,10 @@ impl Exe {
                     }
                 }
             }
-            Err(err) => Err(RunError::new(exitcode::NOINPUT, &format!("Cannot read file: {}", err))),
+            Err(err) => Err(RunError::new(
+                exitcode::NOINPUT,
+                &format!("Cannot read file: {}", err),
+            )),
         }
     }
 
@@ -78,7 +84,10 @@ impl Exe {
         _target_language: Option<TargetLanguage>,
         _output_dir: Option<PathBuf>,
     ) -> Result<String, RunError> {
-        Err(RunError::new(exitcode::USAGE, "Multi-file compilation not yet supported"))
+        Err(RunError::new(
+            exitcode::USAGE,
+            "Multi-file compilation not yet supported",
+        ))
     }
 
     pub fn run_stdin(&self, target_language: Option<TargetLanguage>) -> Result<String, RunError> {
@@ -93,7 +102,7 @@ impl Exe {
                     .unwrap_or(TargetLanguage::Python3);
                 let target_lang = crate::frame_c::compiler::TargetLanguage::from(lang);
                 let compiler = crate::frame_c::compiler::FrameCompiler::new(target_lang);
-                
+
                 match compiler.compile(&buffer, "<stdin>") {
                     crate::frame_c::compiler::FrameResult::Ok(output) => Ok(output.code),
                     crate::frame_c::compiler::FrameResult::Err(err) => {
@@ -104,8 +113,11 @@ impl Exe {
                         Err(RunError::new(exitcode::DATAERR, &error_msg))
                     }
                 }
-            },
-            Err(err) => Err(RunError::new(exitcode::NOINPUT, &format!("Cannot read stdin: {}", err))),
+            }
+            Err(err) => Err(RunError::new(
+                exitcode::NOINPUT,
+                &format!("Cannot read stdin: {}", err),
+            )),
         }
     }
 }

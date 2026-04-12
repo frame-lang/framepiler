@@ -26,6 +26,9 @@ impl ImportScanner for ImportScannerC {
         fsm.bytes = bytes.to_vec();
         fsm.start = start;
         fsm.do_scan();
-        ImportScanResult { spans: fsm.spans, issues: fsm.issues }
+        ImportScanResult {
+            spans: fsm.spans,
+            issues: fsm.issues,
+        }
     }
 }

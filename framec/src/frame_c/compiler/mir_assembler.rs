@@ -1,7 +1,7 @@
 use crate::frame_c::compiler::frame_statement_parser::{FrameStatementParser, ParseError};
 use crate::frame_c::compiler::mir::MirItem;
-use crate::frame_c::compiler::validator::ValidationIssue;
 use crate::frame_c::compiler::native_region_scanner::Region;
+use crate::frame_c::compiler::validator::ValidationIssue;
 
 pub struct MirAssembler;
 
@@ -10,19 +10,23 @@ impl MirAssembler {
         let parser = FrameStatementParser;
         let mut out = Vec::new();
         for r in regions {
-            if let Region::FrameSegment{..} = r {
+            if let Region::FrameSegment { .. } = r {
                 out.push(parser.parse_segment(bytes, r)?);
             }
         }
         Ok(out)
     }
 
-    pub fn assemble_collect(&self, bytes: &[u8], regions: &[Region]) -> (Vec<MirItem>, Vec<ValidationIssue>) {
+    pub fn assemble_collect(
+        &self,
+        bytes: &[u8],
+        regions: &[Region],
+    ) -> (Vec<MirItem>, Vec<ValidationIssue>) {
         let parser = FrameStatementParser;
         let mut out_mir = Vec::new();
         let mut issues: Vec<ValidationIssue> = Vec::new();
         for r in regions {
-            if let Region::FrameSegment{..} = r {
+            if let Region::FrameSegment { .. } = r {
                 match parser.parse_segment(bytes, r) {
                     Ok(m) => out_mir.push(m),
                     Err(e) => {
@@ -31,10 +35,12 @@ impl MirAssembler {
                             K::MissingState => format!("E300: {}", e.message),
                             K::UnbalancedArgs => format!("E301: {}", e.message),
                             K::TrailingTokens => format!("E302: {}", e.message),
-                            K::InvalidHead => "E200: invalid Frame statement at start of line".to_string(),
+                            K::InvalidHead => {
+                                "E200: invalid Frame statement at start of line".to_string()
+                            }
                         };
                         issues.push(ValidationIssue { message: msg });
-                    },
+                    }
                 }
             }
         }

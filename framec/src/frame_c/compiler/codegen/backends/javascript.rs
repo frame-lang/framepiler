@@ -2,9 +2,9 @@
 //!
 //! Structurally identical to TypeScript minus type annotations.
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// JavaScript backend for code generation
 pub struct JavaScriptBackend;
@@ -13,7 +13,6 @@ impl LanguageBackend for JavaScriptBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
             // ===== Structural =====
-
             CodegenNode::Module { imports, items } => {
                 let mut result = String::new();
 
@@ -36,7 +35,11 @@ impl LanguageBackend for JavaScriptBackend {
                 result
             }
 
-            CodegenNode::Import { module, items, alias } => {
+            CodegenNode::Import {
+                module,
+                items,
+                alias,
+            } => {
                 if items.is_empty() {
                     if let Some(alias) = alias {
                         format!("import * as {} from \"{}\";", alias, module)
@@ -48,7 +51,14 @@ impl LanguageBackend for JavaScriptBackend {
                 }
             }
 
-            CodegenNode::Class { name, fields, methods, base_classes, is_abstract: _, .. } => {
+            CodegenNode::Class {
+                name,
+                fields,
+                methods,
+                base_classes,
+                is_abstract: _,
+                ..
+            } => {
                 let mut result = String::new();
 
                 let extends = if base_classes.is_empty() {
@@ -57,7 +67,12 @@ impl LanguageBackend for JavaScriptBackend {
                     format!(" extends {}", base_classes[0])
                 };
 
-                result.push_str(&format!("{}export class {}{} {{\n", ctx.get_indent(), name, extends));
+                result.push_str(&format!(
+                    "{}export class {}{} {{\n",
+                    ctx.get_indent(),
+                    name,
+                    extends
+                ));
 
                 ctx.push_indent();
 
@@ -68,12 +83,19 @@ impl LanguageBackend for JavaScriptBackend {
                         result.push_str(&format!("{}{};\n", ctx.get_indent(), raw_code));
                     } else {
                         let static_kw = if field.is_static { "static " } else { "" };
-                        let init = field.initializer.as_ref()
+                        let init = field
+                            .initializer
+                            .as_ref()
                             .map(|i| format!(" = {}", self.emit(i, ctx)))
                             .unwrap_or_default();
 
-                        result.push_str(&format!("{}{}{}{};\n",
-                            ctx.get_indent(), static_kw, field.name, init));
+                        result.push_str(&format!(
+                            "{}{}{}{};\n",
+                            ctx.get_indent(),
+                            static_kw,
+                            field.name,
+                            init
+                        ));
                     }
                 }
 
@@ -111,7 +133,13 @@ impl LanguageBackend for JavaScriptBackend {
                             comma
                         ));
                     } else {
-                        result.push_str(&format!("{}{}: {}{}\n", ctx.get_indent(), variant.name, i, comma));
+                        result.push_str(&format!(
+                            "{}{}: {}{}\n",
+                            ctx.get_indent(),
+                            variant.name,
+                            i,
+                            comma
+                        ));
                     }
                 }
 
@@ -121,8 +149,16 @@ impl LanguageBackend for JavaScriptBackend {
             }
 
             // ===== Methods =====
-
-            CodegenNode::Method { name, params, body, is_async, is_static, visibility: _, decorators: _, return_type: _ } => {
+            CodegenNode::Method {
+                name,
+                params,
+                body,
+                is_async,
+                is_static,
+                visibility: _,
+                decorators: _,
+                return_type: _,
+            } => {
                 let mut result = String::new();
 
                 // No visibility keywords in JS
@@ -132,7 +168,11 @@ impl LanguageBackend for JavaScriptBackend {
 
                 result.push_str(&format!(
                     "{}{}{}{}({}) {{\n",
-                    ctx.get_indent(), static_kw, async_kw, name, params_str
+                    ctx.get_indent(),
+                    static_kw,
+                    async_kw,
+                    name,
+                    params_str
                 ));
 
                 ctx.push_indent();
@@ -150,11 +190,19 @@ impl LanguageBackend for JavaScriptBackend {
                 result
             }
 
-            CodegenNode::Constructor { params, body, super_call } => {
+            CodegenNode::Constructor {
+                params,
+                body,
+                super_call,
+            } => {
                 let mut result = String::new();
 
                 let params_str = self.emit_params(params);
-                result.push_str(&format!("{}constructor({}) {{\n", ctx.get_indent(), params_str));
+                result.push_str(&format!(
+                    "{}constructor({}) {{\n",
+                    ctx.get_indent(),
+                    params_str
+                ));
 
                 ctx.push_indent();
 
@@ -178,8 +226,12 @@ impl LanguageBackend for JavaScriptBackend {
             }
 
             // ===== Statements =====
-
-            CodegenNode::VarDecl { name, init, is_const, type_annotation: _ } => {
+            CodegenNode::VarDecl {
+                name,
+                init,
+                is_const,
+                type_annotation: _,
+            } => {
                 let keyword = if *is_const { "const" } else { "let" };
                 // No type annotation in JS
 
@@ -205,7 +257,11 @@ impl LanguageBackend for JavaScriptBackend {
                 }
             }
 
-            CodegenNode::If { condition, then_block, else_block } => {
+            CodegenNode::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let mut result = String::new();
                 let cond_str = self.emit(condition, ctx);
                 result.push_str(&format!("{}if ({}) {{\n", ctx.get_indent(), cond_str));
@@ -242,7 +298,11 @@ impl LanguageBackend for JavaScriptBackend {
             CodegenNode::Match { scrutinee, arms } => {
                 let mut result = String::new();
                 let scrutinee_str = self.emit(scrutinee, ctx);
-                result.push_str(&format!("{}switch ({}) {{\n", ctx.get_indent(), scrutinee_str));
+                result.push_str(&format!(
+                    "{}switch ({}) {{\n",
+                    ctx.get_indent(),
+                    scrutinee_str
+                ));
 
                 ctx.push_indent();
                 for arm in arms {
@@ -287,10 +347,19 @@ impl LanguageBackend for JavaScriptBackend {
                 result
             }
 
-            CodegenNode::For { var, iterable, body } => {
+            CodegenNode::For {
+                var,
+                iterable,
+                body,
+            } => {
                 let mut result = String::new();
                 let iter_str = self.emit(iterable, ctx);
-                result.push_str(&format!("{}for (const {} of {}) {{\n", ctx.get_indent(), var, iter_str));
+                result.push_str(&format!(
+                    "{}for (const {} of {}) {{\n",
+                    ctx.get_indent(),
+                    var,
+                    iter_str
+                ));
 
                 ctx.push_indent();
                 for stmt in body {
@@ -329,18 +398,13 @@ impl LanguageBackend for JavaScriptBackend {
             CodegenNode::Empty => String::new(),
 
             // ===== Expressions =====
-
             CodegenNode::Ident(name) => name.clone(),
 
             CodegenNode::Literal(lit) => self.emit_literal(lit, ctx),
 
-            CodegenNode::BinaryOp { op, left, right } => {
-                self.emit_binary_op(op, left, right, ctx)
-            }
+            CodegenNode::BinaryOp { op, left, right } => self.emit_binary_op(op, left, right, ctx),
 
-            CodegenNode::UnaryOp { op, operand } => {
-                self.emit_unary_op(op, operand, ctx)
-            }
+            CodegenNode::UnaryOp { op, operand } => self.emit_unary_op(op, operand, ctx),
 
             CodegenNode::Call { target, args } => {
                 let target_str = self.emit(target, ctx);
@@ -348,7 +412,11 @@ impl LanguageBackend for JavaScriptBackend {
                 format!("{}({})", target_str, args_str.join(", "))
             }
 
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let obj_str = self.emit(object, ctx);
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
                 format!("{}.{}({})", obj_str, method, args_str.join(", "))
@@ -373,13 +441,18 @@ impl LanguageBackend for JavaScriptBackend {
             }
 
             CodegenNode::Dict(pairs) => {
-                let pairs_str: Vec<String> = pairs.iter().map(|(k, v)| {
-                    format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx))
-                }).collect();
+                let pairs_str: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx)))
+                    .collect();
                 format!("{{ {} }}", pairs_str.join(", "))
             }
 
-            CodegenNode::Ternary { condition, then_expr, else_expr } => {
+            CodegenNode::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond = self.emit(condition, ctx);
                 let then_val = self.emit(then_expr, ctx);
                 let else_val = self.emit(else_expr, ctx);
@@ -387,12 +460,19 @@ impl LanguageBackend for JavaScriptBackend {
             }
 
             CodegenNode::Lambda { params, body } => {
-                let params_str = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ");
+                let params_str = params
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let body_str = self.emit(body, ctx);
                 format!("({}) => {}", params_str, body_str)
             }
 
-            CodegenNode::Cast { expr, target_type: _ } => {
+            CodegenNode::Cast {
+                expr,
+                target_type: _,
+            } => {
                 // JS has no cast syntax — just emit the expression
                 self.emit(expr, ctx)
             }
@@ -403,40 +483,61 @@ impl LanguageBackend for JavaScriptBackend {
             }
 
             // ===== Frame-Specific =====
-
-            CodegenNode::Transition { target_state, exit_args, enter_args, state_args, indent } => {
+            CodegenNode::Transition {
+                target_state,
+                exit_args,
+                enter_args,
+                state_args,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 let mut args = vec![format!("this.{}", target_state)];
 
                 if !exit_args.is_empty() || !enter_args.is_empty() || !state_args.is_empty() {
-                    let exit_str: Vec<String> = exit_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let exit_str: Vec<String> =
+                        exit_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", exit_str.join(", ")));
                 }
 
                 if !enter_args.is_empty() || !state_args.is_empty() {
-                    let enter_str: Vec<String> = enter_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let enter_str: Vec<String> =
+                        enter_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", enter_str.join(", ")));
                 }
 
                 if !state_args.is_empty() {
-                    let state_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    let state_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
                     args.push(format!("[{}]", state_str.join(", ")));
                 }
 
                 format!("{}this._transition({})", ind, args.join(", "))
             }
 
-            CodegenNode::ChangeState { target_state, state_args, indent } => {
+            CodegenNode::ChangeState {
+                target_state,
+                state_args,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 if state_args.is_empty() {
                     format!("{}this._changeState(this.{})", ind, target_state)
                 } else {
-                    let args_str: Vec<String> = state_args.iter().map(|a| self.emit(a, ctx)).collect();
-                    format!("{}this._changeState(this.{}, [{}])", ind, target_state, args_str.join(", "))
+                    let args_str: Vec<String> =
+                        state_args.iter().map(|a| self.emit(a, ctx)).collect();
+                    format!(
+                        "{}this._changeState(this.{}, [{}])",
+                        ind,
+                        target_state,
+                        args_str.join(", ")
+                    )
                 }
             }
 
-            CodegenNode::Forward { to_parent: _, indent } => {
+            CodegenNode::Forward {
+                to_parent: _,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 format!("{}return", ind)
             }
@@ -460,12 +561,16 @@ impl LanguageBackend for JavaScriptBackend {
                 if args_str.is_empty() {
                     format!("{}this.{}()", ctx.get_indent(), event)
                 } else {
-                    format!("{}this.{}({})", ctx.get_indent(), event, args_str.join(", "))
+                    format!(
+                        "{}this.{}({})",
+                        ctx.get_indent(),
+                        event,
+                        args_str.join(", ")
+                    )
                 }
             }
 
             // ===== Native Code Preservation =====
-
             CodegenNode::NativeBlock { code, span: _ } => {
                 // Apply current indentation to each line of native code
                 let indent = ctx.get_indent();
@@ -502,19 +607,24 @@ impl LanguageBackend for JavaScriptBackend {
 
 impl JavaScriptBackend {
     fn emit_params(&self, params: &[Param]) -> String {
-        params.iter().map(|p| {
-            let mut s = p.name.clone();
-            // No type annotations in JS
-            if let Some(ref d) = p.default_value {
-                let mut ctx = EmitContext::new();
-                s.push_str(&format!(" = {}", self.emit(d, &mut ctx)));
-            }
-            s
-        }).collect::<Vec<_>>().join(", ")
+        params
+            .iter()
+            .map(|p| {
+                let mut s = p.name.clone();
+                // No type annotations in JS
+                if let Some(ref d) = p.default_value {
+                    let mut ctx = EmitContext::new();
+                    s.push_str(&format!(" = {}", self.emit(d, &mut ctx)));
+                }
+                s
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     fn needs_semicolon(&self, node: &CodegenNode) -> bool {
-        !matches!(node,
+        !matches!(
+            node,
             CodegenNode::If { .. } |
             CodegenNode::While { .. } |
             CodegenNode::For { .. } |

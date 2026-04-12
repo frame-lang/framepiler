@@ -133,9 +133,7 @@ impl ValidationReport {
             // Header: error[E402]: message
             output.push_str(&format!(
                 "{}[{}]: {}\n",
-                issue.severity,
-                issue.code,
-                issue.message
+                issue.severity, issue.code, issue.message
             ));
 
             // Location
@@ -149,7 +147,8 @@ impl ValidationReport {
                     if let Some(line_text) = get_line(source, line) {
                         output.push_str(&format!("   |\n"));
                         output.push_str(&format!("{:>3} | {}\n", line, line_text));
-                        output.push_str(&format!("   | {}{}\n",
+                        output.push_str(&format!(
+                            "   | {}{}\n",
                             " ".repeat(col.saturating_sub(1)),
                             "^".repeat((span.end - span.start).min(line_text.len()))
                         ));
@@ -177,7 +176,11 @@ impl ValidationReport {
         if summary.total() > 0 {
             output.push_str(&format!(
                 "{}: {} error(s), {} warning(s)\n",
-                if summary.has_errors() { "aborting" } else { "finished" },
+                if summary.has_errors() {
+                    "aborting"
+                } else {
+                    "finished"
+                },
                 summary.errors,
                 summary.warnings
             ));
@@ -188,41 +191,45 @@ impl ValidationReport {
 
     /// Format as JSON for IDE integration
     pub fn to_json(&self) -> String {
-        let issues: Vec<serde_json::Value> = self.issues.iter().map(|issue| {
-            let mut obj = serde_json::json!({
-                "code": issue.code,
-                "severity": issue.severity.as_str(),
-                "message": issue.message,
-            });
+        let issues: Vec<serde_json::Value> = self
+            .issues
+            .iter()
+            .map(|issue| {
+                let mut obj = serde_json::json!({
+                    "code": issue.code,
+                    "severity": issue.severity.as_str(),
+                    "message": issue.message,
+                });
 
-            if let Some(span) = &issue.span {
-                if let Some(source) = &self.source {
-                    let (line, col) = span_to_line_col(source, span.start);
-                    let (end_line, end_col) = span_to_line_col(source, span.end);
-                    obj["line"] = serde_json::json!(line);
-                    obj["column"] = serde_json::json!(col);
-                    obj["end_line"] = serde_json::json!(end_line);
-                    obj["end_column"] = serde_json::json!(end_col);
-                } else {
-                    obj["start"] = serde_json::json!(span.start);
-                    obj["end"] = serde_json::json!(span.end);
+                if let Some(span) = &issue.span {
+                    if let Some(source) = &self.source {
+                        let (line, col) = span_to_line_col(source, span.start);
+                        let (end_line, end_col) = span_to_line_col(source, span.end);
+                        obj["line"] = serde_json::json!(line);
+                        obj["column"] = serde_json::json!(col);
+                        obj["end_line"] = serde_json::json!(end_line);
+                        obj["end_column"] = serde_json::json!(end_col);
+                    } else {
+                        obj["start"] = serde_json::json!(span.start);
+                        obj["end"] = serde_json::json!(span.end);
+                    }
                 }
-            }
 
-            if let Some(file) = &self.source_file {
-                obj["file"] = serde_json::json!(file);
-            }
+                if let Some(file) = &self.source_file {
+                    obj["file"] = serde_json::json!(file);
+                }
 
-            if !issue.notes.is_empty() {
-                obj["notes"] = serde_json::json!(issue.notes);
-            }
+                if !issue.notes.is_empty() {
+                    obj["notes"] = serde_json::json!(issue.notes);
+                }
 
-            if let Some(hint) = &issue.fix_hint {
-                obj["fix_hint"] = serde_json::json!(hint);
-            }
+                if let Some(hint) = &issue.fix_hint {
+                    obj["fix_hint"] = serde_json::json!(hint);
+                }
 
-            obj
-        }).collect();
+                obj
+            })
+            .collect();
 
         let summary = self.summary();
         let output = serde_json::json!({
@@ -248,31 +255,18 @@ impl ValidationReport {
                     let (line, col) = span_to_line_col(source, span.start);
                     output.push_str(&format!(
                         "{}:{}:{}: {}: [{}] {}\n",
-                        file,
-                        line,
-                        col,
-                        issue.severity,
-                        issue.code,
-                        issue.message
+                        file, line, col, issue.severity, issue.code, issue.message
                     ));
                 } else {
                     output.push_str(&format!(
                         "{}:{}:{}: {}: [{}] {}\n",
-                        file,
-                        span.start,
-                        span.end,
-                        issue.severity,
-                        issue.code,
-                        issue.message
+                        file, span.start, span.end, issue.severity, issue.code, issue.message
                     ));
                 }
             } else {
                 output.push_str(&format!(
                     "{}: {}: [{}] {}\n",
-                    file,
-                    issue.severity,
-                    issue.code,
-                    issue.message
+                    file, issue.severity, issue.code, issue.message
                 ));
             }
         }
@@ -349,12 +343,10 @@ mod tests {
             .with_source_file("test.frm")
             .with_source("@@system Test {\n  machine:\n    $Idle { }\n}");
 
-        report.add_issues(vec![
-            ValidationIssue::error("E402", "Unknown state 'Foo'")
-                .with_span(Span::new(30, 35))
-                .with_note("State must be defined before use")
-                .with_fix("Add state $Foo { } to the machine"),
-        ]);
+        report.add_issues(vec![ValidationIssue::error("E402", "Unknown state 'Foo'")
+            .with_span(Span::new(30, 35))
+            .with_note("State must be defined before use")
+            .with_fix("Add state $Foo { } to the machine")]);
 
         let output = report.to_human_readable();
         assert!(output.contains("error[E402]"));
@@ -369,7 +361,7 @@ mod tests {
             .with_source("@@system Test { }");
 
         report.add_issues(vec![
-            ValidationIssue::error("E402", "Test error").with_span(Span::new(0, 10)),
+            ValidationIssue::error("E402", "Test error").with_span(Span::new(0, 10))
         ]);
 
         let json = report.to_json();

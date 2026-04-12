@@ -59,7 +59,11 @@ impl TryFrom<&str> for TargetLanguage {
             Ok(TargetLanguage::Graphviz)
         } else if normalized == "c" {
             Ok(TargetLanguage::C)
-        } else if normalized == "c++" || normalized == "cpp" || normalized == "cpp_17" || normalized == "cpp_20" {
+        } else if normalized == "c++"
+            || normalized == "cpp"
+            || normalized == "cpp_17"
+            || normalized == "cpp_20"
+        {
             Ok(TargetLanguage::Cpp)
         } else if normalized == "java" {
             Ok(TargetLanguage::Java)
@@ -102,4 +106,3 @@ impl TryFrom<String> for TargetLanguage {
         Self::try_from(value.as_str())
     }
 }
-

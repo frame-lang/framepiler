@@ -119,7 +119,6 @@ impl SystemHierarchy {
             }
         }
     }
-
 }
 
 pub(crate) mod frame_exitcode {

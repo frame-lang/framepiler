@@ -1,9 +1,9 @@
 // GDScript syntax skipper — reuses Python skipper since both use
 // # line comments, "..." and '...' strings, and """...""" triple-quoted strings.
 
-use super::*;
-use super::unified::*;
 use super::python::PythonSkipper;
+use super::unified::*;
+use super::*;
 use crate::frame_c::compiler::body_closer::gdscript::BodyCloserGDScript;
 use crate::frame_c::compiler::body_closer::BodyCloser;
 

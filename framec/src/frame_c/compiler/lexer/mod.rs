@@ -8,27 +8,29 @@
 //! The Parser (Stage 2) controls mode switching by calling `enter_native_mode()` and
 //! `enter_structural_mode()`.
 
-use std::collections::VecDeque;
-use crate::frame_c::compiler::native_region_scanner::unified::{SyntaxSkipper, skip_template_literal};
-use crate::frame_c::compiler::native_region_scanner::python::PythonSkipper;
-use crate::frame_c::compiler::native_region_scanner::typescript::TypeScriptSkipper;
-use crate::frame_c::compiler::native_region_scanner::rust::RustSkipper;
+use crate::frame_c::compiler::frame_ast::Span;
 use crate::frame_c::compiler::native_region_scanner::c::CSkipper;
 use crate::frame_c::compiler::native_region_scanner::cpp::CppSkipper;
-use crate::frame_c::compiler::native_region_scanner::java::JavaSkipper;
 use crate::frame_c::compiler::native_region_scanner::csharp::CSharpSkipper;
-use crate::frame_c::compiler::native_region_scanner::go::GoSkipper;
-use crate::frame_c::compiler::native_region_scanner::javascript::JavaScriptSkipper;
-use crate::frame_c::compiler::native_region_scanner::php::PhpSkipper;
-use crate::frame_c::compiler::native_region_scanner::kotlin::KotlinSkipper;
-use crate::frame_c::compiler::native_region_scanner::swift::SwiftSkipper;
-use crate::frame_c::compiler::native_region_scanner::ruby::RubySkipper;
-use crate::frame_c::compiler::native_region_scanner::erlang::ErlangSkipper;
-use crate::frame_c::compiler::native_region_scanner::lua::LuaSkipper;
 use crate::frame_c::compiler::native_region_scanner::dart::DartSkipper;
+use crate::frame_c::compiler::native_region_scanner::erlang::ErlangSkipper;
 use crate::frame_c::compiler::native_region_scanner::gdscript::GDScriptSkipper;
-use crate::frame_c::compiler::frame_ast::Span;
+use crate::frame_c::compiler::native_region_scanner::go::GoSkipper;
+use crate::frame_c::compiler::native_region_scanner::java::JavaSkipper;
+use crate::frame_c::compiler::native_region_scanner::javascript::JavaScriptSkipper;
+use crate::frame_c::compiler::native_region_scanner::kotlin::KotlinSkipper;
+use crate::frame_c::compiler::native_region_scanner::lua::LuaSkipper;
+use crate::frame_c::compiler::native_region_scanner::php::PhpSkipper;
+use crate::frame_c::compiler::native_region_scanner::python::PythonSkipper;
+use crate::frame_c::compiler::native_region_scanner::ruby::RubySkipper;
+use crate::frame_c::compiler::native_region_scanner::rust::RustSkipper;
+use crate::frame_c::compiler::native_region_scanner::swift::SwiftSkipper;
+use crate::frame_c::compiler::native_region_scanner::typescript::TypeScriptSkipper;
+use crate::frame_c::compiler::native_region_scanner::unified::{
+    skip_template_literal, SyntaxSkipper,
+};
 use crate::frame_c::visitors::TargetLanguage;
+use std::collections::VecDeque;
 
 // ============================================================================
 // Token Types
@@ -37,16 +39,16 @@ use crate::frame_c::visitors::TargetLanguage;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     // ===== Frame Structural Keywords =====
-    Interface,           // "interface"
-    Machine,             // "machine"
-    Actions,             // "actions"
-    Operations,          // "operations"
-    Domain,              // "domain"
+    Interface,  // "interface"
+    Machine,    // "machine"
+    Actions,    // "actions"
+    Operations, // "operations"
+    Domain,     // "domain"
     // Note: No `Var` token — domain blocks are native code pass-through.
     // `var` is lexed as Ident("var") if encountered.
 
     // ===== Frame Statements =====
-    Return,              // "return" (Frame return sugar)
+    Return, // "return" (Frame return sugar)
 
     // ===== State Syntax =====
     /// "$StateName" — state reference in transitions (-> $Foo)
@@ -61,46 +63,46 @@ pub enum Token {
     ParentRef,
 
     // ===== Transition & Control =====
-    Arrow,               // "->"
-    FatArrow,            // "=>"
-    PushState,           // "push$"
-    PopState,            // "pop$"
+    Arrow,     // "->"
+    FatArrow,  // "=>"
+    PushState, // "push$"
+    PopState,  // "pop$"
 
     // ===== Context Syntax =====
-    ContextReturn,           // "@@:return"
-    ContextEvent,            // "@@:event"
-    ContextData(String),     // "@@:data.key"
-    ContextParams(String),   // "@@:params.key"
+    ContextReturn,         // "@@:return"
+    ContextEvent,          // "@@:event"
+    ContextData(String),   // "@@:data.key"
+    ContextParams(String), // "@@:params.key"
 
     // ===== Delimiters =====
-    LBrace,              // "{"
-    RBrace,              // "}"
-    LParen,              // "("
-    RParen,              // ")"
-    LBracket,            // "["
-    RBracket,            // "]"
-    Comma,               // ","
-    Colon,               // ":" — param/type separator, return type
-    SectionColon,        // ":" after section keyword (interface:, machine:, etc.)
-    Equals,              // "="
-    Dot,                 // "."
-    Semicolon,           // ";"
-    Star,                // "*" — for C pointer types (char*, int**)
-    Ampersand,           // "&" — for Rust reference types (&str, &mut)
+    LBrace,       // "{"
+    RBrace,       // "}"
+    LParen,       // "("
+    RParen,       // ")"
+    LBracket,     // "["
+    RBracket,     // "]"
+    Comma,        // ","
+    Colon,        // ":" — param/type separator, return type
+    SectionColon, // ":" after section keyword (interface:, machine:, etc.)
+    Equals,       // "="
+    Dot,          // "."
+    Semicolon,    // ";"
+    Star,         // "*" — for C pointer types (char*, int**)
+    Ampersand,    // "&" — for Rust reference types (&str, &mut)
 
     // ===== Identifiers & Literals =====
-    Ident(String),       // alphanumeric identifier
-    IntLit(i64),         // integer literal
-    FloatLit(f64),       // float literal
-    StringLit(String),   // string literal
-    BoolLit(bool),       // true/false
+    Ident(String),     // alphanumeric identifier
+    IntLit(i64),       // integer literal
+    FloatLit(f64),     // float literal
+    StringLit(String), // string literal
+    BoolLit(bool),     // true/false
 
     // ===== Native Code (only in native-aware mode) =====
-    NativeCode(String),  // opaque native code chunk
+    NativeCode(String), // opaque native code chunk
 
     // ===== Meta =====
-    Newline,             // significant newline (if needed for grammar)
-    Eof,                 // end of token stream
+    Newline, // significant newline (if needed for grammar)
+    Eof,     // end of token stream
 }
 
 /// A token with its source span.
@@ -126,14 +128,22 @@ pub enum LexError {
 impl std::fmt::Display for LexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LexError::UnexpectedByte { byte, span } =>
-                write!(f, "Unexpected byte '{}' (0x{:02x}) at position {}", *byte as char, byte, span.start),
-            LexError::UnterminatedString { span } =>
-                write!(f, "Unterminated string literal at position {}", span.start),
-            LexError::UnterminatedComment { span } =>
-                write!(f, "Unterminated comment at position {}", span.start),
-            LexError::InvalidFrameConstruct { text, span } =>
-                write!(f, "Invalid Frame construct '{}' at position {}", text, span.start),
+            LexError::UnexpectedByte { byte, span } => write!(
+                f,
+                "Unexpected byte '{}' (0x{:02x}) at position {}",
+                *byte as char, byte, span.start
+            ),
+            LexError::UnterminatedString { span } => {
+                write!(f, "Unterminated string literal at position {}", span.start)
+            }
+            LexError::UnterminatedComment { span } => {
+                write!(f, "Unterminated comment at position {}", span.start)
+            }
+            LexError::InvalidFrameConstruct { text, span } => write!(
+                f,
+                "Invalid Frame construct '{}' at position {}",
+                text, span.start
+            ),
         }
     }
 }
@@ -156,8 +166,8 @@ pub enum LexerMode {
 pub struct Lexer<'a> {
     source: &'a [u8],
     cursor: usize,
-    end: usize,           // end of system body
-    native_end: usize,    // end of current native block (NativeAware mode only)
+    end: usize,        // end of system body
+    native_end: usize, // end of current native block (NativeAware mode only)
     mode: LexerMode,
     skipper: Box<dyn SyntaxSkipper>,
     lang: TargetLanguage,
@@ -215,7 +225,11 @@ impl<'a> Lexer<'a> {
             }
         }
         // pending is guaranteed non-empty: either advance() added tokens or we pushed Eof above
-        Ok(&self.pending.front().map(|s| &s.token).unwrap_or(&Token::Eof))
+        Ok(&self
+            .pending
+            .front()
+            .map(|s| &s.token)
+            .unwrap_or(&Token::Eof))
     }
 
     /// Peek at the next Spanned token without consuming it.
@@ -232,7 +246,10 @@ impl<'a> Lexer<'a> {
         // pending is guaranteed non-empty
         match self.pending.front() {
             Some(s) => Ok(s),
-            None => Err(LexError::UnexpectedByte { byte: 0, span: Span::new(self.cursor, self.cursor) }),
+            None => Err(LexError::UnexpectedByte {
+                byte: 0,
+                span: Span::new(self.cursor, self.cursor),
+            }),
         }
     }
 
@@ -340,18 +357,54 @@ impl<'a> Lexer<'a> {
             }
 
             // Delimiters
-            b'{' => { self.cursor += 1; self.emit(Token::LBrace, start, self.cursor); }
-            b'}' => { self.cursor += 1; self.emit(Token::RBrace, start, self.cursor); }
-            b'(' => { self.cursor += 1; self.emit(Token::LParen, start, self.cursor); }
-            b')' => { self.cursor += 1; self.emit(Token::RParen, start, self.cursor); }
-            b'[' => { self.cursor += 1; self.emit(Token::LBracket, start, self.cursor); }
-            b']' => { self.cursor += 1; self.emit(Token::RBracket, start, self.cursor); }
-            b',' => { self.cursor += 1; self.emit(Token::Comma, start, self.cursor); }
-            b':' => { self.cursor += 1; self.emit(Token::Colon, start, self.cursor); }
-            b'.' => { self.cursor += 1; self.emit(Token::Dot, start, self.cursor); }
-            b';' => { self.cursor += 1; self.emit(Token::Semicolon, start, self.cursor); }
-            b'*' => { self.cursor += 1; self.emit(Token::Star, start, self.cursor); }
-            b'&' => { self.cursor += 1; self.emit(Token::Ampersand, start, self.cursor); }
+            b'{' => {
+                self.cursor += 1;
+                self.emit(Token::LBrace, start, self.cursor);
+            }
+            b'}' => {
+                self.cursor += 1;
+                self.emit(Token::RBrace, start, self.cursor);
+            }
+            b'(' => {
+                self.cursor += 1;
+                self.emit(Token::LParen, start, self.cursor);
+            }
+            b')' => {
+                self.cursor += 1;
+                self.emit(Token::RParen, start, self.cursor);
+            }
+            b'[' => {
+                self.cursor += 1;
+                self.emit(Token::LBracket, start, self.cursor);
+            }
+            b']' => {
+                self.cursor += 1;
+                self.emit(Token::RBracket, start, self.cursor);
+            }
+            b',' => {
+                self.cursor += 1;
+                self.emit(Token::Comma, start, self.cursor);
+            }
+            b':' => {
+                self.cursor += 1;
+                self.emit(Token::Colon, start, self.cursor);
+            }
+            b'.' => {
+                self.cursor += 1;
+                self.emit(Token::Dot, start, self.cursor);
+            }
+            b';' => {
+                self.cursor += 1;
+                self.emit(Token::Semicolon, start, self.cursor);
+            }
+            b'*' => {
+                self.cursor += 1;
+                self.emit(Token::Star, start, self.cursor);
+            }
+            b'&' => {
+                self.cursor += 1;
+                self.emit(Token::Ampersand, start, self.cursor);
+            }
 
             // Negative number
             b'-' if self.peek_byte(1).map_or(false, |c| c.is_ascii_digit()) => {
@@ -392,8 +445,8 @@ impl<'a> Lexer<'a> {
         }
 
         let native_start = self.cursor;
-        let mut at_sol = self.cursor == 0
-            || (self.cursor > 0 && self.source[self.cursor - 1] == b'\n');
+        let mut at_sol =
+            self.cursor == 0 || (self.cursor > 0 && self.source[self.cursor - 1] == b'\n');
         let mut indent = 0usize;
 
         while self.cursor < end {
@@ -412,7 +465,8 @@ impl<'a> Lexer<'a> {
             if let Some(new_pos) = self.skipper.skip_string(self.source, self.cursor, end) {
                 self.cursor = new_pos;
                 // After skipping a string, check if cursor is now on a new line
-                at_sol = self.cursor < end && self.cursor > 0 && self.source[self.cursor - 1] == b'\n';
+                at_sol =
+                    self.cursor < end && self.cursor > 0 && self.source[self.cursor - 1] == b'\n';
                 indent = 0;
                 continue;
             }
@@ -432,9 +486,9 @@ impl<'a> Lexer<'a> {
                 if let Some(frame_tokens) = self.try_sol_frame_statement(end)? {
                     // Emit preceding native code (everything before this Frame line)
                     if native_start < frame_line_start {
-                        let text = String::from_utf8_lossy(
-                            &self.source[native_start..frame_line_start]
-                        ).to_string();
+                        let text =
+                            String::from_utf8_lossy(&self.source[native_start..frame_line_start])
+                                .to_string();
                         if !text.is_empty() {
                             self.emit(Token::NativeCode(text), native_start, frame_line_start);
                         }
@@ -476,9 +530,8 @@ impl<'a> Lexer<'a> {
                 b'$' if self.cursor + 1 < end && self.source[self.cursor + 1] == b'.' => {
                     // Emit preceding native code
                     if native_start < self.cursor {
-                        let text = String::from_utf8_lossy(
-                            &self.source[native_start..self.cursor]
-                        ).to_string();
+                        let text = String::from_utf8_lossy(&self.source[native_start..self.cursor])
+                            .to_string();
                         self.emit(Token::NativeCode(text), native_start, self.cursor);
                     }
                     let var_start = self.cursor;
@@ -492,9 +545,8 @@ impl<'a> Lexer<'a> {
                 b'@' if self.cursor + 1 < end && self.source[self.cursor + 1] == b'@' => {
                     // Emit preceding native code
                     if native_start < self.cursor {
-                        let text = String::from_utf8_lossy(
-                            &self.source[native_start..self.cursor]
-                        ).to_string();
+                        let text = String::from_utf8_lossy(&self.source[native_start..self.cursor])
+                            .to_string();
                         self.emit(Token::NativeCode(text), native_start, self.cursor);
                     }
                     self.lex_context_construct(end)?;
@@ -509,9 +561,7 @@ impl<'a> Lexer<'a> {
 
         // Emit remaining native code
         if native_start < self.cursor {
-            let text = String::from_utf8_lossy(
-                &self.source[native_start..self.cursor]
-            ).to_string();
+            let text = String::from_utf8_lossy(&self.source[native_start..self.cursor]).to_string();
             if !text.is_empty() {
                 self.emit(Token::NativeCode(text), native_start, self.cursor);
             }
@@ -524,10 +574,7 @@ impl<'a> Lexer<'a> {
     // SOL Frame Statement Detection (Native-Aware Mode)
     // ========================================================================
 
-    fn try_sol_frame_statement(
-        &mut self,
-        end: usize,
-    ) -> Result<Option<Vec<Spanned>>, LexError> {
+    fn try_sol_frame_statement(&mut self, end: usize) -> Result<Option<Vec<Spanned>>, LexError> {
         let pos = self.cursor;
 
         if pos >= end {
@@ -570,7 +617,8 @@ impl<'a> Lexer<'a> {
         }
 
         // ---- push$ ----
-        if cb == b'p' && check_pos + 4 < end
+        if cb == b'p'
+            && check_pos + 4 < end
             && self.source[check_pos + 1] == b'u'
             && self.source[check_pos + 2] == b's'
             && self.source[check_pos + 3] == b'h'
@@ -586,7 +634,8 @@ impl<'a> Lexer<'a> {
         }
 
         // ---- pop$ (standalone) ----
-        if cb == b'p' && check_pos + 3 < end
+        if cb == b'p'
+            && check_pos + 3 < end
             && self.source[check_pos + 1] == b'o'
             && self.source[check_pos + 2] == b'p'
             && self.source[check_pos + 3] == b'$'
@@ -601,8 +650,7 @@ impl<'a> Lexer<'a> {
         }
 
         // ---- return <expr> (Frame return sugar) ----
-        if cb == b'r' && check_pos + 6 <= end
-            && &self.source[check_pos..check_pos + 6] == b"return"
+        if cb == b'r' && check_pos + 6 <= end && &self.source[check_pos..check_pos + 6] == b"return"
         {
             let after_return = check_pos + 6;
             if after_return < end
@@ -616,9 +664,8 @@ impl<'a> Lexer<'a> {
                 // Capture the expression after return as native code
                 let line_end = self.skipper.find_line_end(self.source, self.cursor, end);
                 if self.cursor < line_end {
-                    let expr = String::from_utf8_lossy(
-                        &self.source[self.cursor..line_end]
-                    ).to_string();
+                    let expr =
+                        String::from_utf8_lossy(&self.source[self.cursor..line_end]).to_string();
                     tokens.push(Spanned {
                         token: Token::NativeCode(expr),
                         span: Span::new(self.cursor, line_end),
@@ -665,12 +712,12 @@ impl<'a> Lexer<'a> {
 
         // Check for enter args: (args)
         if self.cursor < end && self.source[self.cursor] == b'(' {
-            if let Some(paren_end) = self.skipper.balanced_paren_end(
-                self.source, self.cursor, end
-            ) {
-                let args_text = String::from_utf8_lossy(
-                    &self.source[self.cursor..paren_end]
-                ).to_string();
+            if let Some(paren_end) = self
+                .skipper
+                .balanced_paren_end(self.source, self.cursor, end)
+            {
+                let args_text =
+                    String::from_utf8_lossy(&self.source[self.cursor..paren_end]).to_string();
                 tokens.push(Spanned {
                     token: Token::NativeCode(args_text),
                     span: Span::new(self.cursor, paren_end),
@@ -681,7 +728,9 @@ impl<'a> Lexer<'a> {
         }
 
         // Check for label: "label" before $State
-        if self.cursor < end && (self.source[self.cursor] == b'"' || self.source[self.cursor] == b'\'') {
+        if self.cursor < end
+            && (self.source[self.cursor] == b'"' || self.source[self.cursor] == b'\'')
+        {
             let quote = self.source[self.cursor];
             let str_start = self.cursor;
             self.cursor += 1; // Skip opening quote
@@ -693,9 +742,8 @@ impl<'a> Lexer<'a> {
                     self.cursor += 1;
                 }
             }
-            let content = String::from_utf8_lossy(
-                &self.source[content_start..self.cursor]
-            ).to_string();
+            let content =
+                String::from_utf8_lossy(&self.source[content_start..self.cursor]).to_string();
             if self.cursor < end {
                 self.cursor += 1; // Skip closing quote
             }
@@ -744,14 +792,17 @@ impl<'a> Lexer<'a> {
             // Arrow → NativeCode(args) → StateRef
             if self.cursor < end && self.source[self.cursor] == b'(' {
                 let paren_start = self.cursor;
-                if let Some(paren_end) = self.skipper.balanced_paren_end(
-                    self.source, self.cursor, end
-                ) {
-                    let args_text = String::from_utf8_lossy(
-                        &self.source[paren_start..paren_end]
-                    ).to_string();
+                if let Some(paren_end) =
+                    self.skipper
+                        .balanced_paren_end(self.source, self.cursor, end)
+                {
+                    let args_text =
+                        String::from_utf8_lossy(&self.source[paren_start..paren_end]).to_string();
                     // Only emit args token if there's actual content (not just "()")
-                    let inner = args_text.trim_start_matches('(').trim_end_matches(')').trim();
+                    let inner = args_text
+                        .trim_start_matches('(')
+                        .trim_end_matches(')')
+                        .trim();
                     if !inner.is_empty() {
                         // Insert args BEFORE the StateRef token we just pushed
                         if let Some(state_ref) = tokens.pop() {
@@ -815,18 +866,15 @@ impl<'a> Lexer<'a> {
         paren_pos: usize,
         end: usize,
     ) -> Result<Option<Vec<Spanned>>, LexError> {
-        if let Some(paren_end) = self.skipper.balanced_paren_end(
-            self.source, paren_pos, end
-        ) {
+        if let Some(paren_end) = self.skipper.balanced_paren_end(self.source, paren_pos, end) {
             let mut k = paren_end;
             while k < end && (self.source[k] == b' ' || self.source[k] == b'\t') {
                 k += 1;
             }
             if k + 1 < end && self.source[k] == b'-' && self.source[k + 1] == b'>' {
                 // This is (exit_args) -> ...
-                let exit_args = String::from_utf8_lossy(
-                    &self.source[paren_pos..paren_end]
-                ).to_string();
+                let exit_args =
+                    String::from_utf8_lossy(&self.source[paren_pos..paren_end]).to_string();
                 let mut tokens = vec![Spanned {
                     token: Token::NativeCode(exit_args),
                     span: Span::new(paren_pos, paren_end),
@@ -843,12 +891,12 @@ impl<'a> Lexer<'a> {
 
                 // Optional enter args
                 if self.cursor < end && self.source[self.cursor] == b'(' {
-                    if let Some(pe2) = self.skipper.balanced_paren_end(
-                        self.source, self.cursor, end
-                    ) {
-                        let enter_args = String::from_utf8_lossy(
-                            &self.source[self.cursor..pe2]
-                        ).to_string();
+                    if let Some(pe2) =
+                        self.skipper
+                            .balanced_paren_end(self.source, self.cursor, end)
+                    {
+                        let enter_args =
+                            String::from_utf8_lossy(&self.source[self.cursor..pe2]).to_string();
                         tokens.push(Spanned {
                             token: Token::NativeCode(enter_args),
                             span: Span::new(self.cursor, pe2),
@@ -886,9 +934,7 @@ impl<'a> Lexer<'a> {
 
         if self.cursor < end && self.source[self.cursor] == b':' {
             self.cursor += 1; // Skip ":"
-            if self.cursor + 5 < end
-                && &self.source[self.cursor..self.cursor + 6] == b"return"
-            {
+            if self.cursor + 5 < end && &self.source[self.cursor..self.cursor + 6] == b"return" {
                 self.cursor += 6;
                 self.emit(Token::ContextReturn, start, self.cursor);
             } else if self.cursor + 4 < end
@@ -896,8 +942,7 @@ impl<'a> Lexer<'a> {
             {
                 self.cursor += 5;
                 self.emit(Token::ContextEvent, start, self.cursor);
-            } else if self.cursor + 3 < end
-                && &self.source[self.cursor..self.cursor + 4] == b"data"
+            } else if self.cursor + 3 < end && &self.source[self.cursor..self.cursor + 4] == b"data"
             {
                 self.cursor += 4;
                 let key = self.scan_dot_key(end);
@@ -910,16 +955,12 @@ impl<'a> Lexer<'a> {
                 self.emit(Token::ContextParams(key), start, self.cursor);
             } else {
                 // Unknown @@: variant — emit as native
-                let text = String::from_utf8_lossy(
-                    &self.source[start..self.cursor]
-                ).to_string();
+                let text = String::from_utf8_lossy(&self.source[start..self.cursor]).to_string();
                 self.emit(Token::NativeCode(text), start, self.cursor);
             }
         } else {
             // Just "@@" without . or : — emit as native
-            let text = String::from_utf8_lossy(
-                &self.source[start..self.cursor]
-            ).to_string();
+            let text = String::from_utf8_lossy(&self.source[start..self.cursor]).to_string();
             self.emit(Token::NativeCode(text), start, self.cursor);
         }
 
@@ -1056,8 +1097,10 @@ impl<'a> Lexer<'a> {
         }
 
         // Check for float: digits followed by . and more digits
-        if self.cursor < self.end && self.source[self.cursor] == b'.'
-            && self.cursor + 1 < self.end && self.source[self.cursor + 1].is_ascii_digit()
+        if self.cursor < self.end
+            && self.source[self.cursor] == b'.'
+            && self.cursor + 1 < self.end
+            && self.source[self.cursor + 1].is_ascii_digit()
         {
             self.cursor += 1; // Skip .
             while self.cursor < self.end && self.source[self.cursor].is_ascii_digit() {
@@ -1143,9 +1186,10 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             // Try to skip comments via SyntaxSkipper (handles #, /* */, etc.)
-            if let Some(new_pos) = self.skipper.skip_comment(
-                self.source, self.cursor, self.end
-            ) {
+            if let Some(new_pos) = self
+                .skipper
+                .skip_comment(self.source, self.cursor, self.end)
+            {
                 self.cursor = new_pos;
                 continue;
             }
@@ -1154,7 +1198,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_inline_whitespace(&mut self) {
-        let end = if self.mode == LexerMode::NativeAware { self.native_end } else { self.end };
+        let end = if self.mode == LexerMode::NativeAware {
+            self.native_end
+        } else {
+            self.end
+        };
         while self.cursor < end {
             let b = self.source[self.cursor];
             if b == b' ' || b == b'\t' {
@@ -1167,7 +1215,11 @@ impl<'a> Lexer<'a> {
 
     fn scan_identifier(&mut self) -> String {
         let start = self.cursor;
-        let end = if self.mode == LexerMode::NativeAware { self.native_end } else { self.end };
+        let end = if self.mode == LexerMode::NativeAware {
+            self.native_end
+        } else {
+            self.end
+        };
         while self.cursor < end {
             let b = self.source[self.cursor];
             if b.is_ascii_alphanumeric() || b == b'_' {
@@ -1183,7 +1235,10 @@ impl<'a> Lexer<'a> {
         if self.cursor < end && self.source[self.cursor] == b'.' {
             self.cursor += 1; // Skip .
             let key_start = self.cursor;
-            while self.cursor < end && (self.source[self.cursor].is_ascii_alphanumeric() || self.source[self.cursor] == b'_') {
+            while self.cursor < end
+                && (self.source[self.cursor].is_ascii_alphanumeric()
+                    || self.source[self.cursor] == b'_')
+            {
                 self.cursor += 1;
             }
             String::from_utf8_lossy(&self.source[key_start..self.cursor]).to_string()
@@ -1296,13 +1351,21 @@ mod tests {
     #[test]
     fn test_all_section_keywords() {
         let tokens = lex_py("interface: machine: actions: operations: domain:");
-        assert_eq!(tokens, vec![
-            Token::Interface, Token::SectionColon,
-            Token::Machine, Token::SectionColon,
-            Token::Actions, Token::SectionColon,
-            Token::Operations, Token::SectionColon,
-            Token::Domain, Token::SectionColon,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Interface,
+                Token::SectionColon,
+                Token::Machine,
+                Token::SectionColon,
+                Token::Actions,
+                Token::SectionColon,
+                Token::Operations,
+                Token::SectionColon,
+                Token::Domain,
+                Token::SectionColon,
+            ]
+        );
     }
 
     #[test]
@@ -1314,16 +1377,19 @@ mod tests {
     #[test]
     fn test_method_signature() {
         let tokens = lex_py("start(msg: str): int");
-        assert_eq!(tokens, vec![
-            Token::Ident("start".to_string()),
-            Token::LParen,
-            Token::Ident("msg".to_string()),
-            Token::Colon,
-            Token::Ident("str".to_string()),
-            Token::RParen,
-            Token::Colon,
-            Token::Ident("int".to_string()),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("start".to_string()),
+                Token::LParen,
+                Token::Ident("msg".to_string()),
+                Token::Colon,
+                Token::Ident("str".to_string()),
+                Token::RParen,
+                Token::Colon,
+                Token::Ident("int".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -1371,14 +1437,22 @@ mod tests {
     #[test]
     fn test_delimiters() {
         let tokens = lex_py("{ } ( ) [ ] , : = . ;");
-        assert_eq!(tokens, vec![
-            Token::LBrace, Token::RBrace,
-            Token::LParen, Token::RParen,
-            Token::LBracket, Token::RBracket,
-            Token::Comma, Token::Colon,
-            Token::Equals, Token::Dot,
-            Token::Semicolon,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::LBrace,
+                Token::RBrace,
+                Token::LParen,
+                Token::RParen,
+                Token::LBracket,
+                Token::RBracket,
+                Token::Comma,
+                Token::Colon,
+                Token::Equals,
+                Token::Dot,
+                Token::Semicolon,
+            ]
+        );
     }
 
     #[test]
@@ -1422,12 +1496,15 @@ mod tests {
         // `var` is not a Frame keyword — domain blocks are native code.
         // It lexes as a regular identifier.
         let tokens = lex_py("var x = 0");
-        assert_eq!(tokens, vec![
-            Token::Ident("var".to_string()),
-            Token::Ident("x".to_string()),
-            Token::Equals,
-            Token::IntLit(0),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("var".to_string()),
+                Token::Ident("x".to_string()),
+                Token::Equals,
+                Token::IntLit(0),
+            ]
+        );
     }
 
     #[test]
@@ -1439,24 +1516,38 @@ mod tests {
     #[test]
     fn test_full_interface_section() {
         let tokens = lex_py("interface:\n    start()\n    stop(msg: str)");
-        assert_eq!(tokens, vec![
-            Token::Interface, Token::SectionColon,
-            Token::Ident("start".to_string()), Token::LParen, Token::RParen,
-            Token::Ident("stop".to_string()), Token::LParen,
-            Token::Ident("msg".to_string()), Token::Colon,
-            Token::Ident("str".to_string()), Token::RParen,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Interface,
+                Token::SectionColon,
+                Token::Ident("start".to_string()),
+                Token::LParen,
+                Token::RParen,
+                Token::Ident("stop".to_string()),
+                Token::LParen,
+                Token::Ident("msg".to_string()),
+                Token::Colon,
+                Token::Ident("str".to_string()),
+                Token::RParen,
+            ]
+        );
     }
 
     #[test]
     fn test_state_block_header() {
         let tokens = lex_py("$Running {\n    $>()\n}");
-        assert_eq!(tokens, vec![
-            Token::StateRef("Running".to_string()),
-            Token::LBrace,
-            Token::EnterHandler, Token::LParen, Token::RParen,
-            Token::RBrace,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StateRef("Running".to_string()),
+                Token::LBrace,
+                Token::EnterHandler,
+                Token::LParen,
+                Token::RParen,
+                Token::RBrace,
+            ]
+        );
     }
 
     #[test]
@@ -1465,40 +1556,62 @@ mod tests {
         // The parser bypasses lexer tokens for domain, reading raw source instead.
         let src = "domain:\n    count: int = 0\n    name = \"hello\"";
         let tokens = lex_py(src);
-        assert_eq!(tokens, vec![
-            Token::Domain, Token::SectionColon,
-            Token::Ident("count".to_string()), Token::Colon,
-            Token::Ident("int".to_string()), Token::Equals, Token::IntLit(0),
-            Token::Ident("name".to_string()), Token::Equals,
-            Token::StringLit("hello".to_string()),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Domain,
+                Token::SectionColon,
+                Token::Ident("count".to_string()),
+                Token::Colon,
+                Token::Ident("int".to_string()),
+                Token::Equals,
+                Token::IntLit(0),
+                Token::Ident("name".to_string()),
+                Token::Equals,
+                Token::StringLit("hello".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn test_full_method_signature_with_alias() {
         // foo(a: int, b: str): str = "myfoo"
         let tokens = lex_py(r#"foo(a: int, b: str): str = "myfoo""#);
-        assert_eq!(tokens, vec![
-            Token::Ident("foo".to_string()),
-            Token::LParen,
-            Token::Ident("a".to_string()), Token::Colon, Token::Ident("int".to_string()),
-            Token::Comma,
-            Token::Ident("b".to_string()), Token::Colon, Token::Ident("str".to_string()),
-            Token::RParen,
-            Token::Colon, Token::Ident("str".to_string()),
-            Token::Equals,
-            Token::StringLit("myfoo".to_string()),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("foo".to_string()),
+                Token::LParen,
+                Token::Ident("a".to_string()),
+                Token::Colon,
+                Token::Ident("int".to_string()),
+                Token::Comma,
+                Token::Ident("b".to_string()),
+                Token::Colon,
+                Token::Ident("str".to_string()),
+                Token::RParen,
+                Token::Colon,
+                Token::Ident("str".to_string()),
+                Token::Equals,
+                Token::StringLit("myfoo".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn test_comments_are_skipped() {
         // Python comment should be skipped
         let tokens = lex_py("interface: # this is a comment\n    start()");
-        assert_eq!(tokens, vec![
-            Token::Interface, Token::SectionColon,
-            Token::Ident("start".to_string()), Token::LParen, Token::RParen,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Interface,
+                Token::SectionColon,
+                Token::Ident("start".to_string()),
+                Token::LParen,
+                Token::RParen,
+            ]
+        );
     }
 
     // ============================
@@ -1514,7 +1627,9 @@ mod tests {
         let mut tokens = Vec::new();
         loop {
             let tok = lexer.next_token().unwrap();
-            if tok.token == Token::Eof { break; }
+            if tok.token == Token::Eof {
+                break;
+            }
             tokens.push(tok.token);
         }
         // All native code, no Frame constructs
@@ -1668,13 +1783,17 @@ mod tests {
         let mut tokens = Vec::new();
         loop {
             let tok = lexer.next_token().unwrap();
-            if tok.token == Token::Eof { break; }
+            if tok.token == Token::Eof {
+                break;
+            }
             tokens.push(tok.token);
         }
 
         // The $.counter is inside a string, so no StateVarRef should be emitted
-        assert!(tokens.iter().all(|t| !matches!(t, Token::StateVarRef(_))),
-            "$.counter inside string should not be detected as Frame construct");
+        assert!(
+            tokens.iter().all(|t| !matches!(t, Token::StateVarRef(_))),
+            "$.counter inside string should not be detected as Frame construct"
+        );
     }
 
     #[test]
@@ -1687,13 +1806,17 @@ mod tests {
         let mut tokens = Vec::new();
         loop {
             let tok = lexer.next_token().unwrap();
-            if tok.token == Token::Eof { break; }
+            if tok.token == Token::Eof {
+                break;
+            }
             tokens.push(tok.token);
         }
 
         // The -> inside a comment should not produce Arrow token
-        assert!(tokens.iter().all(|t| !matches!(t, Token::Arrow)),
-            "-> inside comment should not be detected as transition");
+        assert!(
+            tokens.iter().all(|t| !matches!(t, Token::Arrow)),
+            "-> inside comment should not be detected as transition"
+        );
     }
 
     #[test]
@@ -1786,14 +1909,17 @@ mod tests {
     fn test_handler_signature() {
         // Handler in machine section: eventName(params) {
         let tokens = lex_py("start(msg: str) {");
-        assert_eq!(tokens, vec![
-            Token::Ident("start".to_string()),
-            Token::LParen,
-            Token::Ident("msg".to_string()),
-            Token::Colon,
-            Token::Ident("str".to_string()),
-            Token::RParen,
-            Token::LBrace,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("start".to_string()),
+                Token::LParen,
+                Token::Ident("msg".to_string()),
+                Token::Colon,
+                Token::Ident("str".to_string()),
+                Token::RParen,
+                Token::LBrace,
+            ]
+        );
     }
 }

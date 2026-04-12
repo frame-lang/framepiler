@@ -8,14 +8,9 @@
 
 use super::frame_ast::*;
 use super::native_region_scanner::{
-    NativeRegionScanner, Region, RegionSpan, FrameSegmentKind,
-    python::NativeRegionScannerPy,
-    typescript::NativeRegionScannerTs,
-    rust::NativeRegionScannerRust,
-    csharp::NativeRegionScannerCs,
-    c::NativeRegionScannerC,
-    cpp::NativeRegionScannerCpp,
-    java::NativeRegionScannerJava,
+    c::NativeRegionScannerC, cpp::NativeRegionScannerCpp, csharp::NativeRegionScannerCs,
+    java::NativeRegionScannerJava, python::NativeRegionScannerPy, rust::NativeRegionScannerRust,
+    typescript::NativeRegionScannerTs, FrameSegmentKind, NativeRegionScanner, Region, RegionSpan,
 };
 
 /// Main Frame parser
@@ -44,7 +39,7 @@ impl FrameParser {
             persist_library: None,
         }
     }
-    
+
     /// Parse a complete Frame file (V4 syntax)
     ///
     /// V4 supports:
@@ -54,8 +49,7 @@ impl FrameParser {
     /// - Native code passes through (imports, functions, etc.)
     ///
     /// V4 does NOT support:
-    
-    
+
     /// - Frame imports (native imports pass through)
     pub fn parse_module(&mut self) -> Result<FrameAst, ParseError> {
         // Skip any leading whitespace or comments
@@ -133,17 +127,23 @@ impl FrameParser {
             self.skip_whitespace();
 
             if debug {
-                let preview: String = self.source[self.cursor..].iter()
+                let preview: String = self.source[self.cursor..]
+                    .iter()
                     .take(40)
                     .map(|&b| b as char)
                     .collect();
-                eprintln!("[skip_native_preamble] cursor={}, preview={:?}", self.cursor, preview);
+                eprintln!(
+                    "[skip_native_preamble] cursor={}, preview={:?}",
+                    self.cursor, preview
+                );
             }
 
             // Stop if we're at any @@ pragma (@@system, @@persist, etc.)
             // These need to be processed by skip_pragmas, not skipped as native code
             if self.peek_string("@@") {
-                if debug { eprintln!("[skip_native_preamble] Found @@ pragma, stopping"); }
+                if debug {
+                    eprintln!("[skip_native_preamble] Found @@ pragma, stopping");
+                }
                 break;
             }
 
@@ -208,9 +208,10 @@ impl FrameParser {
                     }
 
                     if lib_start < self.cursor {
-                        let lib_name = String::from_utf8_lossy(&self.source[lib_start..self.cursor])
-                            .trim()
-                            .to_string();
+                        let lib_name =
+                            String::from_utf8_lossy(&self.source[lib_start..self.cursor])
+                                .trim()
+                                .to_string();
                         if !lib_name.is_empty() {
                             self.persist_library = Some(lib_name);
                         }
@@ -250,29 +251,29 @@ impl FrameParser {
     /// Parse a system definition
     pub fn parse_system(&mut self) -> Result<SystemAst, ParseError> {
         let start = self.cursor;
-        
+
         // Skip "@@system"
         if self.peek_keyword("@@system") {
             self.cursor += 8;
         } else {
             return Err(ParseError::Expected("@@system keyword".to_string()));
         }
-        
+
         self.skip_whitespace();
-        
+
         // Parse system name
         let name = self.parse_identifier()?;
-        
+
         // Parse optional parameters
         let params = if self.peek_char('(') {
             self.parse_system_params()?
         } else {
             vec![]
         };
-        
+
         self.skip_whitespace();
         self.expect_char('{')?;
-        
+
         // Parse system sections in fixed order: interface, machine, actions, operations, domain
         // Each section is optional, but if present they must appear in this order.
         let mut interface = vec![];
@@ -314,16 +315,16 @@ impl FrameParser {
         }
 
         self.expect_char('}')?;
-        
+
         // Build persist_attr if @@persist was seen before this system
         let persist_attr = if self.persist_seen {
-            self.persist_seen = false;  // Reset for next system
-            let library = self.persist_library.take();  // Take and reset
+            self.persist_seen = false; // Reset for next system
+            let library = self.persist_library.take(); // Take and reset
             Some(PersistAttr {
                 save_name: None,
                 restore_name: None,
                 library,
-                span: Span::new(start, start),  // Span is approximate
+                span: Span::new(start, start), // Span is approximate
             })
         } else {
             None
@@ -343,7 +344,7 @@ impl FrameParser {
             section_order: vec![],
         })
     }
-    
+
     /// Parse system parameters
     fn parse_system_params(&mut self) -> Result<Vec<SystemParam>, ParseError> {
         self.expect_char('(')?;
@@ -399,11 +400,11 @@ impl FrameParser {
                 self.cursor += 1;
             }
         }
-        
+
         self.expect_char(')')?;
         Ok(params)
     }
-    
+
     /// Parse interface section
     fn parse_interface(&mut self) -> Result<Vec<InterfaceMethod>, ParseError> {
         self.expect_keyword("interface:")?;
@@ -419,7 +420,7 @@ impl FrameParser {
 
         Ok(methods)
     }
-    
+
     /// Parse a single interface method
     fn parse_interface_method(&mut self) -> Result<InterfaceMethod, ParseError> {
         let start = self.cursor;
@@ -455,8 +456,14 @@ impl FrameParser {
                 }
                 self.cursor += 1;
             }
-            let expr = String::from_utf8_lossy(&self.source[expr_start..self.cursor]).trim().to_string();
-            if expr.is_empty() { None } else { Some(expr) }
+            let expr = String::from_utf8_lossy(&self.source[expr_start..self.cursor])
+                .trim()
+                .to_string();
+            if expr.is_empty() {
+                None
+            } else {
+                Some(expr)
+            }
         } else {
             None
         };
@@ -470,18 +477,18 @@ impl FrameParser {
             span: Span::new(start, self.cursor),
         })
     }
-    
+
     /// Parse method parameters
     fn parse_method_params(&mut self) -> Result<Vec<MethodParam>, ParseError> {
         self.expect_char('(')?;
         let mut params = vec![];
-        
+
         while !self.peek_char(')') {
             self.skip_whitespace();
-            
+
             let name = self.parse_identifier()?;
             self.skip_whitespace();
-            
+
             // Parse type
             let param_type = if self.peek_char(':') {
                 self.cursor += 1;
@@ -490,7 +497,7 @@ impl FrameParser {
             } else {
                 Type::Unknown
             };
-            
+
             // Parse optional default
             let default = if self.peek_char('=') {
                 self.cursor += 1;
@@ -499,43 +506,43 @@ impl FrameParser {
             } else {
                 None
             };
-            
+
             params.push(MethodParam {
                 name,
                 param_type,
                 default,
                 span: Span::new(self.cursor, self.cursor),
             });
-            
+
             if self.peek_char(',') {
                 self.cursor += 1;
             }
         }
-        
+
         self.expect_char(')')?;
         Ok(params)
     }
-    
+
     /// Parse machine section
     fn parse_machine(&mut self) -> Result<MachineAst, ParseError> {
         let start = self.cursor;
-        
+
         self.expect_keyword("machine:")?;
         self.skip_whitespace();
-        
+
         let mut states = vec![];
-        
+
         while self.peek_state_start() {
             states.push(self.parse_state()?);
             self.skip_whitespace();
         }
-        
+
         Ok(MachineAst {
             states,
             span: Span::new(start, self.cursor),
         })
     }
-    
+
     /// Parse a state definition
     fn parse_state(&mut self) -> Result<StateAst, ParseError> {
         let start = self.cursor;
@@ -626,17 +633,17 @@ impl FrameParser {
             body_span: Span::new(start, end), // Body span before closing brace
         })
     }
-    
+
     /// Parse state parameters
     fn parse_state_params(&mut self) -> Result<Vec<StateParam>, ParseError> {
         self.expect_char('(')?;
         let mut params = vec![];
-        
+
         while !self.peek_char(')') {
             self.skip_whitespace();
-            
+
             let name = self.parse_identifier()?;
-            
+
             let param_type = if self.peek_char(':') {
                 self.cursor += 1;
                 self.skip_whitespace();
@@ -644,18 +651,18 @@ impl FrameParser {
             } else {
                 Type::Unknown
             };
-            
+
             params.push(StateParam {
                 name,
                 param_type,
                 span: Span::new(self.cursor, self.cursor),
             });
-            
+
             if self.peek_char(',') {
                 self.cursor += 1;
             }
         }
-        
+
         self.expect_char(')')?;
         Ok(params)
     }
@@ -699,7 +706,7 @@ impl FrameParser {
     // ... (continued in next part due to length)
 
     // Helper methods
-    
+
     /// Skip whitespace and Frame-level comments
     ///
     /// Note: We only handle Frame structural comments (// and /* */), NOT
@@ -750,7 +757,7 @@ impl FrameParser {
     fn peek_char(&self, ch: char) -> bool {
         self.cursor < self.source.len() && self.source[self.cursor] == ch as u8
     }
-    
+
     /// Peek at string
     fn peek_string(&self, s: &str) -> bool {
         let bytes = s.as_bytes();
@@ -759,43 +766,43 @@ impl FrameParser {
         }
         &self.source[self.cursor..self.cursor + bytes.len()] == bytes
     }
-    
+
     /// Peek for keyword (with word boundary)
     fn peek_keyword(&self, keyword: &str) -> bool {
         if !self.peek_string(keyword) {
             return false;
         }
-        
+
         // Check for word boundary
         let next_idx = self.cursor + keyword.len();
         if next_idx >= self.source.len() {
             return true;
         }
-        
+
         let next_ch = self.source[next_idx] as char;
         !next_ch.is_alphanumeric() && next_ch != '_'
     }
-    
+
     /// Check if next token looks like an identifier
     fn peek_identifier(&self) -> bool {
         if self.cursor >= self.source.len() {
             return false;
         }
-        
+
         let ch = self.source[self.cursor] as char;
         ch.is_alphabetic() || ch == '_'
     }
-    
+
     /// Check if next token looks like a method start
     fn peek_method_start(&self) -> bool {
         self.peek_identifier()
     }
-    
+
     /// Check if next token looks like a state start
     fn peek_state_start(&self) -> bool {
         self.peek_char('$')
     }
-    
+
     /// Parse an identifier
     /// Parse a string literal (e.g., "Path A") and return its content (without quotes).
     fn parse_string_literal(&mut self) -> Result<String, ParseError> {
@@ -822,7 +829,7 @@ impl FrameParser {
         if !self.peek_identifier() {
             return Err(ParseError::Expected("identifier".to_string()));
         }
-        
+
         while self.cursor < self.source.len() {
             let ch = self.source[self.cursor] as char;
             if ch.is_alphanumeric() || ch == '_' {
@@ -831,10 +838,10 @@ impl FrameParser {
                 break;
             }
         }
-        
+
         Ok(String::from_utf8_lossy(&self.source[start..self.cursor]).to_string())
     }
-    
+
     /// Parse a type
     /// V4 uses native language types, so we preserve the type name as-is.
     /// This parser handles complex native types like:
@@ -848,18 +855,27 @@ impl FrameParser {
         let start = self.cursor;
 
         // Track bracket nesting to handle balanced expressions
-        let mut angle_depth = 0;  // < >
-        let mut bracket_depth = 0;  // [ ]
-        let mut paren_depth = 0;  // ( ) - for function types
+        let mut angle_depth = 0; // < >
+        let mut bracket_depth = 0; // [ ]
+        let mut paren_depth = 0; // ( ) - for function types
 
         while self.cursor < self.source.len() {
             let ch = self.source[self.cursor] as char;
 
             match ch {
                 // Opening brackets increase depth
-                '<' => { angle_depth += 1; self.cursor += 1; }
-                '[' => { bracket_depth += 1; self.cursor += 1; }
-                '(' => { paren_depth += 1; self.cursor += 1; }
+                '<' => {
+                    angle_depth += 1;
+                    self.cursor += 1;
+                }
+                '[' => {
+                    bracket_depth += 1;
+                    self.cursor += 1;
+                }
+                '(' => {
+                    paren_depth += 1;
+                    self.cursor += 1;
+                }
 
                 // Closing brackets decrease depth
                 '>' => {
@@ -891,12 +907,16 @@ impl FrameParser {
                 }
 
                 // Terminators (only when not nested)
-                ',' | '{' | '=' | '\n' | '\r' if angle_depth == 0 && bracket_depth == 0 && paren_depth == 0 => {
+                ',' | '{' | '=' | '\n' | '\r'
+                    if angle_depth == 0 && bracket_depth == 0 && paren_depth == 0 =>
+                {
                     break;
                 }
 
                 // Any other character is part of the type
-                _ => { self.cursor += 1; }
+                _ => {
+                    self.cursor += 1;
+                }
             }
         }
 
@@ -911,11 +931,11 @@ impl FrameParser {
         // For V4, always use Custom to preserve the native type name
         Ok(Type::Custom(type_str))
     }
-    
+
     /// Parse until one of the given characters
     fn parse_until_chars(&mut self, chars: &[char]) -> Result<String, ParseError> {
         let start = self.cursor;
-        
+
         while self.cursor < self.source.len() {
             let ch = self.source[self.cursor] as char;
             if chars.contains(&ch) {
@@ -923,10 +943,10 @@ impl FrameParser {
             }
             self.cursor += 1;
         }
-        
+
         Ok(String::from_utf8_lossy(&self.source[start..self.cursor]).to_string())
     }
-    
+
     /// Expect a specific character
     fn expect_char(&mut self, ch: char) -> Result<(), ParseError> {
         if !self.peek_char(ch) {
@@ -953,9 +973,9 @@ impl FrameParser {
         self.cursor += keyword.len();
         Ok(())
     }
-    
+
     // Stub methods - to be implemented
-    
+
     fn parse_enter_handler(&mut self) -> Result<EnterHandler, ParseError> {
         let start = self.cursor;
 
@@ -980,7 +1000,7 @@ impl FrameParser {
             span: Span::new(start, self.cursor),
         })
     }
-    
+
     fn parse_exit_handler(&mut self) -> Result<ExitHandler, ParseError> {
         let start = self.cursor;
 
@@ -1005,7 +1025,7 @@ impl FrameParser {
             span: Span::new(start, self.cursor),
         })
     }
-    
+
     fn parse_handler(&mut self) -> Result<HandlerAst, ParseError> {
         let start = self.cursor;
 
@@ -1044,21 +1064,21 @@ impl FrameParser {
             span: Span::new(start, self.cursor),
         })
     }
-    
+
     /// Parse event parameters
     fn parse_event_params(&mut self) -> Result<Vec<EventParam>, ParseError> {
         self.expect_char('(')?;
         let mut params = vec![];
-        
+
         while !self.peek_char(')') {
             self.skip_whitespace();
-            
+
             if self.peek_char(')') {
                 break;
             }
-            
+
             let name = self.parse_identifier()?;
-            
+
             let param_type = if self.peek_char(':') {
                 self.cursor += 1;
                 self.skip_whitespace();
@@ -1066,18 +1086,18 @@ impl FrameParser {
             } else {
                 Type::Unknown
             };
-            
+
             params.push(EventParam {
                 name,
                 param_type,
                 span: Span::new(self.cursor, self.cursor),
             });
-            
+
             if self.peek_char(',') {
                 self.cursor += 1;
             }
         }
-        
+
         self.expect_char(')')?;
         Ok(params)
     }
@@ -1117,7 +1137,9 @@ impl FrameParser {
             // Python boolean
             self.cursor += 5;
             Ok(Expression::Literal(Literal::Bool(false)))
-        } else if self.cursor < self.source.len() && (self.source[self.cursor].is_ascii_digit() || self.source[self.cursor] == b'-') {
+        } else if self.cursor < self.source.len()
+            && (self.source[self.cursor].is_ascii_digit() || self.source[self.cursor] == b'-')
+        {
             // Number literal (possibly negative)
             let start = self.cursor;
             if self.source[self.cursor] == b'-' {
@@ -1151,17 +1173,26 @@ impl FrameParser {
     /// Handles balanced brackets and stops at newline or end of expression context
     fn parse_native_expression(&mut self) -> Result<Expression, ParseError> {
         let start = self.cursor;
-        let mut bracket_depth = 0;  // [ ]
-        let mut paren_depth = 0;    // ( )
-        let mut brace_depth = 0;    // { }
+        let mut bracket_depth = 0; // [ ]
+        let mut paren_depth = 0; // ( )
+        let mut brace_depth = 0; // { }
 
         while self.cursor < self.source.len() {
             let ch = self.source[self.cursor] as char;
 
             match ch {
-                '[' => { bracket_depth += 1; self.cursor += 1; }
-                '(' => { paren_depth += 1; self.cursor += 1; }
-                '{' => { brace_depth += 1; self.cursor += 1; }
+                '[' => {
+                    bracket_depth += 1;
+                    self.cursor += 1;
+                }
+                '(' => {
+                    paren_depth += 1;
+                    self.cursor += 1;
+                }
+                '{' => {
+                    brace_depth += 1;
+                    self.cursor += 1;
+                }
                 ']' => {
                     if bracket_depth > 0 {
                         bracket_depth -= 1;
@@ -1194,7 +1225,9 @@ impl FrameParser {
                 ',' if bracket_depth == 0 && paren_depth == 0 && brace_depth == 0 => {
                     break;
                 }
-                _ => { self.cursor += 1; }
+                _ => {
+                    self.cursor += 1;
+                }
             }
         }
 
@@ -1209,40 +1242,40 @@ impl FrameParser {
             Ok(Expression::NativeExpr(expr_str))
         }
     }
-    
+
     /// Parse actions section
     fn parse_actions(&mut self) -> Result<Vec<ActionAst>, ParseError> {
         self.expect_keyword("actions:")?;
         self.skip_whitespace();
-        
+
         let mut actions = vec![];
-        
+
         while self.peek_identifier() && !self.is_section_keyword() {
             actions.push(self.parse_action()?);
             self.skip_whitespace();
         }
-        
+
         Ok(actions)
     }
-    
+
     /// Parse a single action
     fn parse_action(&mut self) -> Result<ActionAst, ParseError> {
         let start = self.cursor;
-        
+
         let name = self.parse_identifier()?;
-        
+
         // Parse parameters
         let params = if self.peek_char('(') {
             self.parse_action_params()?
         } else {
             vec![]
         };
-        
+
         self.skip_whitespace();
-        
+
         // Parse action body (native code block)
         let body = self.parse_action_body()?;
-        
+
         Ok(ActionAst {
             name,
             params,
@@ -1251,21 +1284,21 @@ impl FrameParser {
             span: Span::new(start, self.cursor),
         })
     }
-    
+
     /// Parse action parameters
     fn parse_action_params(&mut self) -> Result<Vec<ActionParam>, ParseError> {
         self.expect_char('(')?;
         let mut params = vec![];
-        
+
         while !self.peek_char(')') {
             self.skip_whitespace();
-            
+
             if self.peek_char(')') {
                 break;
             }
-            
+
             let name = self.parse_identifier()?;
-            
+
             let param_type = if self.peek_char(':') {
                 self.cursor += 1;
                 self.skip_whitespace();
@@ -1273,7 +1306,7 @@ impl FrameParser {
             } else {
                 Type::Unknown
             };
-            
+
             let default = if self.peek_char('=') {
                 self.cursor += 1;
                 self.skip_whitespace();
@@ -1281,33 +1314,33 @@ impl FrameParser {
             } else {
                 None
             };
-            
+
             params.push(ActionParam {
                 name,
                 param_type,
                 default,
                 span: Span::new(self.cursor, self.cursor),
             });
-            
+
             if self.peek_char(',') {
                 self.cursor += 1;
             }
         }
-        
+
         self.expect_char(')')?;
         Ok(params)
     }
-    
+
     /// Parse action body
     fn parse_action_body(&mut self) -> Result<ActionBody, ParseError> {
         let start = self.cursor;
-        
+
         self.expect_char('{')?;
-        
+
         // Collect native code until closing brace
         let _body_start = self.cursor;
         let mut depth = 1;
-        
+
         while self.cursor < self.source.len() && depth > 0 {
             if self.source[self.cursor] == b'{' {
                 depth += 1;
@@ -1319,29 +1352,32 @@ impl FrameParser {
             }
             self.cursor += 1;
         }
-        
+
         self.expect_char('}')?;
 
         let span = Span::new(start, self.cursor);
         let code = self.extract_body_content(&span);
-        Ok(ActionBody { span, code: Some(code) })
+        Ok(ActionBody {
+            span,
+            code: Some(code),
+        })
     }
 
     /// Parse operations section
     fn parse_operations(&mut self) -> Result<Vec<OperationAst>, ParseError> {
         self.expect_keyword("operations:")?;
         self.skip_whitespace();
-        
+
         let mut operations = vec![];
-        
+
         while self.peek_identifier() && !self.is_section_keyword() {
             operations.push(self.parse_operation()?);
             self.skip_whitespace();
         }
-        
+
         Ok(operations)
     }
-    
+
     /// Parse a single operation
     fn parse_operation(&mut self) -> Result<OperationAst, ParseError> {
         let start = self.cursor;
@@ -1388,21 +1424,21 @@ impl FrameParser {
             span: Span::new(start, self.cursor),
         })
     }
-    
+
     /// Parse operation parameters
     fn parse_operation_params(&mut self) -> Result<Vec<OperationParam>, ParseError> {
         self.expect_char('(')?;
         let mut params = vec![];
-        
+
         while !self.peek_char(')') {
             self.skip_whitespace();
-            
+
             if self.peek_char(')') {
                 break;
             }
-            
+
             let name = self.parse_identifier()?;
-            
+
             let param_type = if self.peek_char(':') {
                 self.cursor += 1;
                 self.skip_whitespace();
@@ -1410,7 +1446,7 @@ impl FrameParser {
             } else {
                 Type::Unknown
             };
-            
+
             let default = if self.peek_char('=') {
                 self.cursor += 1;
                 self.skip_whitespace();
@@ -1418,33 +1454,33 @@ impl FrameParser {
             } else {
                 None
             };
-            
+
             params.push(OperationParam {
                 name,
                 param_type,
                 default,
                 span: Span::new(self.cursor, self.cursor),
             });
-            
+
             if self.peek_char(',') {
                 self.cursor += 1;
             }
         }
-        
+
         self.expect_char(')')?;
         Ok(params)
     }
-    
+
     /// Parse operation body
     fn parse_operation_body(&mut self) -> Result<OperationBody, ParseError> {
         let start = self.cursor;
-        
+
         self.expect_char('{')?;
-        
+
         // Collect native code until closing brace
         let _body_start = self.cursor;
         let mut depth = 1;
-        
+
         while self.cursor < self.source.len() && depth > 0 {
             if self.source[self.cursor] == b'{' {
                 depth += 1;
@@ -1456,12 +1492,15 @@ impl FrameParser {
             }
             self.cursor += 1;
         }
-        
+
         self.expect_char('}')?;
 
         let span = Span::new(start, self.cursor);
         let code = self.extract_body_content(&span);
-        Ok(OperationBody { span, code: Some(code) })
+        Ok(OperationBody {
+            span,
+            code: Some(code),
+        })
     }
 
     /// Parse domain section
@@ -1500,7 +1539,7 @@ impl FrameParser {
 
         Ok(vars)
     }
-    
+
     /// Parse a single domain variable (V4: captures native code verbatim)
     fn parse_domain_var(&mut self, _is_frame: bool) -> Result<DomainVar, ParseError> {
         let start = self.cursor;
@@ -1527,28 +1566,37 @@ impl FrameParser {
         // variants); map it to visitors::TargetLanguage for the dispatch
         // call.
         let visitor_lang = match self.target {
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Python3 =>
-                crate::frame_c::visitors::TargetLanguage::Python3,
-            crate::frame_c::compiler::frame_ast::TargetLanguage::TypeScript =>
-                crate::frame_c::visitors::TargetLanguage::TypeScript,
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Rust =>
-                crate::frame_c::visitors::TargetLanguage::Rust,
-            crate::frame_c::compiler::frame_ast::TargetLanguage::CSharp =>
-                crate::frame_c::visitors::TargetLanguage::CSharp,
-            crate::frame_c::compiler::frame_ast::TargetLanguage::C =>
-                crate::frame_c::visitors::TargetLanguage::C,
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Cpp =>
-                crate::frame_c::visitors::TargetLanguage::Cpp,
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Java =>
-                crate::frame_c::visitors::TargetLanguage::Java,
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Graphviz =>
-                crate::frame_c::visitors::TargetLanguage::Graphviz,
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Python3 => {
+                crate::frame_c::visitors::TargetLanguage::Python3
+            }
+            crate::frame_c::compiler::frame_ast::TargetLanguage::TypeScript => {
+                crate::frame_c::visitors::TargetLanguage::TypeScript
+            }
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Rust => {
+                crate::frame_c::visitors::TargetLanguage::Rust
+            }
+            crate::frame_c::compiler::frame_ast::TargetLanguage::CSharp => {
+                crate::frame_c::visitors::TargetLanguage::CSharp
+            }
+            crate::frame_c::compiler::frame_ast::TargetLanguage::C => {
+                crate::frame_c::visitors::TargetLanguage::C
+            }
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Cpp => {
+                crate::frame_c::visitors::TargetLanguage::Cpp
+            }
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Java => {
+                crate::frame_c::visitors::TargetLanguage::Java
+            }
+            crate::frame_c::compiler::frame_ast::TargetLanguage::Graphviz => {
+                crate::frame_c::visitors::TargetLanguage::Graphviz
+            }
         };
 
         let parsed = crate::frame_c::compiler::pipeline_parser::domain_native::parse_domain_field(
             &raw_line,
             visitor_lang,
-        ).map_err(|e| ParseError::Expected(format!("malformed domain field: {:?}", e)))?;
+        )
+        .map_err(|e| ParseError::Expected(format!("malformed domain field: {:?}", e)))?;
 
         Ok(DomainVar {
             name: parsed.name,
@@ -1573,9 +1621,11 @@ impl FrameParser {
         let line = line.trim();
 
         // Skip common keywords at start
-        let keywords = ["var", "let", "const", "mut", "static", "int", "float", "double",
-                        "char", "bool", "i32", "i64", "f32", "f64", "String", "str",
-                        "number", "string", "boolean", "void", "auto"];
+        let keywords = [
+            "var", "let", "const", "mut", "static", "int", "float", "double", "char", "bool",
+            "i32", "i64", "f32", "f64", "String", "str", "number", "string", "boolean", "void",
+            "auto",
+        ];
 
         let mut rest = line;
 
@@ -1594,34 +1644,40 @@ impl FrameParser {
                 }
             }
             // Handle pointer/reference markers
-            rest = rest.trim_start_matches('*').trim_start_matches('&').trim_start();
+            rest = rest
+                .trim_start_matches('*')
+                .trim_start_matches('&')
+                .trim_start();
             if !found_keyword {
                 break;
             }
         }
 
         // Now extract the identifier
-        let name: String = rest.chars()
+        let name: String = rest
+            .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect();
 
         if name.is_empty() {
             // Fallback: just take the whole line as name (will likely cause issues)
-            line.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect()
+            line.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect()
         } else {
             name
         }
     }
-    
+
     /// Check if current position is a section keyword
     fn is_section_keyword(&self) -> bool {
-        self.peek_keyword("interface:") ||
-        self.peek_keyword("machine:") ||
-        self.peek_keyword("actions:") ||
-        self.peek_keyword("operations:") ||
-        self.peek_keyword("domain:")
+        self.peek_keyword("interface:")
+            || self.peek_keyword("machine:")
+            || self.peek_keyword("actions:")
+            || self.peek_keyword("operations:")
+            || self.peek_keyword("domain:")
     }
-    
+
     /// Skip to next line
     fn skip_to_next_line(&mut self) {
         while self.cursor < self.source.len() && self.source[self.cursor] != b'\n' {
@@ -1679,12 +1735,15 @@ impl FrameParser {
 
         // Find the opening brace
         if !self.peek_char('{') {
-            return Err(ParseError::Expected("'{' to start handler body".to_string()));
+            return Err(ParseError::Expected(
+                "'{' to start handler body".to_string(),
+            ));
         }
 
         // Use native_region_scanner to identify Frame segments
         let mut scanner = self.get_native_scanner();
-        let scan_result = scanner.scan(&self.source, self.cursor)
+        let scan_result = scanner
+            .scan(&self.source, self.cursor)
             .map_err(|e| ParseError::Unexpected(format!("Scanner error: {}", e.message)))?;
 
         // Parse only Frame segments - native code is handled by splicer in codegen
@@ -1709,7 +1768,8 @@ impl FrameParser {
                         continue;
                     }
                     let segment_bytes = &self.source[span.start..span.end];
-                    let stmt = self.parse_frame_segment_from_bytes(segment_bytes, *kind, span, *indent)?;
+                    let stmt =
+                        self.parse_frame_segment_from_bytes(segment_bytes, *kind, span, *indent)?;
                     statements.push(stmt);
                 }
             }
@@ -1765,43 +1825,44 @@ impl FrameParser {
                     indent,
                 }))
             }
-            FrameSegmentKind::StackPush => {
-                Ok(Statement::StackPush(StackPushAst {
-                    span: Span::new(span.start, span.end),
-                    indent,
-                }))
-            }
-            FrameSegmentKind::StackPop => {
-                Ok(Statement::StackPop(StackPopAst {
-                    span: Span::new(span.start, span.end),
-                    indent,
-                }))
-            }
+            FrameSegmentKind::StackPush => Ok(Statement::StackPush(StackPushAst {
+                span: Span::new(span.start, span.end),
+                indent,
+            })),
+            FrameSegmentKind::StackPop => Ok(Statement::StackPop(StackPopAst {
+                span: Span::new(span.start, span.end),
+                indent,
+            })),
             FrameSegmentKind::StateVar | FrameSegmentKind::StateVarAssign => {
                 // State variables are expanded inline by the splicer
                 // No separate statement needed - return an error that will be handled
-                Err(ParseError::Expected("StateVar handled by splicer".to_string()))
+                Err(ParseError::Expected(
+                    "StateVar handled by splicer".to_string(),
+                ))
             }
             // Context syntax and tagged instantiation - handled by splicer expansion
-            FrameSegmentKind::ContextReturn |
-            FrameSegmentKind::ContextReturnExpr |
-            FrameSegmentKind::ContextEvent |
-            FrameSegmentKind::ContextData |
-            FrameSegmentKind::ContextDataAssign |
-            FrameSegmentKind::ContextParams |
-            FrameSegmentKind::TaggedInstantiation |
-            FrameSegmentKind::ReturnCall |
-            FrameSegmentKind::ContextSelfCall |
-            FrameSegmentKind::ContextSelf |
-            FrameSegmentKind::ContextSystemState |
-            FrameSegmentKind::ReturnStatement => {
-                Err(ParseError::Expected("Context/tagged/return/self syntax handled by splicer".to_string()))
-            }
+            FrameSegmentKind::ContextReturn
+            | FrameSegmentKind::ContextReturnExpr
+            | FrameSegmentKind::ContextEvent
+            | FrameSegmentKind::ContextData
+            | FrameSegmentKind::ContextDataAssign
+            | FrameSegmentKind::ContextParams
+            | FrameSegmentKind::TaggedInstantiation
+            | FrameSegmentKind::ReturnCall
+            | FrameSegmentKind::ContextSelfCall
+            | FrameSegmentKind::ContextSelf
+            | FrameSegmentKind::ContextSystemState
+            | FrameSegmentKind::ReturnStatement => Err(ParseError::Expected(
+                "Context/tagged/return/self syntax handled by splicer".to_string(),
+            )),
         }
     }
 
     /// Parse transition-forward string: "-> => $State"
-    fn parse_transition_forward_from_string(&self, content: &str) -> Result<(String, Vec<Expression>), ParseError> {
+    fn parse_transition_forward_from_string(
+        &self,
+        content: &str,
+    ) -> Result<(String, Vec<Expression>), ParseError> {
         let content = content.trim();
 
         // Find the state name (after $)
@@ -1822,13 +1883,18 @@ impl FrameParser {
 
             Ok((target, vec![]))
         } else {
-            Err(ParseError::Expected("state name after '$' in transition-forward".to_string()))
+            Err(ParseError::Expected(
+                "state name after '$' in transition-forward".to_string(),
+            ))
         }
     }
 
     /// Parse transition string: "-> $State" or "-> $State(args)" or "(exit) -> (enter) $State(args)"
     /// Also handles pop-transition: "-> pop$"
-    fn parse_transition_from_string(&self, content: &str) -> Result<(String, Vec<Expression>), ParseError> {
+    fn parse_transition_from_string(
+        &self,
+        content: &str,
+    ) -> Result<(String, Vec<Expression>), ParseError> {
         let content = content.trim();
 
         // Check for pop-transition: -> pop$
@@ -1880,7 +1946,7 @@ impl FrameParser {
 
         // Check for string literal
         if arg.starts_with('"') && arg.ends_with('"') && arg.len() >= 2 {
-            let s = arg[1..arg.len()-1].to_string();
+            let s = arg[1..arg.len() - 1].to_string();
             return Expression::Literal(Literal::String(s));
         }
 
@@ -1935,7 +2001,7 @@ impl std::error::Error for ParseError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_simple_system() {
         let source = r#"
@@ -1951,16 +2017,16 @@ mod tests {
             tick() { -> $Red() }
         }
 }"#;
-        
+
         let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
         let result = parser.parse_module();
-        
+
         assert!(result.is_ok());
-        
+
         if let Ok(FrameAst::System(system)) = result {
             assert_eq!(system.name, "TrafficLight");
             assert!(system.machine.is_some());
-            
+
             let machine = system.machine.unwrap();
             assert_eq!(machine.states.len(), 3);
             assert_eq!(machine.states[0].name, "Red");

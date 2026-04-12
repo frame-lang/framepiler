@@ -1,8 +1,8 @@
 //! Rust code generation backend
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Rust backend for code generation
 pub struct RustBackend;
@@ -28,7 +28,11 @@ impl LanguageBackend for RustBackend {
                 result
             }
 
-            CodegenNode::Import { module, items, alias: _ } => {
+            CodegenNode::Import {
+                module,
+                items,
+                alias: _,
+            } => {
                 if items.is_empty() {
                     format!("use {};", module)
                 } else {
@@ -36,7 +40,14 @@ impl LanguageBackend for RustBackend {
                 }
             }
 
-            CodegenNode::Class { name, fields, methods, base_classes: _, is_abstract: _, derives } => {
+            CodegenNode::Class {
+                name,
+                fields,
+                methods,
+                base_classes: _,
+                is_abstract: _,
+                derives,
+            } => {
                 let mut result = String::new();
 
                 // Suppress warnings for generated Frame infrastructure
@@ -44,7 +55,11 @@ impl LanguageBackend for RustBackend {
 
                 // Derive attributes (for serde, etc.)
                 if !derives.is_empty() {
-                    result.push_str(&format!("{}#[derive({})]\n", ctx.get_indent(), derives.join(", ")));
+                    result.push_str(&format!(
+                        "{}#[derive({})]\n",
+                        ctx.get_indent(),
+                        derives.join(", ")
+                    ));
                 }
 
                 // Struct definition
@@ -54,7 +69,11 @@ impl LanguageBackend for RustBackend {
                     if let Some(ref raw_code) = field.raw_code {
                         // V4: Native code pass-through (with visibility)
                         // For Rust struct fields, strip initializer (Rust doesn't allow `= value` in struct defs)
-                        let vis = if matches!(field.visibility, Visibility::Public) { "pub " } else { "" };
+                        let vis = if matches!(field.visibility, Visibility::Public) {
+                            "pub "
+                        } else {
+                            ""
+                        };
                         let field_decl = if let Some(eq_pos) = raw_code.find('=') {
                             raw_code[..eq_pos].trim_end()
                         } else {
@@ -62,11 +81,23 @@ impl LanguageBackend for RustBackend {
                         };
                         result.push_str(&format!("{}{}{},\n", ctx.get_indent(), vis, field_decl));
                     } else {
-                        let vis = if matches!(field.visibility, Visibility::Public) { "pub " } else { "" };
-                        let type_ann = field.type_annotation.as_ref()
+                        let vis = if matches!(field.visibility, Visibility::Public) {
+                            "pub "
+                        } else {
+                            ""
+                        };
+                        let type_ann = field
+                            .type_annotation
+                            .as_ref()
                             .map(|t| self.convert_type(t))
                             .unwrap_or_else(|| "()".to_string());
-                        result.push_str(&format!("{}{}{}: {},\n", ctx.get_indent(), vis, field.name, type_ann));
+                        result.push_str(&format!(
+                            "{}{}{}: {},\n",
+                            ctx.get_indent(),
+                            vis,
+                            field.name,
+                            type_ann
+                        ));
                     }
                 }
                 ctx.pop_indent();
@@ -100,9 +131,22 @@ impl LanguageBackend for RustBackend {
                 result
             }
 
-            CodegenNode::Method { name, params, return_type, body, is_async, is_static, visibility, decorators: _ } => {
+            CodegenNode::Method {
+                name,
+                params,
+                return_type,
+                body,
+                is_async,
+                is_static,
+                visibility,
+                decorators: _,
+            } => {
                 let mut result = String::new();
-                let vis = if matches!(visibility, Visibility::Public) { "pub " } else { "" };
+                let vis = if matches!(visibility, Visibility::Public) {
+                    "pub "
+                } else {
+                    ""
+                };
 
                 let params_str = self.emit_params(params, !*is_static);
 
@@ -113,9 +157,16 @@ impl LanguageBackend for RustBackend {
                     let boxed_params = params_str
                         .replace("&mut self", "&'a mut self")
                         .replace(", __e: &", ", __e: &'a ");
-                    let return_str = " -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>";
-                    result.push_str(&format!("{}{}fn {}<'a>({}){} {{\n",
-                        ctx.get_indent(), vis, name, boxed_params, return_str));
+                    let return_str =
+                        " -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>";
+                    result.push_str(&format!(
+                        "{}{}fn {}<'a>({}){} {{\n",
+                        ctx.get_indent(),
+                        vis,
+                        name,
+                        boxed_params,
+                        return_str
+                    ));
                     ctx.push_indent();
                     result.push_str(&format!("{}Box::pin(async move {{\n", ctx.get_indent()));
                     ctx.push_indent();
@@ -135,12 +186,20 @@ impl LanguageBackend for RustBackend {
                 }
 
                 let async_kw = if *is_async { "async " } else { "" };
-                let return_str = return_type.as_ref()
+                let return_str = return_type
+                    .as_ref()
                     .map(|rt| format!(" -> {}", self.convert_type(rt)))
                     .unwrap_or_default();
 
-                result.push_str(&format!("{}{}{}fn {}({}){} {{\n",
-                    ctx.get_indent(), vis, async_kw, name, params_str, return_str));
+                result.push_str(&format!(
+                    "{}{}{}fn {}({}){} {{\n",
+                    ctx.get_indent(),
+                    vis,
+                    async_kw,
+                    name,
+                    params_str,
+                    return_str
+                ));
 
                 ctx.push_indent();
                 let has_return_type = return_type.is_some();
@@ -163,9 +222,17 @@ impl LanguageBackend for RustBackend {
                 result
             }
 
-            CodegenNode::Constructor { params, body, super_call: _ } => {
+            CodegenNode::Constructor {
+                params,
+                body,
+                super_call: _,
+            } => {
                 let params_str = self.emit_params(params, false);
-                let mut result = format!("{}pub fn new({}) -> Self {{\n", ctx.get_indent(), params_str);
+                let mut result = format!(
+                    "{}pub fn new({}) -> Self {{\n",
+                    ctx.get_indent(),
+                    params_str
+                );
                 ctx.push_indent();
 
                 // Rust needs struct initialization. Separate field assignments from other statements.
@@ -179,9 +246,14 @@ impl LanguageBackend for RustBackend {
                             if matches!(object.as_ref(), CodegenNode::SelfRef) {
                                 // This is self.field = value - collect for struct init
                                 // For Rust: wrap string literals in String::from() for String fields
-                                let value_str = if let CodegenNode::Literal(Literal::String(s)) = value.as_ref() {
+                                let value_str = if let CodegenNode::Literal(Literal::String(s)) =
+                                    value.as_ref()
+                                {
                                     // String literal needs conversion for String fields
-                                    format!("String::from(\"{}\")", s.replace("\\", "\\\\").replace("\"", "\\\""))
+                                    format!(
+                                        "String::from(\"{}\")",
+                                        s.replace("\\", "\\\\").replace("\"", "\\\"")
+                                    )
                                 } else {
                                     self.emit(value, ctx)
                                 };
@@ -233,20 +305,38 @@ impl LanguageBackend for RustBackend {
                 result
             }
 
-            CodegenNode::VarDecl { name, type_annotation, init, is_const } => {
+            CodegenNode::VarDecl {
+                name,
+                type_annotation,
+                init,
+                is_const,
+            } => {
                 let kw = if *is_const { "let" } else { "let mut" };
-                let type_ann = type_annotation.as_ref()
+                let type_ann = type_annotation
+                    .as_ref()
                     .map(|t| format!(": {}", self.convert_type(t)))
                     .unwrap_or_default();
                 if let Some(init_expr) = init {
-                    format!("{}{} {}{} = {}", ctx.get_indent(), kw, name, type_ann, self.emit(init_expr, ctx))
+                    format!(
+                        "{}{} {}{} = {}",
+                        ctx.get_indent(),
+                        kw,
+                        name,
+                        type_ann,
+                        self.emit(init_expr, ctx)
+                    )
                 } else {
                     format!("{}{} {}{}", ctx.get_indent(), kw, name, type_ann)
                 }
             }
 
             CodegenNode::Assignment { target, value } => {
-                format!("{}{} = {}", ctx.get_indent(), self.emit(target, ctx), self.emit(value, ctx))
+                format!(
+                    "{}{} = {}",
+                    ctx.get_indent(),
+                    self.emit(target, ctx),
+                    self.emit(value, ctx)
+                )
             }
 
             CodegenNode::Return { value } => {
@@ -257,8 +347,13 @@ impl LanguageBackend for RustBackend {
                 }
             }
 
-            CodegenNode::If { condition, then_block, else_block } => {
-                let mut result = format!("{}if {} {{\n", ctx.get_indent(), self.emit(condition, ctx));
+            CodegenNode::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let mut result =
+                    format!("{}if {} {{\n", ctx.get_indent(), self.emit(condition, ctx));
                 ctx.push_indent();
                 for stmt in then_block {
                     result.push_str(&self.emit(stmt, ctx));
@@ -288,10 +383,18 @@ impl LanguageBackend for RustBackend {
             }
 
             CodegenNode::Match { scrutinee, arms } => {
-                let mut result = format!("{}match {} {{\n", ctx.get_indent(), self.emit(scrutinee, ctx));
+                let mut result = format!(
+                    "{}match {} {{\n",
+                    ctx.get_indent(),
+                    self.emit(scrutinee, ctx)
+                );
                 ctx.push_indent();
                 for arm in arms {
-                    result.push_str(&format!("{}{} => {{\n", ctx.get_indent(), self.emit(&arm.pattern, ctx)));
+                    result.push_str(&format!(
+                        "{}{} => {{\n",
+                        ctx.get_indent(),
+                        self.emit(&arm.pattern, ctx)
+                    ));
                     ctx.push_indent();
                     for stmt in &arm.body {
                         result.push_str(&self.emit(stmt, ctx));
@@ -310,7 +413,11 @@ impl LanguageBackend for RustBackend {
             }
 
             CodegenNode::While { condition, body } => {
-                let mut result = format!("{}while {} {{\n", ctx.get_indent(), self.emit(condition, ctx));
+                let mut result = format!(
+                    "{}while {} {{\n",
+                    ctx.get_indent(),
+                    self.emit(condition, ctx)
+                );
                 ctx.push_indent();
                 for stmt in body {
                     result.push_str(&self.emit(stmt, ctx));
@@ -325,8 +432,17 @@ impl LanguageBackend for RustBackend {
                 result
             }
 
-            CodegenNode::For { var, iterable, body } => {
-                let mut result = format!("{}for {} in {} {{\n", ctx.get_indent(), var, self.emit(iterable, ctx));
+            CodegenNode::For {
+                var,
+                iterable,
+                body,
+            } => {
+                let mut result = format!(
+                    "{}for {} in {} {{\n",
+                    ctx.get_indent(),
+                    var,
+                    self.emit(iterable, ctx)
+                );
                 ctx.push_indent();
                 for stmt in body {
                     result.push_str(&self.emit(stmt, ctx));
@@ -350,8 +466,11 @@ impl LanguageBackend for RustBackend {
             }
 
             CodegenNode::Comment { text, is_doc } => {
-                if *is_doc { format!("{}/// {}", ctx.get_indent(), text) }
-                else { format!("{}// {}", ctx.get_indent(), text) }
+                if *is_doc {
+                    format!("{}/// {}", ctx.get_indent(), text)
+                } else {
+                    format!("{}// {}", ctx.get_indent(), text)
+                }
             }
 
             CodegenNode::Empty => String::new(),
@@ -366,9 +485,18 @@ impl LanguageBackend for RustBackend {
                 format!("{}({})", self.emit(target, ctx), args_str.join(", "))
             }
 
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
-                format!("{}.{}({})", self.emit(object, ctx), method, args_str.join(", "))
+                format!(
+                    "{}.{}({})",
+                    self.emit(object, ctx),
+                    method,
+                    args_str.join(", ")
+                )
             }
 
             CodegenNode::FieldAccess { object, field } => {
@@ -387,19 +515,32 @@ impl LanguageBackend for RustBackend {
             }
 
             CodegenNode::Dict(pairs) => {
-                let pairs_str: Vec<String> = pairs.iter().map(|(k, v)| {
-                    format!("({}, {})", self.emit(k, ctx), self.emit(v, ctx))
-                }).collect();
+                let pairs_str: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("({}, {})", self.emit(k, ctx), self.emit(v, ctx)))
+                    .collect();
                 format!("HashMap::from([{}])", pairs_str.join(", "))
             }
 
-            CodegenNode::Ternary { condition, then_expr, else_expr } => {
-                format!("if {} {{ {} }} else {{ {} }}",
-                    self.emit(condition, ctx), self.emit(then_expr, ctx), self.emit(else_expr, ctx))
+            CodegenNode::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                format!(
+                    "if {} {{ {} }} else {{ {} }}",
+                    self.emit(condition, ctx),
+                    self.emit(then_expr, ctx),
+                    self.emit(else_expr, ctx)
+                )
             }
 
             CodegenNode::Lambda { params, body } => {
-                let params_str = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ");
+                let params_str = params
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!("|{}| {}", params_str, self.emit(body, ctx))
             }
 
@@ -413,7 +554,13 @@ impl LanguageBackend for RustBackend {
             }
 
             // Frame-specific
-            CodegenNode::Transition { target_state, exit_args: _, enter_args: _, state_args: _, indent } => {
+            CodegenNode::Transition {
+                target_state,
+                exit_args: _,
+                enter_args: _,
+                state_args: _,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 // Use compartment-based transition
                 let compartment_type = if let Some(ref sys_name) = ctx.system_name {
@@ -421,10 +568,17 @@ impl LanguageBackend for RustBackend {
                 } else {
                     "Compartment".to_string()
                 };
-                format!("{}self.__transition({}::new(\"{}\"))", ind, compartment_type, target_state)
+                format!(
+                    "{}self.__transition({}::new(\"{}\"))",
+                    ind, compartment_type, target_state
+                )
             }
 
-            CodegenNode::ChangeState { target_state, state_args: _, indent } => {
+            CodegenNode::ChangeState {
+                target_state,
+                state_args: _,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 // Use string-based state change
                 let compartment_type = if let Some(ref sys_name) = ctx.system_name {
@@ -432,10 +586,16 @@ impl LanguageBackend for RustBackend {
                 } else {
                     "Compartment".to_string()
                 };
-                format!("{}self.__compartment = {}::new(\"{}\")", ind, compartment_type, target_state)
+                format!(
+                    "{}self.__compartment = {}::new(\"{}\")",
+                    ind, compartment_type, target_state
+                )
             }
 
-            CodegenNode::Forward { to_parent: _, indent } => {
+            CodegenNode::Forward {
+                to_parent: _,
+                indent,
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 format!("{}return", ind)
             }
@@ -457,7 +617,12 @@ impl LanguageBackend for RustBackend {
                 if args_str.is_empty() {
                     format!("{}self.{}()", ctx.get_indent(), event)
                 } else {
-                    format!("{}self.{}({})", ctx.get_indent(), event, args_str.join(", "))
+                    format!(
+                        "{}self.{}({})",
+                        ctx.get_indent(),
+                        event,
+                        args_str.join(", ")
+                    )
                 }
             }
 
@@ -486,7 +651,6 @@ impl LanguageBackend for RustBackend {
     fn target_language(&self) -> TargetLanguage {
         TargetLanguage::Rust
     }
-
 }
 
 impl RustBackend {
@@ -502,7 +666,9 @@ impl RustBackend {
             "List" => "Vec<Box<dyn std::any::Any>>".to_string(),
             "Dict" => "HashMap<String, Box<dyn std::any::Any>>".to_string(),
             // Keep Rust types as-is
-            t if t.starts_with("Vec<") || t.starts_with("HashMap<") || t.starts_with("&") => t.to_string(),
+            t if t.starts_with("Vec<") || t.starts_with("HashMap<") || t.starts_with("&") => {
+                t.to_string()
+            }
             other => other.to_string(),
         }
     }
@@ -513,7 +679,9 @@ impl RustBackend {
             all_params.push("&mut self".to_string());
         }
         for param in params {
-            let type_ann = param.type_annotation.as_ref()
+            let type_ann = param
+                .type_annotation
+                .as_ref()
                 .map(|t| self.convert_type(t))
                 .unwrap_or_else(|| "()".to_string());
             all_params.push(format!("{}: {}", param.name, type_ann));
@@ -523,9 +691,12 @@ impl RustBackend {
 
     fn needs_semicolon(&self, node: &CodegenNode) -> bool {
         match node {
-            CodegenNode::If { .. } | CodegenNode::While { .. } |
-            CodegenNode::For { .. } | CodegenNode::Match { .. } |
-            CodegenNode::Comment { .. } | CodegenNode::Empty => false,
+            CodegenNode::If { .. }
+            | CodegenNode::While { .. }
+            | CodegenNode::For { .. }
+            | CodegenNode::Match { .. }
+            | CodegenNode::Comment { .. }
+            | CodegenNode::Empty => false,
             // NativeBlocks that end with } or ; don't need another semicolon
             CodegenNode::NativeBlock { code, .. } => {
                 let trimmed = code.trim();

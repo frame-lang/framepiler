@@ -1,21 +1,42 @@
 use crate::frame_c::compiler::mir::MirItem;
-use crate::frame_c::compiler::native_region_scanner::{RegionSpan, Region, FrameSegmentKind};
+use crate::frame_c::compiler::native_region_scanner::{FrameSegmentKind, Region, RegionSpan};
 
 #[derive(Debug)]
-pub enum ParseErrorKind { InvalidHead, UnbalancedArgs, MissingState, TrailingTokens }
+pub enum ParseErrorKind {
+    InvalidHead,
+    UnbalancedArgs,
+    MissingState,
+    TrailingTokens,
+}
 
 #[derive(Debug)]
-pub struct ParseError { pub kind: ParseErrorKind, pub message: String }
+pub struct ParseError {
+    pub kind: ParseErrorKind,
+    pub message: String,
+}
 
 impl ParseError {
-    fn err(kind: ParseErrorKind, msg: &str) -> Self { Self{ kind, message: msg.to_string() } }
+    fn err(kind: ParseErrorKind, msg: &str) -> Self {
+        Self {
+            kind,
+            message: msg.to_string(),
+        }
+    }
 }
 
 pub struct FrameStatementParser;
 
 impl FrameStatementParser {
     pub fn parse_segment(&self, bytes: &[u8], seg: &Region) -> Result<MirItem, ParseError> {
-        let (span, kind) = match seg { Region::FrameSegment{ span, kind, .. } => (*span, *kind), _ => return Err(ParseError::err(ParseErrorKind::InvalidHead, "not a frame segment")) };
+        let (span, kind) = match seg {
+            Region::FrameSegment { span, kind, .. } => (*span, *kind),
+            _ => {
+                return Err(ParseError::err(
+                    ParseErrorKind::InvalidHead,
+                    "not a frame segment",
+                ))
+            }
+        };
         let text = &bytes[span.start..span.end];
         match kind {
             FrameSegmentKind::Transition => self.parse_transition(text, span),
@@ -26,191 +47,413 @@ impl FrameStatementParser {
             FrameSegmentKind::StateVar | FrameSegmentKind::StateVarAssign => {
                 // State variables are handled inline by the splicer expansion
                 // No MIR item needed - just pass through
-                Err(ParseError::err(ParseErrorKind::InvalidHead, "state var handled by splicer"))
+                Err(ParseError::err(
+                    ParseErrorKind::InvalidHead,
+                    "state var handled by splicer",
+                ))
             }
             // Context syntax - handled inline by the splicer expansion
-            FrameSegmentKind::ContextReturn |
-            FrameSegmentKind::ContextReturnExpr |
-            FrameSegmentKind::ContextEvent |
-            FrameSegmentKind::ContextData |
-            FrameSegmentKind::ContextDataAssign |
-            FrameSegmentKind::ContextParams |
-            FrameSegmentKind::TaggedInstantiation |
-            FrameSegmentKind::ReturnCall |
-            FrameSegmentKind::ContextSelfCall |
-            FrameSegmentKind::ContextSelf |
-            FrameSegmentKind::ContextSystemState |
-            FrameSegmentKind::ReturnStatement => {
-                Err(ParseError::err(ParseErrorKind::InvalidHead, "context/tagged/return syntax handled by splicer"))
-            }
+            FrameSegmentKind::ContextReturn
+            | FrameSegmentKind::ContextReturnExpr
+            | FrameSegmentKind::ContextEvent
+            | FrameSegmentKind::ContextData
+            | FrameSegmentKind::ContextDataAssign
+            | FrameSegmentKind::ContextParams
+            | FrameSegmentKind::TaggedInstantiation
+            | FrameSegmentKind::ReturnCall
+            | FrameSegmentKind::ContextSelfCall
+            | FrameSegmentKind::ContextSelf
+            | FrameSegmentKind::ContextSystemState
+            | FrameSegmentKind::ReturnStatement => Err(ParseError::err(
+                ParseErrorKind::InvalidHead,
+                "context/tagged/return syntax handled by splicer",
+            )),
         }
     }
 
     fn parse_transition(&self, line: &[u8], span: RegionSpan) -> Result<MirItem, ParseError> {
         // Expect: (exit_args)? -> (enter_args)? [label?] $State(state_params?)
         let n = line.len();
-        let mut i=0usize;
-        while i<n && line[i].is_ascii_whitespace() { i+=1; }
+        let mut i = 0usize;
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
         // Optional (exit_args)
         let mut exit_args: Vec<String> = Vec::new();
-        if i<n && line[i]==b'(' {
+        if i < n && line[i] == b'(' {
             let (arg_text, next) = self.balanced_paren_block(line, i)?;
             exit_args = self.split_top_level_commas(arg_text);
             i = next;
-            while i<n && line[i].is_ascii_whitespace() { i+=1; }
+            while i < n && line[i].is_ascii_whitespace() {
+                i += 1;
+            }
         }
         // Required '->'
-        if !(i+2<=n && line[i]==b'-' && line[i+1]==b'>') { return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing ->")); }
-        i+=2; while i<n && line[i].is_ascii_whitespace() { i+=1; }
+        if !(i + 2 <= n && line[i] == b'-' && line[i + 1] == b'>') {
+            return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing ->"));
+        }
+        i += 2;
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
         // Optional (enter_args)
         let mut enter_args: Vec<String> = Vec::new();
-        if i<n && line[i]==b'(' {
+        if i < n && line[i] == b'(' {
             let (arg_text, next) = self.balanced_paren_block(line, i)?;
             enter_args = self.split_top_level_commas(arg_text);
             i = next;
-            while i<n && line[i].is_ascii_whitespace() { i+=1; }
+            while i < n && line[i].is_ascii_whitespace() {
+                i += 1;
+            }
         }
         // Check for pop-transition: -> pop$
-        if i+4<=n && &line[i..i+4] == b"pop$" {
+        if i + 4 <= n && &line[i..i + 4] == b"pop$" {
             // Pop-transition - target comes from stack at runtime
-            return Ok(MirItem::Transition{
+            return Ok(MirItem::Transition {
                 target: "pop$".to_string(),
                 exit_args: exit_args,
                 enter_args: enter_args,
                 state_args: vec![],
                 label: None,
-                span
+                span,
             });
         }
 
         // Optional label: string literal "..." or identifier
         let mut label: Option<String> = None;
-        if i<n && line[i]==b'"' {
+        if i < n && line[i] == b'"' {
             // String label: -> "Path A" $State
             let quote_start = i;
             i += 1; // skip opening quote
-            while i<n && line[i]!=b'"' { i+=1; }
-            if i<n {
-                label = Some(String::from_utf8_lossy(&line[quote_start+1..i]).to_string());
-                i += 1; // skip closing quote
-                while i<n && line[i].is_ascii_whitespace() { i+=1; }
+            while i < n && line[i] != b'"' {
+                i += 1;
             }
-        } else if i<n && (line[i].is_ascii_alphabetic() || line[i]==b'_') {
+            if i < n {
+                label = Some(String::from_utf8_lossy(&line[quote_start + 1..i]).to_string());
+                i += 1; // skip closing quote
+                while i < n && line[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+            }
+        } else if i < n && (line[i].is_ascii_alphabetic() || line[i] == b'_') {
             // Identifier label: -> myLabel $State
             let j_start = i;
-            let mut j=i+1; while j<n && (line[j].is_ascii_alphanumeric() || line[j]==b'_') { j+=1; }
+            let mut j = i + 1;
+            while j < n && (line[j].is_ascii_alphanumeric() || line[j] == b'_') {
+                j += 1;
+            }
             // Only treat as label if next non-space is '$'
-            let mut k=j; while k<n && line[k].is_ascii_whitespace() { k+=1; }
-            if k<n && line[k]==b'$' {
+            let mut k = j;
+            while k < n && line[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            if k < n && line[k] == b'$' {
                 label = Some(String::from_utf8_lossy(&line[j_start..j]).to_string());
                 i = k; // advance past label to '$'
             }
         }
         // '$' State
-        if i>=n || line[i]!=b'$' { return Err(ParseError::err(ParseErrorKind::MissingState, "expected $State after '->'")); }
-        i+=1; let name_start=i;
-        if i>=n || !is_ident_start(line[i]) { return Err(ParseError::err(ParseErrorKind::MissingState, "invalid state name start")); }
-        i+=1; while i<n && is_ident(line[i]) { i+=1; }
+        if i >= n || line[i] != b'$' {
+            return Err(ParseError::err(
+                ParseErrorKind::MissingState,
+                "expected $State after '->'",
+            ));
+        }
+        i += 1;
+        let name_start = i;
+        if i >= n || !is_ident_start(line[i]) {
+            return Err(ParseError::err(
+                ParseErrorKind::MissingState,
+                "invalid state name start",
+            ));
+        }
+        i += 1;
+        while i < n && is_ident(line[i]) {
+            i += 1;
+        }
         let target = String::from_utf8_lossy(&line[name_start..i]).to_string();
-        while i<n && line[i].is_ascii_whitespace() { i+=1; }
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
         // Optional (state_params)
         let mut state_args: Vec<String> = Vec::new();
-        if i<n && line[i]==b'(' {
+        if i < n && line[i] == b'(' {
             let (arg_text, next) = self.balanced_paren_block(line, i)?;
             state_args = self.split_top_level_commas(arg_text);
             i = next;
         }
-        while i<n && line[i].is_ascii_whitespace() { i+=1; }
-        if i<n { return Err(ParseError::err(ParseErrorKind::TrailingTokens, "unexpected trailing tokens after Frame statement")); }
-        Ok(MirItem::Transition{ target, exit_args, enter_args, state_args, label, span })
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < n {
+            return Err(ParseError::err(
+                ParseErrorKind::TrailingTokens,
+                "unexpected trailing tokens after Frame statement",
+            ));
+        }
+        Ok(MirItem::Transition {
+            target,
+            exit_args,
+            enter_args,
+            state_args,
+            label,
+            span,
+        })
     }
 
-    fn parse_transition_forward(&self, line: &[u8], span: RegionSpan) -> Result<MirItem, ParseError> {
+    fn parse_transition_forward(
+        &self,
+        line: &[u8],
+        span: RegionSpan,
+    ) -> Result<MirItem, ParseError> {
         // Expect: -> => $State
         let n = line.len();
-        let mut i=0usize;
-        while i<n && line[i].is_ascii_whitespace() { i+=1; }
+        let mut i = 0usize;
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
         // Required '->'
-        if !(i+2<=n && line[i]==b'-' && line[i+1]==b'>') { return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing ->")); }
-        i+=2; while i<n && line[i].is_ascii_whitespace() { i+=1; }
+        if !(i + 2 <= n && line[i] == b'-' && line[i + 1] == b'>') {
+            return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing ->"));
+        }
+        i += 2;
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
         // Required '=>'
-        if !(i+2<=n && line[i]==b'=' && line[i+1]==b'>') { return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing =>")); }
-        i+=2; while i<n && line[i].is_ascii_whitespace() { i+=1; }
+        if !(i + 2 <= n && line[i] == b'=' && line[i + 1] == b'>') {
+            return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing =>"));
+        }
+        i += 2;
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
         // '$' State
-        if i>=n || line[i]!=b'$' { return Err(ParseError::err(ParseErrorKind::MissingState, "expected $State after '-> =>'")); }
-        i+=1; let name_start=i;
-        if i>=n || !is_ident_start(line[i]) { return Err(ParseError::err(ParseErrorKind::MissingState, "invalid state name start")); }
-        i+=1; while i<n && is_ident(line[i]) { i+=1; }
+        if i >= n || line[i] != b'$' {
+            return Err(ParseError::err(
+                ParseErrorKind::MissingState,
+                "expected $State after '-> =>'",
+            ));
+        }
+        i += 1;
+        let name_start = i;
+        if i >= n || !is_ident_start(line[i]) {
+            return Err(ParseError::err(
+                ParseErrorKind::MissingState,
+                "invalid state name start",
+            ));
+        }
+        i += 1;
+        while i < n && is_ident(line[i]) {
+            i += 1;
+        }
         let target = String::from_utf8_lossy(&line[name_start..i]).to_string();
-        while i<n && line[i].is_ascii_whitespace() { i+=1; }
-        if i<n { return Err(ParseError::err(ParseErrorKind::TrailingTokens, "unexpected trailing tokens after Frame statement")); }
-        Ok(MirItem::TransitionForward{ target, span })
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < n {
+            return Err(ParseError::err(
+                ParseErrorKind::TrailingTokens,
+                "unexpected trailing tokens after Frame statement",
+            ));
+        }
+        Ok(MirItem::TransitionForward { target, span })
     }
 
     fn parse_forward(&self, line: &[u8], span: RegionSpan) -> Result<MirItem, ParseError> {
         // Expect: => $^
-        let mut i = 0usize; let n = line.len();
-        while i<n && line[i].is_ascii_whitespace() { i+=1; }
-        if !(i+2<=n && line[i]==b'=' && line[i+1]==b'>') { return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing =>")); }
-        i+=2; while i<n && line[i].is_ascii_whitespace() { i+=1; }
-        if !(i+2<=n && line[i]==b'$' && line[i+1]==b'^') { return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing $^")); }
-        i+=2; while i<n && line[i].is_ascii_whitespace() { i+=1; }
-        if i < n { return Err(ParseError::err(ParseErrorKind::TrailingTokens, "unexpected trailing tokens after Frame statement")); }
-        Ok(MirItem::Forward{ span })
-    }
-
-    fn parse_stack(&self, line: &[u8], span: RegionSpan, is_push: bool) -> Result<MirItem, ParseError> {
-        // Expect: $$[+] or $$[-]
-        let mut i = 0usize; let n = line.len();
-        while i<n && line[i].is_ascii_whitespace() { i+=1; }
-        if !(i+5<=n && line[i]==b'$' && line[i+1]==b'$' && line[i+2]==b'[' && (line[i+3]==b'+' || line[i+3]==b'-') && line[i+4]==b']') {
-            return Err(ParseError::err(ParseErrorKind::InvalidHead, "malformed stack op"));
+        let mut i = 0usize;
+        let n = line.len();
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
         }
-        i+=5; while i<n && line[i].is_ascii_whitespace() { i+=1; }
-        if i < n { return Err(ParseError::err(ParseErrorKind::TrailingTokens, "unexpected trailing tokens after Frame statement")); }
-        Ok(if is_push { MirItem::StackPush{ span } } else { MirItem::StackPop{ span } })
+        if !(i + 2 <= n && line[i] == b'=' && line[i + 1] == b'>') {
+            return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing =>"));
+        }
+        i += 2;
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if !(i + 2 <= n && line[i] == b'$' && line[i + 1] == b'^') {
+            return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing $^"));
+        }
+        i += 2;
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < n {
+            return Err(ParseError::err(
+                ParseErrorKind::TrailingTokens,
+                "unexpected trailing tokens after Frame statement",
+            ));
+        }
+        Ok(MirItem::Forward { span })
     }
 
-    fn balanced_paren_block<'a>(&self, line: &'a [u8], open_idx: usize) -> Result<(&'a [u8], usize), ParseError> {
-        let mut i=open_idx; let mut depth=0i32; let n=line.len();
+    fn parse_stack(
+        &self,
+        line: &[u8],
+        span: RegionSpan,
+        is_push: bool,
+    ) -> Result<MirItem, ParseError> {
+        // Expect: $$[+] or $$[-]
+        let mut i = 0usize;
+        let n = line.len();
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if !(i + 5 <= n
+            && line[i] == b'$'
+            && line[i + 1] == b'$'
+            && line[i + 2] == b'['
+            && (line[i + 3] == b'+' || line[i + 3] == b'-')
+            && line[i + 4] == b']')
+        {
+            return Err(ParseError::err(
+                ParseErrorKind::InvalidHead,
+                "malformed stack op",
+            ));
+        }
+        i += 5;
+        while i < n && line[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < n {
+            return Err(ParseError::err(
+                ParseErrorKind::TrailingTokens,
+                "unexpected trailing tokens after Frame statement",
+            ));
+        }
+        Ok(if is_push {
+            MirItem::StackPush { span }
+        } else {
+            MirItem::StackPop { span }
+        })
+    }
+
+    fn balanced_paren_block<'a>(
+        &self,
+        line: &'a [u8],
+        open_idx: usize,
+    ) -> Result<(&'a [u8], usize), ParseError> {
+        let mut i = open_idx;
+        let mut depth = 0i32;
+        let n = line.len();
         let mut in_s: Option<u8> = None; // quote char
-        if line[i]!=b'(' { return Err(ParseError::err(ParseErrorKind::InvalidHead, "expected (")); }
-        while i<n { let c=line[i];
-            if let Some(q)=in_s { if c==b'\\' { i+=2; continue; } if c==q { in_s=None; i+=1; continue; } i+=1; continue; }
+        if line[i] != b'(' {
+            return Err(ParseError::err(ParseErrorKind::InvalidHead, "expected ("));
+        }
+        while i < n {
+            let c = line[i];
+            if let Some(q) = in_s {
+                if c == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if c == q {
+                    in_s = None;
+                    i += 1;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
             match c {
-                b'\''|b'"' => { in_s=Some(c); i+=1; }
-                b'(' => { depth+=1; i+=1; }
-                b')' => { depth-=1; i+=1; if depth==0 { let start=open_idx+1; let end=i-1; return Ok((&line[start..end], i)); } }
-                b'['|b'{' => { depth+=1; i+=1; }
-                b']'|b'}' => { depth-=1; i+=1; }
-                _ => { i+=1; }
+                b'\'' | b'"' => {
+                    in_s = Some(c);
+                    i += 1;
+                }
+                b'(' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b')' => {
+                    depth -= 1;
+                    i += 1;
+                    if depth == 0 {
+                        let start = open_idx + 1;
+                        let end = i - 1;
+                        return Ok((&line[start..end], i));
+                    }
+                }
+                b'[' | b'{' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b']' | b'}' => {
+                    depth -= 1;
+                    i += 1;
+                }
+                _ => {
+                    i += 1;
+                }
             }
         }
-        Err(ParseError::err(ParseErrorKind::UnbalancedArgs, "unterminated args"))
+        Err(ParseError::err(
+            ParseErrorKind::UnbalancedArgs,
+            "unterminated args",
+        ))
     }
 
     fn split_top_level_commas(&self, text: &[u8]) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        let mut i=0usize; let n=text.len(); let mut depth=0i32; let mut in_s: Option<u8>=None; let mut start=0usize;
-        while i<n {
-            let c=text[i];
-            if let Some(q)=in_s { if c==b'\\' { i+=2; continue; } if c==q { in_s=None; i+=1; continue; } i+=1; continue; }
-            match c { b'\''|b'"' => { in_s=Some(c); i+=1; }
-                b'('|b'['|b'{' => { depth+=1; i+=1; }
-                b')'|b']'|b'}' => { depth-=1; i+=1; }
-                b',' if depth==0 => {
-                    let s = String::from_utf8_lossy(&text[start..i]).trim().to_string();
-                    if !s.is_empty() { out.push(s); }
-                    i+=1; start=i;
+        let mut i = 0usize;
+        let n = text.len();
+        let mut depth = 0i32;
+        let mut in_s: Option<u8> = None;
+        let mut start = 0usize;
+        while i < n {
+            let c = text[i];
+            if let Some(q) = in_s {
+                if c == b'\\' {
+                    i += 2;
+                    continue;
                 }
-                _ => { i+=1; }
+                if c == q {
+                    in_s = None;
+                    i += 1;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            match c {
+                b'\'' | b'"' => {
+                    in_s = Some(c);
+                    i += 1;
+                }
+                b'(' | b'[' | b'{' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b')' | b']' | b'}' => {
+                    depth -= 1;
+                    i += 1;
+                }
+                b',' if depth == 0 => {
+                    let s = String::from_utf8_lossy(&text[start..i]).trim().to_string();
+                    if !s.is_empty() {
+                        out.push(s);
+                    }
+                    i += 1;
+                    start = i;
+                }
+                _ => {
+                    i += 1;
+                }
             }
         }
         let s = String::from_utf8_lossy(&text[start..n]).trim().to_string();
-        if !s.is_empty() { out.push(s); }
+        if !s.is_empty() {
+            out.push(s);
+        }
         out
     }
 }
 
-fn is_ident_start(b: u8) -> bool { b.is_ascii_alphabetic() || b==b'_' }
-fn is_ident(b: u8) -> bool { b.is_ascii_alphanumeric() || b==b'_' }
+fn is_ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_'
+}
+fn is_ident(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}

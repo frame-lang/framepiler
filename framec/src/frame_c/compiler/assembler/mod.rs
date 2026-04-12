@@ -11,14 +11,14 @@
 //! 2. Post-process: expand `@@SystemName()` tagged instantiations in native regions
 //! 3. Return final assembled output
 
-use std::collections::HashMap;
-use std::collections::HashSet;
 use crate::frame_c::compiler::frame_ast::SystemParam;
 use crate::frame_c::compiler::pipeline_parser::call_args::{
     parse_call_args, resolve_call, CallArgsError,
 };
-use crate::frame_c::compiler::segmenter::{SourceMap, Segment};
+use crate::frame_c::compiler::segmenter::{Segment, SourceMap};
 use crate::frame_c::visitors::TargetLanguage;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 // ============================================================================
 // Assembly Error
@@ -95,7 +95,10 @@ pub fn assemble(
                 let text = extract_text(source, span.start, span.end);
                 // Expand tagged instantiations (@@SystemName(args)) in native code
                 let expanded = expand_tagged_instantiations(
-                    &text, &defined_system_names, &params_by_name, lang,
+                    &text,
+                    &defined_system_names,
+                    &params_by_name,
+                    lang,
                 )?;
                 output.push_str(&expanded);
             }
@@ -149,7 +152,10 @@ fn format_call_args_error(err: &CallArgsError) -> String {
             format!("unknown named argument '{}'", name)
         }
         CallArgsError::MissingArg { name } => {
-            format!("required parameter '{}' has no argument and no default", name)
+            format!(
+                "required parameter '{}' has no argument and no default",
+                name
+            )
         }
         CallArgsError::ExtraArgs { count } => {
             format!("{} extra argument(s) supplied", count)
@@ -184,7 +190,10 @@ fn expand_tagged_instantiations(
     let mut i = 0;
 
     // Determine comment style based on language
-    let uses_hash_comments = matches!(lang, TargetLanguage::Python3 | TargetLanguage::Php | TargetLanguage::Ruby);
+    let uses_hash_comments = matches!(
+        lang,
+        TargetLanguage::Python3 | TargetLanguage::Php | TargetLanguage::Ruby
+    );
     let uses_c_style_comments = matches!(
         lang,
         TargetLanguage::TypeScript
@@ -319,8 +328,8 @@ fn expand_tagged_instantiations(
 
                     if paren_depth == 0 {
                         if defined_systems.contains(name) {
-                            let args_text = std::str::from_utf8(&bytes[args_start..i - 1])
-                                .unwrap_or("");
+                            let args_text =
+                                std::str::from_utf8(&bytes[args_start..i - 1]).unwrap_or("");
                             // Resolve the call against the system's declared
                             // params: validate sigils/names, substitute Frame
                             // defaults, produce a positional value list in
@@ -329,20 +338,25 @@ fn expand_tagged_instantiations(
                             // through (preserves zero-arg behavior).
                             let resolved_args = match params_by_name.get(name) {
                                 Some(params) if !params.is_empty() => {
-                                    let parsed = parse_call_args(args_text)
-                                        .map_err(|e| AssemblyError {
+                                    let parsed =
+                                        parse_call_args(args_text).map_err(|e| AssemblyError {
                                             message: format!(
                                                 "@@{}({}): {}",
-                                                name, args_text, format_call_args_error(&e)
+                                                name,
+                                                args_text,
+                                                format_call_args_error(&e)
                                             ),
                                         })?;
-                                    let values = resolve_call(&parsed, params)
-                                        .map_err(|e| AssemblyError {
+                                    let values = resolve_call(&parsed, params).map_err(|e| {
+                                        AssemblyError {
                                             message: format!(
                                                 "@@{}({}): {}",
-                                                name, args_text, format_call_args_error(&e)
+                                                name,
+                                                args_text,
+                                                format_call_args_error(&e)
                                             ),
-                                        })?;
+                                        }
+                                    })?;
                                     values.join(", ")
                                 }
                                 _ => args_text.to_string(),
@@ -437,7 +451,9 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             let module_name = {
                 let mut result = String::new();
                 for (i, c) in name.chars().enumerate() {
-                    if c.is_uppercase() && i > 0 { result.push('_'); }
+                    if c.is_uppercase() && i > 0 {
+                        result.push('_');
+                    }
                     if let Some(lc) = c.to_lowercase().next() {
                         result.push(lc);
                     }
@@ -499,9 +515,15 @@ mod tests {
     #[test]
     fn test_native_only() {
         let src = "import math\nprint('hello')\n";
-        let map = make_source_map(src, vec![
-            Segment::Native { span: Span { start: 0, end: src.len() } },
-        ]);
+        let map = make_source_map(
+            src,
+            vec![Segment::Native {
+                span: Span {
+                    start: 0,
+                    end: src.len(),
+                },
+            }],
+        );
         let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]).unwrap();
         assert_eq!(result, src);
     }
@@ -513,16 +535,35 @@ mod tests {
         let system_start = 7;
         let system_end = 46;
         let epilog_start = 46;
-        let map = make_source_map(src, vec![
-            Segment::Native { span: Span { start: 0, end: prolog_end } },
-            Segment::System {
-                outer_span: Span { start: system_start, end: system_end },
-                body_span: Span { start: system_start + 16, end: system_end - 1 },
-                header_params_span: None,
-                name: "Foo".to_string(),
-            },
-            Segment::Native { span: Span { start: epilog_start, end: src.len() } },
-        ]);
+        let map = make_source_map(
+            src,
+            vec![
+                Segment::Native {
+                    span: Span {
+                        start: 0,
+                        end: prolog_end,
+                    },
+                },
+                Segment::System {
+                    outer_span: Span {
+                        start: system_start,
+                        end: system_end,
+                    },
+                    body_span: Span {
+                        start: system_start + 16,
+                        end: system_end - 1,
+                    },
+                    header_params_span: None,
+                    name: "Foo".to_string(),
+                },
+                Segment::Native {
+                    span: Span {
+                        start: epilog_start,
+                        end: src.len(),
+                    },
+                },
+            ],
+        );
         let generated = vec![("Foo".to_string(), "class Foo:\n  pass\n".to_string())];
         let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[]).unwrap();
         assert_eq!(result, "prolog\nclass Foo:\n  pass\nepilogue\n");
@@ -531,14 +572,22 @@ mod tests {
     #[test]
     fn test_pragma_skipped() {
         let src = "@@target python_3\nimport os\n";
-        let map = make_source_map(src, vec![
-            Segment::Pragma {
-                kind: crate::frame_c::compiler::segmenter::PragmaKind::Target,
-                span: Span { start: 0, end: 18 },
-                value: Some("python_3".to_string()),
-            },
-            Segment::Native { span: Span { start: 18, end: src.len() } },
-        ]);
+        let map = make_source_map(
+            src,
+            vec![
+                Segment::Pragma {
+                    kind: crate::frame_c::compiler::segmenter::PragmaKind::Target,
+                    span: Span { start: 0, end: 18 },
+                    value: Some("python_3".to_string()),
+                },
+                Segment::Native {
+                    span: Span {
+                        start: 18,
+                        end: src.len(),
+                    },
+                },
+            ],
+        );
         let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]).unwrap();
         assert_eq!(result, "import os\n");
     }
@@ -556,7 +605,8 @@ mod tests {
         let src = "s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
-        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
+        let result =
+            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = Foo()\n");
     }
 
@@ -565,7 +615,9 @@ mod tests {
         let src = "let s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
-        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::TypeScript).unwrap();
+        let result =
+            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::TypeScript)
+                .unwrap();
         assert_eq!(result, "let s = new Foo()\n");
     }
 
@@ -574,7 +626,8 @@ mod tests {
         let src = "let s = @@Foo();\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
-        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Rust).unwrap();
+        let result =
+            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Rust).unwrap();
         assert_eq!(result, "let s = Foo::new();\n");
     }
 
@@ -583,7 +636,8 @@ mod tests {
         let src = "struct Foo* s = @@Foo();\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
-        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::C).unwrap();
+        let result =
+            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::C).unwrap();
         assert_eq!(result, "struct Foo* s = Foo_new();\n");
     }
 
@@ -592,7 +646,8 @@ mod tests {
         let src = "s = @@Foo(1, \"hello\")\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
-        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
+        let result =
+            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = Foo(1, \"hello\")\n");
     }
 
@@ -601,7 +656,8 @@ mod tests {
         let src = "# s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
-        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
+        let result =
+            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "# s = @@Foo()\n");
     }
 
@@ -610,7 +666,8 @@ mod tests {
         let src = "s = \"@@Foo()\"\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
-        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
+        let result =
+            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = \"@@Foo()\"\n");
     }
 
@@ -626,23 +683,53 @@ mod tests {
         let s2_end = 40;
         let epilog_start = 40;
 
-        let map = make_source_map(src, vec![
-            Segment::Native { span: Span { start: 0, end: s1_start } },
-            Segment::System {
-                outer_span: Span { start: s1_start, end: s1_end },
-                body_span: Span { start: s1_start + 2, end: s1_end - 2 },
-                header_params_span: None,
-                name: "Alpha".to_string(),
-            },
-            Segment::Native { span: Span { start: between_start, end: between_end } },
-            Segment::System {
-                outer_span: Span { start: s2_start, end: s2_end },
-                body_span: Span { start: s2_start + 2, end: s2_end - 2 },
-                header_params_span: None,
-                name: "Beta".to_string(),
-            },
-            Segment::Native { span: Span { start: epilog_start, end: src.len() } },
-        ]);
+        let map = make_source_map(
+            src,
+            vec![
+                Segment::Native {
+                    span: Span {
+                        start: 0,
+                        end: s1_start,
+                    },
+                },
+                Segment::System {
+                    outer_span: Span {
+                        start: s1_start,
+                        end: s1_end,
+                    },
+                    body_span: Span {
+                        start: s1_start + 2,
+                        end: s1_end - 2,
+                    },
+                    header_params_span: None,
+                    name: "Alpha".to_string(),
+                },
+                Segment::Native {
+                    span: Span {
+                        start: between_start,
+                        end: between_end,
+                    },
+                },
+                Segment::System {
+                    outer_span: Span {
+                        start: s2_start,
+                        end: s2_end,
+                    },
+                    body_span: Span {
+                        start: s2_start + 2,
+                        end: s2_end - 2,
+                    },
+                    header_params_span: None,
+                    name: "Beta".to_string(),
+                },
+                Segment::Native {
+                    span: Span {
+                        start: epilog_start,
+                        end: src.len(),
+                    },
+                },
+            ],
+        );
 
         let generated = vec![
             ("Alpha".to_string(), "class Alpha: pass\n".to_string()),
@@ -659,14 +746,18 @@ mod tests {
     #[test]
     fn test_missing_system_code_errors() {
         let src = "@@system Foo { }";
-        let map = make_source_map(src, vec![
-            Segment::System {
-                outer_span: Span { start: 0, end: src.len() },
+        let map = make_source_map(
+            src,
+            vec![Segment::System {
+                outer_span: Span {
+                    start: 0,
+                    end: src.len(),
+                },
                 body_span: Span { start: 14, end: 15 },
                 header_params_span: None,
                 name: "Foo".to_string(),
-            },
-        ]);
+            }],
+        );
         let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("Foo"));
@@ -689,19 +780,34 @@ mod tests {
         let full_src = format!("{}{}", src_native, src_system);
         let native_end = src_native.len();
 
-        let map = make_source_map(&full_src, vec![
-            Segment::Native { span: Span { start: 0, end: native_end } },
-            Segment::System {
-                outer_span: Span { start: native_end, end: full_src.len() },
-                body_span: Span { start: native_end + 20, end: full_src.len() - 1 },
-                header_params_span: None,
-                name: "MySystem".to_string(),
-            },
-        ]);
+        let map = make_source_map(
+            &full_src,
+            vec![
+                Segment::Native {
+                    span: Span {
+                        start: 0,
+                        end: native_end,
+                    },
+                },
+                Segment::System {
+                    outer_span: Span {
+                        start: native_end,
+                        end: full_src.len(),
+                    },
+                    body_span: Span {
+                        start: native_end + 20,
+                        end: full_src.len() - 1,
+                    },
+                    header_params_span: None,
+                    name: "MySystem".to_string(),
+                },
+            ],
+        );
 
-        let generated = vec![
-            ("MySystem".to_string(), "class MySystem:\n  pass\n".to_string()),
-        ];
+        let generated = vec![(
+            "MySystem".to_string(),
+            "class MySystem:\n  pass\n".to_string(),
+        )];
         let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[]).unwrap();
         assert_eq!(result, "s = MySystem()\nclass MySystem:\n  pass\n");
     }
@@ -711,18 +817,39 @@ mod tests {
         // Test that runtime imports are emitted before native prolog code
         let src = "import json\n@@system Foo { machine: $A { } }";
         let prolog_end = 12;
-        let map = make_source_map(src, vec![
-            Segment::Native { span: Span { start: 0, end: prolog_end } },
-            Segment::System {
-                outer_span: Span { start: prolog_end, end: src.len() },
-                body_span: Span { start: prolog_end + 16, end: src.len() - 1 },
-                header_params_span: None,
-                name: "Foo".to_string(),
-            },
-        ]);
+        let map = make_source_map(
+            src,
+            vec![
+                Segment::Native {
+                    span: Span {
+                        start: 0,
+                        end: prolog_end,
+                    },
+                },
+                Segment::System {
+                    outer_span: Span {
+                        start: prolog_end,
+                        end: src.len(),
+                    },
+                    body_span: Span {
+                        start: prolog_end + 16,
+                        end: src.len() - 1,
+                    },
+                    header_params_span: None,
+                    name: "Foo".to_string(),
+                },
+            ],
+        );
         let generated = vec![("Foo".to_string(), "class Foo:\n  pass\n".to_string())];
         let runtime_imports = vec!["from typing import Any".to_string()];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &runtime_imports).unwrap();
+        let result = assemble(
+            &map,
+            &generated,
+            &[],
+            TargetLanguage::Python3,
+            &runtime_imports,
+        )
+        .unwrap();
         // Runtime imports should come first, then the native prolog, then system
         assert!(result.starts_with("from typing import Any\n"));
         assert!(result.contains("\nimport json\n"));

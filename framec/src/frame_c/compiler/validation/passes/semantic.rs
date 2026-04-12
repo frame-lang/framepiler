@@ -13,8 +13,8 @@
 
 use crate::frame_c::compiler::arcanum::Arcanum;
 use crate::frame_c::compiler::frame_ast::{
-    FrameAst, SystemAst, StateAst, HandlerAst, HandlerBody,
-    Statement, TransitionAst, ForwardAst, InterfaceMethod,
+    ForwardAst, FrameAst, HandlerAst, HandlerBody, InterfaceMethod, StateAst, Statement, SystemAst,
+    TransitionAst,
 };
 use crate::frame_c::compiler::validation::pass::{ValidationContext, ValidationPass};
 use crate::frame_c::compiler::validation::types::ValidationIssue;
@@ -58,7 +58,12 @@ impl ValidationPass for SemanticPass {
 
 impl SemanticPass {
     /// Validate a system
-    fn validate_system(&self, system: &SystemAst, arcanum: &Arcanum, issues: &mut Vec<ValidationIssue>) {
+    fn validate_system(
+        &self,
+        system: &SystemAst,
+        arcanum: &Arcanum,
+        issues: &mut Vec<ValidationIssue>,
+    ) {
         // Build lookup tables
         let state_map = self.build_state_map(system);
         let interface_methods = self.build_interface_map(system);
@@ -102,7 +107,10 @@ impl SemanticPass {
     }
 
     /// Build map of interface methods
-    fn build_interface_map<'a>(&self, system: &'a SystemAst) -> HashMap<String, &'a InterfaceMethod> {
+    fn build_interface_map<'a>(
+        &self,
+        system: &'a SystemAst,
+    ) -> HashMap<String, &'a InterfaceMethod> {
         let mut map = HashMap::new();
         for method in &system.interface {
             map.insert(method.name.clone(), method);
@@ -139,7 +147,7 @@ impl SemanticPass {
                         format!(
                             "State '{}' has invalid parent '{}'",
                             state.name, parent_name
-                        )
+                        ),
                     )
                     .with_span(state.span.clone())
                     .with_note(format!(
@@ -148,7 +156,7 @@ impl SemanticPass {
                     ))
                     .with_fix(format!(
                         "Change parent to an existing state or remove the parent reference"
-                    ))
+                    )),
                 );
             }
         }
@@ -211,7 +219,14 @@ impl SemanticPass {
             }
         }
 
-        self.validate_handler_body(system_name, state, &handler.body, state_map, arcanum, issues);
+        self.validate_handler_body(
+            system_name,
+            state,
+            &handler.body,
+            state_map,
+            arcanum,
+            issues,
+        );
     }
 
     /// Validate handler body statements
@@ -230,7 +245,14 @@ impl SemanticPass {
         for statement in &body.statements {
             match statement {
                 Statement::Transition(transition) => {
-                    self.validate_transition(system_name, state, transition, state_map, arcanum, issues);
+                    self.validate_transition(
+                        system_name,
+                        state,
+                        transition,
+                        state_map,
+                        arcanum,
+                        issues,
+                    );
                 }
                 Statement::Forward(forward) => {
                     self.validate_forward(state, forward, state_map, issues);
@@ -265,7 +287,14 @@ impl SemanticPass {
                 // NativeCode is always trivial — Frame is a preprocessor and cannot
                 // reason about native control flow (if/else, loops, switch, etc.).
                 let has_non_trivial_after = statements[idx + 1..].iter().any(|s| {
-                    matches!(s, Statement::Transition(_) | Statement::Forward(_) | Statement::StackPush(_) | Statement::StackPop(_) | Statement::TransitionForward(_))
+                    matches!(
+                        s,
+                        Statement::Transition(_)
+                            | Statement::Forward(_)
+                            | Statement::StackPush(_)
+                            | Statement::StackPop(_)
+                            | Statement::TransitionForward(_)
+                    )
                 });
                 if has_non_trivial_after {
                     let span = match &statements[idx] {
@@ -276,11 +305,13 @@ impl SemanticPass {
                     issues.push(
                         ValidationIssue::error(
                             "E400",
-                            "Transition/forward must be the last statement in its containing block"
+                            "Transition/forward must be the last statement in its containing block",
                         )
                         .with_span(span)
                         .with_note("Code after a transition is unreachable")
-                        .with_fix("Move the transition to the end of the block or remove code after it")
+                        .with_fix(
+                            "Move the transition to the end of the block or remove code after it",
+                        ),
                     );
                 }
             }
@@ -311,7 +342,8 @@ impl SemanticPass {
 
         if !state_map.contains_key(&transition.target) {
             // Use Arcanum for "did you mean" suggestions
-            let suggestion = arcanum.validate_transition(system_name, &transition.target)
+            let suggestion = arcanum
+                .validate_transition(system_name, &transition.target)
                 .err()
                 .unwrap_or_else(|| format!("Unknown state '{}'", transition.target));
 
@@ -325,12 +357,14 @@ impl SemanticPass {
                     .with_fix(format!(
                         "Add state ${}{{}} or correct the state name",
                         transition.target
-                    ))
+                    )),
             );
         } else {
             // E405: Check STATE PARAMETER arity
             // Transition args like -> $State(a, b) are passed to state params $State(a, b)
-            let Some(target_state) = state_map.get(&transition.target) else { return; };
+            let Some(target_state) = state_map.get(&transition.target) else {
+                return;
+            };
             if target_state.params.len() != transition.args.len() {
                 issues.push(
                     ValidationIssue::error(
@@ -340,7 +374,7 @@ impl SemanticPass {
                             transition.target,
                             target_state.params.len(),
                             transition.args.len()
-                        )
+                        ),
                     )
                     .with_span(transition.span.clone())
                     .with_note(format!(
@@ -351,7 +385,7 @@ impl SemanticPass {
                     .with_fix(format!(
                         "Provide {} argument(s) to the transition",
                         target_state.params.len()
-                    ))
+                    )),
                 );
             }
         }
@@ -373,26 +407,28 @@ impl SemanticPass {
                     format!(
                         "State '{}' cannot forward event '{}' - no parent state defined",
                         state.name, forward.event
-                    )
+                    ),
                 )
                 .with_span(forward.span.clone())
                 .with_note("Forward (>>) is only valid in hierarchical state machines")
                 .with_fix(format!(
                     "Add a parent state using '${}' => $ParentState {{ }}",
                     state.name
-                ))
+                )),
             );
         } else {
             // Check parent exists
-            let Some(parent_name) = state.parent.as_ref() else { return; };
+            let Some(parent_name) = state.parent.as_ref() else {
+                return;
+            };
             if !state_map.contains_key(parent_name) {
                 issues.push(
                     ValidationIssue::error(
                         "E403",
-                        format!("Cannot forward to invalid parent state '{}'", parent_name)
+                        format!("Cannot forward to invalid parent state '{}'", parent_name),
                     )
                     .with_span(forward.span.clone())
-                    .with_fix("Correct the parent state name")
+                    .with_fix("Correct the parent state name"),
                 );
             }
         }
@@ -414,7 +450,8 @@ impl SemanticPass {
         if state.params.is_empty() {
             "(none)".to_string()
         } else {
-            state.params
+            state
+                .params
                 .iter()
                 .map(|p| format!("{}: {:?}", p.name, p.param_type))
                 .collect::<Vec<_>>()
@@ -457,9 +494,7 @@ impl SemanticPass {
                         break;
                     }
                     visited.insert(parent_name.clone());
-                    current = state_map
-                        .get(parent_name)
-                        .and_then(|s| s.parent.as_ref());
+                    current = state_map.get(parent_name).and_then(|s| s.parent.as_ref());
                 }
             }
         }
@@ -532,11 +567,11 @@ impl SemanticPass {
                         format!(
                             "State '{}' is not reachable from start state '{}' in system '{}'",
                             state.name, start_state, system_name
-                        )
+                        ),
                     )
                     .with_span(state.span.clone())
                     .with_note("This state can never be entered during normal execution")
-                    .with_fix("Add a transition to this state or remove it if unused")
+                    .with_fix("Add a transition to this state or remove it if unused"),
                 );
             }
         }
@@ -547,8 +582,8 @@ impl SemanticPass {
 mod tests {
     use super::*;
     use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
-    use crate::frame_c::compiler::frame_parser::FrameParser;
     use crate::frame_c::compiler::frame_ast::TargetLanguage;
+    use crate::frame_c::compiler::frame_parser::FrameParser;
 
     fn make_context() -> ValidationContext<'static> {
         static CONFIG: crate::frame_c::compiler::validation::types::ValidationConfig =
@@ -626,7 +661,9 @@ mod tests {
         let issues = pass.run(&ast, &arcanum, &mut ctx);
 
         // Should report state expects 1 param but 3 provided
-        assert!(issues.iter().any(|i| i.code == "E405" && i.message.contains("expects 1")));
+        assert!(issues
+            .iter()
+            .any(|i| i.code == "E405" && i.message.contains("expects 1")));
     }
 
     #[test]
@@ -650,7 +687,9 @@ mod tests {
         let issues = pass.run(&ast, &arcanum, &mut ctx);
 
         // Should report state expects 0 params but 3 provided
-        assert!(issues.iter().any(|i| i.code == "E405" && i.message.contains("expects 0")));
+        assert!(issues
+            .iter()
+            .any(|i| i.code == "E405" && i.message.contains("expects 0")));
     }
 
     #[test]
@@ -674,7 +713,11 @@ mod tests {
         let pass = SemanticPass;
         let issues = pass.run(&ast, &arcanum, &mut ctx);
 
-        assert!(issues.is_empty(), "Expected no issues but got: {:?}", issues);
+        assert!(
+            issues.is_empty(),
+            "Expected no issues but got: {:?}",
+            issues
+        );
     }
 
     #[test]
@@ -703,8 +746,13 @@ mod tests {
         let issues = pass.run(&ast, &arcanum, &mut ctx);
 
         // Should have a warning about Orphan being unreachable
-        assert!(issues.iter().any(|i| i.code == "W414" && i.message.contains("Orphan")),
-            "Expected W414 warning for unreachable state, got: {:?}", issues);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.code == "W414" && i.message.contains("Orphan")),
+            "Expected W414 warning for unreachable state, got: {:?}",
+            issues
+        );
     }
 
     #[test]
@@ -730,7 +778,10 @@ mod tests {
         let issues = pass.run(&ast, &arcanum, &mut ctx);
 
         // Should have an error about cyclic parent
-        assert!(issues.iter().any(|i| i.code == "E413"),
-            "Expected E413 error for cyclic parent, got: {:?}", issues);
+        assert!(
+            issues.iter().any(|i| i.code == "E413"),
+            "Expected E413 error for cyclic parent, got: {:?}",
+            issues
+        );
     }
 }

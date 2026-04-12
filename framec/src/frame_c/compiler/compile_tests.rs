@@ -22,7 +22,10 @@ mod tests {
         let result = compile_module(invalid_frame, TargetLanguage::Python3);
 
         // Compilation should fail
-        assert!(result.is_err(), "Expected compilation to fail on validation error");
+        assert!(
+            result.is_err(),
+            "Expected compilation to fail on validation error"
+        );
 
         // Error message should contain E402
         let err = result.unwrap_err();
@@ -54,7 +57,10 @@ mod tests {
 
         let result = compile_module(invalid_frame, TargetLanguage::Python3);
 
-        assert!(result.is_err(), "Expected compilation to fail on E403 error");
+        assert!(
+            result.is_err(),
+            "Expected compilation to fail on E403 error"
+        );
 
         let err = result.unwrap_err();
         assert!(
@@ -84,7 +90,10 @@ mod tests {
 
         let result = compile_module(invalid_frame, TargetLanguage::Python3);
 
-        assert!(result.is_err(), "Expected compilation to fail on E405 error");
+        assert!(
+            result.is_err(),
+            "Expected compilation to fail on E405 error"
+        );
 
         let err = result.unwrap_err();
         assert!(
@@ -113,7 +122,10 @@ mod tests {
 }"#;
 
         let result = compile_module(invalid_frame, TargetLanguage::Python3);
-        assert!(result.is_err(), "Expected compilation to fail on E116 error");
+        assert!(
+            result.is_err(),
+            "Expected compilation to fail on E116 error"
+        );
 
         let err = result.unwrap_err();
         assert!(
@@ -139,7 +151,10 @@ mod tests {
 }"#;
 
         let result = compile_module(invalid_frame, TargetLanguage::Python3);
-        assert!(result.is_err(), "Expected compilation to fail on E410 error");
+        assert!(
+            result.is_err(),
+            "Expected compilation to fail on E410 error"
+        );
 
         let err = result.unwrap_err();
         assert!(
@@ -165,7 +180,10 @@ mod tests {
 }"#;
 
         let result = compile_module(invalid_frame, TargetLanguage::Python3);
-        assert!(result.is_err(), "Expected compilation to fail on E413 error");
+        assert!(
+            result.is_err(),
+            "Expected compilation to fail on E413 error"
+        );
 
         let err = result.unwrap_err();
         assert!(
@@ -241,9 +259,9 @@ mod tests {
             let err = result.unwrap_err();
             // Check for some kind of error about unknown method
             assert!(
-                err.error.contains("stop") ||
-                err.error.contains("E406") ||
-                err.error.contains("method"),
+                err.error.contains("stop")
+                    || err.error.contains("E406")
+                    || err.error.contains("method"),
                 "Expected error about unknown method, got: {}",
                 err.error
             );
@@ -269,12 +287,17 @@ mod tests {
 
         let result = compile_module(invalid_frame, TargetLanguage::Python3);
 
-        assert!(result.is_err(), "Expected compilation to fail on multiple errors");
+        assert!(
+            result.is_err(),
+            "Expected compilation to fail on multiple errors"
+        );
 
         let err = result.unwrap_err();
         // Should report at least one undefined state
         assert!(
-            err.error.contains("Unknown1") || err.error.contains("Unknown2") || err.error.contains("E402"),
+            err.error.contains("Unknown1")
+                || err.error.contains("Unknown2")
+                || err.error.contains("E402"),
             "Expected error about Unknown state, got: {}",
             err.error
         );
@@ -296,7 +319,10 @@ mod tests {
 
         let result = compile_module(invalid_frame, TargetLanguage::TypeScript);
 
-        assert!(result.is_err(), "Expected TypeScript compilation to fail on validation error");
+        assert!(
+            result.is_err(),
+            "Expected TypeScript compilation to fail on validation error"
+        );
 
         let err = result.unwrap_err();
         assert!(

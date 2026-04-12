@@ -9,9 +9,9 @@
 //! - Visibility via capitalization (uppercase = exported)
 //! - No generics in runtime types — uses `any` (interface{})
 
-use crate::frame_c::visitors::TargetLanguage;
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Go backend for code generation
 pub struct GoBackend;
@@ -27,9 +27,13 @@ impl LanguageBackend for GoBackend {
                     result.push_str(&self.emit(import, ctx));
                     result.push('\n');
                 }
-                if !imports.is_empty() && !items.is_empty() { result.push('\n'); }
+                if !imports.is_empty() && !items.is_empty() {
+                    result.push('\n');
+                }
                 for (i, item) in items.iter().enumerate() {
-                    if i > 0 { result.push_str("\n\n"); }
+                    if i > 0 {
+                        result.push_str("\n\n");
+                    }
                     result.push_str(&self.emit(item, ctx));
                 }
                 result
@@ -39,7 +43,12 @@ impl LanguageBackend for GoBackend {
                 format!("import \"{}\"", module)
             }
 
-            CodegenNode::Class { name, fields, methods, .. } => {
+            CodegenNode::Class {
+                name,
+                fields,
+                methods,
+                ..
+            } => {
                 // Go: emit struct definition + separate method definitions
                 let mut result = String::new();
 
@@ -50,7 +59,9 @@ impl LanguageBackend for GoBackend {
                     if let Some(ref raw_code) = field.raw_code {
                         result.push_str(&format!("{}{}\n", ctx.get_indent(), raw_code));
                     } else {
-                        let type_ann = field.type_annotation.as_ref()
+                        let type_ann = field
+                            .type_annotation
+                            .as_ref()
                             .map(|t| self.map_type(t))
                             .unwrap_or_else(|| "any".to_string());
                         // Go: lowercase fields are unexported (private)
@@ -58,7 +69,12 @@ impl LanguageBackend for GoBackend {
                             Visibility::Public => capitalize_first(&field.name),
                             _ => field.name.clone(),
                         };
-                        result.push_str(&format!("{}{} {}\n", ctx.get_indent(), field_name, type_ann));
+                        result.push_str(&format!(
+                            "{}{} {}\n",
+                            ctx.get_indent(),
+                            field_name,
+                            type_ann
+                        ));
                     }
                 }
                 ctx.pop_indent();
@@ -79,9 +95,20 @@ impl LanguageBackend for GoBackend {
                 ctx.push_indent();
                 for (i, variant) in variants.iter().enumerate() {
                     if i == 0 {
-                        result.push_str(&format!("{}{}_{} {} = iota\n", ctx.get_indent(), name, variant.name, name));
+                        result.push_str(&format!(
+                            "{}{}_{} {} = iota\n",
+                            ctx.get_indent(),
+                            name,
+                            variant.name,
+                            name
+                        ));
                     } else {
-                        result.push_str(&format!("{}{}_{}\n", ctx.get_indent(), name, variant.name));
+                        result.push_str(&format!(
+                            "{}{}_{}\n",
+                            ctx.get_indent(),
+                            name,
+                            variant.name
+                        ));
                     }
                 }
                 ctx.pop_indent();
@@ -89,7 +116,15 @@ impl LanguageBackend for GoBackend {
                 result
             }
 
-            CodegenNode::Method { name, params, return_type, body, is_static, visibility, .. } => {
+            CodegenNode::Method {
+                name,
+                params,
+                return_type,
+                body,
+                is_static,
+                visibility,
+                ..
+            } => {
                 // Go: static methods become package-level functions
                 // Instance methods use receiver: func (s *ClassName) name(...)
                 let go_name = match visibility {
@@ -100,18 +135,34 @@ impl LanguageBackend for GoBackend {
                 let params_str = self.emit_params(params);
                 let return_str = if let Some(rt) = return_type {
                     let mapped = self.map_type(rt);
-                    if mapped.is_empty() { String::new() } else { format!(" {}", mapped) }
+                    if mapped.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", mapped)
+                    }
                 } else {
                     String::new()
                 };
 
                 let mut result = if *is_static || system_name.is_empty() {
                     // Package-level function
-                    format!("{}func {}({}){} {{\n", ctx.get_indent(), go_name, params_str, return_str)
+                    format!(
+                        "{}func {}({}){} {{\n",
+                        ctx.get_indent(),
+                        go_name,
+                        params_str,
+                        return_str
+                    )
                 } else {
                     // Method with receiver
-                    format!("{}func (s *{}) {}({}){} {{\n",
-                        ctx.get_indent(), system_name, go_name, params_str, return_str)
+                    format!(
+                        "{}func (s *{}) {}({}){} {{\n",
+                        ctx.get_indent(),
+                        system_name,
+                        go_name,
+                        params_str,
+                        return_str
+                    )
                 };
 
                 ctx.push_indent();
@@ -132,8 +183,13 @@ impl LanguageBackend for GoBackend {
                 let class_name = system_name.clone();
                 let params_str = self.emit_params(params);
 
-                let mut result = format!("{}func New{}({}) *{} {{\n",
-                    ctx.get_indent(), class_name, params_str, class_name);
+                let mut result = format!(
+                    "{}func New{}({}) *{} {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    params_str,
+                    class_name
+                );
                 ctx.push_indent();
                 result.push_str(&format!("{}s := &{}{{}}\n", ctx.get_indent(), class_name));
 
@@ -150,20 +206,40 @@ impl LanguageBackend for GoBackend {
                 result
             }
 
-            CodegenNode::VarDecl { name, type_annotation, init, is_const: _ } => {
+            CodegenNode::VarDecl {
+                name,
+                type_annotation,
+                init,
+                is_const: _,
+            } => {
                 if let Some(init_expr) = init {
                     // Short declaration with init
-                    format!("{}{} := {}", ctx.get_indent(), name, self.emit(init_expr, ctx))
+                    format!(
+                        "{}{} := {}",
+                        ctx.get_indent(),
+                        name,
+                        self.emit(init_expr, ctx)
+                    )
                 } else if let Some(ref type_ann) = type_annotation {
                     // Declaration without init — use var
-                    format!("{}var {} {}", ctx.get_indent(), name, self.map_type(type_ann))
+                    format!(
+                        "{}var {} {}",
+                        ctx.get_indent(),
+                        name,
+                        self.map_type(type_ann)
+                    )
                 } else {
                     format!("{}var {} any", ctx.get_indent(), name)
                 }
             }
 
             CodegenNode::Assignment { target, value } => {
-                format!("{}{} = {}", ctx.get_indent(), self.emit(target, ctx), self.emit(value, ctx))
+                format!(
+                    "{}{} = {}",
+                    ctx.get_indent(),
+                    self.emit(target, ctx),
+                    self.emit(value, ctx)
+                )
             }
 
             CodegenNode::Return { value } => {
@@ -174,8 +250,13 @@ impl LanguageBackend for GoBackend {
                 }
             }
 
-            CodegenNode::If { condition, then_block, else_block } => {
-                let mut result = format!("{}if {} {{\n", ctx.get_indent(), self.emit(condition, ctx));
+            CodegenNode::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let mut result =
+                    format!("{}if {} {{\n", ctx.get_indent(), self.emit(condition, ctx));
                 ctx.push_indent();
                 for stmt in then_block {
                     result.push_str(&self.emit(stmt, ctx));
@@ -197,9 +278,17 @@ impl LanguageBackend for GoBackend {
             }
 
             CodegenNode::Match { scrutinee, arms } => {
-                let mut result = format!("{}switch {} {{\n", ctx.get_indent(), self.emit(scrutinee, ctx));
+                let mut result = format!(
+                    "{}switch {} {{\n",
+                    ctx.get_indent(),
+                    self.emit(scrutinee, ctx)
+                );
                 for arm in arms {
-                    result.push_str(&format!("{}case {}:\n", ctx.get_indent(), self.emit(&arm.pattern, ctx)));
+                    result.push_str(&format!(
+                        "{}case {}:\n",
+                        ctx.get_indent(),
+                        self.emit(&arm.pattern, ctx)
+                    ));
                     ctx.push_indent();
                     for stmt in &arm.body {
                         result.push_str(&self.emit(stmt, ctx));
@@ -212,7 +301,8 @@ impl LanguageBackend for GoBackend {
             }
 
             CodegenNode::While { condition, body } => {
-                let mut result = format!("{}for {} {{\n", ctx.get_indent(), self.emit(condition, ctx));
+                let mut result =
+                    format!("{}for {} {{\n", ctx.get_indent(), self.emit(condition, ctx));
                 ctx.push_indent();
                 for stmt in body {
                     result.push_str(&self.emit(stmt, ctx));
@@ -223,8 +313,17 @@ impl LanguageBackend for GoBackend {
                 result
             }
 
-            CodegenNode::For { var, iterable, body } => {
-                let mut result = format!("{}for _, {} := range {} {{\n", ctx.get_indent(), var, self.emit(iterable, ctx));
+            CodegenNode::For {
+                var,
+                iterable,
+                body,
+            } => {
+                let mut result = format!(
+                    "{}for _, {} := range {} {{\n",
+                    ctx.get_indent(),
+                    var,
+                    self.emit(iterable, ctx)
+                );
                 ctx.push_indent();
                 for stmt in body {
                     result.push_str(&self.emit(stmt, ctx));
@@ -253,9 +352,18 @@ impl LanguageBackend for GoBackend {
                 format!("{}({})", self.emit(target, ctx), args_str.join(", "))
             }
 
-            CodegenNode::MethodCall { object, method, args } => {
+            CodegenNode::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
-                format!("{}.{}({})", self.emit(object, ctx), method, args_str.join(", "))
+                format!(
+                    "{}.{}({})",
+                    self.emit(object, ctx),
+                    method,
+                    args_str.join(", ")
+                )
             }
 
             CodegenNode::FieldAccess { object, field } => {
@@ -281,22 +389,39 @@ impl LanguageBackend for GoBackend {
                 if pairs.is_empty() {
                     "map[string]any{}".to_string()
                 } else {
-                    let pairs_str: Vec<String> = pairs.iter().map(|(k, v)| {
-                        format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx))
-                    }).collect();
+                    let pairs_str: Vec<String> = pairs
+                        .iter()
+                        .map(|(k, v)| format!("{}: {}", self.emit(k, ctx), self.emit(v, ctx)))
+                        .collect();
                     format!("map[string]any{{{}}}", pairs_str.join(", "))
                 }
             }
 
-            CodegenNode::Ternary { condition, then_expr, else_expr } => {
+            CodegenNode::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 // Go has no ternary — use inline func
-                format!("func() any {{ if {} {{ return {} }}; return {} }}()",
-                    self.emit(condition, ctx), self.emit(then_expr, ctx), self.emit(else_expr, ctx))
+                format!(
+                    "func() any {{ if {} {{ return {} }}; return {} }}()",
+                    self.emit(condition, ctx),
+                    self.emit(then_expr, ctx),
+                    self.emit(else_expr, ctx)
+                )
             }
 
             CodegenNode::Lambda { params, body } => {
-                let params_str = params.iter().map(|p| format!("{} any", p.name)).collect::<Vec<_>>().join(", ");
-                format!("func({}) any {{ return {} }}", params_str, self.emit(body, ctx))
+                let params_str = params
+                    .iter()
+                    .map(|p| format!("{} any", p.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "func({}) any {{ return {} }}",
+                    params_str,
+                    self.emit(body, ctx)
+                )
             }
 
             CodegenNode::Cast { expr, target_type } => {
@@ -315,12 +440,22 @@ impl LanguageBackend for GoBackend {
             }
 
             // Frame-specific nodes
-            CodegenNode::Transition { target_state, indent, .. } => {
+            CodegenNode::Transition {
+                target_state,
+                indent,
+                ..
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
-                format!("{}s.__transition(&{}Compartment{{state: \"{}\"}})",
-                    ind, system_name, target_state)
+                format!(
+                    "{}s.__transition(&{}Compartment{{state: \"{}\"}})",
+                    ind, system_name, target_state
+                )
             }
-            CodegenNode::ChangeState { target_state, indent, .. } => {
+            CodegenNode::ChangeState {
+                target_state,
+                indent,
+                ..
+            } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 format!("{}// change_state to {}", ind, target_state)
             }
@@ -330,14 +465,19 @@ impl LanguageBackend for GoBackend {
             }
             CodegenNode::StackPush { indent } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
-                format!("{}s._state_stack = append(s._state_stack, s.__compartment.copy())", ind)
+                format!(
+                    "{}s._state_stack = append(s._state_stack, s.__compartment.copy())",
+                    ind
+                )
             }
             CodegenNode::StackPop { indent } => {
                 let ind = format!("{}{}", ctx.get_indent(), " ".repeat(*indent));
                 format!("{}__popped := s._state_stack[len(s._state_stack)-1]\n{}s._state_stack = s._state_stack[:len(s._state_stack)-1]\n{}s.__transition(__popped)",
                     ind, ind, ind)
             }
-            CodegenNode::StateContext { state_name } => format!("s._state_context[\"{}\"]", state_name),
+            CodegenNode::StateContext { state_name } => {
+                format!("s._state_context[\"{}\"]", state_name)
+            }
 
             CodegenNode::SendEvent { event, args } => {
                 let args_str: Vec<String> = args.iter().map(|a| self.emit(a, ctx)).collect();
@@ -370,17 +510,28 @@ impl LanguageBackend for GoBackend {
         vec![]
     }
 
-    fn class_syntax(&self) -> ClassSyntax { ClassSyntax::go() }
-    fn target_language(&self) -> TargetLanguage { TargetLanguage::Go }
-    fn null_keyword(&self) -> &'static str { "nil" }
+    fn class_syntax(&self) -> ClassSyntax {
+        ClassSyntax::go()
+    }
+    fn target_language(&self) -> TargetLanguage {
+        TargetLanguage::Go
+    }
+    fn null_keyword(&self) -> &'static str {
+        "nil"
+    }
 }
 
 impl GoBackend {
     fn emit_params(&self, params: &[Param]) -> String {
-        params.iter().map(|p| {
-            let type_ann = self.map_type(p.type_annotation.as_ref().unwrap_or(&"any".to_string()));
-            format!("{} {}", p.name, type_ann)
-        }).collect::<Vec<_>>().join(", ")
+        params
+            .iter()
+            .map(|p| {
+                let type_ann =
+                    self.map_type(p.type_annotation.as_ref().unwrap_or(&"any".to_string()));
+                format!("{} {}", p.name, type_ann)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     fn map_type(&self, t: &str) -> String {

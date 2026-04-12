@@ -29,9 +29,18 @@ impl BodyCloser for BodyCloserJs {
         fsm.scan();
         match fsm.error_kind {
             0 => Ok(fsm.result_pos),
-            1 => Err(CloseError { kind: CloseErrorKind::UnterminatedString, message: fsm.error_msg }),
-            2 => Err(CloseError { kind: CloseErrorKind::UnterminatedComment, message: fsm.error_msg }),
-            _ => Err(CloseError { kind: CloseErrorKind::UnmatchedBraces, message: fsm.error_msg }),
+            1 => Err(CloseError {
+                kind: CloseErrorKind::UnterminatedString,
+                message: fsm.error_msg,
+            }),
+            2 => Err(CloseError {
+                kind: CloseErrorKind::UnterminatedComment,
+                message: fsm.error_msg,
+            }),
+            _ => Err(CloseError {
+                kind: CloseErrorKind::UnmatchedBraces,
+                message: fsm.error_msg,
+            }),
         }
     }
 }

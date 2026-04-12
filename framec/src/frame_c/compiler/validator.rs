@@ -1,17 +1,22 @@
-use crate::frame_c::compiler::mir::MirItem;
-use crate::frame_c::compiler::native_region_scanner::Region;
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::outline_scanner::OutlineItem;
-use std::collections::HashSet;
 use super::arcanum::Arcanum;
 use super::ast::{ModuleAst, SystemSectionKind};
 use super::system_param_semantics::{collect_domain_vars_per_system, first_state_for_system};
+use crate::frame_c::compiler::mir::MirItem;
+use crate::frame_c::compiler::native_region_scanner::Region;
+use crate::frame_c::compiler::outline_scanner::OutlineItem;
+use crate::frame_c::visitors::TargetLanguage;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
-pub struct ValidationIssue { pub message: String }
+pub struct ValidationIssue {
+    pub message: String,
+}
 
 #[derive(Debug, Clone)]
-pub struct ValidationResult { pub ok: bool, pub issues: Vec<ValidationIssue> }
+pub struct ValidationResult {
+    pub ok: bool,
+    pub issues: Vec<ValidationIssue>,
+}
 
 pub struct Validator;
 
@@ -32,7 +37,10 @@ pub struct ModuleSemanticContext {
 impl Validator {
     // Structural validation placeholder; block-scoped terminal rule enforced in validate_terminal_last_native.
     pub fn validate_regions_mir(&self, _regions: &[Region], _mir: &[MirItem]) -> ValidationResult {
-        ValidationResult { ok: true, issues: Vec::new() }
+        ValidationResult {
+            ok: true,
+            issues: Vec::new(),
+        }
     }
 
     /// Build a semantic context for a module after syntactic/outline checks have succeeded.
@@ -53,21 +61,23 @@ impl Validator {
     ) -> (ModuleSemanticContext, Vec<ValidationIssue>) {
         let mut issues = Vec::new();
         // Tolerant outline scan (collects E111 and similar diagnostics).
-        let (items, outline_issues) =
-            crate::frame_c::compiler::outline_scanner::OutlineScanner.scan_collect(bytes, outline_start, lang);
+        let (items, outline_issues) = crate::frame_c::compiler::outline_scanner::OutlineScanner
+            .scan_collect(bytes, outline_start, lang);
         issues.extend(outline_issues);
         // Section placement: actions/operations/handlers must live in correct sections.
         let outer_issues = self.validate_outer_grammar(bytes, outline_start, lang, &items);
         issues.extend(outer_issues);
         // System block ordering and per-system machine state headers are driven from ModuleAst.
-        let module_ast = crate::frame_c::compiler::system_parser::SystemParser::parse_module(bytes, lang);
+        let module_ast =
+            crate::frame_c::compiler::system_parser::SystemParser::parse_module(bytes, lang);
         let block_order_issues = self.validate_system_block_order_ast(&module_ast);
         issues.extend(block_order_issues);
         let state_issues = self.validate_machine_state_headers_ast(bytes, &module_ast);
         issues.extend(state_issues);
         // Collect coarse state names and build Arcanum symbol table.
         let known_states = self.collect_machine_state_names(bytes, outline_start);
-        let arcanum = crate::frame_c::compiler::arcanum::build_arcanum_from_module_ast(bytes, &module_ast);
+        let arcanum =
+            crate::frame_c::compiler::arcanum::build_arcanum_from_module_ast(bytes, &module_ast);
         // Handlers must be nested inside a state block in machine:, now validated against Arcanum/AST.
         let handler_scope_issues =
             self.validate_handlers_in_state_ast(bytes, &items, &module_ast, &arcanum);
@@ -84,16 +94,27 @@ impl Validator {
 
     // Check that transition state_args arity matches STATE PARAMS
     // Transition args like -> $State(a, b) are passed to state params $State(a, b)
-    pub fn validate_transition_state_arity_arcanum(&self, mir: &[MirItem], arc: &Arcanum, system: Option<&str>) -> Vec<ValidationIssue> {
+    pub fn validate_transition_state_arity_arcanum(
+        &self,
+        mir: &[MirItem],
+        arc: &Arcanum,
+        system: Option<&str>,
+    ) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
         let sys = system.unwrap_or("_");
         for m in mir {
-            if let MirItem::Transition{ target, state_args, .. } = m {
+            if let MirItem::Transition {
+                target, state_args, ..
+            } = m
+            {
                 if let Some(expected) = arc.get_state_param_count(sys, target) {
                     let got = state_args.len();
                     if expected != got {
                         issues.push(ValidationIssue {
-                            message: format!("E405: State '{}' expects {} param(s) but transition supplies {}", target, expected, got)
+                            message: format!(
+                                "E405: State '{}' expects {} param(s) but transition supplies {}",
+                                target, expected, got
+                            ),
                         });
                     }
                 }
@@ -116,7 +137,8 @@ impl Validator {
     ) -> Vec<ValidationIssue> {
         let mut issues: Vec<ValidationIssue> = Vec::new();
         // Parse all systems once to obtain system parameters per name.
-        let module_ast = crate::frame_c::compiler::system_parser::SystemParser::parse_module(bytes, lang);
+        let module_ast =
+            crate::frame_c::compiler::system_parser::SystemParser::parse_module(bytes, lang);
         let mut sys_params_by_name: std::collections::HashMap<String, super::ast::SystemParamsAst> =
             std::collections::HashMap::new();
         for sys in module_ast.systems {
@@ -180,8 +202,10 @@ impl Validator {
 
             // E416: start params must match start state params (order-insensitive, name-based).
             if !start_params.is_empty() || !start_state.params.is_empty() {
-                let mut sys_params = start_params.clone(); sys_params.sort();
-                let mut state_params = start_state.params.clone(); state_params.sort();
+                let mut sys_params = start_params.clone();
+                sys_params.sort();
+                let mut state_params = start_state.params.clone();
+                state_params.sort();
                 if sys_params != state_params {
                     issues.push(ValidationIssue {
                         message: format!(
@@ -195,7 +219,10 @@ impl Validator {
             // E417: enter params must match start state's $>() handler params.
             if !enter_params.is_empty() {
                 // Use the machine-section parser to locate the state's $>() handler.
-                let module_ast = crate::frame_c::compiler::system_parser::SystemParser::parse_module(bytes, lang);
+                let module_ast =
+                    crate::frame_c::compiler::system_parser::SystemParser::parse_module(
+                        bytes, lang,
+                    );
                 let mut machine_span: Option<crate::frame_c::compiler::ast::Span> = None;
                 for sys in &module_ast.systems {
                     if sys.name == *sys_name {
@@ -208,11 +235,7 @@ impl Validator {
                         .find_entry_params_in_machine(bytes, &span, &start_state.name, lang),
                     None => None,
                 };
-                if std::env::var("FRAME_DEBUG_SYSPARAMS")
-                    .ok()
-                    .as_deref()
-                    == Some("1")
-                {
+                if std::env::var("FRAME_DEBUG_SYSPARAMS").ok().as_deref() == Some("1") {
                     eprintln!(
                         "[sysparams] system={} start_state={} entry_params={:?}",
                         sys_name, start_state.name, entry_params
@@ -228,8 +251,10 @@ impl Validator {
                         });
                     }
                     Some(hdr_params) => {
-                        let mut sys_params = enter_params.clone(); sys_params.sort();
-                        let mut hdr_sorted = hdr_params.clone(); hdr_sorted.sort();
+                        let mut sys_params = enter_params.clone();
+                        sys_params.sort();
+                        let mut hdr_sorted = hdr_params.clone();
+                        hdr_sorted.sort();
                         if sys_params != hdr_sorted {
                             issues.push(ValidationIssue {
                                 message: format!(
@@ -267,45 +292,63 @@ impl Validator {
     // host-language rules.
 
     // Strict terminal check: Transition must be last statement in its containing block
-    pub fn validate_terminal_last_native(&self, bytes: &[u8], regions: &[Region], mir: &[MirItem], lang: crate::frame_c::visitors::TargetLanguage) -> Vec<ValidationIssue> {
+    pub fn validate_terminal_last_native(
+        &self,
+        bytes: &[u8],
+        regions: &[Region],
+        mir: &[MirItem],
+        lang: crate::frame_c::visitors::TargetLanguage,
+    ) -> Vec<ValidationIssue> {
         let mut issues: Vec<ValidationIssue> = Vec::new();
         let mut mi = 0usize;
         let mut idx = 0usize;
         while idx < regions.len() {
             match &regions[idx] {
-                Region::FrameSegment{ span, .. } => {
+                Region::FrameSegment { span, .. } => {
                     if mi >= mir.len() {
                         // Parse failed earlier; avoid indexing beyond MIR items.
                         break;
                     }
                     let m = &mir[mi];
                     mi += 1;
-                    if let MirItem::Transition{..} = m {
+                    if let MirItem::Transition { .. } = m {
                         // Enforce block-scope terminal: from end of this segment forward, allow only comment/whitespace
                         // until the containing block closes; first non-comment token before that is a violation.
                         let start = span.end;
-                        if let Some(_) = find_violation_before_block_close(bytes, regions, idx+1, start, lang) {
+                        if let Some(_) =
+                            find_violation_before_block_close(bytes, regions, idx + 1, start, lang)
+                        {
                             issues.push(ValidationIssue { message: "E400: Transition must be last statement in its containing block".to_string() });
                             // continue scanning to report multiple violations if present
                         }
                     }
                     idx += 1;
                 }
-                Region::NativeText{ .. } => { idx += 1; }
+                Region::NativeText { .. } => {
+                    idx += 1;
+                }
             }
         }
         issues
     }
 
     // Expanded API with body-kind policy (not yet wired with full module context).
-    pub fn validate_regions_mir_with_policy(&self, regions: &[Region], mir: &[MirItem], policy: ValidatorPolicy) -> ValidationResult {
+    pub fn validate_regions_mir_with_policy(
+        &self,
+        regions: &[Region],
+        mir: &[MirItem],
+        policy: ValidatorPolicy,
+    ) -> ValidationResult {
         let mut res = self.validate_regions_mir(regions, mir);
         if let Some(kind) = policy.body_kind {
             match kind {
                 BodyKind::Action | BodyKind::Operation => {
                     if !mir.is_empty() {
                         // Frame statements are disallowed in actions/ops. Only advisory for now.
-                        res.issues.push(ValidationIssue { message: "E401: Frame statements are not allowed in actions/operations".to_string() });
+                        res.issues.push(ValidationIssue {
+                            message: "E401: Frame statements are not allowed in actions/operations"
+                                .to_string(),
+                        });
                     }
                 }
                 BodyKind::Handler | BodyKind::Function | BodyKind::Unknown => {}
@@ -329,7 +372,9 @@ impl Validator {
         }
         for r in regions {
             if let Region::NativeText { span } = r {
-                if span.end <= span.start || span.end > body_bytes.len() { continue; }
+                if span.end <= span.start || span.end > body_bytes.len() {
+                    continue;
+                }
                 let seg = &body_bytes[span.start..span.end];
                 let mut i = 0usize;
                 while i + 6 < seg.len() {
@@ -365,7 +410,10 @@ impl Validator {
                             let name = String::from_utf8_lossy(&seg[name_start..j]).to_string();
                             if !name.is_empty() && !interface_methods.contains(&name) {
                                 issues.push(ValidationIssue {
-                                    message: format!("E406: system.{} call must target an interface method", name),
+                                    message: format!(
+                                        "E406: system.{} call must target an interface method",
+                                        name
+                                    ),
                                 });
                             }
                             i = j;
@@ -379,11 +427,21 @@ impl Validator {
         issues
     }
 
-
     // Outer grammar structural checks (headers inside sections)
-    pub fn validate_outer_grammar(&self, bytes: &[u8], start: usize, _lang: TargetLanguage, outline: &[OutlineItem]) -> Vec<ValidationIssue> {
+    pub fn validate_outer_grammar(
+        &self,
+        bytes: &[u8],
+        start: usize,
+        _lang: TargetLanguage,
+        outline: &[OutlineItem],
+    ) -> Vec<ValidationIssue> {
         #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Sec { Actions, Operations, Interface, Machine }
+        enum Sec {
+            Actions,
+            Operations,
+            Interface,
+            Machine,
+        }
         // Collect section spans: [start,end)
         let mut secs: Vec<(usize, usize, Sec)> = Vec::new();
         // Single pass to record section line starts
@@ -392,12 +450,24 @@ impl Validator {
         let mut marks: Vec<(usize, Sec)> = Vec::new();
         while i < n {
             // skip to SOL non-space
-            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n') { i += 1; }
-            if i >= n { break; }
+            while i < n
+                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
+            {
+                i += 1;
+            }
+            if i >= n {
+                break;
+            }
             let line_start = i;
             // read ident
-            let mut j = i; while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
-            let kw_start = j; while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
+            let mut j = i;
+            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            let kw_start = j;
+            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
             if kw_start < j && j < n && bytes[j] == b':' {
                 let kw = String::from_utf8_lossy(&bytes[kw_start..j]).to_ascii_lowercase();
                 let sec = match kw.as_str() {
@@ -407,14 +477,22 @@ impl Validator {
                     "machine" => Some(Sec::Machine),
                     _ => None,
                 };
-                if let Some(s) = sec { marks.push((line_start, s)); }
+                if let Some(s) = sec {
+                    marks.push((line_start, s));
+                }
             }
-            while i < n && bytes[i] != b'\n' { i += 1; }
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
         }
         // Build ranges
         for idx in 0..marks.len() {
             let (spos, sec) = marks[idx];
-            let epos = if idx + 1 < marks.len() { marks[idx+1].0 } else { n };
+            let epos = if idx + 1 < marks.len() {
+                marks[idx + 1].0
+            } else {
+                n
+            };
             secs.push((spos, epos, sec));
         }
         // Validate each outline item header lies within an appropriate section
@@ -423,20 +501,33 @@ impl Validator {
             let hs = it.header_span.start;
             // find containing section
             let mut sec_kind: Option<Sec> = None;
-            for (s,e,sec) in &secs { if hs >= *s && hs < *e { sec_kind = Some(*sec); break; } }
+            for (s, e, sec) in &secs {
+                if hs >= *s && hs < *e {
+                    sec_kind = Some(*sec);
+                    break;
+                }
+            }
             match it.kind {
                 super::validator::BodyKind::Action => {
-                    if sec_kind != Some(Sec::Actions) { issues.push(ValidationIssue{ message: "action body outside actions: section".into() }); }
+                    if sec_kind != Some(Sec::Actions) {
+                        issues.push(ValidationIssue {
+                            message: "action body outside actions: section".into(),
+                        });
+                    }
                 }
                 super::validator::BodyKind::Operation => {
-                    if sec_kind != Some(Sec::Operations) { issues.push(ValidationIssue{ message: "operation body outside operations: section".into() }); }
+                    if sec_kind != Some(Sec::Operations) {
+                        issues.push(ValidationIssue {
+                            message: "operation body outside operations: section".into(),
+                        });
+                    }
                 }
                 super::validator::BodyKind::Handler => {
                     // Machine handlers must live under `machine:`, but interface
                     // handlers are also valid and should not trigger this check.
                     if sec_kind != Some(Sec::Machine) && sec_kind != Some(Sec::Interface) {
-                        issues.push(ValidationIssue{
-                            message: "handler body outside machine: section".into()
+                        issues.push(ValidationIssue {
+                            message: "handler body outside machine: section".into(),
                         });
                     }
                 }
@@ -453,12 +544,18 @@ impl Validator {
     /// This is a module-level semantic constraint used to decide runnable modules.
     /// We detect `fn main` and `async fn main` from header text rather than relying
     /// on outline owner_id, to keep tolerant scan behavior simple.
-    pub fn validate_main_functions(&self, bytes: &[u8], outline: &[OutlineItem]) -> Vec<ValidationIssue> {
+    pub fn validate_main_functions(
+        &self,
+        bytes: &[u8],
+        outline: &[OutlineItem],
+    ) -> Vec<ValidationIssue> {
         let mut main_count = 0usize;
         for it in outline {
             if let BodyKind::Function = it.kind {
                 let span = it.header_span;
-                if span.end <= span.start || span.end > bytes.len() { continue; }
+                if span.end <= span.start || span.end > bytes.len() {
+                    continue;
+                }
                 if let Ok(hdr) = std::str::from_utf8(&bytes[span.start..span.end]) {
                     let s = hdr.trim_start();
                     if s.starts_with("fn main(") || s.starts_with("async fn main(") {
@@ -549,7 +646,10 @@ impl Validator {
                 while p < end {
                     // Skip leading whitespace and blank lines.
                     while p < end
-                        && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n')
+                        && (bytes[p] == b' '
+                            || bytes[p] == b'\t'
+                            || bytes[p] == b'\r'
+                            || bytes[p] == b'\n')
                     {
                         p += 1;
                     }
@@ -585,8 +685,7 @@ impl Validator {
                     // Check for a potential state header starting with '$'.
                     if bytes[p] == b'$' {
                         let next = if p + 1 < end { bytes[p + 1] } else { b'\n' };
-                        let is_ident_start =
-                            next.is_ascii_alphabetic() || next == b'_';
+                        let is_ident_start = next.is_ascii_alphabetic() || next == b'_';
                         if is_ident_start {
                             // Scan to end of line or first '{'.
                             let mut q = p;
@@ -600,8 +699,9 @@ impl Validator {
                             }
                             if !seen_lbrace {
                                 issues.push(ValidationIssue {
-                                    message: "E112: missing '{' after state header in machine: section"
-                                        .into(),
+                                    message:
+                                        "E112: missing '{' after state header in machine: section"
+                                            .into(),
                                 });
                             }
                         }
@@ -616,61 +716,110 @@ impl Validator {
         issues
     }
 
-    pub fn validate_machine_state_headers(&self, bytes: &[u8], start: usize) -> Vec<ValidationIssue> {
+    pub fn validate_machine_state_headers(
+        &self,
+        bytes: &[u8],
+        start: usize,
+    ) -> Vec<ValidationIssue> {
         // Find machine: sections and ensure any '$State' header has a following '{'
         #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Sec { Machine, Other }
+        enum Sec {
+            Machine,
+            Other,
+        }
         let n = bytes.len();
         let mut i = start;
         let mut marks: Vec<(usize, Sec)> = Vec::new();
         while i < n {
-            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n') { i += 1; }
-            if i >= n { break; }
+            while i < n
+                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
+            {
+                i += 1;
+            }
+            if i >= n {
+                break;
+            }
             let line_start = i;
-            let mut j = i; while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
-            let kw_start = j; while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
+            let mut j = i;
+            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            let kw_start = j;
+            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
             if kw_start < j && j < n && bytes[j] == b':' {
                 let kw = String::from_utf8_lossy(&bytes[kw_start..j]).to_ascii_lowercase();
-                if kw.as_str() == "machine" { marks.push((line_start, Sec::Machine)); }
-                else { marks.push((line_start, Sec::Other)); }
+                if kw.as_str() == "machine" {
+                    marks.push((line_start, Sec::Machine));
+                } else {
+                    marks.push((line_start, Sec::Other));
+                }
             }
-            while i < n && bytes[i] != b'\n' { i += 1; }
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
         }
         // Build section ranges
         let mut secs: Vec<(usize, usize, Sec)> = Vec::new();
         for idx in 0..marks.len() {
             let (spos, sec) = marks[idx];
-            let epos = if idx + 1 < marks.len() { marks[idx+1].0 } else { n };
+            let epos = if idx + 1 < marks.len() {
+                marks[idx + 1].0
+            } else {
+                n
+            };
             secs.push((spos, epos, sec));
         }
         let mut issues: Vec<ValidationIssue> = Vec::new();
         for (s, e, sec) in secs {
-            if sec != Sec::Machine { continue; }
+            if sec != Sec::Machine {
+                continue;
+            }
             let mut p = s;
             while p < e {
                 // next SOL
-                while p < e && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') { p += 1; }
-                if p >= e { break; }
+                while p < e
+                    && (bytes[p] == b' '
+                        || bytes[p] == b'\t'
+                        || bytes[p] == b'\r'
+                        || bytes[p] == b'\n')
+                {
+                    p += 1;
+                }
+                if p >= e {
+                    break;
+                }
                 // check for state header starting with '$'
                 if bytes[p] == b'$' {
                     // Distinguish state headers ("$Name {") from Frame statements ("$$[+]", "=> $^", etc.).
                     // State header requires an identifier start after '$'.
-                    let next = if p + 1 < e { bytes[p+1] } else { b'\n' };
+                    let next = if p + 1 < e { bytes[p + 1] } else { b'\n' };
                     let is_ident_start = next.is_ascii_alphabetic() || next == b'_';
                     if is_ident_start {
                         // scan to end of physical line or first '{'
                         let mut q = p;
                         let mut seen_lbrace = false;
                         while q < e && bytes[q] != b'\n' {
-                            if bytes[q] == b'{' { seen_lbrace = true; break; }
+                            if bytes[q] == b'{' {
+                                seen_lbrace = true;
+                                break;
+                            }
                             q += 1;
                         }
-                        if !seen_lbrace { issues.push(ValidationIssue{ message: "E112: missing '{' after state header in machine: section".into() }); }
+                        if !seen_lbrace {
+                            issues.push(ValidationIssue {
+                                message: "E112: missing '{' after state header in machine: section"
+                                    .into(),
+                            });
+                        }
                     } else {
                         // It's a Frame statement at SOL inside machine; skip for state-header validation.
                     }
                 }
-                while p < e && bytes[p] != b'\n' { p += 1; }
+                while p < e && bytes[p] != b'\n' {
+                    p += 1;
+                }
             }
         }
         issues
@@ -679,72 +828,128 @@ impl Validator {
     // Collect all state names declared inside machine: sections as "$Name {".
     pub fn collect_machine_state_names(&self, bytes: &[u8], start: usize) -> HashSet<String> {
         #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Sec { Machine, Other }
+        enum Sec {
+            Machine,
+            Other,
+        }
         let n = bytes.len();
         let mut i = start;
         let mut marks: Vec<(usize, Sec)> = Vec::new();
         while i < n {
             // SOL skip
-            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n') { i += 1; }
-            if i >= n { break; }
+            while i < n
+                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
+            {
+                i += 1;
+            }
+            if i >= n {
+                break;
+            }
             let line_start = i;
             // read ident and ':'
-            let mut j = i; while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
-            let kw_start = j; while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
+            let mut j = i;
+            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            let kw_start = j;
+            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
             if kw_start < j && j < n && bytes[j] == b':' {
                 let kw = String::from_utf8_lossy(&bytes[kw_start..j]).to_ascii_lowercase();
                 match kw.as_str() {
                     "machine" | "actions" | "operations" | "interface" => {
-                        let sec = if kw.as_str() == "machine" { Sec::Machine } else { Sec::Other };
+                        let sec = if kw.as_str() == "machine" {
+                            Sec::Machine
+                        } else {
+                            Sec::Other
+                        };
                         marks.push((line_start, sec));
                     }
                     _ => {}
                 }
             }
-            while i < n && bytes[i] != b'\n' { i += 1; }
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
         }
         // Build section ranges
         let mut secs: Vec<(usize, usize, Sec)> = Vec::new();
         for idx in 0..marks.len() {
             let (spos, sec) = marks[idx];
-            let epos = if idx + 1 < marks.len() { marks[idx+1].0 } else { n };
+            let epos = if idx + 1 < marks.len() {
+                marks[idx + 1].0
+            } else {
+                n
+            };
             secs.push((spos, epos, sec));
         }
         let mut names = HashSet::new();
         for (s, e, sec) in secs {
-            if sec != Sec::Machine { continue; }
+            if sec != Sec::Machine {
+                continue;
+            }
             let mut p = s;
             while p < e {
                 // skip ws
-                while p < e && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') { p += 1; }
-                if p >= e { break; }
+                while p < e
+                    && (bytes[p] == b' '
+                        || bytes[p] == b'\t'
+                        || bytes[p] == b'\r'
+                        || bytes[p] == b'\n')
+                {
+                    p += 1;
+                }
+                if p >= e {
+                    break;
+                }
                 if bytes[p] == b'$' {
                     let mut k = p + 1;
                     if k < e && (bytes[k].is_ascii_alphabetic() || bytes[k] == b'_') {
                         k += 1;
-                        while k < e && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') { k += 1; }
-                        let name = String::from_utf8_lossy(&bytes[p+1..k]).to_string();
+                        while k < e && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') {
+                            k += 1;
+                        }
+                        let name = String::from_utf8_lossy(&bytes[p + 1..k]).to_string();
                         // ensure this looks like a state header line (has '{' before EOL)
-                        let mut q = k; let mut has_lbrace = false; while q < e && bytes[q] != b'\n' { if bytes[q] == b'{' { has_lbrace = true; break; } q += 1; }
-                        if has_lbrace { names.insert(name); }
+                        let mut q = k;
+                        let mut has_lbrace = false;
+                        while q < e && bytes[q] != b'\n' {
+                            if bytes[q] == b'{' {
+                                has_lbrace = true;
+                                break;
+                            }
+                            q += 1;
+                        }
+                        if has_lbrace {
+                            names.insert(name);
+                        }
                     }
                 }
-                while p < e && bytes[p] != b'\n' { p += 1; }
+                while p < e && bytes[p] != b'\n' {
+                    p += 1;
+                }
             }
         }
         names
     }
 
-    pub fn validate_transition_targets(&self, mir: &[MirItem], known_states: &HashSet<String>) -> Vec<ValidationIssue> {
+    pub fn validate_transition_targets(
+        &self,
+        mir: &[MirItem],
+        known_states: &HashSet<String>,
+    ) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
         for m in mir {
-            if let MirItem::Transition{ target, .. } = m {
+            if let MirItem::Transition { target, .. } = m {
                 // Skip pop-transition marker - target comes from stack at runtime
                 if target == "pop$" {
                     continue;
                 }
                 if !known_states.contains(target) {
-                    issues.push(ValidationIssue{ message: format!("E402: unknown state '{}'", target) });
+                    issues.push(ValidationIssue {
+                        message: format!("E402: unknown state '{}'", target),
+                    });
                 }
             }
         }
@@ -764,7 +969,7 @@ impl Validator {
         let mut issues = Vec::new();
         let sys = system_name.unwrap_or("_");
         for m in mir {
-            if let MirItem::Transition{ target, .. } = m {
+            if let MirItem::Transition { target, .. } = m {
                 // Skip pop-transition marker - target comes from stack at runtime
                 if target == "pop$" {
                     continue;
@@ -773,11 +978,15 @@ impl Validator {
                 // Use the enhanced validation method for better error messages
                 if !coarse_known {
                     if let Err(err_msg) = arcanum.validate_transition(sys, target) {
-                        issues.push(ValidationIssue{ message: format!("E402: {}", err_msg) });
+                        issues.push(ValidationIssue {
+                            message: format!("E402: {}", err_msg),
+                        });
                     }
                     // Fall back to checking default system if specific system fails
                     else if arcanum.resolve_state("_", target).is_none() {
-                        issues.push(ValidationIssue{ message: format!("E402: unknown state '{}'", target) });
+                        issues.push(ValidationIssue {
+                            message: format!("E402: unknown state '{}'", target),
+                        });
                     }
                 }
             }
@@ -789,15 +998,31 @@ impl Validator {
         let n = bytes.len();
         let mut i = start;
         while i < n {
-            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n') { i += 1; }
-            if i >= n { break; }
-            let mut j = i; while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
-            let kw_start = j; while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
+            while i < n
+                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
+            {
+                i += 1;
+            }
+            if i >= n {
+                break;
+            }
+            let mut j = i;
+            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            let kw_start = j;
+            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
             if kw_start < j && j < n && bytes[j] == b':' {
                 let kw = String::from_utf8_lossy(&bytes[kw_start..j]).to_ascii_lowercase();
-                if kw.as_str() == "machine" { return true; }
+                if kw.as_str() == "machine" {
+                    return true;
+                }
             }
-            while i < n && bytes[i] != b'\n' { i += 1; }
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
         }
         false
     }
@@ -805,56 +1030,104 @@ impl Validator {
     // Detect whether any state in any machine section declares a parent ("$Child => $Parent").
     pub fn has_any_parent_relationship(&self, bytes: &[u8], start: usize) -> bool {
         #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Sec { Machine, Other }
+        enum Sec {
+            Machine,
+            Other,
+        }
         let n = bytes.len();
         let mut i = start;
         // Mark section starts
         let mut marks: Vec<(usize, Sec)> = Vec::new();
         while i < n {
             // SOL skip
-            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n') { i += 1; }
-            if i >= n { break; }
+            while i < n
+                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
+            {
+                i += 1;
+            }
+            if i >= n {
+                break;
+            }
             let line_start = i;
             // read ident and ':'
-            let mut j = i; while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
-            let kw_start = j; while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
+            let mut j = i;
+            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            let kw_start = j;
+            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
             if kw_start < j && j < n && bytes[j] == b':' {
                 let kw = String::from_utf8_lossy(&bytes[kw_start..j]).to_ascii_lowercase();
                 match kw.as_str() {
                     "machine" | "actions" | "operations" | "interface" => {
-                        let sec = if kw.as_str() == "machine" { Sec::Machine } else { Sec::Other };
+                        let sec = if kw.as_str() == "machine" {
+                            Sec::Machine
+                        } else {
+                            Sec::Other
+                        };
                         marks.push((line_start, sec));
                     }
                     _ => {}
                 }
             }
-            while i < n && bytes[i] != b'\n' { i += 1; }
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
         }
         // Build section ranges and scan only machine sections for "$... => $..." on header lines
         for idx in 0..marks.len() {
             let (spos, sec) = marks[idx];
-            let epos = if idx + 1 < marks.len() { marks[idx+1].0 } else { n };
-            if sec != Sec::Machine { continue; }
+            let epos = if idx + 1 < marks.len() {
+                marks[idx + 1].0
+            } else {
+                n
+            };
+            if sec != Sec::Machine {
+                continue;
+            }
             let mut p = spos;
             while p < epos {
                 // skip ws
-                while p < epos && (bytes[p] == b' ' || bytes[p] == b'\t' || bytes[p] == b'\r' || bytes[p] == b'\n') { p += 1; }
-                if p >= epos { break; }
+                while p < epos
+                    && (bytes[p] == b' '
+                        || bytes[p] == b'\t'
+                        || bytes[p] == b'\r'
+                        || bytes[p] == b'\n')
+                {
+                    p += 1;
+                }
+                if p >= epos {
+                    break;
+                }
                 if bytes[p] == b'$' {
                     // scan "$Child"
                     let mut k = p + 1;
                     if k < epos && (bytes[k].is_ascii_alphabetic() || bytes[k] == b'_') {
-                        k += 1; while k < epos && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') { k += 1; }
+                        k += 1;
+                        while k < epos && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') {
+                            k += 1;
+                        }
                         // skip whitespace
-                        while k < epos && (bytes[k] == b' ' || bytes[k] == b'\t') { k += 1; }
+                        while k < epos && (bytes[k] == b' ' || bytes[k] == b'\t') {
+                            k += 1;
+                        }
                         // check for "=> $"
-                        if k + 3 < epos && bytes[k] == b'=' && bytes[k+1] == b'>' {
-                            let mut q = k + 2; while q < epos && (bytes[q] == b' ' || bytes[q] == b'\t') { q += 1; }
-                            if q < epos && bytes[q] == b'$' { return true; }
+                        if k + 3 < epos && bytes[k] == b'=' && bytes[k + 1] == b'>' {
+                            let mut q = k + 2;
+                            while q < epos && (bytes[q] == b' ' || bytes[q] == b'\t') {
+                                q += 1;
+                            }
+                            if q < epos && bytes[q] == b'$' {
+                                return true;
+                            }
                         }
                     }
                 }
-                while p < epos && bytes[p] != b'\n' { p += 1; }
+                while p < epos && bytes[p] != b'\n' {
+                    p += 1;
+                }
             }
         }
         false
@@ -929,51 +1202,90 @@ impl Validator {
     }
 }
 
-fn trailing_is_effectively_comment_only(slice: &[u8], lang: crate::frame_c::visitors::TargetLanguage) -> bool {
+fn trailing_is_effectively_comment_only(
+    slice: &[u8],
+    lang: crate::frame_c::visitors::TargetLanguage,
+) -> bool {
     // Allow whitespace only
-    let mut i = 0usize; let n = slice.len();
-    while i<n && (slice[i].is_ascii_whitespace()) { i+=1; }
-    // Optional semicolon before comment for C-like and Python
-    if i<n && slice[i]==b';' {
-        i+=1; while i<n && (slice[i].is_ascii_whitespace()) { i+=1; }
+    let mut i = 0usize;
+    let n = slice.len();
+    while i < n && (slice[i].is_ascii_whitespace()) {
+        i += 1;
     }
-    if i>=n { return true; }
+    // Optional semicolon before comment for C-like and Python
+    if i < n && slice[i] == b';' {
+        i += 1;
+        while i < n && (slice[i].is_ascii_whitespace()) {
+            i += 1;
+        }
+    }
+    if i >= n {
+        return true;
+    }
     match lang {
         crate::frame_c::visitors::TargetLanguage::Python3
         | crate::frame_c::visitors::TargetLanguage::GDScript => {
             // For Python/GDScript targets, allow comment-only tails or closing braces from the module DSL on the same line.
             // Skip an optional ';' and whitespace
-            while i<n && (slice[i].is_ascii_whitespace() || slice[i]==b';') { i+=1; }
-            if i>=n { return true; }
-            if slice[i]==b'#' { return true; }
+            while i < n && (slice[i].is_ascii_whitespace() || slice[i] == b';') {
+                i += 1;
+            }
+            if i >= n {
+                return true;
+            }
+            if slice[i] == b'#' {
+                return true;
+            }
             // Accept one or more closing braces '}' (module DSL) followed by only whitespace/semicolons
             let mut j = i;
             let mut saw_brace = false;
-            while j<n && slice[j]==b'}' { saw_brace = true; j+=1; }
+            while j < n && slice[j] == b'}' {
+                saw_brace = true;
+                j += 1;
+            }
             if saw_brace {
-                while j<n && (slice[j].is_ascii_whitespace() || slice[j]==b';') { j+=1; }
-                return j>=n;
+                while j < n && (slice[j].is_ascii_whitespace() || slice[j] == b';') {
+                    j += 1;
+                }
+                return j >= n;
             }
             false
         }
         // All other languages use C-like comment syntax (// or /* */)
         // Note: Erlang (%) and Ruby (#) would need separate handling for full correctness
-        TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Rust
-        | TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java
-        | TargetLanguage::CSharp | TargetLanguage::Go | TargetLanguage::Php
-        | TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::Ruby
-        | TargetLanguage::Erlang | TargetLanguage::Lua | TargetLanguage::Dart
+        TargetLanguage::TypeScript
+        | TargetLanguage::JavaScript
+        | TargetLanguage::Rust
+        | TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Java
+        | TargetLanguage::CSharp
+        | TargetLanguage::Go
+        | TargetLanguage::Php
+        | TargetLanguage::Kotlin
+        | TargetLanguage::Swift
+        | TargetLanguage::Ruby
+        | TargetLanguage::Erlang
+        | TargetLanguage::Lua
+        | TargetLanguage::Dart
         | TargetLanguage::Graphviz => {
-            if i+1<n && slice[i]==b'/' && slice[i+1]==b'/' { return true; }
-            if i+1<n && slice[i]==b'/' && slice[i+1]==b'*' {
+            if i + 1 < n && slice[i] == b'/' && slice[i + 1] == b'/' {
+                return true;
+            }
+            if i + 1 < n && slice[i] == b'/' && slice[i + 1] == b'*' {
                 // ensure that after closing */ there is nothing non-whitespace on this line
                 let mut j = i + 2;
                 while j + 1 < n {
-                    if slice[j]==b'*' && slice[j+1]==b'/' { j += 2; break; }
+                    if slice[j] == b'*' && slice[j + 1] == b'/' {
+                        j += 2;
+                        break;
+                    }
                     j += 1;
                 }
                 // if never closed, treat as comment-only for this slice
-                while j < n && (slice[j].is_ascii_whitespace()) { j += 1; }
+                while j < n && (slice[j].is_ascii_whitespace()) {
+                    j += 1;
+                }
                 return j >= n;
             }
             false
@@ -983,10 +1295,24 @@ fn trailing_is_effectively_comment_only(slice: &[u8], lang: crate::frame_c::visi
 
 // Scan forward from the end of a Transition up to the close of its containing block.
 // Returns Some(()) if a non-comment/non-whitespace token is found before the block closes.
-fn find_violation_before_block_close(bytes: &[u8], regions: &[Region], mut ridx: usize, mut pos: usize, lang: crate::frame_c::visitors::TargetLanguage) -> Option<()> {
+fn find_violation_before_block_close(
+    bytes: &[u8],
+    regions: &[Region],
+    mut ridx: usize,
+    mut pos: usize,
+    lang: crate::frame_c::visitors::TargetLanguage,
+) -> Option<()> {
     match lang {
         crate::frame_c::visitors::TargetLanguage::Python3
-        | crate::frame_c::visitors::TargetLanguage::GDScript => scan_python_block(bytes, regions, &mut ridx, &mut pos, |violate| if violate { Some(()) } else { None }),
+        | crate::frame_c::visitors::TargetLanguage::GDScript => {
+            scan_python_block(bytes, regions, &mut ridx, &mut pos, |violate| {
+                if violate {
+                    Some(())
+                } else {
+                    None
+                }
+            })
+        }
         // All brace-delimited languages use C-like block scanning
         crate::frame_c::visitors::TargetLanguage::TypeScript
         | crate::frame_c::visitors::TargetLanguage::JavaScript
@@ -1003,107 +1329,259 @@ fn find_violation_before_block_close(bytes: &[u8], regions: &[Region], mut ridx:
         | crate::frame_c::visitors::TargetLanguage::Dart
         | crate::frame_c::visitors::TargetLanguage::Erlang
         | crate::frame_c::visitors::TargetLanguage::Lua
-        | crate::frame_c::visitors::TargetLanguage::Graphviz => scan_c_like_block(bytes, regions, &mut ridx, &mut pos, lang, |violate| if violate { Some(()) } else { None }),
+        | crate::frame_c::visitors::TargetLanguage::Graphviz => {
+            scan_c_like_block(bytes, regions, &mut ridx, &mut pos, lang, |violate| {
+                if violate {
+                    Some(())
+                } else {
+                    None
+                }
+            })
+        }
     }
 }
 
-fn scan_c_like_block<F, T>(bytes: &[u8], regions: &[Region], ridx: &mut usize, pos: &mut usize, lang: crate::frame_c::visitors::TargetLanguage, mut out: F) -> Option<T>
-where F: FnMut(bool) -> Option<T> {
+fn scan_c_like_block<F, T>(
+    bytes: &[u8],
+    regions: &[Region],
+    ridx: &mut usize,
+    pos: &mut usize,
+    lang: crate::frame_c::visitors::TargetLanguage,
+    mut out: F,
+) -> Option<T>
+where
+    F: FnMut(bool) -> Option<T>,
+{
     // Simple DPDA: skip whitespace/comments/strings; stop OK at first top-level '}' encountered; any other token => violation.
     let mut i = *pos;
     // scanning spans across regions; treat region boundaries as contiguous
-    let mut in_line = false; let mut in_block = false; let mut in_str: Option<u8> = None; let mut in_tpl = false; let mut tmpl_brace: i32 = 0;
+    let mut in_line = false;
+    let mut in_block = false;
+    let mut in_str: Option<u8> = None;
+    let mut in_tpl = false;
+    let mut tmpl_brace: i32 = 0;
     let mut end = current_region_end(regions, *ridx).unwrap_or(bytes.len());
     // First, allow a comment-only tail on the same physical line (optional leading ';').
-    let mut j = i; while j < end && bytes[j] != b'\n' { j += 1; }
-    if trailing_is_effectively_comment_only(&bytes[i..j], lang) { i = j; }
+    let mut j = i;
+    while j < end && bytes[j] != b'\n' {
+        j += 1;
+    }
+    if trailing_is_effectively_comment_only(&bytes[i..j], lang) {
+        i = j;
+    }
     loop {
         if i >= end {
             // advance to next region's NativeText; if FrameSegment appears before block close, that is a violation inside same block
             *ridx += 1;
-            if *ridx >= regions.len() { return None; }
+            if *ridx >= regions.len() {
+                return None;
+            }
             match &regions[*ridx] {
-                Region::NativeText{ span } => { i = span.start; end = span.end; }
-                Region::FrameSegment{ .. } => { return out(true); }
+                Region::NativeText { span } => {
+                    i = span.start;
+                    end = span.end;
+                }
+                Region::FrameSegment { .. } => {
+                    return out(true);
+                }
             }
         }
         let b = bytes[i];
         if in_line {
-            if b == b'\n' { in_line = false; }
-            i += 1; continue;
+            if b == b'\n' {
+                in_line = false;
+            }
+            i += 1;
+            continue;
         }
         if in_block {
-            if i+1 < end && b == b'*' && bytes[i+1] == b'/' { in_block = false; i += 2; continue; }
-            i += 1; continue;
+            if i + 1 < end && b == b'*' && bytes[i + 1] == b'/' {
+                in_block = false;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
         }
-        if let Some(q) = in_str { // string literal
-            if b == b'\\' { i += 2; continue; }
-            if b == q { in_str = None; i += 1; continue; }
-            i += 1; continue;
+        if let Some(q) = in_str {
+            // string literal
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == q {
+                in_str = None;
+                i += 1;
+                continue;
+            }
+            i += 1;
+            continue;
         }
         if in_tpl {
-            if b == b'`' { in_tpl = false; i += 1; continue; }
-            if b == b'\\' { i += 2; continue; }
-            if b == b'$' && i+1<end && bytes[i+1]==b'{' { tmpl_brace += 1; i += 2; continue; }
-            if b == b'}' && tmpl_brace > 0 { tmpl_brace -= 1; i += 1; continue; }
-            i += 1; continue;
+            if b == b'`' {
+                in_tpl = false;
+                i += 1;
+                continue;
+            }
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == b'$' && i + 1 < end && bytes[i + 1] == b'{' {
+                tmpl_brace += 1;
+                i += 2;
+                continue;
+            }
+            if b == b'}' && tmpl_brace > 0 {
+                tmpl_brace -= 1;
+                i += 1;
+                continue;
+            }
+            i += 1;
+            continue;
         }
         // not in protected region
-        if b.is_ascii_whitespace() { i += 1; continue; }
-        if b == b'/' && i+1<end && bytes[i+1]==b'/' { in_line = true; i += 2; continue; }
-        if b == b'/' && i+1<end && bytes[i+1]==b'*' { in_block = true; i += 2; continue; }
-        if b == b'\'' || b == b'"' { in_str = Some(b); i += 1; continue; }
-        if let crate::frame_c::visitors::TargetLanguage::TypeScript = lang { if b == b'`' { in_tpl = true; i += 1; continue; } }
-        if b == b'}' { return out(false); }
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if b == b'/' && i + 1 < end && bytes[i + 1] == b'/' {
+            in_line = true;
+            i += 2;
+            continue;
+        }
+        if b == b'/' && i + 1 < end && bytes[i + 1] == b'*' {
+            in_block = true;
+            i += 2;
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            in_str = Some(b);
+            i += 1;
+            continue;
+        }
+        if let crate::frame_c::visitors::TargetLanguage::TypeScript = lang {
+            if b == b'`' {
+                in_tpl = true;
+                i += 1;
+                continue;
+            }
+        }
+        if b == b'}' {
+            return out(false);
+        }
         // any other token before close brace => violation
         return out(true);
     }
 }
 
-fn scan_python_block<F, T>(bytes: &[u8], regions: &[Region], ridx: &mut usize, pos: &mut usize, mut out: F) -> Option<T>
-where F: FnMut(bool) -> Option<T> {
+fn scan_python_block<F, T>(
+    bytes: &[u8],
+    regions: &[Region],
+    ridx: &mut usize,
+    pos: &mut usize,
+    mut out: F,
+) -> Option<T>
+where
+    F: FnMut(bool) -> Option<T>,
+{
     // Determine indent of containing block from preceding FrameSegment
     let mut t_indent: Option<usize> = None;
-    if *ridx > 0 { for back in (0..*ridx).rev() { if let Region::FrameSegment{ indent, .. } = regions[back] { t_indent = Some(indent); break; } } }
+    if *ridx > 0 {
+        for back in (0..*ridx).rev() {
+            if let Region::FrameSegment { indent, .. } = regions[back] {
+                t_indent = Some(indent);
+                break;
+            }
+        }
+    }
     let base = t_indent.unwrap_or(0);
     let mut i = *pos;
     let mut end = current_region_end(regions, *ridx).unwrap_or(bytes.len());
     // Same line tail: allow optional ';' then comment-only, else violation
-    let mut line_end = i; while line_end < end && bytes[line_end] != b'\n' { line_end += 1; }
-    if !trailing_is_effectively_comment_only(&bytes[i..line_end], crate::frame_c::visitors::TargetLanguage::Python3) {
+    let mut line_end = i;
+    while line_end < end && bytes[line_end] != b'\n' {
+        line_end += 1;
+    }
+    if !trailing_is_effectively_comment_only(
+        &bytes[i..line_end],
+        crate::frame_c::visitors::TargetLanguage::Python3,
+    ) {
         // Any non-comment tail on same line is a violation
         // Detect non-whitespace non-';' content
         let tail = &bytes[i..line_end];
-        let mut k = 0; while k < tail.len() && (tail[k].is_ascii_whitespace() || tail[k]==b';') { k+=1; }
-        if k < tail.len() && tail[k] != b'#' { return out(true); }
+        let mut k = 0;
+        while k < tail.len() && (tail[k].is_ascii_whitespace() || tail[k] == b';') {
+            k += 1;
+        }
+        if k < tail.len() && tail[k] != b'#' {
+            return out(true);
+        }
     }
     // After the newline: any content within the same block is a violation
     i = line_end;
     loop {
         if i >= end {
-            *ridx += 1; if *ridx >= regions.len() { return None; }
-            match &regions[*ridx] { Region::NativeText{ span } => { i = span.start; end = span.end; }, Region::FrameSegment{ .. } => { return out(true); } }
+            *ridx += 1;
+            if *ridx >= regions.len() {
+                return None;
+            }
+            match &regions[*ridx] {
+                Region::NativeText { span } => {
+                    i = span.start;
+                    end = span.end;
+                }
+                Region::FrameSegment { .. } => {
+                    return out(true);
+                }
+            }
         }
         // consume newline
-        if i < end && bytes[i] == b'\n' { i += 1; }
+        if i < end && bytes[i] == b'\n' {
+            i += 1;
+        }
         // compute indent
-        let mut col = 0usize; while i < end && (bytes[i]==b' ' || bytes[i]==b'\t') { col += 1; i += 1; }
+        let mut col = 0usize;
+        while i < end && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            col += 1;
+            i += 1;
+        }
         // blank or comment-only line
-        if i >= end || bytes[i] == b'\n' { continue; }
-        if bytes[i] == b'#' { while i < end && bytes[i] != b'\n' { i += 1; } continue; }
+        if i >= end || bytes[i] == b'\n' {
+            continue;
+        }
+        if bytes[i] == b'#' {
+            while i < end && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
         // if dedented, block ended OK
-        if col < base { return out(false); }
+        if col < base {
+            return out(false);
+        }
         // still inside block and found content => violation
         return out(true);
     }
 }
 
 fn current_region_end(regions: &[Region], ridx: usize) -> Option<usize> {
-    regions.get(ridx).map(|r| match r { Region::NativeText{ span } => span.end, Region::FrameSegment{ span, .. } => span.end })
+    regions.get(ridx).map(|r| match r {
+        Region::NativeText { span } => span.end,
+        Region::FrameSegment { span, .. } => span.end,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BodyKind { Handler, Action, Operation, Function, Unknown }
+pub enum BodyKind {
+    Handler,
+    Action,
+    Operation,
+    Function,
+    Unknown,
+}
 
 #[derive(Debug, Clone, Default)]
-pub struct ValidatorPolicy { pub body_kind: Option<BodyKind> }
+pub struct ValidatorPolicy {
+    pub body_kind: Option<BodyKind>,
+}

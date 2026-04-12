@@ -13,10 +13,19 @@ pub enum MirItem {
         label: Option<String>,
         span: RegionSpan,
     },
-    Forward { span: RegionSpan },
+    Forward {
+        span: RegionSpan,
+    },
     // Transition then forward event: -> => $State
     // Transitions to target state, then dispatches current event to the new state
-    TransitionForward { target: String, span: RegionSpan },
-    StackPush { span: RegionSpan },
-    StackPop { span: RegionSpan },
+    TransitionForward {
+        target: String,
+        span: RegionSpan,
+    },
+    StackPush {
+        span: RegionSpan,
+    },
+    StackPop {
+        span: RegionSpan,
+    },
 }

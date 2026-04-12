@@ -1,12 +1,11 @@
+use super::ir::{
+    HandlerInfo, StateNode, StateParam as IrStateParam, StateVar, SystemGraph, TransitionEdge,
+    TransitionKind, TransitionTarget,
+};
 /// Builds a SystemGraph IR from SystemAst + Arcanum.
-
 use crate::frame_c::compiler::arcanum::Arcanum;
 use crate::frame_c::compiler::frame_ast::{
-    SystemAst, Statement, Expression, Literal, BinaryOp, UnaryOp, Type,
-};
-use super::ir::{
-    SystemGraph, StateNode, HandlerInfo, StateVar,
-    StateParam as IrStateParam, TransitionEdge, TransitionTarget, TransitionKind,
+    BinaryOp, Expression, Literal, Statement, SystemAst, Type, UnaryOp,
 };
 
 /// Build a GraphViz IR from a parsed Frame system and its symbol table.
@@ -328,8 +327,7 @@ fn format_expression(expr: &Expression) -> String {
 mod tests {
     use super::*;
     use crate::frame_c::compiler::frame_ast::{
-        Span, MachineAst, StateAst, HandlerAst, HandlerBody,
-        TransitionAst, IfAst,
+        HandlerAst, HandlerBody, IfAst, MachineAst, Span, StateAst, TransitionAst,
     };
 
     fn span() -> Span {
@@ -486,15 +484,13 @@ mod tests {
                                     span: span(),
                                     indent: 0,
                                 })),
-                                else_branch: Some(Box::new(Statement::Transition(
-                                    TransitionAst {
-                                        target: "Bad".to_string(),
-                                        args: vec![],
-                                        label: None,
-                                        span: span(),
-                                        indent: 0,
-                                    },
-                                ))),
+                                else_branch: Some(Box::new(Statement::Transition(TransitionAst {
+                                    target: "Bad".to_string(),
+                                    args: vec![],
+                                    label: None,
+                                    span: span(),
+                                    indent: 0,
+                                }))),
                                 span: span(),
                             })],
                             span: span(),

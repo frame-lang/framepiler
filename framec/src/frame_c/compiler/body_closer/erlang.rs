@@ -28,9 +28,18 @@ impl BodyCloser for BodyCloserErlang {
             Ok(fsm.pos)
         } else {
             match fsm.error_kind {
-                1 => Err(CloseError { kind: CloseErrorKind::UnterminatedString, message: String::new() }),
-                2 => Err(CloseError { kind: CloseErrorKind::UnterminatedComment, message: String::new() }),
-                _ => Err(CloseError { kind: CloseErrorKind::UnmatchedBraces, message: String::new() }),
+                1 => Err(CloseError {
+                    kind: CloseErrorKind::UnterminatedString,
+                    message: String::new(),
+                }),
+                2 => Err(CloseError {
+                    kind: CloseErrorKind::UnterminatedComment,
+                    message: String::new(),
+                }),
+                _ => Err(CloseError {
+                    kind: CloseErrorKind::UnmatchedBraces,
+                    message: String::new(),
+                }),
             }
         }
     }

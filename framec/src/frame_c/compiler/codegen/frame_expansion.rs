@@ -7,35 +7,24 @@
 //!   return sugar, $.var, @@:return, etc. to target language code
 //! - Helper functions for extracting transition targets, args, state vars
 
-use crate::frame_c::visitors::TargetLanguage;
-use crate::frame_c::compiler::frame_ast::Type;
-use crate::frame_c::compiler::splice::Splicer;
-use crate::frame_c::compiler::native_region_scanner::{
-    NativeRegionScanner, Region, FrameSegmentKind,
-    python::NativeRegionScannerPy,
-    typescript::NativeRegionScannerTs,
-    rust::NativeRegionScannerRust,
-    csharp::NativeRegionScannerCs,
-    c::NativeRegionScannerC,
-    cpp::NativeRegionScannerCpp,
-    java::NativeRegionScannerJava,
-    go::NativeRegionScannerGo,
-    javascript::NativeRegionScannerJs,
-    php::NativeRegionScannerPhp,
-    kotlin::NativeRegionScannerKotlin,
-    swift::NativeRegionScannerSwift,
-    ruby::NativeRegionScannerRuby,
-    erlang::NativeRegionScannerErlang,
-    lua::NativeRegionScannerLua,
-    dart::NativeRegionScannerDart,
-    gdscript::NativeRegionScannerGDScript,
-};
 use super::codegen_utils::{
-    HandlerContext, expression_to_string, state_var_init_value, to_snake_case,
-    cpp_map_type, cpp_wrap_any_arg, java_map_type, kotlin_map_type,
-    swift_map_type, csharp_map_type, go_map_type, type_to_cpp_string,
+    cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string, go_map_type,
+    java_map_type, kotlin_map_type, state_var_init_value, swift_map_type, to_snake_case,
+    type_to_cpp_string, HandlerContext,
 };
-
+use crate::frame_c::compiler::frame_ast::Type;
+use crate::frame_c::compiler::native_region_scanner::{
+    c::NativeRegionScannerC, cpp::NativeRegionScannerCpp, csharp::NativeRegionScannerCs,
+    dart::NativeRegionScannerDart, erlang::NativeRegionScannerErlang,
+    gdscript::NativeRegionScannerGDScript, go::NativeRegionScannerGo,
+    java::NativeRegionScannerJava, javascript::NativeRegionScannerJs,
+    kotlin::NativeRegionScannerKotlin, lua::NativeRegionScannerLua, php::NativeRegionScannerPhp,
+    python::NativeRegionScannerPy, ruby::NativeRegionScannerRuby, rust::NativeRegionScannerRust,
+    swift::NativeRegionScannerSwift, typescript::NativeRegionScannerTs, FrameSegmentKind,
+    NativeRegionScanner, Region,
+};
+use crate::frame_c::compiler::splice::Splicer;
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Resolve the storage key for a positional state-arg in a transition.
 /// Returns the declared param name if the target state has one at this index,
@@ -72,7 +61,12 @@ fn resolve_exit_arg_key(i: usize, ctx: &HandlerContext) -> String {
 }
 
 /// Splice handler body from a span (used by Arcanum-based generation)
-pub(crate) fn splice_handler_body_from_span(span: &crate::frame_c::compiler::ast::Span, source: &[u8], lang: TargetLanguage, ctx: &HandlerContext) -> String {
+pub(crate) fn splice_handler_body_from_span(
+    span: &crate::frame_c::compiler::ast::Span,
+    source: &[u8],
+    lang: TargetLanguage,
+    ctx: &HandlerContext,
+) -> String {
     // Ensure span is within bounds
     if span.start >= source.len() || span.end > source.len() || span.start >= span.end {
         return String::new();
@@ -107,7 +101,10 @@ pub(crate) fn splice_handler_body_from_span(span: &crate::frame_c::compiler::ast
     let spliced = splicer.splice(body_bytes, &scan_result.regions, &expansions);
 
     if std::env::var("FRAME_DEBUG_SPLICER").is_ok() {
-        eprintln!("[splice_handler_body_from_span] Spliced result: {:?}", spliced.text);
+        eprintln!(
+            "[splice_handler_body_from_span] Spliced result: {:?}",
+            spliced.text
+        );
     }
 
     // The splicer produces content WITHOUT the outer braces
@@ -117,9 +114,19 @@ pub(crate) fn splice_handler_body_from_span(span: &crate::frame_c::compiler::ast
     // Strip unreachable code after terminal statements (strict languages)
     // 1. Strip ;; (empty statement after return)
     // 2. Remove lines after a bare "return;" / "return" until end of block
-    if matches!(lang, TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go) {
+    if matches!(
+        lang,
+        TargetLanguage::Java
+            | TargetLanguage::Kotlin
+            | TargetLanguage::Swift
+            | TargetLanguage::CSharp
+            | TargetLanguage::Go
+    ) {
         // Swift/Kotlin/Go don't use semicolons — strip trailing semicolons from lines
-        let text = if matches!(lang, TargetLanguage::Swift | TargetLanguage::Kotlin | TargetLanguage::Go) {
+        let text = if matches!(
+            lang,
+            TargetLanguage::Swift | TargetLanguage::Kotlin | TargetLanguage::Go
+        ) {
             text.lines()
                 .map(|line| {
                     let trimmed = line.trim_end();
@@ -184,14 +191,16 @@ pub(crate) fn normalize_indentation(text: &str) -> String {
     }
 
     // Find minimum indentation (ignoring empty lines)
-    let min_indent = lines.iter()
+    let min_indent = lines
+        .iter()
         .filter(|line| !line.trim().is_empty())
         .map(|line| line.len() - line.trim_start().len())
         .min()
         .unwrap_or(0);
 
     // Strip the common indentation from all lines
-    lines.iter()
+    lines
+        .iter()
         .map(|line| {
             if line.len() >= min_indent {
                 &line[min_indent..]
@@ -203,13 +212,19 @@ pub(crate) fn normalize_indentation(text: &str) -> String {
         .join("\n")
 }
 
-
 /// Generate code expansion for a Frame segment
 ///
 /// NOTE: The scanner leaves a gap between NativeText and FrameSegment where leading
 /// whitespace lives. Since the splicer doesn't copy this gap, we MUST include the
 /// indentation in the expansion to preserve proper code structure.
-pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c::compiler::native_region_scanner::RegionSpan, kind: FrameSegmentKind, indent: usize, lang: TargetLanguage, ctx: &HandlerContext) -> String {
+pub(crate) fn generate_frame_expansion(
+    body_bytes: &[u8],
+    span: &crate::frame_c::compiler::native_region_scanner::RegionSpan,
+    kind: FrameSegmentKind,
+    indent: usize,
+    lang: TargetLanguage,
+    ctx: &HandlerContext,
+) -> String {
     let segment_text = String::from_utf8_lossy(&body_bytes[span.start..span.end]);
     // Use scanner's indent value to match native code indentation
     // This ensures Frame expansions align with surrounding native code
@@ -317,15 +332,25 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         let key = resolve_exit_arg_key(i, ctx);
                                         format!("\"{}\": {}", key, a)
                                     })
                                     .collect();
-                                code.push_str(&format!("{}self.__compartment.exit_args = {{{}}}\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}self.__compartment.exit_args = {{{}}}\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
@@ -334,9 +359,15 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         // Check for named argument (e.g., "k=3")
                                         if let Some(eq_pos) = a.find('=') {
@@ -350,15 +381,25 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         }
                                     })
                                     .collect();
-                                code.push_str(&format!("{}__compartment.state_args = {{{}}}\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}__compartment.state_args = {{{}}}\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
                         // Set enter_args if present (named keys, mirrors state_args)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         if let Some(eq_pos) = a.find('=') {
                                             let name = a[..eq_pos].trim();
@@ -370,12 +411,19 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         }
                                     })
                                     .collect();
-                                code.push_str(&format!("{}__compartment.enter_args = {{{}}}\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args = {{{}}}\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
                         // Call __transition and return to exit the handler
-                        code.push_str(&format!("{}self.__transition(__compartment)\n{}return", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}self.__transition(__compartment)\n{}return",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::GDScript => {
@@ -384,14 +432,24 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
-                            let entries: Vec<String> = args.iter().enumerate()
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            let entries: Vec<String> = args
+                                .iter()
+                                .enumerate()
                                 .map(|(i, a)| {
                                     let key = resolve_exit_arg_key(i, ctx);
                                     format!("\"{}\": {}", key, a)
                                 })
                                 .collect();
-                            code.push_str(&format!("{}self.__compartment.exit_args = {{{}}}\n", indent_str, entries.join(", ")));
+                            code.push_str(&format!(
+                                "{}self.__compartment.exit_args = {{{}}}\n",
+                                indent_str,
+                                entries.join(", ")
+                            ));
                         }
 
                         // Create new compartment: positional args, .new() constructor
@@ -399,9 +457,15 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         if let Some(eq_pos) = a.find('=') {
                                             let name = a[..eq_pos].trim();
@@ -413,15 +477,25 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         }
                                     })
                                     .collect();
-                                code.push_str(&format!("{}__compartment.state_args = {{{}}}\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}__compartment.state_args = {{{}}}\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
                         // Set enter_args if present (named keys, mirrors state_args)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         if let Some(eq_pos) = a.find('=') {
                                             let name = a[..eq_pos].trim();
@@ -433,12 +507,19 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         }
                                     })
                                     .collect();
-                                code.push_str(&format!("{}__compartment.enter_args = {{{}}}\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args = {{{}}}\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
                         // Call __transition and return
-                        code.push_str(&format!("{}self.__transition(__compartment)\n{}return", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}self.__transition(__compartment)\n{}return",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
@@ -447,15 +528,25 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         let key = resolve_exit_arg_key(i, ctx);
                                         format!("\"{}\": {}", key, a)
                                     })
                                     .collect();
-                                code.push_str(&format!("{}this.__compartment.exit_args = {{{}}};\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}this.__compartment.exit_args = {{{}}};\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
@@ -464,9 +555,15 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         // Check for named argument (e.g., "k=3")
                                         if let Some(eq_pos) = a.find('=') {
@@ -480,15 +577,25 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         }
                                     })
                                     .collect();
-                                code.push_str(&format!("{}__compartment.state_args = {{{}}};\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}__compartment.state_args = {{{}}};\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
                         // Set enter_args if present (named keys, mirrors state_args)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         if let Some(eq_pos) = a.find('=') {
                                             let name = a[..eq_pos].trim();
@@ -500,12 +607,19 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         }
                                     })
                                     .collect();
-                                code.push_str(&format!("{}__compartment.enter_args = {{{}}};\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args = {{{}}};\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
                         // Call __transition and return to exit the handler
-                        code.push_str(&format!("{}this.__transition(__compartment);\n{}return;", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}this.__transition(__compartment);\n{}return;",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Dart => {
@@ -514,10 +628,17 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}this.__compartment.exit_args[\"{}\"] = {};\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}this.__compartment.exit_args[\"{}\"] = {};\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
@@ -526,9 +647,15 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         if let Some(eq_pos) = a.find('=') {
                                             let name = a[..eq_pos].trim();
@@ -540,21 +667,35 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         }
                                     })
                                     .collect();
-                                code.push_str(&format!("{}__compartment.state_args = {{{}}};\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}__compartment.state_args = {{{}}};\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {};\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args[\"{}\"] = {};\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
                         // Call __transition and return to exit the handler
-                        code.push_str(&format!("{}this.__transition(__compartment);\n{}return;", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}this.__transition(__compartment);\n{}return;",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Rust => {
@@ -563,7 +704,11 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let (key, value) = if let Some(eq_pos) = arg.find('=') {
                                     let name = arg[..eq_pos].trim().to_string();
@@ -577,7 +722,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         }
 
                         // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}let mut __compartment = {}Compartment::new(\"{}\");\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}let mut __compartment = {}Compartment::new(\"{}\");\n",
+                            indent_str, ctx.system_name, target
+                        ));
                         code.push_str(&format!("{}__compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));\n", indent_str));
 
                         // Set state args if present. Rust uses a typed
@@ -589,7 +737,11 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         // gives us the param-name-by-index map for the
                         // target state.
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
                                 code.push_str(&format!(
                                     "{}if let {}StateContext::{}(ref mut ctx) = __compartment.state_context {{\n",
@@ -605,7 +757,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                     } else {
                                         (resolve_state_arg_key(i, &target, ctx), (*arg).to_string())
                                     };
-                                    code.push_str(&format!("{}    ctx.{} = {};\n", indent_str, key, value));
+                                    code.push_str(&format!(
+                                        "{}    ctx.{} = {};\n",
+                                        indent_str, key, value
+                                    ));
                                 }
                                 code.push_str(&format!("{}}}\n", indent_str));
                             }
@@ -613,7 +768,11 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let (key, value) = if let Some(eq_pos) = arg.find('=') {
                                     let name = arg[..eq_pos].trim().to_string();
@@ -627,7 +786,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         }
 
                         // Call __transition and return to exit the handler
-                        code.push_str(&format!("{}self.__transition(__compartment);\n{}return;", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}self.__transition(__compartment);\n{}return;",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::C => {
@@ -636,7 +798,11 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_exit_arg_key(i, ctx);
                                 code.push_str(&format!("{}{}_FrameDict_set(self->__compartment->exit_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, key, arg));
@@ -644,14 +810,21 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         }
 
                         // Create new compartment
-                        code.push_str(&format!("{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n", indent_str, ctx.system_name, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n",
+                            indent_str, ctx.system_name, ctx.system_name, target
+                        ));
                         if ctx.parent_state.is_some() {
                             code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_ref(self->__compartment);\n", indent_str, ctx.system_name));
                         }
 
                         // Set state_args if present (split by comma for positional args)
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_state_arg_key(i, &target, ctx);
                                 code.push_str(&format!("{}{}_FrameDict_set(__compartment->state_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, key, arg));
@@ -660,7 +833,11 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
                                 code.push_str(&format!("{}{}_FrameDict_set(__compartment->enter_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, key, arg));
@@ -668,7 +845,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         }
 
                         // Call transition and return to exit the handler
-                        code.push_str(&format!("{}{}_transition(self, __compartment);\n{}return;", indent_str, ctx.system_name, indent_str));
+                        code.push_str(&format!(
+                            "{}{}_transition(self, __compartment);\n{}return;",
+                            indent_str, ctx.system_name, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Cpp => {
@@ -677,21 +857,38 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let wrapped = cpp_wrap_any_arg(arg);
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}__compartment->exit_args[\"{}\"] = std::any({});\n", indent_str, key, wrapped));
+                                code.push_str(&format!(
+                                    "{}__compartment->exit_args[\"{}\"] = std::any({});\n",
+                                    indent_str, key, wrapped
+                                ));
                             }
                         }
 
                         // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__new_compartment->parent_compartment = __compartment;\n", indent_str));
+                        code.push_str(&format!(
+                            "{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__new_compartment->parent_compartment = __compartment;\n",
+                            indent_str
+                        ));
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
                                 for (i, a) in args.iter().enumerate() {
                                     if let Some(eq_pos) = a.find('=') {
@@ -709,16 +906,26 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let wrapped = cpp_wrap_any_arg(arg);
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__new_compartment->enter_args[\"{}\"] = std::any({});\n", indent_str, key, wrapped));
+                                code.push_str(&format!(
+                                    "{}__new_compartment->enter_args[\"{}\"] = std::any({});\n",
+                                    indent_str, key, wrapped
+                                ));
                             }
                         }
 
                         // Call __transition and return to exit the handler
-                        code.push_str(&format!("{}__transition(std::move(__new_compartment));\n{}return;", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}__transition(std::move(__new_compartment));\n{}return;",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Java => {
@@ -727,29 +934,52 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment if present (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}__compartment.exit_args.put(\"{}\", {});\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.exit_args.put(\"{}\", {});\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
                         // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}var __compartment = new {}Compartment(\"{}\");\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment;\n", indent_str));
+                        code.push_str(&format!(
+                            "{}var __compartment = new {}Compartment(\"{}\");\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.parent_compartment = this.__compartment;\n",
+                            indent_str
+                        ));
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
                                 for (i, a) in args.iter().enumerate() {
                                     if let Some(eq_pos) = a.find('=') {
                                         let name = a[..eq_pos].trim();
                                         let value = a[eq_pos + 1..].trim();
-                                        code.push_str(&format!("{}__compartment.state_args.put(\"{}\", {});\n", indent_str, name, value));
+                                        code.push_str(&format!(
+                                            "{}__compartment.state_args.put(\"{}\", {});\n",
+                                            indent_str, name, value
+                                        ));
                                     } else {
                                         let key = resolve_state_arg_key(i, &target, ctx);
-                                        code.push_str(&format!("{}__compartment.state_args.put(\"{}\", {});\n", indent_str, key, a));
+                                        code.push_str(&format!(
+                                            "{}__compartment.state_args.put(\"{}\", {});\n",
+                                            indent_str, key, a
+                                        ));
                                     }
                                 }
                             }
@@ -757,15 +987,25 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__compartment.enter_args.put(\"{}\", {});\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args.put(\"{}\", {});\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
                         // Call __transition and return to exit the handler
-                        code.push_str(&format!("{}__transition(__compartment);\n{}return;", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}__transition(__compartment);\n{}return;",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Kotlin => {
@@ -773,41 +1013,74 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         let mut code = String::new();
 
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}__compartment.exit_args[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.exit_args[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
-                        code.push_str(&format!("{}val __compartment = {}Compartment(\"{}\")\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment\n", indent_str));
+                        code.push_str(&format!(
+                            "{}val __compartment = {}Compartment(\"{}\")\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.parent_compartment = this.__compartment\n",
+                            indent_str
+                        ));
 
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
                                 for (i, a) in args.iter().enumerate() {
                                     if let Some(eq_pos) = a.find('=') {
                                         let name = a[..eq_pos].trim();
                                         let value = a[eq_pos + 1..].trim();
-                                        code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, name, value));
+                                        code.push_str(&format!(
+                                            "{}__compartment.state_args[\"{}\"] = {}\n",
+                                            indent_str, name, value
+                                        ));
                                     } else {
                                         let key = resolve_state_arg_key(i, &target, ctx);
-                                        code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, key, a));
+                                        code.push_str(&format!(
+                                            "{}__compartment.state_args[\"{}\"] = {}\n",
+                                            indent_str, key, a
+                                        ));
                                     }
                                 }
                             }
                         }
 
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
-                        code.push_str(&format!("{}__transition(__compartment)\n{}return", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}__transition(__compartment)\n{}return",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Swift => {
@@ -816,41 +1089,74 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args on CURRENT compartment (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}self.__compartment.exit_args[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}self.__compartment.exit_args[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
-                        code.push_str(&format!("{}let __compartment = {}Compartment(state: \"{}\")\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__compartment.parent_compartment = self.__compartment\n", indent_str));
+                        code.push_str(&format!(
+                            "{}let __compartment = {}Compartment(state: \"{}\")\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.parent_compartment = self.__compartment\n",
+                            indent_str
+                        ));
 
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
                                 for (i, a) in args.iter().enumerate() {
                                     if let Some(eq_pos) = a.find('=') {
                                         let name = a[..eq_pos].trim();
                                         let value = a[eq_pos + 1..].trim();
-                                        code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, name, value));
+                                        code.push_str(&format!(
+                                            "{}__compartment.state_args[\"{}\"] = {}\n",
+                                            indent_str, name, value
+                                        ));
                                     } else {
                                         let key = resolve_state_arg_key(i, &target, ctx);
-                                        code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, key, a));
+                                        code.push_str(&format!(
+                                            "{}__compartment.state_args[\"{}\"] = {}\n",
+                                            indent_str, key, a
+                                        ));
                                     }
                                 }
                             }
                         }
 
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
-                        code.push_str(&format!("{}__transition(__compartment)\n{}return", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}__transition(__compartment)\n{}return",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::CSharp => {
@@ -859,29 +1165,52 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}__compartment.exit_args[\"{}\"] = {};\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.exit_args[\"{}\"] = {};\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
                         // Create new compartment — block scope prevents redeclaration in multiple branches
-                        code.push_str(&format!("{}{{ var __new_compartment = new {}Compartment(\"{}\");\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__new_compartment.parent_compartment = __compartment;\n", indent_str));
+                        code.push_str(&format!(
+                            "{}{{ var __new_compartment = new {}Compartment(\"{}\");\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__new_compartment.parent_compartment = __compartment;\n",
+                            indent_str
+                        ));
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
                                 for (i, a) in args.iter().enumerate() {
                                     if let Some(eq_pos) = a.find('=') {
                                         let name = a[..eq_pos].trim();
                                         let value = a[eq_pos + 1..].trim();
-                                        code.push_str(&format!("{}__new_compartment.state_args[\"{}\"] = {};\n", indent_str, name, value));
+                                        code.push_str(&format!(
+                                            "{}__new_compartment.state_args[\"{}\"] = {};\n",
+                                            indent_str, name, value
+                                        ));
                                     } else {
                                         let key = resolve_state_arg_key(i, &target, ctx);
-                                        code.push_str(&format!("{}__new_compartment.state_args[\"{}\"] = {};\n", indent_str, key, a));
+                                        code.push_str(&format!(
+                                            "{}__new_compartment.state_args[\"{}\"] = {};\n",
+                                            indent_str, key, a
+                                        ));
                                     }
                                 }
                             }
@@ -889,15 +1218,25 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__new_compartment.enter_args[\"{}\"] = {};\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__new_compartment.enter_args[\"{}\"] = {};\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
                         // Call __transition and return to exit the handler
-                        code.push_str(&format!("{}__transition(__new_compartment); }}\n{}return;", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}__transition(__new_compartment); }}\n{}return;",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Go => {
@@ -906,29 +1245,52 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}s.__compartment.exitArgs[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}s.__compartment.exitArgs[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
                         // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}__compartment := new{}Compartment(\"{}\")\n", indent_str, ctx.system_name, target));
-                        code.push_str(&format!("{}__compartment.parentCompartment = s.__compartment.copy()\n", indent_str));
+                        code.push_str(&format!(
+                            "{}__compartment := new{}Compartment(\"{}\")\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.parentCompartment = s.__compartment.copy()\n",
+                            indent_str
+                        ));
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
                                 for (i, a) in args.iter().enumerate() {
                                     if let Some(eq_pos) = a.find('=') {
                                         let name = a[..eq_pos].trim();
                                         let value = a[eq_pos + 1..].trim();
-                                        code.push_str(&format!("{}__compartment.stateArgs[\"{}\"] = {}\n", indent_str, name, value));
+                                        code.push_str(&format!(
+                                            "{}__compartment.stateArgs[\"{}\"] = {}\n",
+                                            indent_str, name, value
+                                        ));
                                     } else {
                                         let key = resolve_state_arg_key(i, &target, ctx);
-                                        code.push_str(&format!("{}__compartment.stateArgs[\"{}\"] = {}\n", indent_str, key, a));
+                                        code.push_str(&format!(
+                                            "{}__compartment.stateArgs[\"{}\"] = {}\n",
+                                            indent_str, key, a
+                                        ));
                                     }
                                 }
                             }
@@ -936,15 +1298,25 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__compartment.enterArgs[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.enterArgs[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
                         // Call __transition and return to exit the handler
-                        code.push_str(&format!("{}s.__transition(__compartment)\n{}return", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}s.__transition(__compartment)\n{}return",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Php => {
@@ -952,10 +1324,17 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Store exit_args in current compartment (named keys)
                         if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}$this->__compartment->exit_args[\"{}\"] = {};\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}$this->__compartment->exit_args[\"{}\"] = {};\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
@@ -963,9 +1342,15 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Set state_args if present
                         if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             if !args.is_empty() {
-                                let entries: Vec<String> = args.iter().enumerate()
+                                let entries: Vec<String> = args
+                                    .iter()
+                                    .enumerate()
                                     .map(|(i, a)| {
                                         if let Some(eq_pos) = a.find('=') {
                                             let name = a[..eq_pos].trim();
@@ -977,77 +1362,163 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                                         }
                                     })
                                     .collect();
-                                code.push_str(&format!("{}$__compartment->state_args = [{}];\n", indent_str, entries.join(", ")));
+                                code.push_str(&format!(
+                                    "{}$__compartment->state_args = [{}];\n",
+                                    indent_str,
+                                    entries.join(", ")
+                                ));
                             }
                         }
 
                         // Set enter_args if present (named keys)
                         if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
                             for (i, arg) in args.iter().enumerate() {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}$__compartment->enter_args[\"{}\"] = {};\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}$__compartment->enter_args[\"{}\"] = {};\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
 
-                        code.push_str(&format!("{}$this->__transition($__compartment);\n{}return;", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}$this->__transition($__compartment);\n{}return;",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Ruby => {
                         let mut code = String::new();
                         if let Some(ref exit) = exit_str {
-                            for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                            for (i, arg) in exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .enumerate()
+                            {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}@__compartment.exit_args[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}@__compartment.exit_args[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
-                        code.push_str(&format!("{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n",
+                            indent_str, ctx.system_name, target
+                        ));
                         if let Some(ref state) = state_str {
-                            for (i, a) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                            for (i, a) in state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .enumerate()
+                            {
                                 if let Some(eq_pos) = a.find('=') {
-                                    code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, a[..eq_pos].trim(), a[eq_pos+1..].trim()));
+                                    code.push_str(&format!(
+                                        "{}__compartment.state_args[\"{}\"] = {}\n",
+                                        indent_str,
+                                        a[..eq_pos].trim(),
+                                        a[eq_pos + 1..].trim()
+                                    ));
                                 } else {
                                     let key = resolve_state_arg_key(i, &target, ctx);
-                                    code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, key, a));
+                                    code.push_str(&format!(
+                                        "{}__compartment.state_args[\"{}\"] = {}\n",
+                                        indent_str, key, a
+                                    ));
                                 }
                             }
                         }
                         if let Some(ref enter) = enter_str {
-                            for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                            for (i, arg) in enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .enumerate()
+                            {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
-                        code.push_str(&format!("{}__transition(__compartment)\n{}return", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}__transition(__compartment)\n{}return",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Lua => {
                         // TODO: Lua-specific transition — follows Python pattern
                         let mut code = String::new();
                         if let Some(ref exit) = exit_str {
-                            for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                            for (i, arg) in exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .enumerate()
+                            {
                                 let key = resolve_exit_arg_key(i, ctx);
-                                code.push_str(&format!("{}self.__compartment.exit_args[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}self.__compartment.exit_args[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
-                        code.push_str(&format!("{}local __compartment = {}.new(\"{}\")\n", indent_str, format!("{}Compartment", ctx.system_name), target));
+                        code.push_str(&format!(
+                            "{}local __compartment = {}.new(\"{}\")\n",
+                            indent_str,
+                            format!("{}Compartment", ctx.system_name),
+                            target
+                        ));
                         if let Some(ref state) = state_str {
-                            for (i, a) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                            for (i, a) in state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .enumerate()
+                            {
                                 if let Some(eq_pos) = a.find('=') {
-                                    code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, a[..eq_pos].trim(), a[eq_pos+1..].trim()));
+                                    code.push_str(&format!(
+                                        "{}__compartment.state_args[\"{}\"] = {}\n",
+                                        indent_str,
+                                        a[..eq_pos].trim(),
+                                        a[eq_pos + 1..].trim()
+                                    ));
                                 } else {
                                     let key = resolve_state_arg_key(i, &target, ctx);
-                                    code.push_str(&format!("{}__compartment.state_args[\"{}\"] = {}\n", indent_str, key, a));
+                                    code.push_str(&format!(
+                                        "{}__compartment.state_args[\"{}\"] = {}\n",
+                                        indent_str, key, a
+                                    ));
                                 }
                             }
                         }
                         if let Some(ref enter) = enter_str {
-                            for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                            for (i, arg) in enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .enumerate()
+                            {
                                 let key = resolve_enter_arg_key(i, &target, ctx);
-                                code.push_str(&format!("{}__compartment.enter_args[\"{}\"] = {}\n", indent_str, key, arg));
+                                code.push_str(&format!(
+                                    "{}__compartment.enter_args[\"{}\"] = {}\n",
+                                    indent_str, key, arg
+                                ));
                             }
                         }
-                        code.push_str(&format!("{}self:__transition(__compartment)\n{}return", indent_str, indent_str));
+                        code.push_str(&format!(
+                            "{}self:__transition(__compartment)\n{}return",
+                            indent_str, indent_str
+                        ));
                         code
                     }
                     TargetLanguage::Erlang => {
@@ -1057,8 +1528,14 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Build exit_args map
                         let exit_map = if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
-                            let entries: Vec<String> = args.iter().enumerate()
+                            let args: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            let entries: Vec<String> = args
+                                .iter()
+                                .enumerate()
                                 .map(|(i, a)| format!("<<\"{}\">> => {}", i, a))
                                 .collect();
                             format!("#{{{}}}", entries.join(", "))
@@ -1068,8 +1545,14 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Build enter_args map
                         let enter_map = if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
-                            let entries: Vec<String> = args.iter().enumerate()
+                            let args: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            let entries: Vec<String> = args
+                                .iter()
+                                .enumerate()
                                 .map(|(i, a)| format!("<<\"{}\">> => {}", i, a))
                                 .collect();
                             format!("#{{{}}}", entries.join(", "))
@@ -1079,11 +1562,21 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
                         // Build state_args map
                         let state_map = if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
-                            let entries: Vec<String> = args.iter().enumerate()
+                            let args: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            let entries: Vec<String> = args
+                                .iter()
+                                .enumerate()
                                 .map(|(i, a)| {
                                     if let Some(eq_pos) = a.find('=') {
-                                        format!("<<\"{}\">> => {}", a[..eq_pos].trim(), a[eq_pos+1..].trim())
+                                        format!(
+                                            "<<\"{}\">> => {}",
+                                            a[..eq_pos].trim(),
+                                            a[eq_pos + 1..].trim()
+                                        )
                                     } else {
                                         format!("<<\"{}\">> => {}", i, a)
                                     }
@@ -1094,8 +1587,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                             "#{}".to_string()
                         };
 
-                        code.push_str(&format!("{}frame_transition__({}, Data, {}, {}, {}, From)",
-                            indent_str, erlang_state, exit_map, enter_map, state_map));
+                        code.push_str(&format!(
+                            "{}frame_transition__({}, Data, {}, {}, {}, From)",
+                            indent_str, erlang_state, exit_map, enter_map, state_map
+                        ));
                         code
                     }
                     TargetLanguage::Graphviz => unreachable!(),
@@ -1113,7 +1608,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     // Create compartment with forward_event set to current event
                     let mut code = String::new();
                     code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment)\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}self.__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
                     code
@@ -1122,7 +1620,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     // GDScript: .new() constructor, positional args
                     let mut code = String::new();
                     code.push_str(&format!("{}var __compartment = {}Compartment.new(\"{}\", self.__compartment.copy())\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}self.__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
                     code
@@ -1131,8 +1632,14 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     // Create compartment with forward_event set to current event
                     let mut code = String::new();
                     code.push_str(&format!("{}const __compartment = new {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.forward_event = __e;\n", indent_str));
-                    code.push_str(&format!("{}this.__transition(__compartment);\n", indent_str));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e;\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}this.__transition(__compartment);\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}return;", indent_str));
                     code
                 }
@@ -1140,66 +1647,126 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     // Create compartment with forward_event set to current event
                     let mut code = String::new();
                     code.push_str(&format!("{}final __compartment = {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.forward_event = __e;\n", indent_str));
-                    code.push_str(&format!("{}this.__transition(__compartment);\n", indent_str));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e;\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}this.__transition(__compartment);\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}return;", indent_str));
                     code
                 }
                 TargetLanguage::Rust => {
                     // Rust uses compartment-based transition with forward event
                     let mut code = String::new();
-                    code.push_str(&format!("{}let mut __compartment = {}Compartment::new(\"{}\");\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.forward_event = Some(__e.clone());\n", indent_str));
-                    code.push_str(&format!("{}self.__transition(__compartment);\n", indent_str));
+                    code.push_str(&format!(
+                        "{}let mut __compartment = {}Compartment::new(\"{}\");\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = Some(__e.clone());\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}self.__transition(__compartment);\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}return;", indent_str));
                     code
                 }
                 TargetLanguage::C => {
                     // C: Create compartment with forward event and call transition
                     let mut code = String::new();
-                    code.push_str(&format!("{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n", indent_str, ctx.system_name, ctx.system_name, target));
+                    code.push_str(&format!(
+                        "{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n",
+                        indent_str, ctx.system_name, ctx.system_name, target
+                    ));
                     if ctx.parent_state.is_some() {
                         code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_ref(self->__compartment);\n", indent_str, ctx.system_name));
                     }
-                    code.push_str(&format!("{}__compartment->forward_event = __e;\n", indent_str));
-                    code.push_str(&format!("{}{}_transition(self, __compartment);\n", indent_str, ctx.system_name));
+                    code.push_str(&format!(
+                        "{}__compartment->forward_event = __e;\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}{}_transition(self, __compartment);\n",
+                        indent_str, ctx.system_name
+                    ));
                     code.push_str(&format!("{}return;", indent_str));
                     code
                 }
                 TargetLanguage::Cpp => {
                     // C++: Create shared_ptr compartment with forward event
                     let mut code = String::new();
-                    code.push_str(&format!("{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__new_compartment->parent_compartment = __compartment;\n", indent_str));
+                    code.push_str(&format!(
+                        "{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__new_compartment->parent_compartment = __compartment;\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}__new_compartment->forward_event = std::make_unique<{}FrameEvent>(__e);\n", indent_str, ctx.system_name));
-                    code.push_str(&format!("{}__transition(std::move(__new_compartment));\n", indent_str));
+                    code.push_str(&format!(
+                        "{}__transition(std::move(__new_compartment));\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}return;", indent_str));
                     code
                 }
                 TargetLanguage::Java => {
                     // Java: Create compartment with forward event
                     let mut code = String::new();
-                    code.push_str(&format!("{}var __compartment = new {}Compartment(\"{}\");\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment;\n", indent_str));
-                    code.push_str(&format!("{}__compartment.forward_event = __e;\n", indent_str));
+                    code.push_str(&format!(
+                        "{}var __compartment = new {}Compartment(\"{}\");\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.parent_compartment = this.__compartment;\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e;\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}__transition(__compartment);\n", indent_str));
                     code.push_str(&format!("{}return;", indent_str));
                     code
                 }
                 TargetLanguage::Kotlin => {
                     let mut code = String::new();
-                    code.push_str(&format!("{}val __compartment = {}Compartment(\"{}\")\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.parent_compartment = this.__compartment\n", indent_str));
-                    code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
+                    code.push_str(&format!(
+                        "{}val __compartment = {}Compartment(\"{}\")\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.parent_compartment = this.__compartment\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
                     code
                 }
                 TargetLanguage::Swift => {
                     let mut code = String::new();
-                    code.push_str(&format!("{}let __compartment = {}Compartment(state: \"{}\")\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.parent_compartment = self.__compartment\n", indent_str));
-                    code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
+                    code.push_str(&format!(
+                        "{}let __compartment = {}Compartment(state: \"{}\")\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.parent_compartment = self.__compartment\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
                     code
@@ -1207,26 +1774,50 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Php => {
                     let mut code = String::new();
                     code.push_str(&format!("{}$__compartment = new {}Compartment(\"{}\", $this->__compartment->copy());\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}$__compartment->forward_event = $__e;\n", indent_str));
-                    code.push_str(&format!("{}$this->__transition($__compartment);\n", indent_str));
+                    code.push_str(&format!(
+                        "{}$__compartment->forward_event = $__e;\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}$this->__transition($__compartment);\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}return;", indent_str));
                     code
                 }
                 TargetLanguage::CSharp => {
                     // C#: Create compartment with forward event — block scope
                     let mut code = String::new();
-                    code.push_str(&format!("{}{{ var __new_compartment = new {}Compartment(\"{}\");\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__new_compartment.parent_compartment = __compartment;\n", indent_str));
-                    code.push_str(&format!("{}__new_compartment.forward_event = __e;\n", indent_str));
-                    code.push_str(&format!("{}__transition(__new_compartment); }}\n", indent_str));
+                    code.push_str(&format!(
+                        "{}{{ var __new_compartment = new {}Compartment(\"{}\");\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__new_compartment.parent_compartment = __compartment;\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}__new_compartment.forward_event = __e;\n",
+                        indent_str
+                    ));
+                    code.push_str(&format!(
+                        "{}__transition(__new_compartment); }}\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}return;", indent_str));
                     code
                 }
                 TargetLanguage::Go => {
                     // Go: Create compartment with forward event
                     let mut code = String::new();
-                    code.push_str(&format!("{}__compartment := new{}Compartment(\"{}\")\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.parentCompartment = s.__compartment.copy()\n", indent_str));
+                    code.push_str(&format!(
+                        "{}__compartment := new{}Compartment(\"{}\")\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.parentCompartment = s.__compartment.copy()\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}__compartment.forwardEvent = __e\n", indent_str));
                     code.push_str(&format!("{}s.__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
@@ -1234,8 +1825,14 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 }
                 TargetLanguage::Ruby => {
                     let mut code = String::new();
-                    code.push_str(&format!("{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
+                    code.push_str(&format!(
+                        "{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
                     code
@@ -1243,8 +1840,14 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Lua => {
                     // TODO: Lua-specific transition-forward
                     let mut code = String::new();
-                    code.push_str(&format!("{}local __compartment = {}Compartment.new(\"{}\")\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!("{}__compartment.forward_event = __e\n", indent_str));
+                    code.push_str(&format!(
+                        "{}local __compartment = {}Compartment.new(\"{}\")\n",
+                        indent_str, ctx.system_name, target
+                    ));
+                    code.push_str(&format!(
+                        "{}__compartment.forward_event = __e\n",
+                        indent_str
+                    ));
                     code.push_str(&format!("{}self:__transition(__compartment)\n", indent_str));
                     code.push_str(&format!("{}return", indent_str));
                     code
@@ -1258,17 +1861,30 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             if let Some(ref parent) = ctx.parent_state {
                 match lang {
                     // Python/TypeScript: call _state_Parent(__e) to dispatch via unified state method
-                    TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._state_{}(__e)", indent_str, parent),
-                    TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._state_{}(__e);", indent_str, parent),
+                    TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                        format!("{}self._state_{}(__e)", indent_str, parent)
+                    }
+                    TargetLanguage::TypeScript
+                    | TargetLanguage::Dart
+                    | TargetLanguage::JavaScript => {
+                        format!("{}this._state_{}(__e);", indent_str, parent)
+                    }
                     // Rust: call parent state router (not specific handler) to dispatch via match
                     TargetLanguage::Rust => format!("{}self._state_{}(__e);", indent_str, parent),
                     // C: call System_state_Parent(self, __e) since C has no methods
-                    TargetLanguage::C => format!("{}{}_state_{}(self, __e);", indent_str, ctx.system_name, parent),
+                    TargetLanguage::C => format!(
+                        "{}{}_state_{}(self, __e);",
+                        indent_str, ctx.system_name, parent
+                    ),
                     // C++: call _state_Parent(__e) — forward is not terminal, no return
                     TargetLanguage::Cpp => format!("{}_state_{}(__e);", indent_str, parent),
                     // Java/C#: call _state_Parent(__e) — forward is not terminal, no return
-                    TargetLanguage::Java | TargetLanguage::CSharp => format!("{}_state_{}(__e);", indent_str, parent),
-                    TargetLanguage::Kotlin | TargetLanguage::Swift => format!("{}_state_{}(__e)", indent_str, parent),
+                    TargetLanguage::Java | TargetLanguage::CSharp => {
+                        format!("{}_state_{}(__e);", indent_str, parent)
+                    }
+                    TargetLanguage::Kotlin | TargetLanguage::Swift => {
+                        format!("{}_state_{}(__e)", indent_str, parent)
+                    }
                     // Go: call s._state_Parent(__e) — forward is not terminal, no return
                     TargetLanguage::Go => format!("{}s._state_{}(__e)", indent_str, parent),
                     TargetLanguage::Php => format!("{}$this->_state_{}($__e);", indent_str, parent),
@@ -1282,21 +1898,35 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         let event_atom = to_snake_case(&ctx.event_name);
                         // Call parent directly with the same {call, From} context so
                         // the parent's reply reaches the original caller.
-                        format!("{}{}({{call, From}}, {}, Data)", indent_str, parent_atom, event_atom)
+                        format!(
+                            "{}{}({{call, From}}, {}, Data)",
+                            indent_str, parent_atom, event_atom
+                        )
                     }
                     TargetLanguage::Graphviz => unreachable!(),
                 }
             } else {
                 // No parent state - just return (shouldn't happen in valid HSM)
                 match lang {
-                    TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}return  # Forward to parent (no parent)", indent_str),
-                    TargetLanguage::Ruby | TargetLanguage::Kotlin | TargetLanguage::Swift
-                        | TargetLanguage::Lua => {
+                    TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                        format!("{}return  # Forward to parent (no parent)", indent_str)
+                    }
+                    TargetLanguage::Ruby
+                    | TargetLanguage::Kotlin
+                    | TargetLanguage::Swift
+                    | TargetLanguage::Lua => {
                         format!("{}return // Forward to parent (no parent)", indent_str)
                     }
-                    TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Rust | TargetLanguage::Dart
-                        | TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java
-                        | TargetLanguage::CSharp | TargetLanguage::Go | TargetLanguage::Php => {
+                    TargetLanguage::TypeScript
+                    | TargetLanguage::JavaScript
+                    | TargetLanguage::Rust
+                    | TargetLanguage::Dart
+                    | TargetLanguage::C
+                    | TargetLanguage::Cpp
+                    | TargetLanguage::Java
+                    | TargetLanguage::CSharp
+                    | TargetLanguage::Go
+                    | TargetLanguage::Php => {
                         format!("{}return; // Forward to parent (no parent)", indent_str)
                     }
                     TargetLanguage::Erlang => {
@@ -1325,34 +1955,49 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             // reference as the current compartment.
             match lang {
                 TargetLanguage::Python3 => {
-                    let push_code = format!("{}self._state_stack.append(self.__compartment)", indent_str);
+                    let push_code =
+                        format!("{}self._state_stack.append(self.__compartment)", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}self._transition(\"{}\", None, None)", push_code, indent_str, target)
+                        format!(
+                            "{}\n{}self._transition(\"{}\", None, None)",
+                            push_code, indent_str, target
+                        )
                     } else {
                         push_code
                     }
                 }
                 TargetLanguage::GDScript => {
-                    let push_code = format!("{}self._state_stack.append(self.__compartment)", indent_str);
+                    let push_code =
+                        format!("{}self._state_stack.append(self.__compartment)", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}self._transition(\"{}\", null, null)", push_code, indent_str, target)
+                        format!(
+                            "{}\n{}self._transition(\"{}\", null, null)",
+                            push_code, indent_str, target
+                        )
                     } else {
                         push_code
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-                    let push_code = format!("{}this._state_stack.push(this.__compartment);", indent_str);
+                    let push_code =
+                        format!("{}this._state_stack.push(this.__compartment);", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}this._transition(\"{}\", null, null);", push_code, indent_str, target)
+                        format!(
+                            "{}\n{}this._transition(\"{}\", null, null);",
+                            push_code, indent_str, target
+                        )
                     } else {
                         push_code
                     }
                 }
                 TargetLanguage::Dart => {
-                    let push_code = format!("{}this._state_stack.add(this.__compartment);", indent_str);
+                    let push_code =
+                        format!("{}this._state_stack.add(this.__compartment);", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}this.__transition({}Compartment(\"{}\"));\n{}return;",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}this.__transition({}Compartment(\"{}\"));\n{}return;",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
@@ -1361,13 +2006,17 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     if !target.is_empty() {
                         // Push-with-transition: mem::replace moves old to
                         // stack, new becomes current. No copy needed.
-                        format!("{}self.__push_transition({}Compartment::new(\"{}\"));\n{}return;",
-                            indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}self.__push_transition({}Compartment::new(\"{}\"));\n{}return;",
+                            indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         // Bare push$: Rust ownership requires clone (can't
                         // have stack and current both own the same value).
-                        format!("{}self._state_stack.push(self.__compartment.clone());",
-                            indent_str)
+                        format!(
+                            "{}self._state_stack.push(self.__compartment.clone());",
+                            indent_str
+                        )
                     }
                 }
                 TargetLanguage::C => {
@@ -1377,8 +2026,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     let push_code = format!("{}{}_FrameVec_push(self->_state_stack, {}_Compartment_ref(self->__compartment));",
                         indent_str, ctx.system_name, ctx.system_name);
                     if !target.is_empty() {
-                        format!("{}\n{}{}_transition(self, {}_Compartment_new(\"{}\"));",
-                            push_code, indent_str, ctx.system_name, ctx.system_name, target)
+                        format!(
+                            "{}\n{}{}_transition(self, {}_Compartment_new(\"{}\"));",
+                            push_code, indent_str, ctx.system_name, ctx.system_name, target
+                        )
                     } else {
                         push_code
                     }
@@ -1396,8 +2047,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Java => {
                     let push_code = format!("{}_state_stack.add(__compartment);", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}__transition(new {}Compartment(\"{}\"));\n{}return;",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}__transition(new {}Compartment(\"{}\"));\n{}return;",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
@@ -1405,8 +2058,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Kotlin => {
                     let push_code = format!("{}_state_stack.add(__compartment)", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}__transition({}Compartment(\"{}\"))\n{}return",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}__transition({}Compartment(\"{}\"))\n{}return",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
@@ -1414,17 +2069,24 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Swift => {
                     let push_code = format!("{}_state_stack.append(__compartment)", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}__transition({}Compartment(state: \"{}\"))\n{}return",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}__transition({}Compartment(state: \"{}\"))\n{}return",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
                 }
                 TargetLanguage::Go => {
-                    let push_code = format!("{}s._state_stack = append(s._state_stack, s.__compartment)", indent_str);
+                    let push_code = format!(
+                        "{}s._state_stack = append(s._state_stack, s.__compartment)",
+                        indent_str
+                    );
                     if !target.is_empty() {
-                        format!("{}\n{}s.__transition(new{}Compartment(\"{}\"))\n{}return",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}s.__transition(new{}Compartment(\"{}\"))\n{}return",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
@@ -1432,17 +2094,24 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::CSharp => {
                     let push_code = format!("{}_state_stack.Add(__compartment);", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}__transition(new {}Compartment(\"{}\"));\n{}return;",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}__transition(new {}Compartment(\"{}\"));\n{}return;",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
                 }
                 TargetLanguage::Php => {
-                    let push_code = format!("{}$this->_state_stack[] = $this->__compartment;", indent_str);
+                    let push_code = format!(
+                        "{}$this->_state_stack[] = $this->__compartment;",
+                        indent_str
+                    );
                     if !target.is_empty() {
-                        format!("{}\n{}$this->__transition(new {}Compartment(\"{}\"));\n{}return;",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}$this->__transition(new {}Compartment(\"{}\"));\n{}return;",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
@@ -1450,17 +2119,24 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::Ruby => {
                     let push_code = format!("{}@_state_stack.push(@__compartment)", indent_str);
                     if !target.is_empty() {
-                        format!("{}\n{}__transition({}Compartment.new(\"{}\"))\n{}return",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}__transition({}Compartment.new(\"{}\"))\n{}return",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
                 }
                 TargetLanguage::Lua => {
-                    let push_code = format!("{}self._state_stack[#self._state_stack + 1] = self.__compartment", indent_str);
+                    let push_code = format!(
+                        "{}self._state_stack[#self._state_stack + 1] = self.__compartment",
+                        indent_str
+                    );
                     if !target.is_empty() {
-                        format!("{}\n{}self:__transition({}Compartment.new(\"{}\"))\n{}return",
-                            push_code, indent_str, ctx.system_name, target, indent_str)
+                        format!(
+                            "{}\n{}self:__transition({}Compartment.new(\"{}\"))\n{}return",
+                            push_code, indent_str, ctx.system_name, target, indent_str
+                        )
                     } else {
                         push_code
                     }
@@ -1472,7 +2148,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         format!("{}self.frame_stack = [{} | self.frame_stack]\n{}{{next_state, {}, Data, [{{reply, From, ok}}]}}",
                             indent_str, state_atom, indent_str, target_atom)
                     } else {
-                        format!("{}self.frame_stack = [{} | self.frame_stack]", indent_str, state_atom)
+                        format!(
+                            "{}self.frame_stack = [{} | self.frame_stack]",
+                            indent_str, state_atom
+                        )
                     }
                 }
                 TargetLanguage::Graphviz => unreachable!(),
@@ -1488,19 +2167,35 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 TargetLanguage::JavaScript => format!("{}this._state_stack.pop();", indent_str),
                 TargetLanguage::Dart => format!("{}this._state_stack.removeLast();", indent_str),
                 TargetLanguage::Rust => format!("{}self._state_stack.pop();", indent_str),
-                TargetLanguage::C => format!("{}{}_FrameVec_pop(self->_state_stack);", indent_str, ctx.system_name),
+                TargetLanguage::C => format!(
+                    "{}{}_FrameVec_pop(self->_state_stack);",
+                    indent_str, ctx.system_name
+                ),
                 TargetLanguage::Cpp => format!("{}_state_stack.pop_back();", indent_str),
-                TargetLanguage::Java => format!("{}_state_stack.remove(_state_stack.size() - 1);", indent_str),
-                TargetLanguage::Kotlin => format!("{}_state_stack.removeAt(_state_stack.size - 1)", indent_str),
+                TargetLanguage::Java => format!(
+                    "{}_state_stack.remove(_state_stack.size() - 1);",
+                    indent_str
+                ),
+                TargetLanguage::Kotlin => {
+                    format!("{}_state_stack.removeAt(_state_stack.size - 1)", indent_str)
+                }
                 TargetLanguage::Swift => format!("{}_state_stack.removeLast()", indent_str),
-                TargetLanguage::CSharp => format!("{}_state_stack.RemoveAt(_state_stack.Count - 1);", indent_str),
-                TargetLanguage::Go => format!("{}s._state_stack = s._state_stack[:len(s._state_stack)-1]", indent_str),
+                TargetLanguage::CSharp => format!(
+                    "{}_state_stack.RemoveAt(_state_stack.Count - 1);",
+                    indent_str
+                ),
+                TargetLanguage::Go => format!(
+                    "{}s._state_stack = s._state_stack[:len(s._state_stack)-1]",
+                    indent_str
+                ),
                 TargetLanguage::Php => format!("{}array_pop($this->_state_stack);", indent_str),
                 TargetLanguage::Ruby => format!("{}@_state_stack.pop", indent_str),
                 TargetLanguage::Lua => format!("{}table.remove(self._state_stack)", indent_str),
                 TargetLanguage::Erlang => {
-                    format!("{}[_ | __RestStack] = self.frame_stack,\n{}self.frame_stack = __RestStack",
-                        indent_str, indent_str)
+                    format!(
+                        "{}[_ | __RestStack] = self.frame_stack,\n{}self.frame_stack = __RestStack",
+                        indent_str, indent_str
+                    )
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -1544,85 +2239,142 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                     // Navigation handles HSM: walks parent_compartment chain to find correct state.
                     // The match borrows via `&`, so non-Copy fields (String) need `.clone()`
                     // to produce an owned value. Copy types (i64, bool) don't need it.
-                    let is_copy = ctx.state_var_types.get(var_name.as_str())
-                        .map(|t| matches!(t.to_lowercase().as_str(),
-                            "i32" | "i64" | "u32" | "u64" | "isize" | "usize"
-                            | "f32" | "f64" | "bool" | "int" | "float" | "number"))
+                    let is_copy = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
+                        .map(|t| {
+                            matches!(
+                                t.to_lowercase().as_str(),
+                                "i32"
+                                    | "i64"
+                                    | "u32"
+                                    | "u64"
+                                    | "isize"
+                                    | "usize"
+                                    | "f32"
+                                    | "f64"
+                                    | "bool"
+                                    | "int"
+                                    | "float"
+                                    | "number"
+                            )
+                        })
                         .unwrap_or(false);
                     let suffix = if is_copy { "" } else { ".clone()" };
                     format!("{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}{}, _ => unreachable!() }} }}",
                         ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix)
-                },
+                }
                 TargetLanguage::C => {
                     // For C, access via FrameDict_get with cast
                     // Note: This is for reads; writes are handled by detecting assignment context
-                    format!("(int)(intptr_t){}_FrameDict_get(self->__compartment->state_vars, \"{}\")", ctx.system_name, var_name)
-                },
+                    format!(
+                        "(int)(intptr_t){}_FrameDict_get(self->__compartment->state_vars, \"{}\")",
+                        ctx.system_name, var_name
+                    )
+                }
                 TargetLanguage::Cpp => {
-                    let cpp_type = ctx.state_var_types.get(var_name.as_str())
+                    let cpp_type = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
                         .map(|t| cpp_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
                     if ctx.use_sv_comp {
-                        format!("std::any_cast<{}>(__sv_comp->state_vars[\"{}\"])", cpp_type, var_name)
+                        format!(
+                            "std::any_cast<{}>(__sv_comp->state_vars[\"{}\"])",
+                            cpp_type, var_name
+                        )
                     } else {
-                        format!("std::any_cast<{}>(__compartment->state_vars[\"{}\"])", cpp_type, var_name)
+                        format!(
+                            "std::any_cast<{}>(__compartment->state_vars[\"{}\"])",
+                            cpp_type, var_name
+                        )
                     }
-                },
+                }
                 TargetLanguage::Java => {
-                    let java_type = ctx.state_var_types.get(var_name.as_str())
+                    let java_type = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
                         .map(|t| java_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let cast = if java_type == "Object" { String::new() } else { format!("({}) ", java_type) };
+                    let cast = if java_type == "Object" {
+                        String::new()
+                    } else {
+                        format!("({}) ", java_type)
+                    };
                     if ctx.use_sv_comp {
                         format!("{}__sv_comp.state_vars.get(\"{}\")", cast, var_name)
                     } else {
                         format!("{}__compartment.state_vars.get(\"{}\")", cast, var_name)
                     }
-                },
+                }
                 TargetLanguage::Kotlin => {
-                    let kt_type = ctx.state_var_types.get(var_name.as_str())
+                    let kt_type = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
                         .map(|t| kotlin_map_type(t))
                         .unwrap_or_else(|| "Int".to_string());
-                    let cast = if kt_type == "Any?" { String::new() } else { format!(" as {}", kt_type) };
-                    if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]{}",  var_name, cast)
+                    let cast = if kt_type == "Any?" {
+                        String::new()
                     } else {
-                        format!("__compartment.state_vars[\"{}\"]{}",  var_name, cast)
+                        format!(" as {}", kt_type)
+                    };
+                    if ctx.use_sv_comp {
+                        format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast)
+                    } else {
+                        format!("__compartment.state_vars[\"{}\"]{}", var_name, cast)
                     }
-                },
+                }
                 TargetLanguage::Swift => {
-                    let sw_type = ctx.state_var_types.get(var_name.as_str())
+                    let sw_type = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
                         .map(|t| swift_map_type(t))
                         .unwrap_or_else(|| "Int".to_string());
-                    let cast = if sw_type == "Any" { String::new() } else { format!(" as! {}", sw_type) };
-                    if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]{}",  var_name, cast)
+                    let cast = if sw_type == "Any" {
+                        String::new()
                     } else {
-                        format!("__compartment.state_vars[\"{}\"]{}",  var_name, cast)
+                        format!(" as! {}", sw_type)
+                    };
+                    if ctx.use_sv_comp {
+                        format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast)
+                    } else {
+                        format!("__compartment.state_vars[\"{}\"]{}", var_name, cast)
                     }
-                },
+                }
                 TargetLanguage::Go => {
-                    let go_type = ctx.state_var_types.get(var_name.as_str())
+                    let go_type = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
                         .map(|t| go_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let assertion = if go_type == "any" || go_type.is_empty() { String::new() } else { format!(".({})", go_type) };
+                    let assertion = if go_type == "any" || go_type.is_empty() {
+                        String::new()
+                    } else {
+                        format!(".({})", go_type)
+                    };
                     if ctx.use_sv_comp {
                         format!("__sv_comp.stateVars[\"{}\"]{}", var_name, assertion)
                     } else {
                         format!("s.__compartment.stateVars[\"{}\"]{}", var_name, assertion)
                     }
-                },
+                }
                 TargetLanguage::CSharp => {
-                    let cs_type = ctx.state_var_types.get(var_name.as_str())
+                    let cs_type = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
                         .map(|t| csharp_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let cast = if cs_type == "object" { String::new() } else { format!("({}) ", cs_type) };
+                    let cast = if cs_type == "object" {
+                        String::new()
+                    } else {
+                        format!("({}) ", cs_type)
+                    };
                     if ctx.use_sv_comp {
                         format!("{}__sv_comp.state_vars[\"{}\"]", cast, var_name)
                     } else {
                         format!("{}__compartment.state_vars[\"{}\"]", cast, var_name)
                     }
-                },
+                }
                 TargetLanguage::Lua => {
                     if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[\"{}\"]", var_name)
@@ -1660,7 +2412,9 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             // Extract variable name: skip "$." and collect identifier
             let var_name = if text.starts_with("$.") {
                 let rest = &text[2..];
-                let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
+                let end = rest
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
                 &rest[..end]
             } else {
                 ""
@@ -1679,30 +2433,54 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}self.__compartment.state_vars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}self.__compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars[\"{}\"] = {};", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp.state_vars[\"{}\"] = {};",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}this.__compartment.state_vars[\"{}\"] = {};", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}this.__compartment.state_vars[\"{}\"] = {};",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::Php => {
                     if ctx.use_sv_comp {
-                        format!("{}$__sv_comp->state_vars[\"{}\"] = {};", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}$__sv_comp->state_vars[\"{}\"] = {};",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}$this->__compartment->state_vars[\"{}\"] = {};", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}$this->__compartment->state_vars[\"{}\"] = {};",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::Ruby => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}@__compartment.state_vars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}@__compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::Rust => {
@@ -1719,7 +2497,7 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                         indent_str, expanded_expr,
                         ctx.system_name, ctx.state_name,
                         ctx.system_name, ctx.state_name, var_name)
-                },
+                }
                 TargetLanguage::C => {
                     if ctx.use_sv_comp {
                         format!("{}{}_FrameDict_set(__sv_comp->state_vars, \"{}\", (void*)(intptr_t)({}));",
@@ -1731,44 +2509,80 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 }
                 TargetLanguage::Cpp => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp->state_vars[\"{}\"] = std::any({});", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp->state_vars[\"{}\"] = std::any({});",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}__compartment->state_vars[\"{}\"] = std::any({});", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__compartment->state_vars[\"{}\"] = std::any({});",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::Java => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars.put(\"{}\", {});", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp.state_vars.put(\"{}\", {});",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}__compartment.state_vars.put(\"{}\", {});", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__compartment.state_vars.put(\"{}\", {});",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::Kotlin | TargetLanguage::Swift => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}__compartment.state_vars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::Go => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.stateVars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp.stateVars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}s.__compartment.stateVars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}s.__compartment.stateVars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::CSharp => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars[\"{}\"] = {};", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp.state_vars[\"{}\"] = {};",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}__compartment.state_vars[\"{}\"] = {};", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__compartment.state_vars[\"{}\"] = {};",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::Lua => {
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}__sv_comp.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     } else {
-                        format!("{}self.__compartment.state_vars[\"{}\"] = {}", indent_str, var_name, expanded_expr)
+                        format!(
+                            "{}self.__compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
                     }
                 }
                 TargetLanguage::Erlang => {
@@ -1824,19 +2638,48 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 } else {
                     // Read: @@:return (== check)
                     match lang {
-                        TargetLanguage::Python3 | TargetLanguage::GDScript => "self._context_stack[-1]._return".to_string(),
-                        TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => "this._context_stack[this._context_stack.length - 1]._return".to_string(),
+                        TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                            "self._context_stack[-1]._return".to_string()
+                        }
+                        TargetLanguage::TypeScript
+                        | TargetLanguage::Dart
+                        | TargetLanguage::JavaScript => {
+                            "this._context_stack[this._context_stack.length - 1]._return"
+                                .to_string()
+                        }
                         TargetLanguage::C => format!("{}_RETURN(self)", ctx.system_name),
-                        TargetLanguage::Rust => "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())".to_string(),
-                        TargetLanguage::Cpp => "std::any_cast<std::string>(_context_stack.back()._return)".to_string(),
-                        TargetLanguage::Java => "_context_stack.get(_context_stack.size() - 1)._return".to_string(),
-                        TargetLanguage::Kotlin => "_context_stack[_context_stack.size - 1]._return".to_string(),
-                        TargetLanguage::Swift => "_context_stack[_context_stack.count - 1]._return".to_string(),
-                        TargetLanguage::CSharp => "_context_stack[_context_stack.Count - 1]._return".to_string(),
-                        TargetLanguage::Go => "s._context_stack[len(s._context_stack)-1]._return".to_string(),
-                        TargetLanguage::Php => "$this->_context_stack[count($this->_context_stack) - 1]->_return".to_string(),
-                        TargetLanguage::Ruby => "@_context_stack[@_context_stack.length - 1]._return".to_string(),
-                        TargetLanguage::Lua => "self._context_stack[#self._context_stack]._return".to_string(),
+                        TargetLanguage::Rust => {
+                            "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())"
+                                .to_string()
+                        }
+                        TargetLanguage::Cpp => {
+                            "std::any_cast<std::string>(_context_stack.back()._return)".to_string()
+                        }
+                        TargetLanguage::Java => {
+                            "_context_stack.get(_context_stack.size() - 1)._return".to_string()
+                        }
+                        TargetLanguage::Kotlin => {
+                            "_context_stack[_context_stack.size - 1]._return".to_string()
+                        }
+                        TargetLanguage::Swift => {
+                            "_context_stack[_context_stack.count - 1]._return".to_string()
+                        }
+                        TargetLanguage::CSharp => {
+                            "_context_stack[_context_stack.Count - 1]._return".to_string()
+                        }
+                        TargetLanguage::Go => {
+                            "s._context_stack[len(s._context_stack)-1]._return".to_string()
+                        }
+                        TargetLanguage::Php => {
+                            "$this->_context_stack[count($this->_context_stack) - 1]->_return"
+                                .to_string()
+                        }
+                        TargetLanguage::Ruby => {
+                            "@_context_stack[@_context_stack.length - 1]._return".to_string()
+                        }
+                        TargetLanguage::Lua => {
+                            "self._context_stack[#self._context_stack]._return".to_string()
+                        }
                         TargetLanguage::Erlang => "__ReturnVal".to_string(),
                         TargetLanguage::Graphviz => unreachable!(),
                     }
@@ -1844,19 +2687,47 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             } else {
                 // Read: @@:return
                 match lang {
-                    TargetLanguage::Python3 | TargetLanguage::GDScript => "self._context_stack[-1]._return".to_string(),
-                    TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => "this._context_stack[this._context_stack.length - 1]._return".to_string(),
-                    TargetLanguage::Rust => "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())".to_string(),
-                    TargetLanguage::Cpp => "std::any_cast<std::string>(_context_stack.back()._return)".to_string(),
-                    TargetLanguage::Java => "_context_stack.get(_context_stack.size() - 1)._return".to_string(),
-                    TargetLanguage::Kotlin => "_context_stack[_context_stack.size - 1]._return".to_string(),
-                    TargetLanguage::Swift => "_context_stack[_context_stack.count - 1]._return".to_string(),
-                    TargetLanguage::CSharp => "_context_stack[_context_stack.Count - 1]._return".to_string(),
-                    TargetLanguage::Php => "$this->_context_stack[count($this->_context_stack) - 1]->_return".to_string(),
-                    TargetLanguage::Go => "s._context_stack[len(s._context_stack)-1]._return".to_string(),
-                    TargetLanguage::Ruby => "@_context_stack[@_context_stack.length - 1]._return".to_string(),
+                    TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                        "self._context_stack[-1]._return".to_string()
+                    }
+                    TargetLanguage::TypeScript
+                    | TargetLanguage::Dart
+                    | TargetLanguage::JavaScript => {
+                        "this._context_stack[this._context_stack.length - 1]._return".to_string()
+                    }
+                    TargetLanguage::Rust => {
+                        "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())"
+                            .to_string()
+                    }
+                    TargetLanguage::Cpp => {
+                        "std::any_cast<std::string>(_context_stack.back()._return)".to_string()
+                    }
+                    TargetLanguage::Java => {
+                        "_context_stack.get(_context_stack.size() - 1)._return".to_string()
+                    }
+                    TargetLanguage::Kotlin => {
+                        "_context_stack[_context_stack.size - 1]._return".to_string()
+                    }
+                    TargetLanguage::Swift => {
+                        "_context_stack[_context_stack.count - 1]._return".to_string()
+                    }
+                    TargetLanguage::CSharp => {
+                        "_context_stack[_context_stack.Count - 1]._return".to_string()
+                    }
+                    TargetLanguage::Php => {
+                        "$this->_context_stack[count($this->_context_stack) - 1]->_return"
+                            .to_string()
+                    }
+                    TargetLanguage::Go => {
+                        "s._context_stack[len(s._context_stack)-1]._return".to_string()
+                    }
+                    TargetLanguage::Ruby => {
+                        "@_context_stack[@_context_stack.length - 1]._return".to_string()
+                    }
                     TargetLanguage::C => format!("{}_RETURN(self)", ctx.system_name),
-                    TargetLanguage::Lua => "self._context_stack[#self._context_stack]._return".to_string(),
+                    TargetLanguage::Lua => {
+                        "self._context_stack[#self._context_stack]._return".to_string()
+                    }
                     TargetLanguage::Erlang => "__ReturnVal".to_string(),
                     TargetLanguage::Graphviz => unreachable!(),
                 }
@@ -1915,26 +2786,65 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             // does need indent because it's on a new line introduced by
             // the expansion itself.
             let assignment = match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1]._return = {}", expanded_expr),
-                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1]._return = {};", expanded_expr),
-                TargetLanguage::C => format!("{}_CTX(self)->_return = (void*)(intptr_t)({});", ctx.system_name, expanded_expr),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                    format!("self._context_stack[-1]._return = {}", expanded_expr)
+                }
+                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
+                    format!(
+                        "this._context_stack[this._context_stack.length - 1]._return = {};",
+                        expanded_expr
+                    )
+                }
+                TargetLanguage::C => format!(
+                    "{}_CTX(self)->_return = (void*)(intptr_t)({});",
+                    ctx.system_name, expanded_expr
+                ),
                 TargetLanguage::Rust => {
-                    let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
+                    let boxed_expr = if expanded_expr.trim().starts_with('"')
+                        && expanded_expr.trim().ends_with('"')
+                    {
                         format!("String::from({})", expanded_expr.trim())
                     } else {
                         expanded_expr.clone()
                     };
                     format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", boxed_expr, indent_str)
                 }
-                TargetLanguage::Cpp => format!("_context_stack.back()._return = std::any({});", expanded_expr),
-                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._return = {};", expanded_expr),
-                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._return = {}", expanded_expr),
-                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._return = {}", expanded_expr),
-                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._return = {};", expanded_expr),
-                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._return = {}", expanded_expr),
-                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_return = {};", expanded_expr),
-                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._return = {}", expanded_expr),
-                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._return = {}", expanded_expr),
+                TargetLanguage::Cpp => format!(
+                    "_context_stack.back()._return = std::any({});",
+                    expanded_expr
+                ),
+                TargetLanguage::Java => format!(
+                    "_context_stack.get(_context_stack.size() - 1)._return = {};",
+                    expanded_expr
+                ),
+                TargetLanguage::Kotlin => format!(
+                    "_context_stack[_context_stack.size - 1]._return = {}",
+                    expanded_expr
+                ),
+                TargetLanguage::Swift => format!(
+                    "_context_stack[_context_stack.count - 1]._return = {}",
+                    expanded_expr
+                ),
+                TargetLanguage::CSharp => format!(
+                    "_context_stack[_context_stack.Count - 1]._return = {};",
+                    expanded_expr
+                ),
+                TargetLanguage::Go => format!(
+                    "s._context_stack[len(s._context_stack)-1]._return = {}",
+                    expanded_expr
+                ),
+                TargetLanguage::Php => format!(
+                    "$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
+                    expanded_expr
+                ),
+                TargetLanguage::Ruby => format!(
+                    "@_context_stack[@_context_stack.length - 1]._return = {}",
+                    expanded_expr
+                ),
+                TargetLanguage::Lua => format!(
+                    "self._context_stack[#self._context_stack]._return = {}",
+                    expanded_expr
+                ),
                 TargetLanguage::Erlang => {
                     let erl_expr = expanded_expr.replace("self.", "Data#data.");
                     format!("__ReturnVal = {}", erl_expr)
@@ -1949,7 +2859,10 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
                 // The newline puts us at column 0, then indent_str
                 // fills in the source's leading whitespace.
                 let ret_line = match lang {
-                    TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Lua | TargetLanguage::Ruby => format!("{}return", indent_str),
+                    TargetLanguage::Python3
+                    | TargetLanguage::GDScript
+                    | TargetLanguage::Lua
+                    | TargetLanguage::Ruby => format!("{}return", indent_str),
                     TargetLanguage::Erlang => String::new(), // Erlang has no native return statement
                     _ => format!("{}return;", indent_str),
                 };
@@ -1965,20 +2878,41 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
         FrameSegmentKind::ContextEvent => {
             // @@:event - interface event name
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => "self._context_stack[-1].event._message".to_string(),
-                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => "this._context_stack[this._context_stack.length - 1].event._message".to_string(),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                    "self._context_stack[-1].event._message".to_string()
+                }
+                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
+                    "this._context_stack[this._context_stack.length - 1].event._message".to_string()
+                }
                 TargetLanguage::C => format!("{}_CTX(self)->event->_message", ctx.system_name),
                 // Rust: handlers receive __e as parameter, use it directly to avoid borrow conflicts
                 TargetLanguage::Rust => "__e.message.clone()".to_string(),
                 TargetLanguage::Cpp => "_context_stack.back()._event._message".to_string(),
-                TargetLanguage::Java => "_context_stack.get(_context_stack.size() - 1)._event._message".to_string(),
-                TargetLanguage::Kotlin => "_context_stack[_context_stack.size - 1]._event._message".to_string(),
-                TargetLanguage::Swift => "_context_stack[_context_stack.count - 1]._event._message".to_string(),
-                TargetLanguage::CSharp => "_context_stack[_context_stack.Count - 1]._event._message".to_string(),
-                TargetLanguage::Go => "s._context_stack[len(s._context_stack)-1]._event._message".to_string(),
-                TargetLanguage::Php => "$this->_context_stack[count($this->_context_stack) - 1]->_event->_message".to_string(),
-                TargetLanguage::Ruby => "@_context_stack[@_context_stack.length - 1]._event._message".to_string(),
-                TargetLanguage::Lua => "self._context_stack[#self._context_stack]._event._message".to_string(),
+                TargetLanguage::Java => {
+                    "_context_stack.get(_context_stack.size() - 1)._event._message".to_string()
+                }
+                TargetLanguage::Kotlin => {
+                    "_context_stack[_context_stack.size - 1]._event._message".to_string()
+                }
+                TargetLanguage::Swift => {
+                    "_context_stack[_context_stack.count - 1]._event._message".to_string()
+                }
+                TargetLanguage::CSharp => {
+                    "_context_stack[_context_stack.Count - 1]._event._message".to_string()
+                }
+                TargetLanguage::Go => {
+                    "s._context_stack[len(s._context_stack)-1]._event._message".to_string()
+                }
+                TargetLanguage::Php => {
+                    "$this->_context_stack[count($this->_context_stack) - 1]->_event->_message"
+                        .to_string()
+                }
+                TargetLanguage::Ruby => {
+                    "@_context_stack[@_context_stack.length - 1]._event._message".to_string()
+                }
+                TargetLanguage::Lua => {
+                    "self._context_stack[#self._context_stack]._event._message".to_string()
+                }
                 TargetLanguage::Erlang => {
                     let event_atom = to_snake_case(&ctx.event_name);
                     format!("{}", event_atom)
@@ -1990,21 +2924,51 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             // @@:data.key - call-scoped data (read)
             let key = extract_dot_key(&segment_text, "@@:data");
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1]._data[\"{}\"]", key),
-                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1]._data[\"{}\"]", key),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                    format!("self._context_stack[-1]._data[\"{}\"]", key)
+                }
+                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
+                    format!(
+                        "this._context_stack[this._context_stack.length - 1]._data[\"{}\"]",
+                        key
+                    )
+                }
                 TargetLanguage::C => format!("{}_DATA(self, \"{}\")", ctx.system_name, key),
                 TargetLanguage::Rust => {
                     format!("self._context_stack.last().and_then(|ctx| ctx._data.get(\"{}\")).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default()", key)
                 }
                 TargetLanguage::Cpp => format!("_context_stack.back()._data[\"{}\"]", key),
-                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._data.get(\"{}\")", key),
-                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._data[\"{}\"]", key),
-                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._data[\"{}\"]", key),
-                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._data[\"{}\"]", key),
-                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._data[\"{}\"]", key),
-                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_data[\"{}\"]", key),
-                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._data[\"{}\"]", key),
-                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._data[\"{}\"]", key),
+                TargetLanguage::Java => format!(
+                    "_context_stack.get(_context_stack.size() - 1)._data.get(\"{}\")",
+                    key
+                ),
+                TargetLanguage::Kotlin => {
+                    format!("_context_stack[_context_stack.size - 1]._data[\"{}\"]", key)
+                }
+                TargetLanguage::Swift => format!(
+                    "_context_stack[_context_stack.count - 1]._data[\"{}\"]",
+                    key
+                ),
+                TargetLanguage::CSharp => format!(
+                    "_context_stack[_context_stack.Count - 1]._data[\"{}\"]",
+                    key
+                ),
+                TargetLanguage::Go => format!(
+                    "s._context_stack[len(s._context_stack)-1]._data[\"{}\"]",
+                    key
+                ),
+                TargetLanguage::Php => format!(
+                    "$this->_context_stack[count($this->_context_stack) - 1]->_data[\"{}\"]",
+                    key
+                ),
+                TargetLanguage::Ruby => format!(
+                    "@_context_stack[@_context_stack.length - 1]._data[\"{}\"]",
+                    key
+                ),
+                TargetLanguage::Lua => format!(
+                    "self._context_stack[#self._context_stack]._data[\"{}\"]",
+                    key
+                ),
                 TargetLanguage::Erlang => "undefined".to_string(), // gen_statem has no context data
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -2203,38 +3167,65 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
             // add indent_str to the first line. The return on the next
             // line does need indent_str since it's a new line.
             let set_code = match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript =>
-                    format!("self._context_stack[-1]._return = {}", expanded_expr),
-                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript =>
-                    format!("this._context_stack[this._context_stack.length - 1]._return = {};", expanded_expr),
-                TargetLanguage::C =>
-                    format!("{}_CTX(self)->_return = (void*)(intptr_t)({});", ctx.system_name, expanded_expr),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                    format!("self._context_stack[-1]._return = {}", expanded_expr)
+                }
+                TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
+                    format!(
+                        "this._context_stack[this._context_stack.length - 1]._return = {};",
+                        expanded_expr
+                    )
+                }
+                TargetLanguage::C => format!(
+                    "{}_CTX(self)->_return = (void*)(intptr_t)({});",
+                    ctx.system_name, expanded_expr
+                ),
                 TargetLanguage::Rust => {
-                    let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
+                    let boxed_expr = if expanded_expr.trim().starts_with('"')
+                        && expanded_expr.trim().ends_with('"')
+                    {
                         format!("String::from({})", expanded_expr.trim())
                     } else {
                         expanded_expr.clone()
                     };
                     format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", boxed_expr, indent_str)
                 }
-                TargetLanguage::Cpp =>
-                    format!("_context_stack.back()._return = std::any({});", expanded_expr),
-                TargetLanguage::Java =>
-                    format!("_context_stack.get(_context_stack.size() - 1)._return = {};", expanded_expr),
-                TargetLanguage::Kotlin =>
-                    format!("_context_stack[_context_stack.size - 1]._return = {}", expanded_expr),
-                TargetLanguage::Swift =>
-                    format!("_context_stack[_context_stack.count - 1]._return = {}", expanded_expr),
-                TargetLanguage::CSharp =>
-                    format!("_context_stack[_context_stack.Count - 1]._return = {};", expanded_expr),
-                TargetLanguage::Go =>
-                    format!("s._context_stack[len(s._context_stack)-1]._return = {}", expanded_expr),
-                TargetLanguage::Php =>
-                    format!("$this->_context_stack[count($this->_context_stack) - 1]->_return = {};", expanded_expr),
-                TargetLanguage::Ruby =>
-                    format!("@_context_stack[@_context_stack.length - 1]._return = {}", expanded_expr),
-                TargetLanguage::Lua =>
-                    format!("self._context_stack[#self._context_stack]._return = {}", expanded_expr),
+                TargetLanguage::Cpp => format!(
+                    "_context_stack.back()._return = std::any({});",
+                    expanded_expr
+                ),
+                TargetLanguage::Java => format!(
+                    "_context_stack.get(_context_stack.size() - 1)._return = {};",
+                    expanded_expr
+                ),
+                TargetLanguage::Kotlin => format!(
+                    "_context_stack[_context_stack.size - 1]._return = {}",
+                    expanded_expr
+                ),
+                TargetLanguage::Swift => format!(
+                    "_context_stack[_context_stack.count - 1]._return = {}",
+                    expanded_expr
+                ),
+                TargetLanguage::CSharp => format!(
+                    "_context_stack[_context_stack.Count - 1]._return = {};",
+                    expanded_expr
+                ),
+                TargetLanguage::Go => format!(
+                    "s._context_stack[len(s._context_stack)-1]._return = {}",
+                    expanded_expr
+                ),
+                TargetLanguage::Php => format!(
+                    "$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
+                    expanded_expr
+                ),
+                TargetLanguage::Ruby => format!(
+                    "@_context_stack[@_context_stack.length - 1]._return = {}",
+                    expanded_expr
+                ),
+                TargetLanguage::Lua => format!(
+                    "self._context_stack[#self._context_stack]._return = {}",
+                    expanded_expr
+                ),
                 TargetLanguage::Erlang => {
                     let erl_expr = expanded_expr.replace("self.", "Data#data.");
                     format!("__ReturnVal = {}", erl_expr)
@@ -2244,13 +3235,12 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
             // Append native return on a new line with proper indent
             let ret_code = match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby =>
-                    format!("\n{}return", indent_str),
-                TargetLanguage::Lua =>
-                    format!("\n{}return", indent_str),
+                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby => {
+                    format!("\n{}return", indent_str)
+                }
+                TargetLanguage::Lua => format!("\n{}return", indent_str),
                 TargetLanguage::Erlang => String::new(),
-                _ =>
-                    format!("\n{}return;", indent_str),
+                _ => format!("\n{}return;", indent_str),
             };
 
             format!("{}{}", set_code, ret_code)
@@ -2258,28 +3248,23 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
         FrameSegmentKind::ContextSystemState => {
             // @@:system.state — current state name (read-only)
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript =>
-                    "self.__compartment.state".to_string(),
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart =>
-                    "this.__compartment.state".to_string(),
-                TargetLanguage::Rust =>
-                    "self.__compartment.state.clone()".to_string(),
-                TargetLanguage::C =>
-                    "self->__compartment->state".to_string(),
-                TargetLanguage::Cpp =>
-                    "__compartment->state".to_string(),
-                TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp =>
-                    "__compartment.state".to_string(),
-                TargetLanguage::Swift =>
-                    "__compartment.state".to_string(),
-                TargetLanguage::Go =>
-                    "s.compartment.State".to_string(),
-                TargetLanguage::Php =>
-                    "$this->__compartment->state".to_string(),
-                TargetLanguage::Ruby =>
-                    "@__compartment.state".to_string(),
-                TargetLanguage::Lua =>
-                    "self.__compartment.state".to_string(),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                    "self.__compartment.state".to_string()
+                }
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
+                    "this.__compartment.state".to_string()
+                }
+                TargetLanguage::Rust => "self.__compartment.state.clone()".to_string(),
+                TargetLanguage::C => "self->__compartment->state".to_string(),
+                TargetLanguage::Cpp => "__compartment->state".to_string(),
+                TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp => {
+                    "__compartment.state".to_string()
+                }
+                TargetLanguage::Swift => "__compartment.state".to_string(),
+                TargetLanguage::Go => "s.compartment.State".to_string(),
+                TargetLanguage::Php => "$this->__compartment->state".to_string(),
+                TargetLanguage::Ruby => "@__compartment.state".to_string(),
+                TargetLanguage::Lua => "self.__compartment.state".to_string(),
                 TargetLanguage::Erlang => "\"\"".to_string(),
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -2287,10 +3272,17 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
         FrameSegmentKind::ContextSelf => {
             // @@:self — bare system instance reference
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby
-                    | TargetLanguage::Lua | TargetLanguage::Swift => "self".to_string(),
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Java
-                    | TargetLanguage::Kotlin | TargetLanguage::CSharp | TargetLanguage::Dart => "this".to_string(),
+                TargetLanguage::Python3
+                | TargetLanguage::GDScript
+                | TargetLanguage::Ruby
+                | TargetLanguage::Lua
+                | TargetLanguage::Swift => "self".to_string(),
+                TargetLanguage::TypeScript
+                | TargetLanguage::JavaScript
+                | TargetLanguage::Java
+                | TargetLanguage::Kotlin
+                | TargetLanguage::CSharp
+                | TargetLanguage::Dart => "this".to_string(),
                 TargetLanguage::Cpp => "this".to_string(),
                 TargetLanguage::C => "self".to_string(),
                 TargetLanguage::Go => "s".to_string(),
@@ -2311,42 +3303,45 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
             // Generate the native self-call
             let call_expr = match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript =>
-                    format!("self.{}{}", method_name, args_with_parens),
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart =>
-                    format!("this.{}{}", method_name, args_with_parens),
-                TargetLanguage::Rust | TargetLanguage::Swift =>
-                    format!("self.{}{}", method_name, args_with_parens),
-                TargetLanguage::Cpp =>
-                    format!("this->{}{}", method_name, args_with_parens),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                    format!("self.{}{}", method_name, args_with_parens)
+                }
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
+                    format!("this.{}{}", method_name, args_with_parens)
+                }
+                TargetLanguage::Rust | TargetLanguage::Swift => {
+                    format!("self.{}{}", method_name, args_with_parens)
+                }
+                TargetLanguage::Cpp => format!("this->{}{}", method_name, args_with_parens),
                 TargetLanguage::C => {
                     if args_with_parens == "()" {
                         format!("{}_{}(self)", ctx.system_name, method_name)
                     } else {
-                        let inner_args = &args_with_parens[1..args_with_parens.len()-1];
+                        let inner_args = &args_with_parens[1..args_with_parens.len() - 1];
                         format!("{}_{}(self, {})", ctx.system_name, method_name, inner_args)
                     }
                 }
-                TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp =>
-                    format!("this.{}{}", method_name, args_with_parens),
+                TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp => {
+                    format!("this.{}{}", method_name, args_with_parens)
+                }
                 TargetLanguage::Go => {
-                    let go_method = format!("{}{}", method_name[..1].to_uppercase(), &method_name[1..]);
+                    let go_method =
+                        format!("{}{}", method_name[..1].to_uppercase(), &method_name[1..]);
                     format!("s.{}{}", go_method, args_with_parens)
                 }
-                TargetLanguage::Php =>
-                    format!("$this->{}{}", method_name, args_with_parens),
-                TargetLanguage::Ruby =>
-                    format!("self.{}{}", method_name, args_with_parens),
-                TargetLanguage::Lua =>
-                    format!("self:{}{}", method_name, args_with_parens),
+                TargetLanguage::Php => format!("$this->{}{}", method_name, args_with_parens),
+                TargetLanguage::Ruby => format!("self.{}{}", method_name, args_with_parens),
+                TargetLanguage::Lua => format!("self:{}{}", method_name, args_with_parens),
                 TargetLanguage::Erlang => String::new(),
                 TargetLanguage::Graphviz => unreachable!(),
             };
 
             // Add statement terminator for languages that require it
             let terminator = match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby
-                    | TargetLanguage::Lua => "",
+                TargetLanguage::Python3
+                | TargetLanguage::GDScript
+                | TargetLanguage::Ruby
+                | TargetLanguage::Lua => "",
                 _ => ";",
             };
 
@@ -2389,24 +3384,32 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
         FrameSegmentKind::ReturnStatement => {
             // Native return keyword detected in handler body.
             // Extract expression after "return" (if any).
-            let after_return = segment_text.trim()
-                .strip_prefix("return").unwrap_or("")
-                .trim().trim_end_matches(';').trim();
+            let after_return = segment_text
+                .trim()
+                .strip_prefix("return")
+                .unwrap_or("")
+                .trim()
+                .trim_end_matches(';')
+                .trim();
 
             if after_return.is_empty() {
                 // Bare `return` — valid, exits the handler. Pass through as native.
                 format!("{}return", indent_str)
             } else if after_return.starts_with("@@:") || after_return.starts_with("@@(") {
                 // E408: `return @@:<anything>` — combining native return with Frame context
-                eprintln!("E408: Cannot combine `return` with Frame context syntax `{}`. \
+                eprintln!(
+                    "E408: Cannot combine `return` with Frame context syntax `{}`. \
                     Use `@@:(expr)` to set the return value, then `return` on a separate line.",
-                    after_return);
+                    after_return
+                );
                 String::new()
             } else {
                 // W415: `return <expr>` in event handler — value is silently lost
-                eprintln!("W415: `return {}` in event handler '{}' — the return value is lost. \
+                eprintln!(
+                    "W415: `return {}` in event handler '{}' — the return value is lost. \
                     Use `@@:({})` to set the return value, or bare `return` to exit.",
-                    after_return, ctx.event_name, after_return);
+                    after_return, ctx.event_name, after_return
+                );
                 // Pass through as native — it compiles but doesn't do what the user expects
                 format!("{}{}", indent_str, segment_text.trim())
             }
@@ -2422,7 +3425,8 @@ pub(crate) fn extract_dot_key(text: &str, prefix: &str) -> String {
     if let Some(rest) = text.strip_prefix(prefix) {
         if let Some(rest) = rest.strip_prefix('.') {
             // Extract only the identifier (alphanumeric + underscore)
-            let key: String = rest.chars()
+            let key: String = rest
+                .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                 .collect();
             return key;
@@ -2453,7 +3457,8 @@ pub(crate) fn extract_transition_target(text: &str) -> String {
         }
         if let Some(start) = best_start {
             let after_dollar = &after_arrow[start..];
-            let end = after_dollar.find(|c: char| !c.is_alphanumeric() && c != '_')
+            let end = after_dollar
+                .find(|c: char| !c.is_alphanumeric() && c != '_')
                 .unwrap_or(after_dollar.len());
             return after_dollar[..end].to_string();
         }
@@ -2468,7 +3473,8 @@ pub(crate) fn extract_transition_target(text: &str) -> String {
     }
     if let Some(start) = best_start {
         let after_dollar = &text[start..];
-        let end = after_dollar.find(|c: char| !c.is_alphanumeric() && c != '_')
+        let end = after_dollar
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
             .unwrap_or(after_dollar.len());
         after_dollar[..end].to_string()
     } else {
@@ -2485,29 +3491,35 @@ pub(crate) fn extract_transition_args(text: &str) -> (Option<String>, Option<Str
     let mut i = 0;
 
     // Skip leading whitespace
-    while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') { i += 1; }
+    while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
 
     // Check for (exit_args) before ->
     let mut exit_args: Option<String> = None;
     if i < n && bytes[i] == b'(' {
         if let Some(close_idx) = find_balanced_paren(bytes, i, n) {
-            exit_args = Some(String::from_utf8_lossy(&bytes[i+1..close_idx-1]).to_string());
+            exit_args = Some(String::from_utf8_lossy(&bytes[i + 1..close_idx - 1]).to_string());
             i = close_idx;
-            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') { i += 1; }
+            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
         }
     }
 
     // Skip ->
     if i + 1 < n && bytes[i] == b'-' && bytes[i + 1] == b'>' {
         i += 2;
-        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') { i += 1; }
+        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
     }
 
     // Check for (enter_args) after ->
     let mut enter_args: Option<String> = None;
     if i < n && bytes[i] == b'(' {
         if let Some(close_idx) = find_balanced_paren(bytes, i, n) {
-            enter_args = Some(String::from_utf8_lossy(&bytes[i+1..close_idx-1]).to_string());
+            enter_args = Some(String::from_utf8_lossy(&bytes[i + 1..close_idx - 1]).to_string());
         }
     }
 
@@ -2545,7 +3557,9 @@ pub(crate) fn extract_state_args(text: &str) -> Option<String> {
         let paren_start = arrow_pos + 2 + i;
         if let Some(close_idx) = find_balanced_paren(bytes, paren_start, n) {
             // Return content between ( and )
-            return Some(String::from_utf8_lossy(&bytes[paren_start+1..close_idx-1]).to_string());
+            return Some(
+                String::from_utf8_lossy(&bytes[paren_start + 1..close_idx - 1]).to_string(),
+            );
         }
     }
 
@@ -2554,21 +3568,43 @@ pub(crate) fn extract_state_args(text: &str) -> Option<String> {
 
 /// Find the closing paren for a balanced paren block, returns index after ')'
 pub(crate) fn find_balanced_paren(bytes: &[u8], mut i: usize, end: usize) -> Option<usize> {
-    if i >= end || bytes[i] != b'(' { return None; }
+    if i >= end || bytes[i] != b'(' {
+        return None;
+    }
     let mut depth = 0i32;
     let mut in_str: Option<u8> = None;
     while i < end {
         let b = bytes[i];
         if let Some(q) = in_str {
-            if b == b'\\' { i += 2; continue; }
-            if b == q { in_str = None; }
-            i += 1; continue;
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == q {
+                in_str = None;
+            }
+            i += 1;
+            continue;
         }
         match b {
-            b'\'' | b'"' => { in_str = Some(b); i += 1; }
-            b'(' => { depth += 1; i += 1; }
-            b')' => { depth -= 1; i += 1; if depth == 0 { return Some(i); } }
-            _ => { i += 1; }
+            b'\'' | b'"' => {
+                in_str = Some(b);
+                i += 1;
+            }
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
     None
@@ -2579,7 +3615,8 @@ pub(crate) fn extract_state_var_name(text: &str) -> String {
     // Skip "$." prefix and get identifier
     if text.starts_with("$.") {
         let after_prefix = &text[2..];
-        let end = after_prefix.find(|c: char| !c.is_alphanumeric() && c != '_')
+        let end = after_prefix
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
             .unwrap_or(after_prefix.len());
         after_prefix[..end].to_string()
     } else {
@@ -2619,11 +3656,26 @@ pub(crate) fn expand_expression(expr: &str, lang: TargetLanguage, ctx: &HandlerC
     };
 
     if std::env::var("FRAME_DEBUG_EXPR").is_ok() {
-        eprintln!("[expand_expression] input='{}' regions={}", with_state_vars, scan_result.regions.len());
+        eprintln!(
+            "[expand_expression] input='{}' regions={}",
+            with_state_vars,
+            scan_result.regions.len()
+        );
         for (i, r) in scan_result.regions.iter().enumerate() {
             match r {
-                Region::NativeText { span } => eprintln!("  [{}] NativeText {:?} = '{}'", i, span, String::from_utf8_lossy(&body_bytes[span.start..span.end])),
-                Region::FrameSegment { span, kind, .. } => eprintln!("  [{}] FrameSegment {:?} {:?} = '{}'", i, kind, span, String::from_utf8_lossy(&body_bytes[span.start..span.end])),
+                Region::NativeText { span } => eprintln!(
+                    "  [{}] NativeText {:?} = '{}'",
+                    i,
+                    span,
+                    String::from_utf8_lossy(&body_bytes[span.start..span.end])
+                ),
+                Region::FrameSegment { span, kind, .. } => eprintln!(
+                    "  [{}] FrameSegment {:?} {:?} = '{}'",
+                    i,
+                    kind,
+                    span,
+                    String::from_utf8_lossy(&body_bytes[span.start..span.end])
+                ),
             }
         }
     }
@@ -2631,7 +3683,12 @@ pub(crate) fn expand_expression(expr: &str, lang: TargetLanguage, ctx: &HandlerC
     // Expand each Frame segment
     let mut expansions = Vec::new();
     for region in &scan_result.regions {
-        if let Region::FrameSegment { span, kind, indent: _ } = region {
+        if let Region::FrameSegment {
+            span,
+            kind,
+            indent: _,
+        } = region
+        {
             let expansion = generate_frame_expansion(body_bytes, span, *kind, 0, lang, ctx);
             expansions.push(expansion);
         }
@@ -2679,10 +3736,26 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     }
                 }
                 TargetLanguage::Rust => {
-                    let is_copy = ctx.state_var_types.get(&var_name)
-                        .map(|t| matches!(t.to_lowercase().as_str(),
-                            "i32" | "i64" | "u32" | "u64" | "isize" | "usize"
-                            | "f32" | "f64" | "bool" | "int" | "float" | "number"))
+                    let is_copy = ctx
+                        .state_var_types
+                        .get(&var_name)
+                        .map(|t| {
+                            matches!(
+                                t.to_lowercase().as_str(),
+                                "i32"
+                                    | "i64"
+                                    | "u32"
+                                    | "u64"
+                                    | "isize"
+                                    | "usize"
+                                    | "f32"
+                                    | "f64"
+                                    | "bool"
+                                    | "int"
+                                    | "float"
+                                    | "number"
+                            )
+                        })
                         .unwrap_or(false);
                     let suffix = if is_copy { "" } else { ".clone()" };
                     result.push_str(&format!(
@@ -2691,80 +3764,141 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                 }
                 TargetLanguage::C => {
                     if ctx.use_sv_comp {
-                        result.push_str(&format!("(int)(intptr_t){}_FrameDict_get(__sv_comp->state_vars, \"{}\")", ctx.system_name, var_name))
+                        result.push_str(&format!(
+                            "(int)(intptr_t){}_FrameDict_get(__sv_comp->state_vars, \"{}\")",
+                            ctx.system_name, var_name
+                        ))
                     } else {
                         result.push_str(&format!("(int)(intptr_t){}_FrameDict_get(self->__compartment->state_vars, \"{}\")", ctx.system_name, var_name))
                     }
                 }
                 TargetLanguage::Cpp => {
-                    let cpp_type = ctx.state_var_types.get(&var_name)
+                    let cpp_type = ctx
+                        .state_var_types
+                        .get(&var_name)
                         .map(|t| cpp_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
                     if ctx.use_sv_comp {
-                        result.push_str(&format!("std::any_cast<{}>(__sv_comp->state_vars[\"{}\"])", cpp_type, var_name))
+                        result.push_str(&format!(
+                            "std::any_cast<{}>(__sv_comp->state_vars[\"{}\"])",
+                            cpp_type, var_name
+                        ))
                     } else {
-                        result.push_str(&format!("std::any_cast<{}>(__compartment->state_vars[\"{}\"])", cpp_type, var_name))
+                        result.push_str(&format!(
+                            "std::any_cast<{}>(__compartment->state_vars[\"{}\"])",
+                            cpp_type, var_name
+                        ))
                     }
                 }
                 TargetLanguage::Java => {
-                    let java_type = ctx.state_var_types.get(&var_name)
+                    let java_type = ctx
+                        .state_var_types
+                        .get(&var_name)
                         .map(|t| java_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let cast = if java_type == "Object" { String::new() } else { format!("({}) ", java_type) };
-                    if ctx.use_sv_comp {
-                        result.push_str(&format!("{}__sv_comp.state_vars.get(\"{}\")", cast, var_name))
+                    let cast = if java_type == "Object" {
+                        String::new()
                     } else {
-                        result.push_str(&format!("{}__compartment.state_vars.get(\"{}\")", cast, var_name))
+                        format!("({}) ", java_type)
+                    };
+                    if ctx.use_sv_comp {
+                        result.push_str(&format!(
+                            "{}__sv_comp.state_vars.get(\"{}\")",
+                            cast, var_name
+                        ))
+                    } else {
+                        result.push_str(&format!(
+                            "{}__compartment.state_vars.get(\"{}\")",
+                            cast, var_name
+                        ))
                     }
                 }
                 TargetLanguage::Kotlin => {
-                    let kt_type = ctx.state_var_types.get(&var_name)
+                    let kt_type = ctx
+                        .state_var_types
+                        .get(&var_name)
                         .map(|t| kotlin_map_type(t))
                         .unwrap_or_else(|| "Int".to_string());
-                    let cast = if kt_type == "Any?" { String::new() } else { format!(" as {}", kt_type) };
-                    if ctx.use_sv_comp {
-                        result.push_str(&format!("__sv_comp.state_vars[\"{}\"]{}",  var_name, cast))
+                    let cast = if kt_type == "Any?" {
+                        String::new()
                     } else {
-                        result.push_str(&format!("__compartment.state_vars[\"{}\"]{}",  var_name, cast))
+                        format!(" as {}", kt_type)
+                    };
+                    if ctx.use_sv_comp {
+                        result.push_str(&format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast))
+                    } else {
+                        result.push_str(&format!(
+                            "__compartment.state_vars[\"{}\"]{}",
+                            var_name, cast
+                        ))
                     }
                 }
                 TargetLanguage::Swift => {
-                    let sw_type = ctx.state_var_types.get(&var_name)
+                    let sw_type = ctx
+                        .state_var_types
+                        .get(&var_name)
                         .map(|t| swift_map_type(t))
                         .unwrap_or_else(|| "Int".to_string());
-                    let cast = if sw_type == "Any" { String::new() } else { format!(" as! {}", sw_type) };
-                    if ctx.use_sv_comp {
-                        result.push_str(&format!("__sv_comp.state_vars[\"{}\"]{}",  var_name, cast))
+                    let cast = if sw_type == "Any" {
+                        String::new()
                     } else {
-                        result.push_str(&format!("__compartment.state_vars[\"{}\"]{}",  var_name, cast))
+                        format!(" as! {}", sw_type)
+                    };
+                    if ctx.use_sv_comp {
+                        result.push_str(&format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast))
+                    } else {
+                        result.push_str(&format!(
+                            "__compartment.state_vars[\"{}\"]{}",
+                            var_name, cast
+                        ))
                     }
                 }
                 TargetLanguage::CSharp => {
-                    let cs_type = ctx.state_var_types.get(&var_name)
+                    let cs_type = ctx
+                        .state_var_types
+                        .get(&var_name)
                         .map(|t| csharp_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let cast = if cs_type == "object" { String::new() } else { format!("({}) ", cs_type) };
+                    let cast = if cs_type == "object" {
+                        String::new()
+                    } else {
+                        format!("({}) ", cs_type)
+                    };
                     if ctx.use_sv_comp {
                         result.push_str(&format!("{}__sv_comp.state_vars[\"{}\"]", cast, var_name))
                     } else {
-                        result.push_str(&format!("{}__compartment.state_vars[\"{}\"]", cast, var_name))
+                        result.push_str(&format!(
+                            "{}__compartment.state_vars[\"{}\"]",
+                            cast, var_name
+                        ))
                     }
                 }
                 TargetLanguage::Go => {
-                    let go_type = ctx.state_var_types.get(&var_name)
+                    let go_type = ctx
+                        .state_var_types
+                        .get(&var_name)
                         .map(|t| go_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
                     if ctx.use_sv_comp {
-                        result.push_str(&format!("__sv_comp.stateVars[\"{}\"].({})", var_name, go_type))
+                        result.push_str(&format!(
+                            "__sv_comp.stateVars[\"{}\"].({})",
+                            var_name, go_type
+                        ))
                     } else {
-                        result.push_str(&format!("s.compartment.stateVars[\"{}\"].({})", var_name, go_type))
+                        result.push_str(&format!(
+                            "s.compartment.stateVars[\"{}\"].({})",
+                            var_name, go_type
+                        ))
                     }
                 }
                 TargetLanguage::Php => {
                     if ctx.use_sv_comp {
                         result.push_str(&format!("$__sv_comp->state_vars[\"{}\"]", var_name))
                     } else {
-                        result.push_str(&format!("$this->__compartment->state_vars[\"{}\"]", var_name))
+                        result.push_str(&format!(
+                            "$this->__compartment->state_vars[\"{}\"]",
+                            var_name
+                        ))
                     }
                 }
                 TargetLanguage::Ruby => {
@@ -2839,8 +3973,8 @@ pub(crate) fn get_native_scanner(lang: TargetLanguage) -> Box<dyn NativeRegionSc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame_c::visitors::TargetLanguage;
     use crate::frame_c::compiler::native_region_scanner::FrameSegmentKind;
+    use crate::frame_c::visitors::TargetLanguage;
 
     fn make_ctx(state_var_types: Vec<(&str, &str)>) -> HandlerContext {
         HandlerContext {
@@ -2850,7 +3984,8 @@ mod tests {
             parent_state: None,
             defined_systems: std::collections::HashSet::new(),
             use_sv_comp: false,
-            state_var_types: state_var_types.into_iter()
+            state_var_types: state_var_types
+                .into_iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             state_param_names: std::collections::HashMap::new(),
@@ -2860,7 +3995,12 @@ mod tests {
     }
 
     /// Helper: call generate_frame_expansion with text as bytes + span
-    fn expand(kind: FrameSegmentKind, text: &str, lang: TargetLanguage, ctx: &HandlerContext) -> String {
+    fn expand(
+        kind: FrameSegmentKind,
+        text: &str,
+        lang: TargetLanguage,
+        ctx: &HandlerContext,
+    ) -> String {
         let bytes = text.as_bytes();
         let span = crate::frame_c::compiler::native_region_scanner::RegionSpan {
             start: 0,
@@ -2876,29 +4016,59 @@ mod tests {
     #[test]
     fn test_context_return_expr_rust_string_wraps() {
         let ctx = make_ctx(vec![]);
-        let result = expand(FrameSegmentKind::ContextReturnExpr, "@@:(\"green\")", TargetLanguage::Rust, &ctx);
-        assert!(result.contains("String::from(\"green\")"),
-            "Rust @@:(\"green\") should wrap with String::from, got: {}", result);
+        let result = expand(
+            FrameSegmentKind::ContextReturnExpr,
+            "@@:(\"green\")",
+            TargetLanguage::Rust,
+            &ctx,
+        );
+        assert!(
+            result.contains("String::from(\"green\")"),
+            "Rust @@:(\"green\") should wrap with String::from, got: {}",
+            result
+        );
     }
 
     #[test]
     fn test_context_return_expr_rust_int_no_wrap() {
         let ctx = make_ctx(vec![]);
-        let result = expand(FrameSegmentKind::ContextReturnExpr, "@@:(42)", TargetLanguage::Rust, &ctx);
-        assert!(result.contains("Box::new(42)"),
-            "Rust @@:(42) should NOT wrap with String::from, got: {}", result);
-        assert!(!result.contains("String::from"),
-            "Integer should not get String::from wrapping, got: {}", result);
+        let result = expand(
+            FrameSegmentKind::ContextReturnExpr,
+            "@@:(42)",
+            TargetLanguage::Rust,
+            &ctx,
+        );
+        assert!(
+            result.contains("Box::new(42)"),
+            "Rust @@:(42) should NOT wrap with String::from, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("String::from"),
+            "Integer should not get String::from wrapping, got: {}",
+            result
+        );
     }
 
     #[test]
     fn test_context_return_expr_python_no_wrap() {
         let ctx = make_ctx(vec![]);
-        let result = expand(FrameSegmentKind::ContextReturnExpr, "@@:(\"green\")", TargetLanguage::Python3, &ctx);
-        assert!(!result.contains("String::from"),
-            "Python should NOT wrap string literals, got: {}", result);
-        assert!(result.contains("\"green\""),
-            "Python should pass through the literal, got: {}", result);
+        let result = expand(
+            FrameSegmentKind::ContextReturnExpr,
+            "@@:(\"green\")",
+            TargetLanguage::Python3,
+            &ctx,
+        );
+        assert!(
+            !result.contains("String::from"),
+            "Python should NOT wrap string literals, got: {}",
+            result
+        );
+        assert!(
+            result.contains("\"green\""),
+            "Python should pass through the literal, got: {}",
+            result
+        );
     }
 
     // =========================================================
@@ -2908,17 +4078,33 @@ mod tests {
     #[test]
     fn test_context_return_assign_rust_string_wraps() {
         let ctx = make_ctx(vec![]);
-        let result = expand(FrameSegmentKind::ContextReturn, "@@:return = \"hello\"", TargetLanguage::Rust, &ctx);
-        assert!(result.contains("String::from(\"hello\")"),
-            "Rust @@:return = \"hello\" should wrap, got: {}", result);
+        let result = expand(
+            FrameSegmentKind::ContextReturn,
+            "@@:return = \"hello\"",
+            TargetLanguage::Rust,
+            &ctx,
+        );
+        assert!(
+            result.contains("String::from(\"hello\")"),
+            "Rust @@:return = \"hello\" should wrap, got: {}",
+            result
+        );
     }
 
     #[test]
     fn test_context_return_assign_rust_int_no_wrap() {
         let ctx = make_ctx(vec![]);
-        let result = expand(FrameSegmentKind::ContextReturn, "@@:return = 42", TargetLanguage::Rust, &ctx);
-        assert!(!result.contains("String::from"),
-            "Rust @@:return = 42 should NOT wrap, got: {}", result);
+        let result = expand(
+            FrameSegmentKind::ContextReturn,
+            "@@:return = 42",
+            TargetLanguage::Rust,
+            &ctx,
+        );
+        assert!(
+            !result.contains("String::from"),
+            "Rust @@:return = 42 should NOT wrap, got: {}",
+            result
+        );
     }
 
     // =========================================================
@@ -2929,31 +4115,43 @@ mod tests {
     fn test_state_var_read_rust_string_clones() {
         let ctx = make_ctx(vec![("name", "String")]);
         let result = expand_expression("$.name", TargetLanguage::Rust, &ctx);
-        assert!(result.contains(".clone()"),
-            "String state var read should add .clone(), got: {}", result);
+        assert!(
+            result.contains(".clone()"),
+            "String state var read should add .clone(), got: {}",
+            result
+        );
     }
 
     #[test]
     fn test_state_var_read_rust_int_no_clone() {
         let ctx = make_ctx(vec![("count", "i32")]);
         let result = expand_expression("$.count", TargetLanguage::Rust, &ctx);
-        assert!(!result.contains(".clone()"),
-            "i32 state var read should NOT add .clone(), got: {}", result);
+        assert!(
+            !result.contains(".clone()"),
+            "i32 state var read should NOT add .clone(), got: {}",
+            result
+        );
     }
 
     #[test]
     fn test_state_var_read_rust_bool_no_clone() {
         let ctx = make_ctx(vec![("flag", "bool")]);
         let result = expand_expression("$.flag", TargetLanguage::Rust, &ctx);
-        assert!(!result.contains(".clone()"),
-            "bool state var read should NOT add .clone(), got: {}", result);
+        assert!(
+            !result.contains(".clone()"),
+            "bool state var read should NOT add .clone(), got: {}",
+            result
+        );
     }
 
     #[test]
     fn test_state_var_read_rust_unknown_type_clones() {
         let ctx = make_ctx(vec![]);
         let result = expand_expression("$.mystery", TargetLanguage::Rust, &ctx);
-        assert!(result.contains(".clone()"),
-            "Unknown-type state var should clone for safety, got: {}", result);
+        assert!(
+            result.contains(".clone()"),
+            "Unknown-type state var should clone for safety, got: {}",
+            result
+        );
     }
 }

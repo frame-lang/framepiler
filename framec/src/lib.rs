@@ -18,7 +18,7 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::large_enum_variant)]
-#![allow(clippy::new_without_default)]  // Generated FSM structs use new() not Default
+#![allow(clippy::new_without_default)] // Generated FSM structs use new() not Default
 #![allow(clippy::manual_strip)]
 #![allow(clippy::match_like_matches_macro)]
 #![allow(clippy::len_zero)]

@@ -3,8 +3,8 @@
 // Dart uses the same comment styles (// and /* */) and string delimiters
 // (" and ') as TypeScript, so the TypeScript FSM works correctly.
 
-use super::{BodyCloser, CloseError};
 use super::typescript::BodyCloserTs;
+use super::{BodyCloser, CloseError};
 
 pub struct BodyCloserDart;
 
