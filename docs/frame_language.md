@@ -473,6 +473,7 @@ See [System Context](#system-context) for full semantics.
 
 ```frame
 @@:self              // reference to this system instance
+@@:self.state        // current state name (read-only)
 @@:self.method(args) // call own interface method (reentrant)
 ```
 
@@ -589,6 +590,24 @@ Each interface call pushes its own context. Nested calls are isolated — inner 
 | Syntax | Meaning |
 |--------|---------|
 | `@@:self` | Reference to this system instance |
+| `@@:self.state` | Current state name (read-only string) |
+| `@@:self.method(args)` | Reentrant interface call |
+
+### Current State — `@@:self.state`
+
+Returns the current state name as a string. Read-only. Available in event handlers, enter/exit handlers, actions, and non-static operations.
+
+```frame
+$Processing {
+    status(): str {
+        @@:(@@:self.state)    // returns "Processing"
+    }
+}
+```
+
+`@@:self.state` reads from the compartment's `state` field, which holds the state identifier without the `$` prefix. It reflects the current state at the time of access — if a transition has been deferred but not yet processed, `@@:self.state` still returns the pre-transition state.
+
+**Not available in:** static operations (no system instance), constructors before the first state is entered.
 
 ### Self Interface Call — `@@:self.method(args)`
 
@@ -844,6 +863,7 @@ The framepiler validates at the assembler stage:
 | Token | Meaning |
 |-------|---------|
 | `@@:self` | System instance reference |
+| `@@:self.state` | Current state name (read-only) |
 | `@@:self.method()` | Self interface call |
 
 ---
