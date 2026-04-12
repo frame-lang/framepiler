@@ -2780,7 +2780,10 @@ while self.__next_compartment is not None:
             # Forwarding other event - send $> first, then forward
             enter_event = {}("$>", self.__compartment.enter_args)
             self.__router(enter_event)
-            self.__router(forward_event)"#,
+            self.__router(forward_event)
+    # Mark all stacked contexts as transitioned
+    for ctx in self._context_stack:
+        ctx._transitioned = True"#,
                         event_class, event_class, event_class
                     ),
                     span: None,
@@ -2862,6 +2865,10 @@ while (this.__next_compartment !== null) {{
             this.__router(enter_event);
             this.__router(forward_event);
         }}
+    }}
+    // Mark all stacked contexts as transitioned
+    for (const ctx of this._context_stack) {{
+        ctx._transitioned = true;
     }}
 }}"#,
                         event_class, event_class, event_class
@@ -2957,6 +2964,10 @@ while ($this->__next_compartment !== null) {{
             $this->__router($forward_event);
         }}
     }}
+    // Mark all stacked contexts as transitioned
+    foreach ($this->_context_stack as $ctx) {{
+        $ctx->_transitioned = true;
+    }}
 }}"#,
                         event_class, event_class, event_class
                     ),
@@ -3003,7 +3014,7 @@ if (method_exists($this, $handler_name)) {
             });
         }
         TargetLanguage::Ruby => {
-            methods.push(CodegenNode::Method { name: "__kernel".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: format!("# Route event to current state\n__router(__e)\nwhile @__next_compartment != nil\n    next_compartment = @__next_compartment\n    @__next_compartment = nil\n    exit_event = {0}.new(\"<$\", @__compartment.exit_args)\n    __router(exit_event)\n    @__compartment = next_compartment\n    if next_compartment.forward_event == nil\n        enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n        __router(enter_event)\n    else\n        forward_event = next_compartment.forward_event\n        next_compartment.forward_event = nil\n        if forward_event._message == \"$>\"\n            __router(forward_event)\n        else\n            enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n            __router(enter_event)\n            __router(forward_event)\n        end\n    end\nend", event_class), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
+            methods.push(CodegenNode::Method { name: "__kernel".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: format!("# Route event to current state\n__router(__e)\nwhile @__next_compartment != nil\n    next_compartment = @__next_compartment\n    @__next_compartment = nil\n    exit_event = {0}.new(\"<$\", @__compartment.exit_args)\n    __router(exit_event)\n    @__compartment = next_compartment\n    if next_compartment.forward_event == nil\n        enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n        __router(enter_event)\n    else\n        forward_event = next_compartment.forward_event\n        next_compartment.forward_event = nil\n        if forward_event._message == \"$>\"\n            __router(forward_event)\n        else\n            enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n            __router(enter_event)\n            __router(forward_event)\n        end\n    end\n    # Mark all stacked contexts as transitioned\n    @_context_stack.each {{ |ctx| ctx._transitioned = true }}\nend", event_class), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
             methods.push(CodegenNode::Method { name: "__router".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: "state_name = @__compartment.state\nhandler_name = \"_state_#{state_name}\"\nif respond_to?(handler_name, true)\n    send(handler_name, __e)\nend".to_string(), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
             methods.push(CodegenNode::Method { name: "__transition".to_string(), params: vec![Param::new("next_compartment")], return_type: None, body: vec![CodegenNode::NativeBlock { code: "@__next_compartment = next_compartment".to_string(), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
         }
@@ -3046,6 +3057,10 @@ while self.__next_compartment.is_some() {{
             self.__router(&enter_event);
             self.__router(&forward_event);
         }}
+    }}
+    // Mark all stacked contexts as transitioned
+    for ctx in self._context_stack.iter_mut() {{
+        ctx._transitioned = true;
     }}
 }}"#,
                         event_class, event_class, event_class
@@ -3134,6 +3149,10 @@ while (self->__next_compartment != NULL) {{
             {sys}_router(self, forward_event);
         }}
         // Do NOT destroy forward_event - it's owned by the interface method caller
+    }}
+    // Mark all stacked contexts as transitioned
+    for (int __i = 0; __i < self->_context_stack->size; __i++) {{
+        (({sys}_FrameContext*)self->_context_stack->items[__i])->_transitioned = 1;
     }}
 }}"#,
                         sys = sys
@@ -3232,6 +3251,10 @@ free(self);"#,
             kernel_code.push_str("            __router(*forward_event);\n");
             kernel_code.push_str("        }\n");
             kernel_code.push_str("    }\n");
+            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+            kernel_code.push_str("    for (auto& ctx : _context_stack) {\n");
+            kernel_code.push_str("        ctx._transitioned = true;\n");
+            kernel_code.push_str("    }\n");
             kernel_code.push_str("}");
 
             methods.push(CodegenNode::Method {
@@ -3310,6 +3333,10 @@ free(self);"#,
             kernel_code.push_str("            __router(enter_event);\n");
             kernel_code.push_str("            __router(forward_event);\n");
             kernel_code.push_str("        }\n");
+            kernel_code.push_str("    }\n");
+            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+            kernel_code.push_str("    for (var ctx : _context_stack) {\n");
+            kernel_code.push_str("        ctx._transitioned = true;\n");
             kernel_code.push_str("    }\n");
             kernel_code.push_str("}");
 
@@ -3390,6 +3417,10 @@ free(self);"#,
             kernel_code.push_str("            __router(forward_event)\n");
             kernel_code.push_str("        }\n");
             kernel_code.push_str("    }\n");
+            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+            kernel_code.push_str("    for (ctx in _context_stack) {\n");
+            kernel_code.push_str("        ctx._transitioned = true\n");
+            kernel_code.push_str("    }\n");
             kernel_code.push_str("}");
 
             methods.push(CodegenNode::Method {
@@ -3468,6 +3499,10 @@ free(self);"#,
             kernel_code.push_str("            __router(enter_event)\n");
             kernel_code.push_str("            __router(forward_event)\n");
             kernel_code.push_str("        }\n");
+            kernel_code.push_str("    }\n");
+            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+            kernel_code.push_str("    for i in 0..<_context_stack.count {\n");
+            kernel_code.push_str("        _context_stack[i]._transitioned = true\n");
             kernel_code.push_str("    }\n");
             kernel_code.push_str("}");
 
@@ -3548,6 +3583,10 @@ free(self);"#,
             kernel_code.push_str("            __router(forward_event);\n");
             kernel_code.push_str("        }\n");
             kernel_code.push_str("    }\n");
+            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+            kernel_code.push_str("    foreach (var ctx in _context_stack) {\n");
+            kernel_code.push_str("        ctx._transitioned = true;\n");
+            kernel_code.push_str("    }\n");
             kernel_code.push_str("}");
 
             methods.push(CodegenNode::Method {
@@ -3626,6 +3665,10 @@ free(self);"#,
             kernel_code.push_str("            s.__router(enter_event)\n");
             kernel_code.push_str("            s.__router(forward_event)\n");
             kernel_code.push_str("        }\n");
+            kernel_code.push_str("    }\n");
+            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+            kernel_code.push_str("    for i := range s._context_stack {\n");
+            kernel_code.push_str("        s._context_stack[i]._transitioned = true\n");
             kernel_code.push_str("    }\n");
             kernel_code.push_str("}");
 
@@ -3712,6 +3755,10 @@ while self.__next_compartment ~= nil do
             self:__router(forward_event)
         end
     end
+    -- Mark all stacked contexts as transitioned
+    for _, ctx in ipairs(self._context_stack) do
+        ctx._transitioned = true
+    end
 end"#,
                         event_class, event_class, event_class
                     ),
@@ -3790,6 +3837,10 @@ while (__next_compartment != null) {{
             __router(enter_event);
             __router(forward_event);
         }}
+    }}
+    // Mark all stacked contexts as transitioned
+    for (final ctx in _context_stack) {{
+        ctx._transitioned = true;
     }}
 }}"#,
                         event_class, event_class, event_class
@@ -3875,7 +3926,10 @@ while self.__next_compartment != null:
         else:
             var enter_event = {}.new("$>", self.__compartment.enter_args)
             self.__router(enter_event)
-            self.__router(forward_event)"#,
+            self.__router(forward_event)
+    # Mark all stacked contexts as transitioned
+    for ctx in self._context_stack:
+        ctx._transitioned = true"#,
                         event_class, event_class, event_class
                     ),
                     span: None,
