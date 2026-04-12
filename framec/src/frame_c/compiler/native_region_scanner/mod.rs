@@ -18,6 +18,7 @@ pub enum FrameSegmentKind {
     ReturnCall,            // @@:return(expr) - set return value AND exit handler
     ContextSelfCall,       // @@:self.method(args) - reentrant interface call
     ContextSelf,           // @@:self - bare system instance reference
+    ContextSystemState,    // @@:system.state - current state name (read-only)
     ReturnStatement,       // return <expr>? - native return keyword in handler body
 }
 

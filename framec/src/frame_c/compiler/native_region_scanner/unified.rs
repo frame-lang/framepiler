@@ -256,6 +256,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         9 => FrameSegmentKind::ReturnCall,
                         10 => FrameSegmentKind::ContextSelfCall,
                         11 => FrameSegmentKind::ContextSelf,
+                        12 => FrameSegmentKind::ContextSystemState,
                         _ => FrameSegmentKind::ContextReturn, // shouldn't happen
                     };
                     let mut seg_end = parser.result_end;
@@ -1190,5 +1191,33 @@ mod tests {
     fn test_self_call_with_nested_parens() {
         let kinds = scan_for_kinds("{ @@:self.process(foo(1, 2), bar()) }");
         assert_eq!(kinds, vec![FrameSegmentKind::ContextSelfCall]);
+    }
+
+    #[test]
+    fn test_system_state_recognized() {
+        let kinds = scan_for_kinds("{ let s = @@:system.state; }");
+        assert_eq!(kinds, vec![FrameSegmentKind::ContextSystemState]);
+    }
+
+    #[test]
+    fn test_system_state_in_return_expr() {
+        let kinds = scan_for_kinds("{ @@:(@@:system.state) }");
+        assert_eq!(kinds, vec![FrameSegmentKind::ContextReturnExpr]);
+    }
+
+    #[test]
+    fn test_system_state_word_boundary() {
+        // @@:system.stateX should NOT match — 'stateX' is not 'state'
+        let kinds = scan_for_kinds("{ let s = @@:system.stateX; }");
+        assert!(!kinds.contains(&FrameSegmentKind::ContextSystemState),
+            "stateX should not match @@:system.state, got: {:?}", kinds);
+    }
+
+    #[test]
+    fn test_system_unknown_property() {
+        // @@:system.foo should not produce a match
+        let kinds = scan_for_kinds("{ let s = @@:system.foo; }");
+        assert!(!kinds.contains(&FrameSegmentKind::ContextSystemState),
+            "@@:system.foo should not match, got: {:?}", kinds);
     }
 }

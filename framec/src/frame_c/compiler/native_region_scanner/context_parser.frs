@@ -12,6 +12,7 @@
 //   @@:return(expr)    → ReturnCall (kind=9)
 //   @@:self.method()   → ContextSelfCall (kind=10)
 //   @@:self            → ContextSelf (kind=11)
+//   @@:system.state    → ContextSystemState (kind=12)
 //   other              → no match (has_result=false)
 //
 // Demonstrates hierarchical composition: $ParseReturn and $ParseData
@@ -80,6 +81,9 @@ include!("expr_scanner.gen.rs");
                 } else if i + 3 < end && &bytes[i..i + 4] == b"self" {
                     self.pos = i + 4;
                     -> $ParseSelf
+                } else if i + 5 < end && &bytes[i..i + 6] == b"system" {
+                    self.pos = i + 6;
+                    -> $ParseSystem
                 } else if i < end && bytes[i] == b'(' {
                     // @@:(expr) — context return expression
                     self.pos = i;
@@ -297,6 +301,30 @@ include!("expr_scanner.gen.rs");
                     self.result_end = i;
                     self.result_kind = 11; // ContextSelf
                     self.has_result = true;
+                }
+
+                -> $Done
+            }
+        }
+
+        $ParseSystem {
+            $>() {
+                // @@:system — currently only .state is supported
+                let i = self.pos;
+                let end = self.end;
+                let bytes = &self.bytes;
+
+                if i + 5 < end && &bytes[i..i + 6] == b".state"
+                    && (i + 6 >= end || !(bytes[i + 6].is_ascii_alphanumeric() || bytes[i + 6] == b'_'))
+                {
+                    // @@:system.state — read-only state name accessor
+                    self.result_end = i + 6;
+                    self.result_kind = 12; // ContextSystemState
+                    self.has_result = true;
+                } else {
+                    // Unknown @@:system variant — no match
+                    self.result_end = i;
+                    self.has_result = false;
                 }
 
                 -> $Done

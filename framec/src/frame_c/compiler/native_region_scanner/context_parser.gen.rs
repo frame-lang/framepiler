@@ -11,6 +11,7 @@
 //   @@:return(expr)    â ReturnCall (kind=9)
 //   @@:self.method()   â ContextSelfCall (kind=10)
 //   @@:self            â ContextSelf (kind=11)
+//   @@:system.state    â ContextSystemState (kind=12)
 //   other              â no match (has_result=false)
 //
 // Demonstrates hierarchical composition: $ParseReturn and $ParseData
@@ -77,6 +78,7 @@ enum ContextParserFsmStateContext {
     ParseData,
     ParseParams,
     ParseSelf,
+    ParseSystem,
     ParseInstantiation,
     Done,
     Empty,
@@ -110,6 +112,7 @@ impl ContextParserFsmCompartment {
             "ParseData" => ContextParserFsmStateContext::ParseData,
             "ParseParams" => ContextParserFsmStateContext::ParseParams,
             "ParseSelf" => ContextParserFsmStateContext::ParseSelf,
+            "ParseSystem" => ContextParserFsmStateContext::ParseSystem,
             "ParseInstantiation" => ContextParserFsmStateContext::ParseInstantiation,
             "Done" => ContextParserFsmStateContext::Done,
             _ => ContextParserFsmStateContext::Empty,
@@ -211,6 +214,7 @@ impl ContextParserFsm {
             "ParseData" => self._state_ParseData(__e),
             "ParseParams" => self._state_ParseParams(__e),
             "ParseSelf" => self._state_ParseSelf(__e),
+            "ParseSystem" => self._state_ParseSystem(__e),
             "ParseInstantiation" => self._state_ParseInstantiation(__e),
             "Done" => self._state_Done(__e),
             _ => {}
@@ -252,16 +256,30 @@ impl ContextParserFsm {
         self._context_stack.pop();
     }
 
-    fn _state_Done(&mut self, __e: &ContextParserFsmFrameEvent) {
+    fn _state_ParseReturn(&mut self, __e: &ContextParserFsmFrameEvent) {
         match __e.message.as_str() {
-            "$>" => { self._s_Done_enter(__e); }
+            "$>" => { self._s_ParseReturn_enter(__e); }
             _ => {}
         }
     }
 
-    fn _state_ParseInstantiation(&mut self, __e: &ContextParserFsmFrameEvent) {
+    fn _state_Dispatching(&mut self, __e: &ContextParserFsmFrameEvent) {
         match __e.message.as_str() {
-            "$>" => { self._s_ParseInstantiation_enter(__e); }
+            "$>" => { self._s_Dispatching_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_ParseContextReturnExpr(&mut self, __e: &ContextParserFsmFrameEvent) {
+        match __e.message.as_str() {
+            "$>" => { self._s_ParseContextReturnExpr_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_ParseData(&mut self, __e: &ContextParserFsmFrameEvent) {
+        match __e.message.as_str() {
+            "$>" => { self._s_ParseData_enter(__e); }
             _ => {}
         }
     }
@@ -280,13 +298,6 @@ impl ContextParserFsm {
         }
     }
 
-    fn _state_Dispatching(&mut self, __e: &ContextParserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_Dispatching_enter(__e); }
-            _ => {}
-        }
-    }
-
     fn _state_ParseParams(&mut self, __e: &ContextParserFsmFrameEvent) {
         match __e.message.as_str() {
             "$>" => { self._s_ParseParams_enter(__e); }
@@ -301,61 +312,203 @@ impl ContextParserFsm {
         }
     }
 
-    fn _state_ParseData(&mut self, __e: &ContextParserFsmFrameEvent) {
+    fn _state_ParseSystem(&mut self, __e: &ContextParserFsmFrameEvent) {
         match __e.message.as_str() {
-            "$>" => { self._s_ParseData_enter(__e); }
+            "$>" => { self._s_ParseSystem_enter(__e); }
             _ => {}
         }
     }
 
-    fn _state_ParseReturn(&mut self, __e: &ContextParserFsmFrameEvent) {
+    fn _state_Done(&mut self, __e: &ContextParserFsmFrameEvent) {
         match __e.message.as_str() {
-            "$>" => { self._s_ParseReturn_enter(__e); }
+            "$>" => { self._s_Done_enter(__e); }
             _ => {}
         }
     }
 
-    fn _state_ParseContextReturnExpr(&mut self, __e: &ContextParserFsmFrameEvent) {
+    fn _state_ParseInstantiation(&mut self, __e: &ContextParserFsmFrameEvent) {
         match __e.message.as_str() {
-            "$>" => { self._s_ParseContextReturnExpr_enter(__e); }
+            "$>" => { self._s_ParseInstantiation_enter(__e); }
             _ => {}
         }
     }
 
-    fn _s_Done_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
-        // Terminal state — results are in domain vars;
-    }
-
-    fn _s_ParseInstantiation_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
-        // @@SystemName() — scan name, find balanced parens
+    fn _s_ParseReturn_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
+        // @@:return — check for assignment, call form, or bare read
         let mut i = self.pos;
         let end = self.end;
         let bytes = &self.bytes;
         
-        // Scan identifier
-        while i < end && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        // Skip whitespace
+        while i < end && (bytes[i] == b' ' || bytes[i] == b'\t') {
             i += 1;
         }
         
-        // Must be followed by (
         if i < end && bytes[i] == b'(' {
-            // Use the pre-computed paren_end if available
-            if self.paren_end > 0 {
-                i = self.paren_end;
-                self.result_end = i;
-                self.result_kind = 7; // TaggedInstantiation
-                self.has_result = true;
-            } else {
-                // No paren_end provided — caller must handle
-                self.result_end = i;
-                self.has_result = false;
+            // @@:return(expr) — set return value AND exit handler.
+            // Scan balanced parens to find matching ')'.
+            let mut depth: usize = 1;
+            i += 1; // Skip opening '('
+            while i < end && depth > 0 {
+                if bytes[i] == b'(' { depth += 1; }
+                if bytes[i] == b')' { depth -= 1; }
+                if depth > 0 { i += 1; }
             }
-        } else {
-            // @@SomeName without () — treat as native
+            if depth == 0 { i += 1; } // Skip closing ')'
             self.result_end = i;
+            self.result_kind = 9; // ReturnCall
+            self.has_result = true;
+            let mut __compartment = ContextParserFsmCompartment::new("Done");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
+        } else if i < end && bytes[i] == b'=' && (i + 1 >= end || bytes[i + 1] != b'=') {
+            // @@:return = <expr> — create ExprScanner sub-machine
+            i += 1; // Skip '='
+            let mut expr = ExprScannerFsm::new();
+            expr.bytes = bytes.to_vec();
+            expr.pos = i;
+            expr.end = end;
+            expr.do_scan();
+            i = expr.result_end;
+            // expr is destroyed here (state manager pattern)
+            self.result_end = i;
+            self.result_kind = 2; // ContextReturn
+            self.has_result = true;
+            let mut __compartment = ContextParserFsmCompartment::new("Done");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
+        } else {
+            // @@:return (bare read) — rvalue access to return slot
+            self.result_end = i;
+            self.result_kind = 2; // ContextReturn (read mode)
+            self.has_result = true;
+            let mut __compartment = ContextParserFsmCompartment::new("Done");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
+        }
+    }
+
+    fn _s_Dispatching_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
+        let i = self.pos;
+        let end = self.end;
+        let bytes = &self.bytes;
+        
+        if i >= end {
             self.has_result = false;
+            let mut __compartment = ContextParserFsmCompartment::new("Done");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
         }
         
+        let b = bytes[i];
+        
+        if b == b':' {
+            self.pos = i + 1;
+            let mut __compartment = ContextParserFsmCompartment::new("DispatchColon");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
+        } else if b.is_ascii_uppercase() {
+            // @@SystemName — pos stays at start of name
+            let mut __compartment = ContextParserFsmCompartment::new("ParseInstantiation");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
+        } else {
+            // Just @@ without . or : or uppercase
+            self.result_end = i;
+            self.has_result = false;
+            let mut __compartment = ContextParserFsmCompartment::new("Done");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
+        }
+    }
+
+    fn _s_ParseContextReturnExpr_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
+        // @@:(expr) — scan balanced parens to find matching ')'
+        let mut i = self.pos;
+        let end = self.end;
+        let bytes = &self.bytes;
+        
+        if i < end && bytes[i] == b'(' {
+            let mut depth: usize = 1;
+            i += 1; // Skip opening '('
+            while i < end && depth > 0 {
+                let b = bytes[i];
+                if b == b'(' {
+                    depth += 1;
+                } else if b == b')' {
+                    depth -= 1;
+                } else if b == b'"' || b == b'\'' {
+                    // Skip string literals
+                    let q = b;
+                    i += 1;
+                    while i < end {
+                        if bytes[i] == b'\\' && i + 1 < end {
+                            i += 2;
+                            continue;
+                        }
+                        if bytes[i] == q {
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                i += 1;
+            }
+        }
+        
+        self.result_end = i;
+        self.result_kind = 8; // ContextReturnExpr
+        self.has_result = true;
+        let mut __compartment = ContextParserFsmCompartment::new("Done");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_ParseData_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
+        // @@:data.key or @@:data.key = expr
+        let mut i = self.pos;
+        let end = self.end;
+        let bytes = &self.bytes;
+        
+        // Scan .key (dot + identifier)
+        if i < end && bytes[i] == b'.' {
+            i += 1; // Skip '.'
+            while i < end && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+        }
+        
+        // Check for assignment
+        let mut j = i;
+        while j < end && (bytes[j] == b' ' || bytes[j] == b'\t') {
+            j += 1;
+        }
+        
+        if j < end && bytes[j] == b'=' && (j + 1 >= end || bytes[j + 1] != b'=') {
+            // @@:data[key] = expr — create ExprScanner sub-machine
+            j += 1; // Skip '='
+            let mut expr = ExprScannerFsm::new();
+            expr.bytes = bytes.to_vec();
+            expr.pos = j;
+            expr.end = end;
+            expr.do_scan();
+            self.result_end = expr.result_end;
+            // expr is destroyed here (state manager pattern)
+            self.result_kind = 5; // ContextDataAssign
+        } else {
+            self.result_end = i;
+            self.result_kind = 4; // ContextData
+        }
+        
+        self.has_result = true;
         let mut __compartment = ContextParserFsmCompartment::new("Done");
         __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
         self.__transition(__compartment);
@@ -400,6 +553,12 @@ impl ContextParserFsm {
             __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
             self.__transition(__compartment);
             return;
+        } else if i + 5 < end && &bytes[i..i + 6] == b"system" {
+            self.pos = i + 6;
+            let mut __compartment = ContextParserFsmCompartment::new("ParseSystem");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
         } else if i < end && bytes[i] == b'(' {
             // @@:(expr) — context return expression
             self.pos = i;
@@ -423,44 +582,6 @@ impl ContextParserFsm {
         __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
         self.__transition(__compartment);
         return;
-    }
-
-    fn _s_Dispatching_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
-        let i = self.pos;
-        let end = self.end;
-        let bytes = &self.bytes;
-        
-        if i >= end {
-            self.has_result = false;
-            let mut __compartment = ContextParserFsmCompartment::new("Done");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
-        }
-        
-        let b = bytes[i];
-        
-        if b == b':' {
-            self.pos = i + 1;
-            let mut __compartment = ContextParserFsmCompartment::new("DispatchColon");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
-        } else if b.is_ascii_uppercase() {
-            // @@SystemName — pos stays at start of name
-            let mut __compartment = ContextParserFsmCompartment::new("ParseInstantiation");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
-        } else {
-            // Just @@ without . or : or uppercase
-            self.result_end = i;
-            self.has_result = false;
-            let mut __compartment = ContextParserFsmCompartment::new("Done");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
-        }
     }
 
     fn _s_ParseParams_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
@@ -540,144 +661,65 @@ impl ContextParserFsm {
         return;
     }
 
-    fn _s_ParseData_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
-        // @@:data.key or @@:data.key = expr
-        let mut i = self.pos;
+    fn _s_ParseSystem_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
+        // @@:system — currently only .state is supported
+        let i = self.pos;
         let end = self.end;
         let bytes = &self.bytes;
         
-        // Scan .key (dot + identifier)
-        if i < end && bytes[i] == b'.' {
-            i += 1; // Skip '.'
-            while i < end && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-        }
-        
-        // Check for assignment
-        let mut j = i;
-        while j < end && (bytes[j] == b' ' || bytes[j] == b'\t') {
-            j += 1;
-        }
-        
-        if j < end && bytes[j] == b'=' && (j + 1 >= end || bytes[j + 1] != b'=') {
-            // @@:data[key] = expr — create ExprScanner sub-machine
-            j += 1; // Skip '='
-            let mut expr = ExprScannerFsm::new();
-            expr.bytes = bytes.to_vec();
-            expr.pos = j;
-            expr.end = end;
-            expr.do_scan();
-            self.result_end = expr.result_end;
-            // expr is destroyed here (state manager pattern)
-            self.result_kind = 5; // ContextDataAssign
+        if i + 5 < end && &bytes[i..i + 6] == b".state"
+            && (i + 6 >= end || !(bytes[i + 6].is_ascii_alphanumeric() || bytes[i + 6] == b'_'))
+        {
+            // @@:system.state — read-only state name accessor
+            self.result_end = i + 6;
+            self.result_kind = 12; // ContextSystemState
+            self.has_result = true;
         } else {
+            // Unknown @@:system variant — no match
             self.result_end = i;
-            self.result_kind = 4; // ContextData
+            self.has_result = false;
         }
         
-        self.has_result = true;
         let mut __compartment = ContextParserFsmCompartment::new("Done");
         __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
         self.__transition(__compartment);
         return;
     }
 
-    fn _s_ParseReturn_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
-        // @@:return — check for assignment, call form, or bare read
+    fn _s_Done_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
+        // Terminal state — results are in domain vars;
+    }
+
+    fn _s_ParseInstantiation_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
+        // @@SystemName() — scan name, find balanced parens
         let mut i = self.pos;
         let end = self.end;
         let bytes = &self.bytes;
         
-        // Skip whitespace
-        while i < end && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        // Scan identifier
+        while i < end && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
             i += 1;
         }
         
+        // Must be followed by (
         if i < end && bytes[i] == b'(' {
-            // @@:return(expr) — set return value AND exit handler.
-            // Scan balanced parens to find matching ')'.
-            let mut depth: usize = 1;
-            i += 1; // Skip opening '('
-            while i < end && depth > 0 {
-                if bytes[i] == b'(' { depth += 1; }
-                if bytes[i] == b')' { depth -= 1; }
-                if depth > 0 { i += 1; }
+            // Use the pre-computed paren_end if available
+            if self.paren_end > 0 {
+                i = self.paren_end;
+                self.result_end = i;
+                self.result_kind = 7; // TaggedInstantiation
+                self.has_result = true;
+            } else {
+                // No paren_end provided — caller must handle
+                self.result_end = i;
+                self.has_result = false;
             }
-            if depth == 0 { i += 1; } // Skip closing ')'
-            self.result_end = i;
-            self.result_kind = 9; // ReturnCall
-            self.has_result = true;
-            let mut __compartment = ContextParserFsmCompartment::new("Done");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
-        } else if i < end && bytes[i] == b'=' && (i + 1 >= end || bytes[i + 1] != b'=') {
-            // @@:return = <expr> — create ExprScanner sub-machine
-            i += 1; // Skip '='
-            let mut expr = ExprScannerFsm::new();
-            expr.bytes = bytes.to_vec();
-            expr.pos = i;
-            expr.end = end;
-            expr.do_scan();
-            i = expr.result_end;
-            // expr is destroyed here (state manager pattern)
-            self.result_end = i;
-            self.result_kind = 2; // ContextReturn
-            self.has_result = true;
-            let mut __compartment = ContextParserFsmCompartment::new("Done");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
         } else {
-            // @@:return (bare read) — rvalue access to return slot
+            // @@SomeName without () — treat as native
             self.result_end = i;
-            self.result_kind = 2; // ContextReturn (read mode)
-            self.has_result = true;
-            let mut __compartment = ContextParserFsmCompartment::new("Done");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
-        }
-    }
-
-    fn _s_ParseContextReturnExpr_enter(&mut self, __e: &ContextParserFsmFrameEvent) {
-        // @@:(expr) — scan balanced parens to find matching ')'
-        let mut i = self.pos;
-        let end = self.end;
-        let bytes = &self.bytes;
-        
-        if i < end && bytes[i] == b'(' {
-            let mut depth: usize = 1;
-            i += 1; // Skip opening '('
-            while i < end && depth > 0 {
-                let b = bytes[i];
-                if b == b'(' {
-                    depth += 1;
-                } else if b == b')' {
-                    depth -= 1;
-                } else if b == b'"' || b == b'\'' {
-                    // Skip string literals
-                    let q = b;
-                    i += 1;
-                    while i < end {
-                        if bytes[i] == b'\\' && i + 1 < end {
-                            i += 2;
-                            continue;
-                        }
-                        if bytes[i] == q {
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                i += 1;
-            }
+            self.has_result = false;
         }
         
-        self.result_end = i;
-        self.result_kind = 8; // ContextReturnExpr
-        self.has_result = true;
         let mut __compartment = ContextParserFsmCompartment::new("Done");
         __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
         self.__transition(__compartment);

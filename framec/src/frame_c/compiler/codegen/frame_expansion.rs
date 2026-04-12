@@ -2255,6 +2255,35 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
             format!("{}{}", set_code, ret_code)
         }
+        FrameSegmentKind::ContextSystemState => {
+            // @@:system.state — current state name (read-only)
+            match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript =>
+                    "self.__compartment.state".to_string(),
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart =>
+                    "this.__compartment.state".to_string(),
+                TargetLanguage::Rust =>
+                    "self.__compartment.state.clone()".to_string(),
+                TargetLanguage::C =>
+                    "self->__compartment->state".to_string(),
+                TargetLanguage::Cpp =>
+                    "__compartment->state".to_string(),
+                TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp =>
+                    "__compartment.state".to_string(),
+                TargetLanguage::Swift =>
+                    "__compartment.state".to_string(),
+                TargetLanguage::Go =>
+                    "s.compartment.State".to_string(),
+                TargetLanguage::Php =>
+                    "$this->__compartment->state".to_string(),
+                TargetLanguage::Ruby =>
+                    "@__compartment.state".to_string(),
+                TargetLanguage::Lua =>
+                    "self.__compartment.state".to_string(),
+                TargetLanguage::Erlang => "\"\"".to_string(),
+                TargetLanguage::Graphviz => unreachable!(),
+            }
+        }
         FrameSegmentKind::ContextSelf => {
             // @@:self — bare system instance reference
             match lang {

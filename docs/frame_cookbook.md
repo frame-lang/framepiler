@@ -1207,11 +1207,11 @@ The framepiler substitutes Frame defaults for missing arguments and routes each 
                 @@:(self.trace)
             }
 
-            status(): str { @@:("active") }
+            status(): str { @@:(@@:system.state) }
         }
 
         $Shutdown {
-            status(): str { @@:("shutdown") }
+            status(): str { @@:(@@:system.state) }
         }
 
     domain:
@@ -1231,10 +1231,12 @@ if __name__ == '__main__':
     s2 = @@Sensor()
     s2.attempt_post_shutdown()
     print(s2.trace)          # "before" — "after" was suppressed
-    print(s2.status())       # "shutdown"
+    print(s2.status())       # "Shutdown" (via @@:system.state)
 ```
 
 **How it works:** `@@:self.reading()` dispatches through the full kernel pipeline — FrameEvent construction, context push, router, state dispatch, handler execution, context pop. The return value is available as a native expression. Each self-call gets its own context, so `@@:event`, `@@:params`, and `@@:return` are isolated from the calling handler.
+
+The `status()` handlers use `@@:system.state` to return the current state name. This is a read-only accessor on the system runtime — it reads the compartment's `state` field, which holds the state identifier without the `$` prefix.
 
 **Transition guard — the key subtlety:** Look at `attempt_post_shutdown()`. It calls `@@:self.trigger_shutdown()`, which transitions to `$Shutdown`. When control returns from the self-call, the system has already moved to `$Shutdown`. The transition guard detects this: it checks `_transitioned` on the current context and immediately returns, suppressing `self.trace = "after"` and the `@@:` return.
 
