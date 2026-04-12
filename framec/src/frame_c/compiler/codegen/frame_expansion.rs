@@ -236,7 +236,12 @@ pub(crate) fn generate_frame_expansion(
             // For Rust: Use simpler _transition() approach
 
             // Check for pop-transition: -> pop$
-            if segment_text.contains("pop$") {
+            let is_pop = if let SegmentMetadata::Transition { is_pop, .. } = metadata {
+                *is_pop
+            } else {
+                segment_text.contains("pop$")
+            };
+            if is_pop {
                 // Pop-transition: pop state from stack and transition to it
                 // Includes return to exit handler (code after -> pop$ is unreachable)
                 match lang {
@@ -311,9 +316,18 @@ pub(crate) fn generate_frame_expansion(
                     TargetLanguage::Graphviz => unreachable!(),
                 }
             } else {
-                let target = extract_transition_target(&segment_text);
-                let (exit_args, enter_args) = extract_transition_args(&segment_text);
-                let state_args = extract_state_args(&segment_text);
+                // Extract transition components from metadata (preferred)
+                // or fall back to text re-parsing
+                let (target, exit_args, enter_args, state_args) = if let SegmentMetadata::Transition {
+                    target_state, exit_args, enter_args, state_args, ..
+                } = metadata {
+                    (target_state.clone(), exit_args.clone(), enter_args.clone(), state_args.clone())
+                } else {
+                    let t = extract_transition_target(&segment_text);
+                    let (ex, en) = extract_transition_args(&segment_text);
+                    let st = extract_state_args(&segment_text);
+                    (t, ex, en, st)
+                };
 
                 // Expand state variable references in arguments
                 let exit_str = exit_args.map(|a| expand_expression(&a, lang, ctx));
@@ -1601,7 +1615,11 @@ pub(crate) fn generate_frame_expansion(
             // 1. Transition to the target state (exit current)
             // 2. Forward current event to new state (instead of sending $>)
             // 3. Return (event was handled by new state)
-            let target = extract_transition_target(&segment_text);
+            let target = if let SegmentMetadata::Transition { target_state, .. } = metadata {
+                target_state.clone()
+            } else {
+                extract_transition_target(&segment_text)
+            };
             match lang {
                 TargetLanguage::Python3 => {
                     // Create compartment with forward_event set to current event
@@ -2605,15 +2623,24 @@ pub(crate) fn generate_frame_expansion(
         }
         FrameSegmentKind::ContextReturn => {
             // @@:return - return value slot (assignment or read)
-            // Check if this is assignment (@@:return = expr) or read (@@:return)
+            // Determine if this is assignment or read from metadata (preferred) or text
+            let is_assignment = if let SegmentMetadata::ContextReturn { assign_expr } = metadata {
+                assign_expr.is_some()
+            } else {
+                let t = segment_text.trim();
+                t.contains('=') && !t.contains("==")
+            };
             let trimmed = segment_text.trim();
-            if let Some(eq_pos) = trimmed.find('=') {
-                // Check it's not ==
-                if eq_pos + 1 < trimmed.len() && trimmed.as_bytes().get(eq_pos + 1) != Some(&b'=') {
-                    // Assignment: @@:return = expr
-                    let expr = trimmed[eq_pos + 1..].trim().trim_end_matches(';').trim();
-                    let expanded_expr = expand_expression(expr, lang, ctx);
-                    match lang {
+            if is_assignment {
+                // Assignment: @@:return = expr
+                let expr = if let SegmentMetadata::ContextReturn { assign_expr: Some(e) } = metadata {
+                    e.as_str()
+                } else {
+                    let eq_pos = trimmed.find('=').unwrap();
+                    trimmed[eq_pos + 1..].trim().trim_end_matches(';').trim()
+                };
+                let expanded_expr = expand_expression(expr, lang, ctx);
+                match lang {
                         TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._context_stack[-1]._return = {}", indent_str, expanded_expr),
                         TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._return = {};", indent_str, expanded_expr),
                         TargetLanguage::C => format!("{}{}_CTX(self)->_return = (void*)(intptr_t)({});", indent_str, ctx.system_name, expanded_expr),
@@ -2641,9 +2668,9 @@ pub(crate) fn generate_frame_expansion(
                             format!("{}__ReturnVal = {}", indent_str, erl_expr)
                         }
                         TargetLanguage::Graphviz => unreachable!(),
-                    }
-                } else {
-                    // Read: @@:return (== check)
+                }
+            } else {
+                // Read: @@:return
                     match lang {
                         TargetLanguage::Python3 | TargetLanguage::GDScript => {
                             "self._context_stack[-1]._return".to_string()
@@ -2689,54 +2716,6 @@ pub(crate) fn generate_frame_expansion(
                         }
                         TargetLanguage::Erlang => "__ReturnVal".to_string(),
                         TargetLanguage::Graphviz => unreachable!(),
-                    }
-                }
-            } else {
-                // Read: @@:return
-                match lang {
-                    TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                        "self._context_stack[-1]._return".to_string()
-                    }
-                    TargetLanguage::TypeScript
-                    | TargetLanguage::Dart
-                    | TargetLanguage::JavaScript => {
-                        "this._context_stack[this._context_stack.length - 1]._return".to_string()
-                    }
-                    TargetLanguage::Rust => {
-                        "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())"
-                            .to_string()
-                    }
-                    TargetLanguage::Cpp => {
-                        "std::any_cast<std::string>(_context_stack.back()._return)".to_string()
-                    }
-                    TargetLanguage::Java => {
-                        "_context_stack.get(_context_stack.size() - 1)._return".to_string()
-                    }
-                    TargetLanguage::Kotlin => {
-                        "_context_stack[_context_stack.size - 1]._return".to_string()
-                    }
-                    TargetLanguage::Swift => {
-                        "_context_stack[_context_stack.count - 1]._return".to_string()
-                    }
-                    TargetLanguage::CSharp => {
-                        "_context_stack[_context_stack.Count - 1]._return".to_string()
-                    }
-                    TargetLanguage::Php => {
-                        "$this->_context_stack[count($this->_context_stack) - 1]->_return"
-                            .to_string()
-                    }
-                    TargetLanguage::Go => {
-                        "s._context_stack[len(s._context_stack)-1]._return".to_string()
-                    }
-                    TargetLanguage::Ruby => {
-                        "@_context_stack[@_context_stack.length - 1]._return".to_string()
-                    }
-                    TargetLanguage::C => format!("{}_RETURN(self)", ctx.system_name),
-                    TargetLanguage::Lua => {
-                        "self._context_stack[#self._context_stack]._return".to_string()
-                    }
-                    TargetLanguage::Erlang => "__ReturnVal".to_string(),
-                    TargetLanguage::Graphviz => unreachable!(),
                 }
             }
         }
@@ -2752,37 +2731,46 @@ pub(crate) fn generate_frame_expansion(
             // Detect whether the scanner consumed a trailing `return`
             // by looking for the bare `return` keyword in segment_text
             // outside of the `@@:(...)` expression.
+            // Extract expression from metadata (preferred) or raw text (fallback)
             let trimmed = segment_text.trim();
-            // Find the closing paren of @@:( so we can split the
-            // segment into the expression part and the trailing
-            // (optional) `return` keyword.
-            let (expr, has_native_return) = if let Some(start) = trimmed.find("@@:(") {
-                let after_open = start + 4;
-                // Find matching close paren — paren depth aware so a
-                // function call inside the expression doesn't fool us.
-                let bytes = trimmed.as_bytes();
-                let mut depth = 1i32;
-                let mut p = after_open;
-                while p < bytes.len() && depth > 0 {
-                    match bytes[p] {
-                        b'(' => depth += 1,
-                        b')' => depth -= 1,
-                        _ => {}
-                    }
-                    if depth > 0 {
-                        p += 1;
-                    }
-                }
-                let expr_str = trimmed[after_open..p].to_string();
-                let after_close = if p < bytes.len() { p + 1 } else { p };
-                let tail = trimmed[after_close..].trim();
-                let has_ret = tail.starts_with("return")
-                    && (tail.len() == 6
-                        || tail.as_bytes()[6].is_ascii_whitespace()
-                        || tail.as_bytes()[6] == b';');
-                (expr_str, has_ret)
+            let (expr, has_native_return) = if let SegmentMetadata::ReturnExpr { expr } = metadata {
+                // Check for trailing `return` in the segment text
+                // (the metadata only has the expression, not the trailing keyword)
+                let has_ret = if let Some(close_pos) = trimmed.rfind(')') {
+                    let tail = trimmed[close_pos + 1..].trim();
+                    tail.starts_with("return")
+                        && (tail.len() == 6
+                            || tail.as_bytes().get(6).map_or(true, |b| b.is_ascii_whitespace() || *b == b';'))
+                } else {
+                    false
+                };
+                (expr.clone(), has_ret)
             } else {
-                (trimmed.to_string(), false)
+                // Fallback: parse from raw text
+                if let Some(start) = trimmed.find("@@:(") {
+                    let after_open = start + 4;
+                    let bytes = trimmed.as_bytes();
+                    let mut depth = 1i32;
+                    let mut p = after_open;
+                    while p < bytes.len() && depth > 0 {
+                        match bytes[p] {
+                            b'(' => depth += 1,
+                            b')' => depth -= 1,
+                            _ => {}
+                        }
+                        if depth > 0 { p += 1; }
+                    }
+                    let expr_str = trimmed[after_open..p].to_string();
+                    let after_close = if p < bytes.len() { p + 1 } else { p };
+                    let tail = trimmed[after_close..].trim();
+                    let has_ret = tail.starts_with("return")
+                        && (tail.len() == 6
+                            || tail.as_bytes()[6].is_ascii_whitespace()
+                            || tail.as_bytes()[6] == b';');
+                    (expr_str, has_ret)
+                } else {
+                    (trimmed.to_string(), false)
+                }
             };
             let expanded_expr = expand_expression(expr.trim(), lang, ctx);
             // The assignment line uses an empty indent prefix because
@@ -3168,15 +3156,22 @@ pub(crate) fn generate_frame_expansion(
             // This is the "set + return" one-liner. The segment text is
             // `@@:return(expr)` — extract the expression between parens.
             let trimmed = segment_text.trim();
-            let expr = if let Some(start) = trimmed.find('(') {
-                let inner = &trimmed[start + 1..];
-                if let Some(end) = inner.rfind(')') {
-                    inner[..end].trim()
-                } else {
-                    inner.trim()
-                }
+            let expr_owned;
+            let expr = if let SegmentMetadata::ReturnCall { expr } = metadata {
+                expr.as_str()
             } else {
-                ""
+                // Fallback: parse from raw text
+                expr_owned = if let Some(start) = trimmed.find('(') {
+                    let inner = &trimmed[start + 1..];
+                    if let Some(end) = inner.rfind(')') {
+                        inner[..end].trim().to_string()
+                    } else {
+                        inner.trim().to_string()
+                    }
+                } else {
+                    String::new()
+                };
+                &expr_owned
             };
             let expanded_expr = expand_expression(expr, lang, ctx);
 
