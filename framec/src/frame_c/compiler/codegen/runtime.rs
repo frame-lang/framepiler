@@ -290,6 +290,10 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
                 CodegenNode::field(CodegenNode::self_ref(), "_data"),
                 CodegenNode::Dict(vec![]),
             ),
+            CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "_transitioned"),
+                CodegenNode::ident("False"),
+            ),
         ],
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => vec![
             CodegenNode::assign(
@@ -303,6 +307,10 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "_data"),
                 CodegenNode::Dict(vec![]),
+            ),
+            CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "_transitioned"),
+                CodegenNode::ident("false"),
             ),
         ],
         TargetLanguage::Dart => vec![
@@ -318,10 +326,14 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
                 CodegenNode::field(CodegenNode::self_ref(), "_data"),
                 CodegenNode::Dict(vec![]),
             ),
+            CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "_transitioned"),
+                CodegenNode::ident("false"),
+            ),
         ],
         TargetLanguage::Php => vec![
             CodegenNode::NativeBlock {
-                code: "$this->_event = $event;\n$this->_return = $defaultReturn;\n$this->_data = [];".to_string(),
+                code: "$this->_event = $event;\n$this->_return = $defaultReturn;\n$this->_data = [];\n$this->_transitioned = false;".to_string(),
                 span: None,
             },
         ],
@@ -338,10 +350,14 @@ pub fn generate_frame_context_class(system: &SystemAst, lang: TargetLanguage) ->
                 CodegenNode::field(CodegenNode::self_ref(), "_data"),
                 CodegenNode::Dict(vec![]),
             ),
+            CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "_transitioned"),
+                CodegenNode::ident("false"),
+            ),
         ],
         TargetLanguage::Lua => vec![
             CodegenNode::NativeBlock {
-                code: "self._event = event\nself._return = default_return\nself._data = {}".to_string(),
+                code: "self._event = event\nself._return = default_return\nself._data = {}\nself._transitioned = false".to_string(),
                 span: None,
             },
         ],
@@ -876,6 +892,7 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!("    event: {}FrameEvent,\n", system_name));
     code.push_str("    _return: Option<Box<dyn std::any::Any>>,\n");
     code.push_str("    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,\n");
+    code.push_str("    _transitioned: bool,\n");
     code.push_str("}\n\n");
 
     // Generate FrameContext impl with new()
@@ -885,6 +902,7 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("            event,\n");
     code.push_str("            _return: default_return,\n");
     code.push_str("            _data: std::collections::HashMap::new(),\n");
+    code.push_str("            _transitioned: false,\n");
     code.push_str("        }\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
@@ -1054,6 +1072,7 @@ pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("    {sys}FrameEvent _event;\n"));
     code.push_str("    std::any _return;\n");
     code.push_str("    std::unordered_map<std::string, std::any> _data;\n");
+    code.push_str("    bool _transitioned = false;\n");
     code.push_str(&format!("\n    {sys}FrameContext({sys}FrameEvent event, std::any default_return = {{}})\n"));
     code.push_str("        : _event(std::move(event)), _return(std::move(default_return)) {}\n");
     code.push_str("};\n\n");
@@ -1100,10 +1119,12 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("    {sys}FrameEvent _event;\n"));
     code.push_str("    Object _return;\n");
     code.push_str("    HashMap<String, Object> _data;\n");
+    code.push_str("    boolean _transitioned = false;\n");
     code.push_str(&format!("\n    {sys}FrameContext({sys}FrameEvent event, Object defaultReturn) {{\n"));
     code.push_str("        this._event = event;\n");
     code.push_str("        this._return = defaultReturn;\n");
     code.push_str("        this._data = new HashMap<>();\n");
+    code.push_str("        this._transitioned = false;\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
 
@@ -1151,6 +1172,7 @@ pub fn generate_kotlin_compartment_types(system: &SystemAst) -> String {
     // FrameContext class
     code.push_str(&format!("class {sys}FrameContext(val _event: {sys}FrameEvent, var _return: Any? = null) {{\n"));
     code.push_str("    val _data: MutableMap<String, Any?> = mutableMapOf()\n");
+    code.push_str("    var _transitioned: Boolean = false\n");
     code.push_str("}\n\n");
 
     // Compartment class
@@ -1195,7 +1217,8 @@ pub fn generate_swift_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("class {sys}FrameContext {{\n"));
     code.push_str(&format!("    var _event: {sys}FrameEvent\n"));
     code.push_str("    var _return: Any?\n");
-    code.push_str("    var _data: [String: Any] = [:]\n\n");
+    code.push_str("    var _data: [String: Any] = [:]\n");
+    code.push_str("    var _transitioned: Bool = false\n\n");
     code.push_str(&format!("    init(event: {sys}FrameEvent, defaultReturn: Any? = nil) {{\n"));
     code.push_str("        self._event = event\n");
     code.push_str("        self._return = defaultReturn\n");
@@ -1253,10 +1276,12 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("    public {sys}FrameEvent _event;\n"));
     code.push_str("    public object _return;\n");
     code.push_str("    public Dictionary<string, object> _data;\n");
+    code.push_str("    public bool _transitioned = false;\n");
     code.push_str(&format!("\n    public {sys}FrameContext({sys}FrameEvent ev, object defaultReturn) {{\n"));
     code.push_str("        this._event = ev;\n");
     code.push_str("        this._return = defaultReturn;\n");
     code.push_str("        this._data = new Dictionary<string, object>();\n");
+    code.push_str("        this._transitioned = false;\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
 
@@ -1307,8 +1332,9 @@ pub fn generate_go_compartment_types(system: &SystemAst) -> String {
     // FrameContext struct
     code.push_str(&format!("type {}FrameContext struct {{\n", sys));
     code.push_str(&format!("    _event  {}FrameEvent\n", sys));
-    code.push_str("    _return any\n");
-    code.push_str("    _data   map[string]any\n");
+    code.push_str("    _return       any\n");
+    code.push_str("    _data         map[string]any\n");
+    code.push_str("    _transitioned bool\n");
     code.push_str("}\n\n");
 
     // Compartment struct
@@ -1576,6 +1602,7 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!("    {}_FrameEvent* event;\n", sys));
     code.push_str("    void* _return;\n");
     code.push_str(&format!("    {}_FrameDict* _data;\n", sys));
+    code.push_str("    int _transitioned;\n");
     code.push_str(&format!("}} {}_FrameContext;\n\n", sys));
 
     // FrameContext_new
@@ -1584,6 +1611,7 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("    ctx->event = event;\n");
     code.push_str("    ctx->_return = default_return;\n");
     code.push_str(&format!("    ctx->_data = {}_FrameDict_new();\n", sys));
+    code.push_str("    ctx->_transitioned = 0;\n");
     code.push_str("    return ctx;\n");
     code.push_str("}\n\n");
 
