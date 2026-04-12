@@ -2255,6 +2255,101 @@ pub(crate) fn generate_frame_expansion(body_bytes: &[u8], span: &crate::frame_c:
 
             format!("{}{}", set_code, ret_code)
         }
+        FrameSegmentKind::ContextSelf => {
+            // @@:self — bare system instance reference
+            match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby
+                    | TargetLanguage::Lua | TargetLanguage::Swift => "self".to_string(),
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Java
+                    | TargetLanguage::Kotlin | TargetLanguage::CSharp | TargetLanguage::Dart => "this".to_string(),
+                TargetLanguage::Cpp => "this".to_string(),
+                TargetLanguage::C => "self".to_string(),
+                TargetLanguage::Go => "s".to_string(),
+                TargetLanguage::Php => "$this".to_string(),
+                TargetLanguage::Rust => "self".to_string(),
+                TargetLanguage::Erlang => "self".to_string(),
+                TargetLanguage::Graphviz => unreachable!(),
+            }
+        }
+        FrameSegmentKind::ContextSelfCall => {
+            // @@:self.method(args) — reentrant interface call with transition guard
+            // Extract method name and args from segment text: @@:self.method(args)
+            let trimmed = segment_text.trim();
+            let after_self = trimmed.strip_prefix("@@:self.").unwrap_or(trimmed);
+            let paren_pos = after_self.find('(').unwrap_or(after_self.len());
+            let method_name = &after_self[..paren_pos];
+            let args_with_parens = &after_self[paren_pos..]; // "(args)" or "()"
+
+            // Generate the native self-call
+            let call_expr = match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript =>
+                    format!("self.{}{}", method_name, args_with_parens),
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart =>
+                    format!("this.{}{}", method_name, args_with_parens),
+                TargetLanguage::Rust | TargetLanguage::Swift =>
+                    format!("self.{}{}", method_name, args_with_parens),
+                TargetLanguage::Cpp =>
+                    format!("this->{}{}", method_name, args_with_parens),
+                TargetLanguage::C => {
+                    if args_with_parens == "()" {
+                        format!("{}_{}(self)", ctx.system_name, method_name)
+                    } else {
+                        let inner_args = &args_with_parens[1..args_with_parens.len()-1];
+                        format!("{}_{}(self, {})", ctx.system_name, method_name, inner_args)
+                    }
+                }
+                TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp =>
+                    format!("this.{}{}", method_name, args_with_parens),
+                TargetLanguage::Go => {
+                    let go_method = format!("{}{}", method_name[..1].to_uppercase(), &method_name[1..]);
+                    format!("s.{}{}", go_method, args_with_parens)
+                }
+                TargetLanguage::Php =>
+                    format!("$this->{}{}", method_name, args_with_parens),
+                TargetLanguage::Ruby =>
+                    format!("self.{}{}", method_name, args_with_parens),
+                TargetLanguage::Lua =>
+                    format!("self:{}{}", method_name, args_with_parens),
+                TargetLanguage::Erlang => String::new(),
+                TargetLanguage::Graphviz => unreachable!(),
+            };
+
+            // Generate the transition guard check
+            let guard = match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript =>
+                    format!("\n{}if self._context_stack[-1]._transitioned:\n{}    return", indent_str, indent_str),
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript =>
+                    format!("\n{}if (this._context_stack[this._context_stack.length - 1]._transitioned) return;", indent_str),
+                TargetLanguage::Dart =>
+                    format!("\n{}if (this._context_stack[this._context_stack.length - 1]._transitioned) return;", indent_str),
+                TargetLanguage::Rust =>
+                    format!("\n{}if self._context_stack.last().map_or(false, |ctx| ctx._transitioned) {{ return; }}", indent_str),
+                TargetLanguage::C =>
+                    format!("\n{}if ({}_CTX(self)->_transitioned) return;", indent_str, ctx.system_name),
+                TargetLanguage::Cpp =>
+                    format!("\n{}if (_context_stack.back()._transitioned) return;", indent_str),
+                TargetLanguage::Java =>
+                    format!("\n{}if (_context_stack.get(_context_stack.size() - 1)._transitioned) return;", indent_str),
+                TargetLanguage::Kotlin =>
+                    format!("\n{}if (_context_stack[_context_stack.size - 1]._transitioned) return", indent_str),
+                TargetLanguage::Swift =>
+                    format!("\n{}if _context_stack[_context_stack.count - 1]._transitioned {{ return }}", indent_str),
+                TargetLanguage::CSharp =>
+                    format!("\n{}if (_context_stack[_context_stack.Count - 1]._transitioned) return;", indent_str),
+                TargetLanguage::Go =>
+                    format!("\n{}if s._context_stack[len(s._context_stack)-1]._transitioned {{ return }}", indent_str),
+                TargetLanguage::Php =>
+                    format!("\n{}if ($this->_context_stack[count($this->_context_stack) - 1]->_transitioned) return;", indent_str),
+                TargetLanguage::Ruby =>
+                    format!("\n{}return if @_context_stack[@_context_stack.length - 1]._transitioned", indent_str),
+                TargetLanguage::Lua =>
+                    format!("\n{}if self._context_stack[#self._context_stack]._transitioned then return end", indent_str),
+                TargetLanguage::Erlang => String::new(),
+                TargetLanguage::Graphviz => unreachable!(),
+            };
+
+            format!("{}{}", call_expr, guard)
+        }
         FrameSegmentKind::ReturnStatement => {
             // Native return keyword detected in handler body.
             // Extract expression after "return" (if any).

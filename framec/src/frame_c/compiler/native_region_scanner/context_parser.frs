@@ -9,6 +9,9 @@
 //   @@:params.key      → ContextParams (kind=6)
 //   @@SystemName()     → TaggedInstantiation (kind=7)
 //   @@:(expr)          → ContextReturnExpr (kind=8)
+//   @@:return(expr)    → ReturnCall (kind=9)
+//   @@:self.method()   → ContextSelfCall (kind=10)
+//   @@:self            → ContextSelf (kind=11)
 //   other              → no match (has_result=false)
 //
 // Demonstrates hierarchical composition: $ParseReturn and $ParseData
@@ -74,6 +77,9 @@ include!("expr_scanner.gen.rs");
                 } else if i + 5 < end && &bytes[i..i + 6] == b"params" {
                     self.pos = i + 6;
                     -> $ParseParams
+                } else if i + 3 < end && &bytes[i..i + 4] == b"self" {
+                    self.pos = i + 4;
+                    -> $ParseSelf
                 } else if i < end && bytes[i] == b'(' {
                     // @@:(expr) — context return expression
                     self.pos = i;
@@ -240,6 +246,59 @@ include!("expr_scanner.gen.rs");
                 self.result_end = i;
                 self.result_kind = 6; // ContextParams
                 self.has_result = true;
+                -> $Done
+            }
+        }
+
+        $ParseSelf {
+            $>() {
+                // @@:self — bare reference or @@:self.method(args) call
+                let mut i = self.pos;
+                let end = self.end;
+                let bytes = &self.bytes;
+
+                if i < end && bytes[i] == b'.' {
+                    i += 1; // Skip '.'
+                    // Scan identifier (method or property name)
+                    let name_start = i;
+                    while i < end && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                        i += 1;
+                    }
+                    if i < end && bytes[i] == b'(' {
+                        // @@:self.method(args) — scan balanced parens
+                        let mut depth: usize = 1;
+                        i += 1; // Skip '('
+                        while i < end && depth > 0 {
+                            if bytes[i] == b'(' { depth += 1; }
+                            if bytes[i] == b')' { depth -= 1; }
+                            if bytes[i] == b'"' || bytes[i] == b'\'' {
+                                let q = bytes[i];
+                                i += 1;
+                                while i < end {
+                                    if bytes[i] == b'\\' && i + 1 < end { i += 2; continue; }
+                                    if bytes[i] == q { break; }
+                                    i += 1;
+                                }
+                            }
+                            if depth > 0 { i += 1; }
+                        }
+                        if depth == 0 { i += 1; } // Skip closing ')'
+                        self.result_end = i;
+                        self.result_kind = 10; // ContextSelfCall
+                        self.has_result = true;
+                    } else {
+                        // @@:self.property — bare accessor
+                        self.result_end = i;
+                        self.result_kind = 11; // ContextSelf
+                        self.has_result = true;
+                    }
+                } else {
+                    // bare @@:self
+                    self.result_end = i;
+                    self.result_kind = 11; // ContextSelf
+                    self.has_result = true;
+                }
+
                 -> $Done
             }
         }

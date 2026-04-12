@@ -16,6 +16,8 @@ pub enum FrameSegmentKind {
     ContextReturnExpr,     // @@:(expr) - set context return value (concise form)
     TaggedInstantiation,   // @@SystemName() - validated system instantiation
     ReturnCall,            // @@:return(expr) - set return value AND exit handler
+    ContextSelfCall,       // @@:self.method(args) - reentrant interface call
+    ContextSelf,           // @@:self - bare system instance reference
     ReturnStatement,       // return <expr>? - native return keyword in handler body
 }
 

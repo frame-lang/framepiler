@@ -254,6 +254,8 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         7 => FrameSegmentKind::TaggedInstantiation,
                         8 => FrameSegmentKind::ContextReturnExpr,
                         9 => FrameSegmentKind::ReturnCall,
+                        10 => FrameSegmentKind::ContextSelfCall,
+                        11 => FrameSegmentKind::ContextSelf,
                         _ => FrameSegmentKind::ContextReturn, // shouldn't happen
                     };
                     let mut seg_end = parser.result_end;
@@ -304,14 +306,28 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     // and the splicer's leading native text already
                     // carries the correct indentation.
                     let computed_indent = if kind == FrameSegmentKind::ContextReturnExpr
-                        || kind == FrameSegmentKind::ReturnCall {
+                        || kind == FrameSegmentKind::ReturnCall
+                        || kind == FrameSegmentKind::ContextSelfCall {
+                        // Find the start of this line
                         let mut line_start = ctx_start;
                         while line_start > open_brace_index + 1
                             && bytes[line_start - 1] != b'\n'
                         {
                             line_start -= 1;
                         }
-                        ctx_start - line_start
+                        if kind == FrameSegmentKind::ContextSelfCall {
+                            // For self-calls, compute the line's leading whitespace
+                            // (not the column of @@:) so the guard aligns with the statement
+                            let mut ws = 0;
+                            let mut p = line_start;
+                            while p < ctx_start && (bytes[p] == b' ' || bytes[p] == b'\t') {
+                                ws += 1;
+                                p += 1;
+                            }
+                            ws
+                        } else {
+                            ctx_start - line_start
+                        }
                     } else {
                         0
                     };
