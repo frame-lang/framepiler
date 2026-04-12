@@ -281,8 +281,17 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
                     source_map: None,
                 });
             }
-            // Target-specific checks (no-op for Graphviz today, but kept
-            // here so the validator runs through every entry path).
+            // @@:self.method() validation against interface
+            if let Err(errs) = validator.validate_self_calls(&frame_ast, source) {
+                let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+                return Ok(CompileResult {
+                    code: String::new(),
+                    errors,
+                    warnings: vec![],
+                    source_map: None,
+                });
+            }
+            // Target-specific checks
             if let Err(errs) = validator.validate_target_specific(&frame_ast, config.target) {
                 let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
                 return Ok(CompileResult {
@@ -332,6 +341,16 @@ pub fn compile_ast_based(source: &[u8], config: &PipelineConfig) -> Result<Compi
         let frame_ast = FrameAst::System(system_ast.clone());
         let mut validator = FrameValidator::new();
         if let Err(errs) = validator.validate_with_arcanum(&frame_ast, &arcanum) {
+            let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
+            return Ok(CompileResult {
+                code: String::new(),
+                errors,
+                warnings: module_warnings,
+                source_map: None,
+            });
+        }
+        // @@:self.method() validation against interface
+        if let Err(errs) = validator.validate_self_calls(&frame_ast, source) {
             let errors = errs.iter().map(|e| CompileError::new(&e.code, &e.message)).collect();
             return Ok(CompileResult {
                 code: String::new(),

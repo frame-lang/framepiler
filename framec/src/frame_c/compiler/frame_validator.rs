@@ -152,6 +152,133 @@ impl FrameValidator {
     /// `target` parameter is the canonical `visitors::TargetLanguage`
     /// (the legacy `frame_ast::TargetLanguage` only has 8 variants and
     /// doesn't include GDScript).
+    /// Validate @@:self.method() calls against the interface declaration.
+    /// Requires source bytes to scan handler bodies for self-call patterns.
+    pub fn validate_self_calls(
+        &mut self,
+        ast: &FrameAst,
+        source: &[u8],
+    ) -> Result<(), Vec<ValidationError>> {
+        match ast {
+            FrameAst::System(system) => self.validate_system_self_calls(system, source),
+            FrameAst::Module(module) => {
+                for system in &module.systems {
+                    self.validate_system_self_calls(system, source);
+                }
+            }
+        }
+
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors.clone())
+        }
+    }
+
+    fn validate_system_self_calls(&mut self, system: &SystemAst, source: &[u8]) {
+        let interface_methods = self.build_interface_map(system);
+
+        // Scan all handler body spans for @@:self.method(args) patterns
+        if let Some(machine) = &system.machine {
+            for state in &machine.states {
+                for handler in &state.handlers {
+                    let span = &handler.span;
+                    if span.start >= source.len() || span.end > source.len() {
+                        continue;
+                    }
+                    let body = &source[span.start..span.end];
+                    self.scan_self_calls_in_body(body, &interface_methods, &state.name, &handler.event, span.start);
+                }
+            }
+        }
+
+        // Also scan action bodies
+        for action in &system.actions {
+            let span = &action.span;
+            if span.start >= source.len() || span.end > source.len() {
+                continue;
+            }
+            let body = &source[span.start..span.end];
+            self.scan_self_calls_in_body(body, &interface_methods, "(action)", &action.name, span.start);
+        }
+    }
+
+    fn scan_self_calls_in_body(
+        &mut self,
+        body: &[u8],
+        interface_methods: &HashMap<String, &InterfaceMethod>,
+        state_name: &str,
+        handler_name: &str,
+        base_offset: usize,
+    ) {
+        let pattern = b"@@:self.";
+        let mut i = 0;
+        while i + pattern.len() < body.len() {
+            if &body[i..i + pattern.len()] == pattern {
+                let after_dot = i + pattern.len();
+                // Extract method name
+                let mut name_end = after_dot;
+                while name_end < body.len() && (body[name_end].is_ascii_alphanumeric() || body[name_end] == b'_') {
+                    name_end += 1;
+                }
+                let method_name = String::from_utf8_lossy(&body[after_dot..name_end]).to_string();
+
+                if name_end < body.len() && body[name_end] == b'(' {
+                    // This is a self-call: @@:self.method(args)
+                    // E601: Check method exists in interface
+                    if let Some(iface_method) = interface_methods.get(&method_name) {
+                        // E602: Check argument count
+                        // Count args by scanning for commas between balanced parens
+                        let mut arg_count = 0;
+                        let mut depth = 0;
+                        let mut j = name_end;
+                        let mut found_arg = false;
+                        while j < body.len() {
+                            match body[j] {
+                                b'(' => { depth += 1; }
+                                b')' => {
+                                    depth -= 1;
+                                    if depth == 0 { break; }
+                                }
+                                b',' if depth == 1 => { arg_count += 1; }
+                                b' ' | b'\t' | b'\n' | b'\r' => {}
+                                _ if depth == 1 => { found_arg = true; }
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+                        if found_arg || arg_count > 0 {
+                            arg_count += 1; // N commas = N+1 args
+                        }
+
+                        let expected = iface_method.params.len();
+                        if arg_count != expected {
+                            self.errors.push(ValidationError::new(
+                                "E602",
+                                format!(
+                                    "@@:self.{}() in {}/{} has {} arguments but interface expects {}",
+                                    method_name, state_name, handler_name, arg_count, expected
+                                )
+                            ));
+                        }
+                    } else {
+                        self.errors.push(ValidationError::new(
+                            "E601",
+                            format!(
+                                "@@:self.{}() in {}/{} — method '{}' not found in interface",
+                                method_name, state_name, handler_name, method_name
+                            )
+                        ));
+                    }
+                }
+
+                i = name_end;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     pub fn validate_target_specific(
         &mut self,
         ast: &FrameAst,
