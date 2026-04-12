@@ -969,7 +969,7 @@ import logging
 
             $>() {
                 $.attempts = $.attempts + 1
-                if validate(self.order_data):
+                if self.validate(self.order_data):
                     -> $Processing
                 else:
                     if $.attempts >= self.max_retries:
@@ -987,7 +987,7 @@ import logging
             }
 
             cancel(reason) {
-                (reason) -> $Cancelled
+                -> (reason) $Cancelled
             }
 
             getStatus(): str {

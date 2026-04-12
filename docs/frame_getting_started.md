@@ -424,17 +424,15 @@ Here's a turnstile — locked until you insert a coin, then it lets one person t
                 -> $Unlocked
             }
             push(): str {
-                @@:return = "locked - insert coin"
+                @@:("locked - insert coin")
             }
         }
 
         $Unlocked {
-            coin() {
-                # Already unlocked, coin is wasted
-            }
+            coin() { }
             push(): str {
                 -> $Locked
-                @@:return = "welcome"
+                @@:("welcome")
             }
         }
 }
@@ -447,7 +445,7 @@ if __name__ == '__main__':
     print(t.push())    # "locked - insert coin"
 ```
 
-Notice that a handler can both transition and set a return value. The transition is *deferred* — it happens after the handler finishes, so `@@:return = "welcome"` sets the value before the system moves to `$Locked`.
+Notice that a handler can both transition and set a return value. The transition is *deferred* — it happens after the handler finishes, so `@@:("welcome")` sets the value before the system moves to `$Locked`.
 
 ### Deferred Transitions
 
