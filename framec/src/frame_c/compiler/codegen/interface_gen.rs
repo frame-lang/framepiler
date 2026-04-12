@@ -584,10 +584,17 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Any?" {
                     let kotlin_type = kotlin_map_type(&return_type_str);
+                    let kt_default = match kotlin_type.as_str() {
+                        "Int" => "0",
+                        "Long" => "0L",
+                        "Double" => "0.0",
+                        "Float" => "0.0f",
+                        "Boolean" => "false",
+                        "String" => "\"\"",
+                        _ => "null as Any",
+                    };
                     code.push_str("val __rctx = _context_stack.removeAt(_context_stack.size - 1)\n");
-                    // When transitioned, _return is null. `as Type` on null throws TypeCastException.
-                    // Return _return without non-null cast — caller ignores return in transition scenarios.
-                    code.push_str("if (__rctx._transitioned) return __rctx._return\n");
+                    code.push_str(&format!("if (__rctx._transitioned) return {}\n", kt_default));
                     code.push_str(&format!("return __rctx._return as {}", kotlin_type));
                 } else {
                     code.push_str("_context_stack.removeAt(_context_stack.size - 1)");
@@ -631,10 +638,15 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Any?" {
                     let swift_type = swift_map_type(&return_type_str);
+                    let sw_default = match swift_type.as_str() {
+                        "Int" => "0",
+                        "Double" | "Float" => "0.0",
+                        "Bool" => "false",
+                        "String" => "\"\"",
+                        _ => "nil as Any",
+                    };
                     code.push_str("let __rctx = _context_stack.removeLast()\n");
-                    // When transitioned, _return is nil. Force cast `as! Type` on nil crashes.
-                    // Return _return without force cast — caller ignores return in transition scenarios.
-                    code.push_str("if __rctx._transitioned { return __rctx._return }\n");
+                    code.push_str(&format!("if __rctx._transitioned {{ return {} }}\n", sw_default));
                     code.push_str(&format!("return __rctx._return as! {}", swift_type));
                 } else {
                     code.push_str("_context_stack.removeLast()");
@@ -800,7 +812,7 @@ return __result;"#,
                 if method.return_type.is_some() || method.return_init.is_some() {
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "final __e = {}(\"{}\", {});\nfinal __ctx = {}(__e, null);{}\n_context_stack.add(__ctx);\n__kernel(__e);\nfinal __rctx = _context_stack.removeLast();\nif (__rctx._transitioned) return __rctx._return;\nreturn __rctx._return;",
+                            "final __e = {}(\"{}\", {});\nfinal __ctx = {}(__e, null);{}\n_context_stack.add(__ctx);\n__kernel(__e);\nfinal __rctx = _context_stack.removeLast();\nif (__rctx._transitioned) {{ return __rctx._return; }}\nreturn __rctx._return;",
                             event_class, method.name, params_code, context_class, default_init
                         ),
                         span: None,
