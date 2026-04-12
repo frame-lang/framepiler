@@ -13,7 +13,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 5. [Connection Manager](#5-connection-manager) — lifecycle with enter/exit handlers
 6. [Retry with Backoff](#6-retry-with-backoff) — state variables as counters
 7. [Modal Dialog Stack](#7-modal-dialog-stack) — push/pop for navigation history
-8. [Undo/Redo](#8-undoredo) — state stack for history
+8. [State Stack](#8-state-stack-pushpop) — state stack for history
 9. [Video Player](#9-video-player) — HSM with sub-states
 10. [Order Processor](#10-order-processor) — business process with branches
 11. [Approval Chain](#11-approval-chain) — multi-stage with forwarding
@@ -383,7 +383,7 @@ if __name__ == '__main__':
 
 ---
 
-## 8. Undo/Redo
+## 8. State Stack (Push/Pop)
 
 **Problem:** Track state history and allow stepping backward.
 

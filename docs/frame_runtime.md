@@ -492,6 +492,24 @@ Restore does NOT invoke `$>`. The state is being *restored*, not *entered*.
 | Rust | `serde_json` | JSON |
 | C | cJSON library | JSON |
 
+Languages not shown follow the TypeScript/JSON pattern. See the [Language Reference](frame_language.md#persistence) for full coverage.
+
+---
+
+## Runtime Edge Cases
+
+### Stack Underflow
+`-> pop$` on an empty state stack is undefined behavior. The generated code does not check — the pop will fail with a language-specific error (IndexError in Python, panic in Rust, etc.). Frame does not guarantee graceful handling.
+
+### Self-Transitions
+A transition to the current state (`-> $CurrentState`) fires the full lifecycle: `<$` (exit), state switch, `$>` (enter). State variables are reset to their initial values. This is intentional — self-transitions are a reinitialization mechanism.
+
+### Exceptions in Handlers
+If native code throws an exception inside a handler, the pending transition (if any) does NOT execute. The `__next_compartment` field is set but the kernel loop never processes it. The context stack entry is NOT popped — the interface wrapper's `finally` or equivalent handles cleanup. Behavior varies by target language.
+
+### Context Data Scope
+`@@:data` is scoped to the current interface call's context. It exists for the duration of the dispatch chain (handler -> exit -> transition -> enter) and is discarded when the interface method returns. Enter and exit handlers within the same dispatch chain share the same context data. A new interface call creates a fresh context with empty data.
+
 ---
 
 ## Per-Language Patterns

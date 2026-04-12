@@ -323,6 +323,8 @@ The sections must appear in this order: `operations:` -> `interface:` -> `machin
 
 Modify `hello.fpy` to add a second method `farewell()` that prints a goodbye message. Transpile and run it to verify.
 
+*Expected: calling `greet()` prints "Hello from Frame!" and calling `farewell()` prints your goodbye message.*
+
 ---
 
 ## States and Handlers
@@ -470,11 +472,13 @@ $Locked {
 }
 ```
 
-Wait — that's not quite right. In the turnstile example above, `$Locked` *does* handle `push()`. If it didn't, `push()` would return the default value (`"blocked"`) declared in the interface.
+Note that `$Locked` does handle `push()` in the turnstile example — it returns `"blocked"`. If a state doesn't handle an event at all, the event is silently ignored and the interface method returns the default value declared in the interface.
 
 ### Try It
 
 Build a `Door` system with three states: `$Closed`, `$Open`, and `$Locked`. It should support `open()`, `close()`, `lock()`, and `unlock()` — but you can only lock a closed door, and you can only open an unlocked door.
+
+*Expected: `open()` on a closed door transitions to `$Open`; `lock()` on an open door is ignored; `unlock()` on a locked door transitions to `$Closed`.*
 
 ---
 
@@ -558,12 +562,13 @@ $Counting {
 }
 ```
 
-There are two forms for setting the return value on the context stack:
+There are three forms for setting the return value on the context stack:
 
 - **`@@:(expr)`** — the concise form (preferred). Sets the return value and can be followed by `return` on a separate line to exit the handler.
 - **`@@:return = expr`** — the long form. Sets the return value in a single statement.
+- **`@@:return(expr)`** — sets the return value AND exits the handler in one statement. It replaces the common two-line pattern of `@@:(expr)` followed by `return`.
 
-If the current state doesn't handle the event, the caller gets the default value (`0` in this case). Note: bare `return` exits the dispatch method but does NOT set the return value — always use `@@:(expr)` or `@@:return = expr` to set return values.
+If the current state doesn't handle the event, the caller gets the default value (`0` in this case). Note: bare `return` exits the dispatch method but does NOT set the return value — always use `@@:(expr)`, `@@:return = expr`, or `@@:return(expr)` to set return values.
 
 **String returns across languages**: When returning string literals with `@@:("value")`, the framepiler automatically wraps the literal for typed backends (Rust: `String::from("value")`, C++: `std::string("value")`). For computed strings, use the target language's string construction (e.g., `@@:(format!("hello {}", name))` for Rust, `@@:(std::string("hello ") + name)` for C++). All other languages accept bare string literals without wrapping.
 
@@ -664,6 +669,8 @@ This is the pattern: each state declares *only the events it cares about*. Every
 ### Try It
 
 Build a `Counter` system with `increment()`, `decrement()`, `reset()`, and `get_value(): int = 0`. Add a `$Frozen` state where increment and decrement are ignored but reset still works.
+
+*Expected: incrementing three times then calling `get_value()` returns 3; after freezing, `increment()` and `decrement()` have no effect but `reset()` zeros the counter.*
 
 ---
 
@@ -792,11 +799,13 @@ The key distinction: actions are *private* helpers for handlers, operations are 
 
 Take the `Turnstile` from the States and Handlers section and add actions for `log_entry()` and `log_rejection()`. Call them from the appropriate handlers.
 
+*Expected: pushing an unlocked turnstile prints a log entry message and transitions to `$Locked`; pushing a locked turnstile prints a rejection message and stays in `$Locked`.*
+
 ---
 
 ## Variables
 
-Frame provides three kinds of variables, each with different scope and lifetime.
+Frame provides two kinds of variables, each with different scope and lifetime: **domain variables** (persist across states) and **state variables** (reset on state entry).
 
 ### Domain Variables
 
@@ -981,7 +990,7 @@ Frame V4 also supports **state parameters** and **enter parameters** in the syst
 r = @@Robot($(42), $>("hello"), "R2")
 ```
 
-See the [Frame Language Reference](frame_language.md#passing-system-parameters) for the complete parameter syntax.
+See the [Frame Language Reference](frame_language.md#system-parameters) for the complete parameter syntax.
 
 ### Try It
 
@@ -1578,8 +1587,8 @@ Sync methods on an async system still work correctly — awaiting a synchronous 
             async fetch(url: str): str {
                 self.last_url = url
                 response = await http_get(url)
+                @@:(response)
                 -> $Done
-                @@:return = response
             }
             get_last_url(): str {
                 @@:return = self.last_url

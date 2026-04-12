@@ -203,7 +203,7 @@ pub enum CodegenNode {
 
     // Frame-specific
     Transition { target_state, exit_args, enter_args, state_args, indent },
-    ChangeState { target_state, state_args, indent },
+    ChangeState { target_state, state_args, indent },  // internal IR node, not exposed to Frame users
     Forward { to_parent, indent },
     StackPush { indent },
     StackPop { indent },
@@ -218,6 +218,8 @@ pub enum CodegenNode {
     NativeBlock { code, span },
 }
 ```
+
+> **Note:** `ChangeState` is an internal IR node, not exposed to Frame users. The `->>` (change-state) operator was removed in Frame V4.
 
 ### NativeRegionScanner
 
@@ -271,7 +273,7 @@ pub trait LanguageBackend {
 }
 ```
 
-17 backends: Python, TypeScript, JavaScript, Rust, C, C++, Java, C#, Go, PHP, Kotlin, Swift, Ruby, Erlang, Lua, Dart, GDScript.
+17 backends: Python, TypeScript, JavaScript, Rust, C, C++, Java, C#, Go, PHP, Kotlin, Swift, Ruby, Erlang, Lua, Dart, GDScript. See the [Language Reference](frame_language.md#target) for the complete list of supported target languages.
 
 **Erlang** bypasses the class pipeline entirely — it generates OTP `gen_statem` modules with `-behaviour(gen_statem)`, `-record(data, {...})`, and state callback functions.
 

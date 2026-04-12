@@ -618,7 +618,7 @@ $Active {
 - Only interface methods can be called via `@@:self`. Actions and operations are called directly using native syntax.
 - `@@:self` does not support calling constructors.
 
-#### Validation
+#### Self-Call Validation
 
 | Code | Check | Severity |
 |------|-------|----------|
@@ -782,7 +782,7 @@ c2 = @@Counter(42)       // expands to Counter(42)
 
 This means default values can use any expression valid in the target language at *call* scope, not just at *parameter-default* scope. It's also why the call site for `@@Counter()` works in target languages that don't natively support default arguments (Java, C, Go, etc.).
 
-#### Validation
+#### Instantiation Validation
 
 The framepiler validates at the assembler stage:
 
@@ -895,6 +895,7 @@ The framepiler validates at the assembler stage:
 | Code | Name | Description |
 |------|------|-------------|
 | W414 | `unreachable-state` | State has no incoming transitions |
+| W415 | `handler-return-value-lost` | `return expr` in event handler; value not set on context stack |
 | W601 | `unused-self-call-return` | Return value not captured for method with return type |
 
 ---
