@@ -84,7 +84,7 @@ Frame is a language for specifying *automata* — state machines, pushdown autom
 
 Frame's unit of definition for a single machine is a *system*. Here's one:
 
-```
+```frame
 @@system TrafficLight {
     interface:
         next()
@@ -111,7 +111,7 @@ Frame is not a standalone language. It's designed to live *inside* your native s
 
 Frame makes heavy use of a special token — `@@` — to mark Frame pragmas and constructs that should be preprocessed by the *framepiler* (Frame's compilation tool). Everything without `@@` passes through unchanged.
 
-```
+```frame
 @@target python_3
 
 import logging
@@ -211,7 +211,7 @@ framec --version
 
 Create a file called `hello.fpy`:
 
-```
+```frame
 @@target python_3
 
 @@system Hello {
@@ -260,7 +260,7 @@ python3 hello.py
 
 Nothing happens yet — we declared the class but didn't instantiate it. Add native Python code after the system block:
 
-```
+```frame
 @@target python_3
 
 @@system Hello {
@@ -298,7 +298,7 @@ The `if __name__` block is native Python — the framepiler passes it through un
 
 Every Frame system has the same structure:
 
-```
+```frame
 @@system Name {
     operations:
         # Public methods that bypass the state machine 
@@ -333,7 +333,7 @@ A system's power comes from having multiple states, each responding to the same 
 
 ### A Light Switch
 
-```
+```frame
 @@target python_3
 
 @@system LightSwitch {
@@ -392,7 +392,7 @@ Events that a state doesn't handle are silently ignored. If `$Off` doesn't have 
 
 The `status()` method shows how to return values from handlers:
 
-```
+```frame
 status(): str = "unknown"
 ```
 
@@ -400,7 +400,7 @@ In the `interface:` block, `: str` declares the return type and `= "unknown"` se
 
 Inside a handler, `@@:return` sets the return value:
 
-```
+```frame
 status(): str {
     @@:return = "off"
 }
@@ -410,7 +410,7 @@ status(): str {
 
 Here's a turnstile — locked until you insert a coin, then it lets one person through and locks again:
 
-```
+```frame
 @@target python_3
 
 @@system Turnstile {
@@ -463,7 +463,7 @@ This means:
 
 If an event arrives and the current state has no handler for it, **the event is silently ignored**. This is by design — it means you only need to declare handlers for events you care about in each state.
 
-```
+```frame
 $Locked {
     coin() {
         -> $Unlocked
@@ -488,7 +488,7 @@ The `interface:` block is how the outside world communicates with your state mac
 
 ### Interface Methods
 
-```
+```frame
 interface:
     start()
     stop()
@@ -508,7 +508,7 @@ Each declaration specifies:
 
 Interface methods can take parameters, and handlers receive them:
 
-```
+```frame
 @@target python_3
 
 @@system Greeter {
@@ -535,7 +535,7 @@ The parameter names in the handler must match the interface declaration. The val
 
 You can add type annotations to parameters:
 
-```
+```frame
 interface:
     set_position(x: float, y: float)
     send_message(to: str, body: str)
@@ -547,14 +547,14 @@ Type annotations are passed through to the generated code. Their exact semantics
 
 To return values from a state machine, declare the return type and default in the interface:
 
-```
+```frame
 interface:
     get_count(): int = 0
 ```
 
 Then in handlers, use `@@:return`:
 
-```
+```frame
 $Counting {
     get_count(): int {
         @@:return = self.count
@@ -574,7 +574,7 @@ If the current state doesn't handle the event, the caller gets the default value
 
 ### Multiple Parameters and Returns
 
-```
+```frame
 @@target python_3
 
 @@system Calculator {
@@ -613,7 +613,7 @@ if __name__ == '__main__':
 
 The real power shows when different states handle the same event differently:
 
-```
+```frame
 @@target python_3
 
 @@system Player {
@@ -682,7 +682,7 @@ Actions are private helper methods that keep your event handlers clean. They can
 
 As handlers grow, they accumulate native code — logging, validation, API calls. This clutters the state machine logic:
 
-```
+```frame
 $Processing {
     submit(order) {
         # 20 lines of validation...
@@ -699,7 +699,7 @@ The transition (`-> $Complete`) is buried. The state machine's structure is hard
 
 Move the native code into actions:
 
-```
+```frame
 @@target python_3
 
 @@system OrderProcessor {
@@ -745,7 +745,7 @@ Actions are native code methods. They can:
 - Access interface context via `@@:params.x`, `@@:return`, `@@:event`, `@@:data.key`
 - Call interface methods on the system via `@@:self.method()`
 
-```
+```frame
 actions:
     calculate_tax(amount): float {
         return amount * self.tax_rate
@@ -772,7 +772,7 @@ These restrictions exist because actions don't have state context — they're ca
 
 If you need a state variable's value in an action, pass it as a parameter:
 
-```
+```frame
 $Counting {
     report() {
         print_count($.count)
@@ -811,7 +811,7 @@ Frame provides two kinds of variables, each with different scope and lifetime: *
 
 Domain variables are declared in the `domain:` block. They're instance fields that persist for the lifetime of the system, across all state transitions.
 
-```
+```frame
 @@target python_3
 
 @@system Counter {
@@ -836,7 +836,7 @@ Domain variables are declared in the `domain:` block. They're instance fields th
 
 Domain variables are **native code** — the framepiler passes them through to the generated class as instance fields. The syntax matches your target language:
 
-```
+```frame
 # Python
 domain:
     count: int = 0
@@ -859,7 +859,7 @@ Access them using your language's normal syntax (`self.count` in Python, `this.c
 
 State variables are scoped to a single state. They're declared at the top of a state block with the `$.` prefix:
 
-```
+```frame
 $Retrying {
     $.attempts: int = 0
     $.last_error = None
@@ -902,7 +902,7 @@ A good rule: if multiple states need it, use domain. If only one state needs it 
 
 You can pass arguments to a state during transition:
 
-```
+```frame
 @@target python_3
 
 @@system Router {
@@ -946,7 +946,7 @@ When you write `-> $Page("Settings", "/settings")`, the arguments initialize the
 
 You can also pass arguments when constructing a system. System parameters can initialize domain variables:
 
-```
+```frame
 @@target python_3
 
 @@system Server(port: int, host: str) {
@@ -983,7 +983,7 @@ Frame V4 also supports **state parameters** and **enter parameters** in the syst
 | `$>(name: type)` | Enter | `compartment.enter_args` | Start state `$>` handler via bare `name` |
 | (bare) | Domain | `self.field` | Any handler via `self.field` |
 
-```
+```frame
 @@system Robot($(x: int), $>(msg: str), name: str) {
     ...
 }
@@ -1010,7 +1010,7 @@ When a transition happens, Frame fires lifecycle events:
 2. The system switches to the new state
 3. The new state's **enter handler** (`$>`) runs
 
-```
+```frame
 @@target python_3
 
 @@system Connection {
@@ -1054,7 +1054,7 @@ The enter handler (`$>`) is the natural place for initialization. The exit handl
 
 You can pass arguments to enter and exit handlers through transitions:
 
-```
+```frame
 $Idle {
     start(config) {
         -> (config) $Running
@@ -1090,7 +1090,7 @@ Parameters are positional — the first argument maps to the first parameter of 
 
 A transition can carry exit args, enter args, state args, and a label:
 
-```
+```frame
 (exit_args) -> (enter_args) "label" $State(state_args)
 ```
 
@@ -1105,10 +1105,10 @@ You rarely need all of these at once, but they compose freely.
 
 Sometimes you want the target state to handle the *same event* that triggered the transition. This is event forwarding:
 
-```
+```frame
 $Connecting {
     receive(data) {
-        # We got data while still connecting — transition
+        # We got data while still connecting �� transition
         # to Ready and let it handle this data
         -> => $Ready
     }
@@ -1131,7 +1131,7 @@ Frame has a built-in state stack for saving and restoring states. This enables p
 
 `push$` saves the current state (including all state variables) onto the stack:
 
-```
+```frame
 $Normal {
     help() {
         push$
@@ -1144,7 +1144,7 @@ $Normal {
 
 `-> pop$` transitions to whatever state was last pushed:
 
-```
+```frame
 $HelpMode {
     done() {
         -> pop$   # Returns to $Normal (or wherever we came from)
@@ -1156,7 +1156,7 @@ The critical difference from a normal transition: **state variables are restored
 
 #### Example: Subroutine State
 
-```
+```frame
 @@target python_3
 
 @@system Editor {
@@ -1234,7 +1234,7 @@ When state machines grow, you'll find states that share common behavior. Hierarc
 
 Imagine a media player where every state needs to handle `get_status()` and `emergency_stop()`:
 
-```
+```frame
 $Playing {
     pause()     { -> $Paused }
     get_status(): str { @@:return = "playing" }
@@ -1260,7 +1260,7 @@ $Buffering {
 
 Declare a parent with `=> $ParentState` after the state name:
 
-```
+```frame
 @@target python_3
 
 @@system MediaPlayer {
@@ -1313,7 +1313,7 @@ Declare a parent with `=> $ParentState` after the state name:
 
 Frame uses **explicit forwarding**. A child state must explicitly delegate events to its parent with `=> $^`:
 
-```
+```frame
 $Playing => $Active {
     pause() {
         -> $Paused
@@ -1333,7 +1333,7 @@ Without `=> $^`, unhandled events are silently ignored, even if the parent has a
 
 You can also forward from inside a specific handler:
 
-```
+```frame
 $Playing => $Active {
     pause() {
         log_pause()
@@ -1352,7 +1352,7 @@ There are two common patterns:
 
 **Default forward** — handle some events, forward the rest:
 
-```
+```frame
 $Child => $Parent {
     specific_event() {
         # Handle locally
@@ -1363,7 +1363,7 @@ $Child => $Parent {
 
 **Selective forward** — handle some events, forward specific others:
 
-```
+```frame
 $Child => $Parent {
     event_a() {
         # Handle locally only
@@ -1378,7 +1378,7 @@ $Child => $Parent {
 
 ### A Complete Example
 
-```
+```frame
 @@target python_3
 
 @@system Appliance {
@@ -1463,7 +1463,7 @@ Sometimes a handler or action needs to call one of the system's own interface me
 
 ### Calling Your Own Interface
 
-```
+```frame
 @@target python_3
 
 @@system Sensor {
@@ -1496,7 +1496,7 @@ Why not just use `self.reading()` (native Python)? You can — it works the same
 
 A self-call is a reentrant dispatch. Each call gets its own context on the context stack:
 
-```
+```frame
 $Processing {
     analyze() {
         # @@:event == "analyze"
@@ -1518,7 +1518,7 @@ The calling handler's `@@:event`, `@@:params`, `@@:return`, and `@@:data` are al
 
 Because `@@:self.method()` goes through the kernel, the handler that executes depends on the **current state at the time of the call**. If a transition has been deferred, the self-call dispatches to the new state's handler:
 
-```
+```frame
 $Calibrating {
     run_calibration() {
         // Self-call before transition — dispatches to $Calibrating's handler
@@ -1557,7 +1557,7 @@ Some state machines need to do asynchronous work — network calls, file I/O, ti
 
 Add `async` before interface methods, actions, or operations:
 
-```
+```frame
 interface:
     async connect(url: str)
     async receive(): Message
@@ -1574,7 +1574,7 @@ Sync methods on an async system still work correctly — awaiting a synchronous 
 
 ### Example
 
-```
+```frame
 @@target python_3
 
 @@system HttpClient {
@@ -1673,7 +1673,7 @@ When an interface method is called, Frame creates a *context* that handlers can 
 
 #### Accessing Parameters
 
-```
+```frame
 interface:
     process(input, mode)
 
@@ -1695,7 +1695,7 @@ machine:
 
 `@@:return` is the slot where the interface method's return value lives:
 
-```
+```frame
 calculate(a, b): int = 0 {
     @@:return = a + b
 }
@@ -1707,7 +1707,7 @@ calculate(a, b): int = 0 {
 
 `@@:data.key` stores data that survives transitions within a single interface call:
 
-```
+```frame
 $Validating {
     submit(order) {
         @@:data.order = order
@@ -1729,7 +1729,7 @@ The data is scoped to the interface call — once `submit()` returns to the call
 
 Operations are public methods that bypass the state machine entirely:
 
-```
+```frame
 @@system Config {
     operations:
         static version(): str {
@@ -1765,7 +1765,7 @@ Use operations for utility methods, version info, debug introspection — anythi
 
 Add `@@persist` before a system to generate save/restore methods:
 
-```
+```frame
 @@target python_3
 @@persist
 
@@ -1816,7 +1816,7 @@ What gets persisted: current state, state variables, state stack, state argument
 
 The `@@codegen` directive controls code generation:
 
-```
+```frame
 @@codegen {
     frame_event: on
 }
@@ -1833,7 +1833,7 @@ The framepiler auto-enables `frame_event` when features that require it are used
 
 A single file can contain multiple `@@system` blocks:
 
-```
+```frame
 @@target python_3
 
 @@system Logger {

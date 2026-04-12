@@ -329,7 +329,7 @@ Interface method call
 
 ### Kernel
 
-```
+```frame
 kernel(event):
     router(event)
     while next_compartment is not None:

@@ -81,7 +81,7 @@ The framepiler auto-enables `frame_event` when features that require it are used
 
 ### `@@persist`
 
-```
+```frame
 @@persist
 @@persist(domain=[field1, field2])
 @@persist(exclude=[field3])
@@ -424,7 +424,7 @@ Every transition is implicitly followed by a `return` — code after a transitio
 
 ### Forward to Parent — `=> $^`
 
-```
+```frame
 => $^
 ```
 
@@ -432,7 +432,7 @@ Forwards the current event to the parent state's dispatch function. The enclosin
 
 ### Stack Push — `push$`
 
-```
+```frame
 push$
 ```
 
@@ -444,7 +444,7 @@ Saves a **reference** to the current compartment (including all state variables)
 
 ### Stack Pop — `pop$`
 
-```
+```frame
 pop$
 ```
 
@@ -452,14 +452,14 @@ Pops and discards the top compartment. To transition to the popped state, use `-
 
 ### State Variable Access — `$.varName`
 
-```
+```frame
 $.counter               // read
 $.counter = <expr>      // write
 ```
 
 ### System Context — `@@`
 
-```
+```frame
 @@:params.x         // interface parameter (by name)
 @@:return = <expr>  // set return value
 @@:return           // read return value
@@ -471,7 +471,7 @@ See [System Context](#system-context) for full semantics.
 
 ### Self Reference — `@@:self`
 
-```
+```frame
 @@:self              // reference to this system instance
 @@:self.method(args) // call own interface method (reentrant)
 ```

@@ -34,7 +34,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 
 **Problem:** Cycle through a fixed sequence of states on each event.
 
-```
+```frame
 @@target python_3
 
 @@system TrafficLight {
@@ -78,7 +78,7 @@ if __name__ == '__main__':
 
 **Problem:** A switch that alternates between on and off.
 
-```
+```frame
 @@target python_3
 
 @@system Switch {
@@ -120,7 +120,7 @@ if __name__ == '__main__':
 
 **Problem:** A coin-operated turnstile that locks after each passage.
 
-```
+```frame
 @@target python_3
 
 @@system Turnstile {
@@ -160,7 +160,7 @@ if __name__ == '__main__':
 
 **Problem:** A multi-step login: enter username, enter password, authenticate.
 
-```
+```frame
 @@target python_3
 
 @@system LoginFlow {
@@ -216,7 +216,7 @@ if __name__ == '__main__':
 
 **Problem:** A network connection with proper setup/teardown lifecycle.
 
-```
+```frame
 @@target python_3
 
 @@system Connection {
@@ -269,7 +269,7 @@ if __name__ == '__main__':
 
 **Problem:** Retry an operation up to N times before failing.
 
-```
+```frame
 @@target python_3
 
 @@system Retrier {
@@ -330,7 +330,7 @@ if __name__ == '__main__':
 
 **Problem:** Open nested modal dialogs and return to the previous one on close.
 
-```
+```frame
 @@target python_3
 
 @@system DialogManager {
@@ -387,7 +387,7 @@ if __name__ == '__main__':
 
 **Problem:** Track state history and allow stepping backward.
 
-```
+```frame
 @@target python_3
 
 @@system Editor {
@@ -432,7 +432,7 @@ For true snapshot undo, use `push$` with a transition (`push$ -> $Editing`) to c
 
 **Problem:** A media player with play/pause/stop, where playing and paused are sub-states of "active."
 
-```
+```frame
 @@target python_3
 
 @@system VideoPlayer {
@@ -483,7 +483,7 @@ if __name__ == '__main__':
 
 **Problem:** Process an order through validation, processing, and completion — with cancellation support.
 
-```
+```frame
 @@target python_3
 
 @@system OrderProcessor {
@@ -547,7 +547,7 @@ if __name__ == '__main__':
 
 **Problem:** A document requires approval from two reviewers before it's published.
 
-```
+```frame
 @@target python_3
 
 @@system ApprovalChain {
@@ -609,7 +609,7 @@ if __name__ == '__main__':
 
 **Problem:** A game character with idle, walking, running, and jumping states.
 
-```
+```frame
 @@target python_3
 
 @@system Character {
@@ -669,7 +669,7 @@ if __name__ == '__main__':
 
 **Problem:** An AI agent that explores, flees from threats, and tracks its actions.
 
-```
+```frame
 @@target python_3
 
 @@system Agent {
@@ -725,7 +725,7 @@ if __name__ == '__main__':
 
 **Problem:** An LED that blinks on a timer, with on/off control.
 
-```
+```frame
 @@target python_3
 
 @@system LedBlinker {
@@ -769,7 +769,7 @@ if __name__ == '__main__':
 
 **Problem:** Filter noisy switch input — only register a press after the signal stabilizes.
 
-```
+```frame
 @@target python_3
 
 @@system Debouncer {
@@ -826,7 +826,7 @@ if __name__ == '__main__':
 
 **Problem:** Output depends on both the current state AND the input (classic Mealy machine).
 
-```
+```frame
 @@target python_3
 
 @@system MealyDetector {
@@ -870,7 +870,7 @@ if __name__ == '__main__':
 
 **Problem:** Output depends only on the current state (classic Moore machine).
 
-```
+```frame
 @@target python_3
 
 @@system MooreParity {
@@ -912,7 +912,7 @@ if __name__ == '__main__':
 
 **Problem:** Save a user session to disk and restore it later.
 
-```
+```frame
 @@target python_3
 
 @@persist
@@ -965,7 +965,7 @@ if __name__ == '__main__':
 
 **Problem:** An HTTP client with async connect/fetch/disconnect.
 
-```
+```frame
 @@target python_3
 
 import aiohttp
@@ -1024,7 +1024,7 @@ asyncio.run(main())
 
 **Problem:** A logger and an app as separate systems, with the app using the logger.
 
-```
+```frame
 @@target python_3
 
 @@system Logger {
@@ -1079,7 +1079,7 @@ if __name__ == '__main__':
 
 A task executor whose pool size and retry policy are set at construction time. Domain, state, and enter parameters flow through the constructor to initialize the machine.
 
-```
+```frame
 @@target python_3
 
 @@system WorkerPool($(max_retries: int), $>(start_msg: str), pool_size: int) {

@@ -357,7 +357,7 @@ Inner `@@:return` does not affect outer `@@:return`.
 
 The expansion calls the generated interface method, which follows the standard pipeline:
 
-```
+```frame
 @@:self.getStatus() called inside a handler
 │
 ├─► Expands to self.getStatus() (Python)
@@ -374,7 +374,7 @@ The expansion calls the generated interface method, which follows the standard p
 
 The self-call pushes its own context. The calling handler's context is preserved:
 
-```
+```frame
 Handler processing "analyze":
     _context_stack: [ctx_analyze]
 
