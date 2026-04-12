@@ -237,10 +237,10 @@ The popped compartment retains all its state variables — no reinitialization.
 ### Push
 
 ```python
-self._state_stack.append(self.__compartment.copy())
+self._state_stack.append(self.__compartment)
 ```
 
-The compartment is **copied**, preserving: state name, state vars, state args, and all other fields.
+The stack entry and `__compartment` point to the **same object** — push$ saves a reference, not a copy. Modifications after push$ are visible through both. For snapshot semantics, use `push$` with a transition (`push$ -> $State`) which creates a new compartment.
 
 ### Reentry vs History
 
@@ -444,11 +444,12 @@ Private helpers with domain and context access:
 
 ```python
 def __my_action(self, param):
-    count = self.__compartment.state_vars["count"]  # Can access state vars
-    self.domain_var = count  # Can access domain vars
+    self.domain_var = param  # Can access domain vars
     # Can use @@:self.method() for self-calls
-    # CANNOT use: -> $State, push$, pop$
+    # CANNOT use: -> $State, push$, pop$, $.varName
 ```
+
+Actions cannot use Frame's `$.varName` syntax (error E401). State variable values should be passed as parameters if needed by an action.
 
 ### Operations
 
@@ -479,7 +480,7 @@ Restore does NOT invoke `$>`. The state is being *restored*, not *entered*.
 | Operation | Enter Handler | State Vars |
 |-----------|---------------|------------|
 | `-> $State` | Invoked | Reset |
-| `-> pop$` | NOT invoked | Restored |
+| `-> pop$` | Invoked | Preserved (not reset) |
 | `restore_state()` | NOT invoked | Restored |
 
 ### Per-Language Serialization
