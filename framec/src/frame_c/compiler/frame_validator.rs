@@ -198,6 +198,7 @@ impl FrameValidator {
                         &handler.event,
                         span.start,
                     );
+                    self.scan_bare_context_refs_in_body(body, &state.name, &handler.event);
                 }
             }
         }
@@ -216,6 +217,64 @@ impl FrameValidator {
                 &action.name,
                 span.start,
             );
+            self.scan_bare_context_refs_in_body(body, "(action)", &action.name);
+        }
+    }
+
+    /// Flag bare `@@:self` and `@@:system` — both are syntactic prefixes and
+    /// require a member access.
+    ///   - `@@:self`   must be `@@:self.method(args)` — E603
+    ///   - `@@:system` must be `@@:system.<member>`   — E604
+    ///
+    /// Identifier characters after the prefix (e.g. `@@:selfish`) are not
+    /// matched — that's unrelated native code passing through.
+    fn scan_bare_context_refs_in_body(
+        &mut self,
+        body: &[u8],
+        scope_outer: &str,
+        scope_inner: &str,
+    ) {
+        for (prefix, code, label, example) in [
+            (
+                b"@@:self".as_slice(),
+                "E603",
+                "@@:self",
+                "e.g. `@@:self.method(args)`",
+            ),
+            (
+                b"@@:system".as_slice(),
+                "E604",
+                "@@:system",
+                "e.g. `@@:system.state`",
+            ),
+        ] {
+            let mut i = 0;
+            while i + prefix.len() <= body.len() {
+                if &body[i..i + prefix.len()] == prefix {
+                    let after = i + prefix.len();
+                    // Skip if followed by `.member` — that's the chained form,
+                    // validated elsewhere (E601/E602) or accepted (@@:system.state).
+                    // Skip if followed by an identifier char — it's a different token
+                    // (e.g. a native identifier starting with the same prefix letters).
+                    let next = body.get(after).copied();
+                    let is_chained = next == Some(b'.');
+                    let is_ident_continuation = next
+                        .map(|b| b.is_ascii_alphanumeric() || b == b'_')
+                        .unwrap_or(false);
+                    if !is_chained && !is_ident_continuation {
+                        self.errors.push(ValidationError::new(
+                            code,
+                            format!(
+                                "bare `{}` in {}/{} — `{}` is a syntactic prefix and requires a member access ({})",
+                                label, scope_outer, scope_inner, label, example
+                            ),
+                        ));
+                    }
+                    i = after;
+                } else {
+                    i += 1;
+                }
+            }
         }
     }
 
@@ -1718,5 +1777,73 @@ mod tests {
 
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.code == "E402"));
+    }
+
+    /// Helper: run the bare-context-ref scanner on a raw handler body
+    /// and collect the errors it produces. The scanner is the hot path for
+    /// E603/E604; the parser-level invocation is covered by integration
+    /// tests via `framec compile`.
+    fn scan_bare(body: &[u8]) -> Vec<ValidationError> {
+        let mut v = FrameValidator::new();
+        v.scan_bare_context_refs_in_body(body, "TestState", "test_evt");
+        v.errors
+    }
+
+    #[test]
+    fn test_e603_bare_self_is_error() {
+        let errs = scan_bare(b"let x = @@:self");
+        assert!(
+            errs.iter().any(|e| e.code == "E603"),
+            "expected E603, got {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn test_e604_bare_system_is_error() {
+        let errs = scan_bare(b"let x = @@:system");
+        assert!(
+            errs.iter().any(|e| e.code == "E604"),
+            "expected E604, got {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn test_chained_self_call_does_not_trigger_e603() {
+        let errs = scan_bare(b"let y = @@:self.ping()");
+        assert!(
+            !errs.iter().any(|e| e.code == "E603"),
+            "E603 false-fired on @@:self.ping(): {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn test_chained_system_state_does_not_trigger_e604() {
+        let errs = scan_bare(b"let s = @@:system.state");
+        assert!(
+            !errs.iter().any(|e| e.code == "E604"),
+            "E604 false-fired on @@:system.state: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn test_native_identifier_sharing_prefix_chars_does_not_false_positive() {
+        // `selfish` and `systemic` are native identifiers that share letters
+        // with the Frame prefixes but are not prefixed with `@@:`. They must
+        // not trigger the new errors.
+        let errs = scan_bare(b"let selfish = 1; let systemic = 2");
+        assert!(errs.is_empty(), "false positive: {:?}", errs);
+    }
+
+    #[test]
+    fn test_multiple_bare_refs_each_reported() {
+        let errs = scan_bare(b"let x = @@:self; let y = @@:system");
+        let e603 = errs.iter().filter(|e| e.code == "E603").count();
+        let e604 = errs.iter().filter(|e| e.code == "E604").count();
+        assert_eq!(e603, 1, "expected exactly 1 E603, got {:?}", errs);
+        assert_eq!(e604, 1, "expected exactly 1 E604, got {:?}", errs);
     }
 }
