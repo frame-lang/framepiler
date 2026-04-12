@@ -15,6 +15,7 @@ Complete reference for the Frame language. For a tutorial introduction, see [Get
 - [Hierarchical State Machines](#hierarchical-state-machines)
 - [System Context](#system-context)
 - [Self Reference](#self-reference)
+- [System Runtime](#system-runtime)
 - [Compartment](#compartment)
 - [Persistence](#persistence)
 - [Async](#async)
@@ -473,8 +474,8 @@ See [System Context](#system-context) for full semantics.
 
 ```frame
 @@:self              // reference to this system instance
-@@:self.state        // current state name (read-only)
 @@:self.method(args) // call own interface method (reentrant)
+@@:system.state      // current state name (read-only)
 ```
 
 See [Self Reference](#self-reference-1) for full semantics.
@@ -590,24 +591,7 @@ Each interface call pushes its own context. Nested calls are isolated — inner 
 | Syntax | Meaning |
 |--------|---------|
 | `@@:self` | Reference to this system instance |
-| `@@:self.state` | Current state name (read-only string) |
 | `@@:self.method(args)` | Reentrant interface call |
-
-### Current State — `@@:self.state`
-
-Returns the current state name as a string. Read-only. Available in event handlers, enter/exit handlers, actions, and non-static operations.
-
-```frame
-$Processing {
-    status(): str {
-        @@:(@@:self.state)    // returns "Processing"
-    }
-}
-```
-
-`@@:self.state` reads from the compartment's `state` field, which holds the state identifier without the `$` prefix. It reflects the current state at the time of access — if a transition has been deferred but not yet processed, `@@:self.state` still returns the pre-transition state.
-
-**Not available in:** static operations (no system instance), constructors before the first state is entered.
 
 ### Self Interface Call — `@@:self.method(args)`
 
@@ -660,6 +644,34 @@ The transpiler expands `@@:self.method(args)` into the target language's native 
 | Java | `this.method(args)` |
 
 The generated interface method handles FrameEvent construction, context push/pop, kernel dispatch, and return value extraction. The self-call enters the same code path as an external call.
+
+---
+
+## System Runtime
+
+`@@:system` provides read-only access to the system's runtime state from within handlers, actions, and non-static operations.
+
+| Syntax | Meaning |
+|--------|---------|
+| `@@:system.state` | Current state name (read-only string) |
+
+### Current State — `@@:system.state`
+
+Returns the current state name as a string, without the `$` prefix. Read-only — assignment is an error (E603).
+
+```frame
+$Processing {
+    status(): str {
+        @@:(@@:system.state)    // returns "Processing"
+    }
+}
+```
+
+`@@:system.state` reads from the compartment's `state` field. It reflects the current state at the time of access — if a transition has been deferred but not yet processed, `@@:system.state` still returns the pre-transition state.
+
+**Available in:** event handlers, enter/exit handlers, actions, non-static operations.
+
+**Not available in:** static operations (E604 — no system instance).
 
 ---
 
@@ -863,8 +875,8 @@ The framepiler validates at the assembler stage:
 | Token | Meaning |
 |-------|---------|
 | `@@:self` | System instance reference |
-| `@@:self.state` | Current state name (read-only) |
 | `@@:self.method()` | Self interface call |
+| `@@:system.state` | Current state name (read-only) |
 
 ---
 

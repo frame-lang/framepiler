@@ -1669,7 +1669,7 @@ When an interface method is called, Frame creates a *context* that handlers can 
 | `@@:event` | The name of the interface method that was called |
 | `@@:data.key` | Call-scoped data that persists across transitions |
 | `@@:self` | Reference to this system instance |
-| `@@:self.state` | Current state name (string) |
+| `@@:system.state` | Current state name (read-only string) |
 
 #### Accessing Parameters
 
