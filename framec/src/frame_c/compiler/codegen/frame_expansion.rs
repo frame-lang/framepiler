@@ -3261,7 +3261,7 @@ pub(crate) fn generate_frame_expansion(
                     "__compartment.state".to_string()
                 }
                 TargetLanguage::Swift => "__compartment.state".to_string(),
-                TargetLanguage::Go => "s.compartment.State".to_string(),
+                TargetLanguage::Go => "s.__compartment.state".to_string(),
                 TargetLanguage::Php => "$this->__compartment->state".to_string(),
                 TargetLanguage::Ruby => "@__compartment.state".to_string(),
                 TargetLanguage::Lua => "self.__compartment.state".to_string(),
