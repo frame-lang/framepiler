@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Pre-commit hook: validate doc samples when docs/*.md files are staged.
+#
+# Installed via `scripts/install-hooks.sh` (which sets core.hooksPath).
+# Skip with `git commit --no-verify` if needed.
+
+set -euo pipefail
+
+# Only run when markdown under docs/ is staged.
+if ! git diff --cached --name-only --diff-filter=ACMR | grep -qE '^docs/.*\.md$'; then
+    exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# Need a framec binary. Prefer debug (fast rebuild); fall back to release;
+# fall back to PATH. If none exist, build debug.
+if [[ -x "target/debug/framec" ]]; then
+    :
+elif [[ -x "target/release/framec" ]]; then
+    :
+elif command -v framec >/dev/null 2>&1; then
+    :
+else
+    echo "pre-commit: building framec (debug) so doc samples can be validated..."
+    cargo build --quiet
+fi
+
+echo "pre-commit: validating doc samples (docs/*.md changed)..."
+python3 scripts/validate_doc_samples.py

@@ -29,3 +29,20 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
       - name: Format check
         run: cargo fmt --all -- --check
+
+  validate-docs:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Build framec
+        run: cargo build --release
+      - name: Validate doc samples
+        env:
+          FRAMEC: ${{ github.workspace }}/target/release/framec
+        run: python3 scripts/validate_doc_samples.py

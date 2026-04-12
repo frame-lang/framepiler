@@ -14,6 +14,7 @@ Thank you for your interest in contributing to the Frame language transpiler! Th
 git clone https://github.com/frame-lang/framepiler.git
 cd framepiler
 cargo build
+./scripts/install-hooks.sh   # enables pre-commit doc-sample validation
 ```
 
 ### Running Tests
@@ -34,9 +35,12 @@ make test-python       # Single language
 All PRs must pass these checks (CI enforces them):
 
 ```bash
-cargo clippy -- -D warnings   # No warnings allowed
-cargo fmt --check              # Consistent formatting
+cargo clippy -- -D warnings           # No warnings allowed
+cargo fmt --check                     # Consistent formatting
+python3 scripts/validate_doc_samples.py   # Every runnable docs/ example compiles and runs
 ```
+
+The doc validator extracts runnable Frame blocks from `docs/*.md`, compiles them with `framec`, and runs the generated Python. It's also wired into the pre-commit hook (see `.githooks/pre-commit`) so edits to docs are checked before they're committed.
 
 ## Project Structure
 
