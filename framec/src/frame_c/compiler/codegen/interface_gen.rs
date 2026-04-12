@@ -161,6 +161,9 @@ pub(crate) fn generate_interface_wrappers(
                     };
                     match_code.push_str(&format!(
                         r#"let __ctx = self._context_stack.pop().unwrap();
+if __ctx._transitioned {{
+    return Default::default();
+}}
 if let Some(ret) = __ctx._return {{
     *ret.downcast::<{}>().unwrap()
 }} else {{
@@ -202,7 +205,10 @@ if let Some(ret) = __ctx._return {{
 __ctx = {}(__e, None){}
 self._context_stack.append(__ctx)
 self.__kernel(__e)
-return self._context_stack.pop()._return"#,
+__ctx = self._context_stack.pop()
+if __ctx._transitioned:
+    return __ctx._return
+return __ctx._return"#,
                             event_class, method.name, params_code, context_class, default_init
                         ),
                         span: None,
@@ -246,7 +252,7 @@ self._context_stack.pop()"#,
                 if method.return_type.is_some() || method.return_init.is_some() {
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "const __e = new {}(\"{}\", {});\nconst __ctx = new {}(__e, null);{}\nthis._context_stack.push(__ctx);\nthis.__kernel(__e);\nreturn this._context_stack.pop(){}._return;",
+                            "const __e = new {}(\"{}\", {});\nconst __ctx = new {}(__e, null);{}\nthis._context_stack.push(__ctx);\nthis.__kernel(__e);\nconst __rctx = this._context_stack.pop(){};\nif (__rctx._transitioned) return __rctx._return;\nreturn __rctx._return;",
                             event_class, method.name, params_code, context_class, default_init, pop_suffix
                         ),
                         span: None,
@@ -282,7 +288,7 @@ self._context_stack.pop()"#,
                 if method.return_type.is_some() || method.return_init.is_some() {
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "$__e = new {}(\"{}\", {});\n$__ctx = new {}($__e, null);{}\n$this->_context_stack[] = $__ctx;\n$this->__kernel($__e);\nreturn array_pop($this->_context_stack)->_return;",
+                            "$__e = new {}(\"{}\", {});\n$__ctx = new {}($__e, null);{}\n$this->_context_stack[] = $__ctx;\n$this->__kernel($__e);\n$__rctx = array_pop($this->_context_stack);\nif ($__rctx->_transitioned) return $__rctx->_return;\nreturn $__rctx->_return;",
                             event_class, method.name, params_code, context_class, default_init
                         ),
                         span: None,
@@ -318,7 +324,7 @@ self._context_stack.pop()"#,
                 if method.return_type.is_some() || method.return_init.is_some() {
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "__e = {}.new(\"{}\", {})\n__ctx = {}.new(__e, nil){}\n@_context_stack.push(__ctx)\n__kernel(__e)\nreturn @_context_stack.pop._return",
+                            "__e = {}.new(\"{}\", {})\n__ctx = {}.new(__e, nil){}\n@_context_stack.push(__ctx)\n__kernel(__e)\n__rctx = @_context_stack.pop\nreturn __rctx._return if __rctx._transitioned\nreturn __rctx._return",
                             event_class, method.name, params_code, context_class, default_init
                         ),
                         span: None,
@@ -378,6 +384,13 @@ self._context_stack.pop()"#,
                         "bool" | "int" => "(intptr_t)",
                         _ => "",
                     };
+                    let default_val = match return_type_str.as_str() {
+                        "bool" => "0",
+                        "int" => "0",
+                        "double" => "0.0",
+                        "char*" => "NULL",
+                        _ => "NULL",
+                    };
                     CodegenNode::NativeBlock {
                         code: format!(
                             r#"{}
@@ -385,11 +398,18 @@ self._context_stack.pop()"#,
 {}_FrameVec_push(self->_context_stack, __ctx);
 {}_kernel(self, __e);
 {}_FrameContext* __result_ctx = ({}_FrameContext*){}_FrameVec_pop(self->_context_stack);
+if (__result_ctx->_transitioned) {{
+    {} __result = {};
+    {}_FrameContext_destroy(__result_ctx);
+    {}_FrameEvent_destroy(__e);
+    return __result;
+}}
 {} __result = ({}){}__result_ctx->_return;
 {}_FrameContext_destroy(__result_ctx);
 {}_FrameEvent_destroy(__e);
 return __result;"#,
                             params_code, sys, sys, default_init, sys, sys, sys, sys, sys,
+                            return_type_str, default_val, sys, sys,
                             return_type_str, return_type_str, cast, sys, sys
                         ),
                         span: None,
@@ -462,6 +482,10 @@ return __result;"#,
                 code.push_str("__kernel(_context_stack.back()._event);\n");
 
                 if returns_value {
+                    code.push_str("if (_context_stack.back()._transitioned) {\n");
+                    code.push_str("    _context_stack.pop_back();\n");
+                    code.push_str(&format!("    return {}();\n", return_type_str));
+                    code.push_str("}\n");
                     code.push_str(&format!("auto __result = std::any_cast<{}>(std::move(_context_stack.back()._return));\n", return_type_str));
                     code.push_str("_context_stack.pop_back();\n");
                     code.push_str("return __result;");
@@ -505,9 +529,19 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Object" {
                     let java_type = java_map_type(&return_type_str);
-                    code.push_str(&format!("var __result = ({}) _context_stack.get(_context_stack.size() - 1)._return;\n", java_type));
+                    code.push_str("var __rctx = _context_stack.get(_context_stack.size() - 1);\n");
                     code.push_str("_context_stack.remove(_context_stack.size() - 1);\n");
-                    code.push_str("return __result;");
+                    // When transitioned, _return is null. For primitive types, casting null
+                    // would cause an NPE via auto-unboxing. Return type-appropriate default.
+                    let default_val = match java_type.as_str() {
+                        "int" | "long" | "short" | "byte" => "0",
+                        "double" | "float" => "0.0",
+                        "boolean" => "false",
+                        "char" => "'\\0'",
+                        _ => "null",
+                    };
+                    code.push_str(&format!("if (__rctx._transitioned) return {};\n", default_val));
+                    code.push_str(&format!("return ({}) __rctx._return;", java_type));
                 } else {
                     code.push_str("_context_stack.remove(_context_stack.size() - 1);");
                 }
@@ -550,9 +584,11 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Any?" {
                     let kotlin_type = kotlin_map_type(&return_type_str);
-                    code.push_str(&format!("val __result = _context_stack[_context_stack.size - 1]._return as {}\n", kotlin_type));
-                    code.push_str("_context_stack.removeAt(_context_stack.size - 1)\n");
-                    code.push_str("return __result");
+                    code.push_str("val __rctx = _context_stack.removeAt(_context_stack.size - 1)\n");
+                    // When transitioned, _return is null. `as Type` on null throws TypeCastException.
+                    // Return _return without non-null cast — caller ignores return in transition scenarios.
+                    code.push_str("if (__rctx._transitioned) return __rctx._return\n");
+                    code.push_str(&format!("return __rctx._return as {}", kotlin_type));
                 } else {
                     code.push_str("_context_stack.removeAt(_context_stack.size - 1)");
                 }
@@ -595,9 +631,11 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Any?" {
                     let swift_type = swift_map_type(&return_type_str);
-                    code.push_str(&format!("let __result = _context_stack[_context_stack.count - 1]._return as! {}\n", swift_type));
-                    code.push_str("_context_stack.removeLast()\n");
-                    code.push_str("return __result");
+                    code.push_str("let __rctx = _context_stack.removeLast()\n");
+                    // When transitioned, _return is nil. Force cast `as! Type` on nil crashes.
+                    // Return _return without force cast — caller ignores return in transition scenarios.
+                    code.push_str("if __rctx._transitioned { return __rctx._return }\n");
+                    code.push_str(&format!("return __rctx._return as! {}", swift_type));
                 } else {
                     code.push_str("_context_stack.removeLast()");
                 }
@@ -638,9 +676,12 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "object" {
                     let cs_type = csharp_map_type(&return_type_str);
-                    code.push_str(&format!("var __result = ({}) _context_stack[_context_stack.Count - 1]._return;\n", cs_type));
+                    code.push_str("var __rctx = _context_stack[_context_stack.Count - 1];\n");
                     code.push_str("_context_stack.RemoveAt(_context_stack.Count - 1);\n");
-                    code.push_str("return __result;");
+                    // When transitioned, _return is null. Cast to value type (int, bool, etc.) crashes.
+                    // Return default — caller ignores return in transition scenarios.
+                    code.push_str(&format!("if (__rctx._transitioned) return default({});\n", cs_type));
+                    code.push_str(&format!("return ({}) __rctx._return;", cs_type));
                 } else {
                     code.push_str("_context_stack.RemoveAt(_context_stack.Count - 1);");
                 }
@@ -684,8 +725,13 @@ return __result;"#,
                     if go_type.is_empty() {
                         code.push_str("s._context_stack = s._context_stack[:len(s._context_stack)-1]");
                     } else {
-                        code.push_str(&format!("var __result {}\nif __rv := s._context_stack[len(s._context_stack)-1]._return; __rv != nil {{ __result = __rv.({}) }}\n", go_type, go_type));
+                        code.push_str(&format!("__rctx := s._context_stack[len(s._context_stack)-1]\n"));
                         code.push_str("s._context_stack = s._context_stack[:len(s._context_stack)-1]\n");
+                        // When transitioned, _return is nil. Type assertion on nil panics.
+                        // Return zero value — caller ignores return in transition scenarios.
+                        code.push_str(&format!("var __result {}\n", go_type));
+                        code.push_str("if __rctx._transitioned { return __result }\n");
+                        code.push_str(&format!("if __rctx._return != nil {{ __result = __rctx._return.({}) }}\n", go_type));
                         code.push_str("return __result");
                     }
                 } else {
@@ -714,15 +760,11 @@ return __result;"#,
                 if method.return_type.is_some() || method.return_init.is_some() {
                     // Lua's block transformer treats `return` as terminal
                     // and strips any token that follows it on the same
-                    // line. Emitting `local __ret = ...; pop; return __ret`
-                    // would have `return __ret` collapse to bare `return`,
-                    // discarding the value. Use `table.remove(...)._return`
-                    // as a single expression so the return statement has
-                    // the value embedded inline — no trailing token to
-                    // strip.
+                    // line. Use `table.remove(...)` as a single expression
+                    // so the return statement has the value embedded inline.
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "local __e = {}.new(\"{}\", {})\nlocal __ctx = {}.new(__e, nil){}\nself._context_stack[#self._context_stack + 1] = __ctx\nself:__kernel(__e)\nreturn table.remove(self._context_stack)._return",
+                            "local __e = {}.new(\"{}\", {})\nlocal __ctx = {}.new(__e, nil){}\nself._context_stack[#self._context_stack + 1] = __ctx\nself:__kernel(__e)\nlocal __rctx = table.remove(self._context_stack)\nif __rctx._transitioned then return __rctx._return end\nreturn __rctx._return",
                             event_class, method.name, params_code, context_class, default_init
                         ),
                         span: None,
@@ -758,7 +800,7 @@ return __result;"#,
                 if method.return_type.is_some() || method.return_init.is_some() {
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "final __e = {}(\"{}\", {});\nfinal __ctx = {}(__e, null);{}\n_context_stack.add(__ctx);\n__kernel(__e);\nreturn _context_stack.removeLast()._return;",
+                            "final __e = {}(\"{}\", {});\nfinal __ctx = {}(__e, null);{}\n_context_stack.add(__ctx);\n__kernel(__e);\nfinal __rctx = _context_stack.removeLast();\nif (__rctx._transitioned) return __rctx._return;\nreturn __rctx._return;",
                             event_class, method.name, params_code, context_class, default_init
                         ),
                         span: None,
@@ -799,7 +841,10 @@ return __result;"#,
 var __ctx = {}.new(__e, null){}
 self._context_stack.append(__ctx)
 self.__kernel(__e)
-return self._context_stack.pop_back()._return"#,
+var __rctx = self._context_stack.pop_back()
+if __rctx._transitioned:
+    return __rctx._return
+return __rctx._return"#,
                             event_class, method.name, params_code, context_class, default_init
                         ),
                         span: None,
