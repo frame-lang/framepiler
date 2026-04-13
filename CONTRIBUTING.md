@@ -110,6 +110,25 @@ For a deep dive into the compilation pipeline, runtime model, and generated code
 This is the most common type of contribution. See the detailed guide:
 [Adding a Backend](docs/contributing/adding-a-backend.md)
 
+### Working with Generated Scanners (`.frs` → `.gen.rs`)
+
+Several internal scanners and parsers in `framec/src/frame_c/compiler/` are themselves Frame state machines. They live as paired files:
+
+- `<name>.frs` — Frame source (the truth)
+- `<name>.gen.rs` — generated Rust (committed for build hermeticity, **never hand-edit**)
+
+Examples include `native_region_scanner/context_parser.frs`, `codegen/output_block_parser.frs`, and the per-language `import_scanner/*_import.frs` and `body_closer/*.frs` files.
+
+To modify scanner behavior:
+
+1. Edit the `.frs` source.
+2. Build a bootstrap framec: `cargo build --release`
+3. Regenerate the matching `.gen.rs` — see [Adding a Backend](docs/contributing/adding-a-backend.md#regenerating-output_block_parsergenrs) for the canonical command pattern.
+4. Run `cargo test` and the doc validator to confirm nothing regressed.
+5. Commit the paired `.frs` and `.gen.rs` together.
+
+If you find yourself reaching for a `.gen.rs` file directly, stop — the change will be silently overwritten the next regen.
+
 ## Code Style
 
 - Follow standard Rust conventions
