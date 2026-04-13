@@ -550,7 +550,14 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Any?" {
                     let kotlin_type = kotlin_map_type(&return_type_str);
-                    code.push_str(&format!("val __result = _context_stack[_context_stack.size - 1]._return as {}\n", kotlin_type));
+                    let kt_default = match kotlin_type.as_str() {
+                        "Int" | "Long" => "0",
+                        "Double" | "Float" => "0.0",
+                        "Boolean" => "false",
+                        "String" => "\"\"",
+                        _ => "null",
+                    };
+                    code.push_str(&format!("val __result = _context_stack[_context_stack.size - 1]._return as? {} ?: {}\n", kotlin_type, kt_default));
                     code.push_str("_context_stack.removeAt(_context_stack.size - 1)\n");
                     code.push_str("return __result");
                 } else {
@@ -595,7 +602,14 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Any?" {
                     let swift_type = swift_map_type(&return_type_str);
-                    code.push_str(&format!("let __result = _context_stack[_context_stack.count - 1]._return as! {}\n", swift_type));
+                    let sw_default = match swift_type.as_str() {
+                        "Int" => "0",
+                        "Double" | "Float" => "0.0",
+                        "Bool" => "false",
+                        "String" => "\"\"",
+                        _ => "nil as Any",
+                    };
+                    code.push_str(&format!("let __result = _context_stack[_context_stack.count - 1]._return as? {} ?? {}\n", swift_type, sw_default));
                     code.push_str("_context_stack.removeLast()\n");
                     code.push_str("return __result");
                 } else {
@@ -756,10 +770,19 @@ return __result;"#,
                 };
 
                 if method.return_type.is_some() || method.return_init.is_some() {
+                    // Use null-safe return with type-appropriate default
+                    let rt = method.return_type.as_ref().map(|t| type_to_string(t)).unwrap_or_default();
+                    let dart_default = match rt.as_str() {
+                        "int" | "num" => "0",
+                        "double" => "0.0",
+                        "bool" => "false",
+                        "String" | "str" | "string" => "''",
+                        _ => "null",
+                    };
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "final __e = {}(\"{}\", {});\nfinal __ctx = {}(__e, null);{}\n_context_stack.add(__ctx);\n__kernel(__e);\nreturn _context_stack.removeLast()._return;",
-                            event_class, method.name, params_code, context_class, default_init
+                            "final __e = {}(\"{}\", {});\nfinal __ctx = {}(__e, null);{}\n_context_stack.add(__ctx);\n__kernel(__e);\nreturn _context_stack.removeLast()._return ?? {};",
+                            event_class, method.name, params_code, context_class, default_init, dart_default
                         ),
                         span: None,
                     }
