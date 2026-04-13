@@ -431,8 +431,8 @@ Here's a turnstile — locked until you insert a coin, then it lets one person t
         $Unlocked {
             coin() { }
             push(): str {
-                -> $Locked
                 @@:("welcome")
+                -> $Locked
             }
         }
 }
@@ -445,17 +445,17 @@ if __name__ == '__main__':
     print(t.push())    # "locked - insert coin"
 ```
 
-Notice that a handler can both transition and set a return value. The transition is *deferred* — it happens after the handler finishes, so `@@:("welcome")` sets the value before the system moves to `$Locked`.
+Notice that a handler can both transition and set a return value. The return value must be set *before* the transition — `-> $Locked` generates a `return` in the handler, so any code after it is unreachable. The transition itself is deferred: the kernel processes it after the handler returns.
 
 ### Deferred Transitions
 
-This is an important concept: **transitions don't happen immediately**. When a handler executes `-> $State`, the system records the target but doesn't switch yet. The transition is processed after the handler returns.
+This is an important concept: **transitions are deferred but generate a return**. When a handler executes `-> $State`, the system records the target and immediately returns from the handler. The kernel then processes the transition — running exit handlers, switching compartments, and running enter handlers.
 
 This means:
 
-- Code after `->` in the same handler still executes in the current state
-- You can set return values after a transition
-- You can do cleanup work after triggering a transition
+- Code after `->` in a handler is **unreachable** — the transition generates a `return`
+- Set return values and do cleanup work *before* the transition
+- The transition itself (exit/enter handlers, state switch) happens in the kernel after the handler returns
 
 ### Unhandled Events
 
