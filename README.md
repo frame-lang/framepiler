@@ -24,19 +24,24 @@ Create a file `hello.fpy`:
     machine:
         $Start {
             greet() {
-                print("Hello from Frame!")
+                print(f"Hello, {self.name}!")
             }
         }
 
     domain:
         name = "World"
 }
+
+if __name__ == "__main__":
+    h = @@Hello()
+    h.greet()
 ```
 
-Transpile it:
+Transpile and run:
 
 ```bash
-framec hello.fpy
+framec hello.fpy         # emits hello.py
+python3 hello.py         # prints: Hello, World!
 ```
 
 ## Supported Languages

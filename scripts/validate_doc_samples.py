@@ -140,6 +140,10 @@ def run_sample(framec: str, sample: Sample, workdir: Path) -> tuple[bool, str]:
 def main() -> int:
     framec = find_framec()
     md_files = sorted(DOCS_DIR.glob("*.md"))
+    # Also cover the top-level README so the quickstart snippet stays honest.
+    readme = REPO_ROOT / "README.md"
+    if readme.exists():
+        md_files.append(readme)
     if not md_files:
         sys.stderr.write(f"error: no *.md files under {DOCS_DIR}\n")
         return 2

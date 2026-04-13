@@ -6,8 +6,9 @@
 
 set -euo pipefail
 
-# Only run when markdown under docs/ is staged.
-if ! git diff --cached --name-only --diff-filter=ACMR | grep -qE '^docs/.*\.md$'; then
+# Only run when markdown under docs/ or the top-level README is staged.
+if ! git diff --cached --name-only --diff-filter=ACMR \
+    | grep -qE '^(docs/.*\.md|README\.md)$'; then
     exit 0
 fi
 
