@@ -673,8 +673,6 @@ The approval gate is a clean state. While in `$AwaitingApproval`, the agent igno
         load_doc_tools() { print("Doc tools loaded") }
         unload_doc_tools() { print("Doc tools unloaded") }
 
-    domain:
-        pass
 }
 
 if __name__ == '__main__':

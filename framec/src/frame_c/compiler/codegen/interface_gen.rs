@@ -536,11 +536,21 @@ return __result;"#,
                     code.push_str(&format!("val __e = {}(\"{}\")\n", event_class, method.name));
                 }
 
-                // Create context with default return
+                // Create context with type-appropriate default return.
+                // If handler is suppressed (e.g., transition guard), _return
+                // keeps this default — wrappers never see null for typed returns.
                 if let Some(ref init) = method.return_init {
                     code.push_str(&format!("val __ctx = {}(__e, {})\n", context_class, init));
                 } else if has_return && return_type_str != "void" {
-                    code.push_str(&format!("val __ctx = {}(__e, null)\n", context_class));
+                    let kotlin_type = kotlin_map_type(&return_type_str);
+                    let kt_default = match kotlin_type.as_str() {
+                        "Int" | "Long" => "0",
+                        "Double" | "Float" => "0.0",
+                        "Boolean" => "false",
+                        "String" => "\"\"",
+                        _ => "null",
+                    };
+                    code.push_str(&format!("val __ctx = {}(__e, {})\n", context_class, kt_default));
                 } else {
                     code.push_str(&format!("val __ctx = {}(__e, null)\n", context_class));
                 }
@@ -550,14 +560,7 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Any?" {
                     let kotlin_type = kotlin_map_type(&return_type_str);
-                    let kt_default = match kotlin_type.as_str() {
-                        "Int" | "Long" => "0",
-                        "Double" | "Float" => "0.0",
-                        "Boolean" => "false",
-                        "String" => "\"\"",
-                        _ => "null",
-                    };
-                    code.push_str(&format!("val __result = _context_stack[_context_stack.size - 1]._return as? {} ?: {}\n", kotlin_type, kt_default));
+                    code.push_str(&format!("val __result = _context_stack[_context_stack.size - 1]._return as {}\n", kotlin_type));
                     code.push_str("_context_stack.removeAt(_context_stack.size - 1)\n");
                     code.push_str("return __result");
                 } else {
@@ -588,11 +591,23 @@ return __result;"#,
                     code.push_str(&format!("let __e = {}(message: \"{}\")\n", event_class, method.name));
                 }
 
-                // Create context with default return
+                // Create context with type-appropriate default return
                 if let Some(ref init) = method.return_init {
                     code.push_str(&format!("let __ctx = {}(event: __e, defaultReturn: {})\n", context_class, init));
                 } else if has_return && return_type_str != "void" {
-                    code.push_str(&format!("let __ctx = {}(event: __e)\n", context_class));
+                    let swift_type = swift_map_type(&return_type_str);
+                    let sw_default = if swift_type.ends_with('?') {
+                        "nil"
+                    } else {
+                        match swift_type.as_str() {
+                            "Int" => "0",
+                            "Double" | "Float" => "0.0",
+                            "Bool" => "false",
+                            "String" => "\"\"",
+                            _ => "nil",
+                        }
+                    };
+                    code.push_str(&format!("let __ctx = {}(event: __e, defaultReturn: {})\n", context_class, sw_default));
                 } else {
                     code.push_str(&format!("let __ctx = {}(event: __e)\n", context_class));
                 }
@@ -602,14 +617,7 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Any?" {
                     let swift_type = swift_map_type(&return_type_str);
-                    let sw_default = match swift_type.as_str() {
-                        "Int" => "0",
-                        "Double" | "Float" => "0.0",
-                        "Bool" => "false",
-                        "String" => "\"\"",
-                        _ => "nil as Any",
-                    };
-                    code.push_str(&format!("let __result = _context_stack[_context_stack.count - 1]._return as? {} ?? {}\n", swift_type, sw_default));
+                    code.push_str(&format!("let __result = _context_stack[_context_stack.count - 1]._return as! {}\n", swift_type));
                     code.push_str("_context_stack.removeLast()\n");
                     code.push_str("return __result");
                 } else {
@@ -770,19 +778,18 @@ return __result;"#,
                 };
 
                 if method.return_type.is_some() || method.return_init.is_some() {
-                    // Use null-safe return with type-appropriate default
                     let rt = method.return_type.as_ref().map(|t| type_to_string(t)).unwrap_or_default();
                     let dart_default = match rt.as_str() {
                         "int" | "num" => "0",
-                        "double" => "0.0",
+                        "double" | "float" => "0.0",
                         "bool" => "false",
                         "String" | "str" | "string" => "''",
                         _ => "null",
                     };
                     CodegenNode::NativeBlock {
                         code: format!(
-                            "final __e = {}(\"{}\", {});\nfinal __ctx = {}(__e, null);{}\n_context_stack.add(__ctx);\n__kernel(__e);\nreturn _context_stack.removeLast()._return ?? {};",
-                            event_class, method.name, params_code, context_class, default_init, dart_default
+                            "final __e = {}(\"{}\", {});\nfinal __ctx = {}(__e, {});{}\n_context_stack.add(__ctx);\n__kernel(__e);\nreturn _context_stack.removeLast()._return;",
+                            event_class, method.name, params_code, context_class, dart_default, default_init
                         ),
                         span: None,
                     }
