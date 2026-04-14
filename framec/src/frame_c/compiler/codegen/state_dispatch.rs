@@ -1158,7 +1158,30 @@ pub(crate) fn generate_rust_state_dispatch(
             // (keyed by declared param name) and pass to handler.
             code.push_str(&format!("    \"{}\" => {{\n", message));
             for param in &handler.params {
-                code.push_str(&format!("        let {0} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n", param.name));
+                let param_type = param.symbol_type.as_deref().unwrap_or("String");
+                let extraction = match param_type {
+                    "String" | "str" | "string" => format!(
+                        "        let {0}: String = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
+                        param.name
+                    ),
+                    "i32" | "i64" | "isize" | "u32" | "u64" | "usize" | "int" => format!(
+                        "        let {0}: {1} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<{1}>()).copied().unwrap_or_default();\n",
+                        param.name, param_type
+                    ),
+                    "f32" | "f64" | "float" => format!(
+                        "        let {0}: {1} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<{1}>()).copied().unwrap_or_default();\n",
+                        param.name, param_type
+                    ),
+                    "bool" => format!(
+                        "        let {0}: bool = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<bool>()).copied().unwrap_or_default();\n",
+                        param.name
+                    ),
+                    _ => format!(
+                        "        let {0} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<{1}>()).cloned().unwrap_or_default();\n",
+                        param.name, param_type
+                    ),
+                };
+                code.push_str(&extraction);
             }
             let param_names: Vec<_> = handler.params.iter().map(|p| p.name.clone()).collect();
             code.push_str(&format!(
