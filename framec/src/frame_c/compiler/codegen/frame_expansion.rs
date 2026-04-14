@@ -3264,28 +3264,7 @@ pub(crate) fn generate_frame_expansion(
             "/* ERROR: bare @@:system */".to_string()
         }
         FrameSegmentKind::ContextSystemState => {
-            // @@:system.state — current state name (read-only)
-            match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                    "self.__compartment.state".to_string()
-                }
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
-                    "this.__compartment.state".to_string()
-                }
-                TargetLanguage::Rust => "self.__compartment.state.clone()".to_string(),
-                TargetLanguage::C => "self->__compartment->state".to_string(),
-                TargetLanguage::Cpp => "__compartment->state".to_string(),
-                TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp => {
-                    "__compartment.state".to_string()
-                }
-                TargetLanguage::Swift => "__compartment.state".to_string(),
-                TargetLanguage::Go => "s.__compartment.state".to_string(),
-                TargetLanguage::Php => "$this->__compartment->state".to_string(),
-                TargetLanguage::Ruby => "@__compartment.state".to_string(),
-                TargetLanguage::Lua => "self.__compartment.state".to_string(),
-                TargetLanguage::Erlang => "\"\"".to_string(),
-                TargetLanguage::Graphviz => unreachable!(),
-            }
+            expand_system_state(lang)
         }
         FrameSegmentKind::ContextSelf => {
             // @@:self — bare system instance reference
@@ -3994,6 +3973,42 @@ pub(crate) fn get_native_scanner(lang: TargetLanguage) -> Box<dyn NativeRegionSc
             panic!("No native region scanner for {:?}", lang)
         }
     }
+}
+
+/// Expand `@@:system.state` to the target-language compartment state accessor.
+/// Used by both handler body expansion and operation body expansion.
+pub(crate) fn expand_system_state(lang: TargetLanguage) -> String {
+    match lang {
+        TargetLanguage::Python3 | TargetLanguage::GDScript => {
+            "self.__compartment.state".to_string()
+        }
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
+            "this.__compartment.state".to_string()
+        }
+        TargetLanguage::Rust => "self.__compartment.state.clone()".to_string(),
+        TargetLanguage::C => "self->__compartment->state".to_string(),
+        TargetLanguage::Cpp => "__compartment->state".to_string(),
+        TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp => {
+            "__compartment.state".to_string()
+        }
+        TargetLanguage::Swift => "__compartment.state".to_string(),
+        TargetLanguage::Go => "s.__compartment.state".to_string(),
+        TargetLanguage::Php => "$this->__compartment->state".to_string(),
+        TargetLanguage::Ruby => "@__compartment.state".to_string(),
+        TargetLanguage::Lua => "self.__compartment.state".to_string(),
+        TargetLanguage::Erlang => "\"\"".to_string(),
+        TargetLanguage::Graphviz => unreachable!(),
+    }
+}
+
+/// Expand `@@:system.state` occurrences in operation body code.
+/// Operations are native code but `@@:system.state` is a read-only accessor
+/// that's safe in non-static operations.
+pub(crate) fn expand_system_state_in_code(code: &str, lang: TargetLanguage) -> String {
+    if !code.contains("@@:system.state") {
+        return code.to_string();
+    }
+    code.replace("@@:system.state", &expand_system_state(lang))
 }
 
 #[cfg(test)]

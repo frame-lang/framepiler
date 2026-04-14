@@ -25,6 +25,8 @@
 //! - E417: Enter args must match $>() handler params (-> (args) $State)
 //! - E418: Domain param has no matching variable
 //! - E419: Exit args must match $<() handler params ((args) -> $State)
+//! - E420: `static` is only valid on operations (not interface methods or actions)
+//! - E421: `@@:system.state` not allowed in static operations (no self/compartment access)
 //! - E410: Duplicate state variable in same state
 //!
 //! ## Domain Errors (E6xx)
@@ -545,12 +547,67 @@ impl FrameValidator {
         }
 
         // E401: Validate no Frame statements in operations
+        // E421: @@:system.state not allowed in static operations
         for operation in &system.operations {
             self.validate_operation_no_frame_statements(operation);
+            if operation.is_static {
+                if let Some(ref code) = operation.body.code {
+                    if code.contains("@@:system.state") {
+                        self.errors.push(
+                            ValidationError::new(
+                                "E421",
+                                format!(
+                                    "'@@:system.state' is not allowed in static operation '{}' in system '{}'. \
+                                     Static operations have no access to the system's compartment.",
+                                    operation.name, system.name
+                                ),
+                            )
+                            .with_span(operation.span.clone()),
+                        );
+                    }
+                }
+            }
         }
+
+        // E420: `static` only valid on operations
+        self.validate_static_placement(system);
 
         // Domain field validation
         self.validate_domain_fields(system);
+    }
+
+    /// E420: `static` is only valid on operations
+    fn validate_static_placement(&mut self, system: &SystemAst) {
+        for method in &system.interface {
+            if method.is_static {
+                self.errors.push(
+                    ValidationError::new(
+                        "E420",
+                        format!(
+                            "'static' is not valid on interface method '{}' in system '{}'. \
+                             Only operations can be static.",
+                            method.name, system.name
+                        ),
+                    )
+                    .with_span(method.span.clone()),
+                );
+            }
+        }
+        for action in &system.actions {
+            if action.is_static {
+                self.errors.push(
+                    ValidationError::new(
+                        "E420",
+                        format!(
+                            "'static' is not valid on action '{}' in system '{}'. \
+                             Only operations can be static.",
+                            action.name, system.name
+                        ),
+                    )
+                    .with_span(action.span.clone()),
+                );
+            }
+        }
     }
 
     /// E613: Domain field shadows system parameter

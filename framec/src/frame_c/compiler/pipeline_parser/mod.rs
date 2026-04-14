@@ -172,14 +172,23 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_interface_method(&mut self) -> Result<InterfaceMethod, ParseError> {
-        // Check for `async` prefix
-        let is_async = if let Token::Ident(ref s) = self.peek()? {
-            s == "async"
-        } else {
-            false
-        };
-        if is_async {
-            self.advance()?; // consume `async`
+        // Check for `static` and `async` modifiers (in any order)
+        let mut is_static = false;
+        let mut is_async = false;
+        loop {
+            if let Token::Ident(ref name) = self.peek()? {
+                if name == "static" && !is_static {
+                    is_static = true;
+                    self.advance()?;
+                    continue;
+                }
+                if name == "async" && !is_async {
+                    is_async = true;
+                    self.advance()?;
+                    continue;
+                }
+            }
+            break;
         }
 
         let name_tok = self.expect_ident()?;
@@ -235,6 +244,7 @@ impl<'a> Parser<'a> {
             return_type,
             return_init,
             is_async,
+            is_static,
             span: Span::new(start, self.lexer.cursor()),
         })
     }
@@ -863,14 +873,23 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_action(&mut self) -> Result<ActionAst, ParseError> {
-        // Check for `async` prefix
-        let is_async = if let Token::Ident(ref s) = self.peek()? {
-            s == "async"
-        } else {
-            false
-        };
-        if is_async {
-            self.advance()?;
+        // Check for `static` and `async` modifiers (in any order)
+        let mut is_static = false;
+        let mut is_async = false;
+        loop {
+            if let Token::Ident(ref name) = self.peek()? {
+                if name == "static" && !is_static {
+                    is_static = true;
+                    self.advance()?;
+                    continue;
+                }
+                if name == "async" && !is_async {
+                    is_async = true;
+                    self.advance()?;
+                    continue;
+                }
+            }
+            break;
         }
 
         let (name, name_span) = self.expect_ident()?;
@@ -900,6 +919,7 @@ impl<'a> Parser<'a> {
                 code: Some(code),
             },
             is_async,
+            is_static,
             span: Span::new(start, self.lexer.cursor()),
         })
     }

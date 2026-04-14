@@ -153,6 +153,8 @@ pub struct InterfaceMethod {
     pub return_init: Option<String>,
     /// Whether this method is declared async (triggers async dispatch chain)
     pub is_async: bool,
+    /// Parsed but invalid on interface methods (E420)
+    pub is_static: bool,
     pub span: Span,
 }
 
@@ -455,6 +457,8 @@ pub struct ActionAst {
     pub body: ActionBody,
     /// Whether this action is declared async
     pub is_async: bool,
+    /// Parsed but invalid on actions (E420)
+    pub is_static: bool,
     pub span: Span,
 }
 

@@ -83,6 +83,7 @@ pub(crate) fn generate_interface_wrappers(
                     return_type,
                     return_init: None,
                     is_async: false,
+                    is_static: false,
                     span: Span::new(0, 0),
                 }
             })
@@ -908,7 +909,7 @@ pub(crate) fn generate_action(
 /// Extracts native code from source using the body span
 pub(crate) fn generate_operation(
     operation: &OperationAst,
-    _syntax: &super::backend::ClassSyntax,
+    syntax: &super::backend::ClassSyntax,
     source: &[u8],
 ) -> CodegenNode {
     let params: Vec<Param> = operation
@@ -921,7 +922,13 @@ pub(crate) fn generate_operation(
         .collect();
 
     // Extract native code from source using span (oceans model)
-    let code = extract_body_content(source, &operation.body.span);
+    let mut code = extract_body_content(source, &operation.body.span);
+
+    // Expand @@:system.state in non-static operation bodies.
+    // Static operations have no `self` — they can't access the compartment.
+    if !operation.is_static {
+        code = super::frame_expansion::expand_system_state_in_code(&code, syntax.language);
+    }
 
     // Backend handles is_static flag for @staticmethod decorator
     CodegenNode::Method {

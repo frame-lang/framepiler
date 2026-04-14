@@ -1114,6 +1114,41 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
         }
     }
 
+    // Domain-kind system params override domain field defaults.
+    // Emit `self.field = param` for each Domain param AFTER domain field init.
+    for p in &system.params {
+        if matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::Domain) {
+            let assign_code = match syntax.language {
+                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Lua => {
+                    format!("self.{} = {}", p.name, p.name)
+                }
+                TargetLanguage::Ruby => {
+                    format!("@{} = {}", p.name, p.name)
+                }
+                TargetLanguage::Php => {
+                    format!("$this->{} = ${};", p.name, p.name)
+                }
+                TargetLanguage::C => {
+                    format!("self->{} = {};", p.name, p.name)
+                }
+                TargetLanguage::Go => {
+                    format!("s.{} = {}", p.name, p.name)
+                }
+                TargetLanguage::Rust => {
+                    // Rust handles this in the struct literal — skip here
+                    continue;
+                }
+                _ => {
+                    format!("this.{} = {};", p.name, p.name)
+                }
+            };
+            body.push(CodegenNode::NativeBlock {
+                code: assign_code,
+                span: None,
+            });
+        }
+    }
+
     // Rust state vars now live on compartment.state_context — no _sv_ field init needed.
     // State vars are initialized when compartments are created (in transition codegen).
 

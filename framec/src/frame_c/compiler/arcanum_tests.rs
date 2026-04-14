@@ -221,6 +221,7 @@ mod tests {
             return_type: None,
             return_init: None,
             is_async: false,
+            is_static: false,
             span: FrameSpan::new(10, 20),
         });
         system.interface.push(InterfaceMethod {
@@ -229,6 +230,7 @@ mod tests {
             return_type: None,
             return_init: None,
             is_async: false,
+            is_static: false,
             span: FrameSpan::new(20, 30),
         });
 
@@ -241,6 +243,7 @@ mod tests {
                 code: None,
             },
             is_async: false,
+            is_static: false,
             span: FrameSpan::new(30, 40),
         });
 

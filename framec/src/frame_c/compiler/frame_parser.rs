@@ -474,6 +474,7 @@ impl FrameParser {
             return_type,
             return_init,
             is_async: false,
+            is_static: false,
             span: Span::new(start, self.cursor),
         })
     }
@@ -1281,6 +1282,7 @@ impl FrameParser {
             params,
             body,
             is_async: false,
+            is_static: false,
             span: Span::new(start, self.cursor),
         })
     }
