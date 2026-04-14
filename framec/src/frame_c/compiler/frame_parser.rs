@@ -1280,6 +1280,7 @@ impl FrameParser {
         Ok(ActionAst {
             name,
             params,
+            return_type: Type::Unknown,
             body,
             is_async: false,
             is_static: false,

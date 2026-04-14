@@ -904,6 +904,14 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
+        // Optional return type: : Type
+        let return_type = if self.check(&Token::Colon)? {
+            self.advance()?;
+            self.parse_type()?
+        } else {
+            Type::Unknown
+        };
+
         let body = self.parse_body_block()?;
 
         // E401: Validate no forbidden Frame syntax in action body
@@ -914,6 +922,7 @@ impl<'a> Parser<'a> {
         Ok(ActionAst {
             name,
             params,
+            return_type,
             body: ActionBody {
                 span: body.span,
                 code: Some(code),

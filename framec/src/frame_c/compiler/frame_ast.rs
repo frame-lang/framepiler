@@ -454,6 +454,7 @@ pub enum UnaryOp {
 pub struct ActionAst {
     pub name: String,
     pub params: Vec<ActionParam>,
+    pub return_type: Type,
     pub body: ActionBody,
     /// Whether this action is declared async
     pub is_async: bool,

@@ -1141,6 +1141,9 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                     // Rust handles this in the struct literal — skip here
                     continue;
                 }
+                TargetLanguage::Cpp => {
+                    format!("this->{} = {};", p.name, p.name)
+                }
                 _ => {
                     format!("this.{} = {};", p.name, p.name)
                 }

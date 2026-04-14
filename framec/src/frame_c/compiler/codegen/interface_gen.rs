@@ -889,10 +889,15 @@ pub(crate) fn generate_action(
     // Extract native code from source using span (oceans model)
     let code = extract_body_content(source, &action.body.span);
 
+    let ret_type = match &action.return_type {
+        crate::frame_c::compiler::frame_ast::Type::Unknown => None,
+        t => Some(type_to_string(t)),
+    };
+
     CodegenNode::Method {
         name: action.name.clone(),
         params,
-        return_type: None, // Actions don't have explicit return types
+        return_type: ret_type,
         body: vec![CodegenNode::NativeBlock {
             code,
             span: Some(action.body.span.clone()),

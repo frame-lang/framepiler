@@ -238,6 +238,7 @@ mod tests {
         system.actions.push(ActionAst {
             name: "doSomething".to_string(),
             params: vec![],
+            return_type: Type::Unknown,
             body: ActionBody {
                 span: FrameSpan::new(0, 10),
                 code: None,
