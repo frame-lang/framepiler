@@ -1144,7 +1144,14 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 TargetLanguage::Cpp => {
                     format!("this->{} = {};", p.name, p.name)
                 }
+                TargetLanguage::Swift => {
+                    format!("self.{} = {}", p.name, p.name)
+                }
+                TargetLanguage::Erlang => {
+                    continue; // Erlang handles domain differently
+                }
                 _ => {
+                    // Java, C#, Kotlin, Dart, TypeScript, JavaScript
                     format!("this.{} = {};", p.name, p.name)
                 }
             };
