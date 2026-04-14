@@ -33,8 +33,8 @@ pub(crate) struct DispatchSyntax {
     pub empty_body: &'static str,
     /// Body indent prefix (always "    ")
     pub indent: &'static str,
-    /// Close brace after handler body ("" for Python, "}\n" for brace langs)
-    pub close_block: &'static str,
+    /// Close brace after the FINAL handler body ("" for Python, "}\n" for brace langs)
+    pub close_final: &'static str,
     /// Else clause start ("else:\n" for Python, "} else {\n" for brace langs)
     pub else_start: &'static str,
 
@@ -64,7 +64,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             semi: "",
             empty_body: "pass",
             indent: "    ",
-            close_block: "",
+            close_final: "",
             else_start: "else:\n",
             fmt_if: |msg| format!("if __e._message == \"{}\":\n", msg),
             fmt_elif: |msg| format!("elif __e._message == \"{}\":\n", msg),
@@ -97,7 +97,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             semi: "",
             empty_body: "pass",
             indent: "    ",
-            close_block: "",
+            close_final: "",
             else_start: "else:\n",
             fmt_if: |msg| format!("if __e._message == \"{}\":\n", msg),
             fmt_elif: |msg| format!("elif __e._message == \"{}\":\n", msg),
@@ -123,6 +123,41 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}self._state_{parent}(__e)\n")
+            },
+        }),
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript => Some(DispatchSyntax {
+            lang,
+            semi: ";",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if (__e._message === \"{}\") {{\n", msg),
+            fmt_elif: |msg| format!("}} else if (__e._message === \"{}\") {{\n", msg),
+            fmt_hsm_nav: |state| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("let __sv_comp = this.__compartment;\n");
+                s.push_str(&format!("while (__sv_comp !== null && __sv_comp.state !== \"{}\") {{\n", state));
+                s.push_str("    __sv_comp = __sv_comp.parent_compartment;\n");
+                s.push_str("}\n");
+                s
+            },
+            fmt_bind_param: |name, _type_str, _sys| {
+                format!("let {name} = this.__compartment.state_args[\"{name}\"];\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if (!(\"{var_name}\" in __sv_comp.state_vars)) {{\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val};\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, _type_str, indent, _sys| {
+                format!("{indent}let {name} = __e._parameters[\"{name}\"];\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}this._state_{parent}(__e);\n")
             },
         }),
         // Other languages will be added incrementally here
@@ -172,7 +207,8 @@ pub(crate) fn generate_unified_state_dispatch(
             };
             code.push_str(&(syn.fmt_init_sv)(&var.name, &init_val, syn.indent, system_name));
         }
-        code.push_str(syn.close_block);
+        // Note: for brace langs, the closing } is handled by the next
+        // fmt_elif ("} else if") or the final close_final at the end.
         first = false;
     }
 
@@ -246,20 +282,22 @@ pub(crate) fn generate_unified_state_dispatch(
             code.push('\n');
         }
 
-        code.push_str(syn.close_block);
     }
 
-    // 5. Default forward
+    // 5. Default forward or close final block
     if default_forward {
         if let Some(ref parent) = ctx.parent_state {
             if !first {
                 code.push_str(syn.else_start);
                 code.push_str(&(syn.fmt_forward)(parent, syn.indent, system_name));
-                code.push_str(syn.close_block);
+                code.push_str(syn.close_final);
             } else {
                 code.push_str(&(syn.fmt_forward)(parent, "", system_name));
             }
         }
+    } else if !first && !syn.close_final.is_empty() {
+        // Close the final handler block (brace languages need `}`)
+        code.push_str(syn.close_final);
     }
 
     code.trim_end().to_string()
