@@ -92,6 +92,39 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 format!("{indent}self._state_{parent}(__e)\n")
             },
         }),
+        TargetLanguage::GDScript => Some(DispatchSyntax {
+            lang,
+            semi: "",
+            empty_body: "pass",
+            indent: "    ",
+            close_block: "",
+            else_start: "else:\n",
+            fmt_if: |msg| format!("if __e._message == \"{}\":\n", msg),
+            fmt_elif: |msg| format!("elif __e._message == \"{}\":\n", msg),
+            fmt_hsm_nav: |state| {
+                let mut s = String::new();
+                s.push_str("# HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("var __sv_comp = self.__compartment\n");
+                s.push_str(&format!("while __sv_comp != null and __sv_comp.state != \"{}\":\n", state));
+                s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
+                s
+            },
+            fmt_bind_param: |name, _type_str, _sys| {
+                format!("var {name} = self.__compartment.state_args[\"{name}\"]\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if not \"{var_name}\" in __sv_comp.state_vars:\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val}\n"
+                )
+            },
+            fmt_unpack: |name, _type_str, indent, _sys| {
+                format!("{indent}var {name} = __e._parameters[\"{name}\"]\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}self._state_{parent}(__e)\n")
+            },
+        }),
         // Other languages will be added incrementally here
         _ => None,
     }
