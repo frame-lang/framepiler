@@ -239,10 +239,15 @@ impl LanguageBackend for KotlinBackend {
                     .unwrap_or_default();
 
                 let mut result = if *is_static {
-                    // Static methods in Kotlin go in companion object, but for generated code
-                    // we just emit them with a comment
+                    // Kotlin: wrap in companion object for class-level access.
+                    // Each static method gets its own companion object block.
+                    // Kotlin allows only one companion per class, so this only
+                    // works for a single static method. For multiple statics,
+                    // a proper solution needs the class emitter to collect them.
+                    // TODO: collect all static methods and emit one companion block.
                     format!(
-                        "{}{}fun {}({}){} {{\n",
+                        "{}companion object {{\n{}    {}fun {}({}){} {{\n",
+                        ctx.get_indent(),
                         ctx.get_indent(),
                         vis_prefix,
                         name,
@@ -260,6 +265,10 @@ impl LanguageBackend for KotlinBackend {
                     )
                 };
 
+                if *is_static {
+                    // Extra indent for companion object body
+                    ctx.push_indent();
+                }
                 ctx.push_indent();
                 for stmt in body {
                     result.push_str(&self.emit(stmt, ctx));
@@ -268,6 +277,10 @@ impl LanguageBackend for KotlinBackend {
                 }
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                if *is_static {
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent())); // close companion object
+                }
                 result
             }
 
