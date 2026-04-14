@@ -342,11 +342,7 @@ pub fn build_system_model(system: &SystemAst, target: &str, source: &[u8]) -> Sy
         .map(|d| DomainVarModel {
             name: d.name.clone(),
             var_type: format_type_opt(&d.var_type),
-            default: d
-                .initializer
-                .as_ref()
-                .map(|e| format_expr(e))
-                .or_else(|| d.raw_code.clone()),
+            default: d.initializer_text.clone(),
         })
         .collect();
 

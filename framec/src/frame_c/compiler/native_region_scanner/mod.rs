@@ -152,3 +152,31 @@ pub mod ruby;
 pub mod rust;
 pub mod swift;
 pub mod typescript;
+
+use crate::frame_c::visitors::TargetLanguage;
+use unified::SyntaxSkipper;
+
+/// Create the appropriate SyntaxSkipper for a target language.
+/// This is the single source of truth for language → skipper mapping.
+pub fn create_skipper(lang: TargetLanguage) -> Box<dyn SyntaxSkipper> {
+    match lang {
+        TargetLanguage::Python3 => Box::new(python::PythonSkipper),
+        TargetLanguage::TypeScript => Box::new(typescript::TypeScriptSkipper),
+        TargetLanguage::Rust => Box::new(rust::RustSkipper),
+        TargetLanguage::C => Box::new(c::CSkipper),
+        TargetLanguage::Cpp => Box::new(cpp::CppSkipper),
+        TargetLanguage::Java => Box::new(java::JavaSkipper),
+        TargetLanguage::CSharp => Box::new(csharp::CSharpSkipper),
+        TargetLanguage::Go => Box::new(go::GoSkipper),
+        TargetLanguage::JavaScript => Box::new(javascript::JavaScriptSkipper),
+        TargetLanguage::Php => Box::new(php::PhpSkipper),
+        TargetLanguage::Kotlin => Box::new(kotlin::KotlinSkipper),
+        TargetLanguage::Swift => Box::new(swift::SwiftSkipper),
+        TargetLanguage::Ruby => Box::new(ruby::RubySkipper),
+        TargetLanguage::Erlang => Box::new(erlang::ErlangSkipper),
+        TargetLanguage::Lua => Box::new(lua::LuaSkipper),
+        TargetLanguage::Dart => Box::new(dart::DartSkipper),
+        TargetLanguage::GDScript => Box::new(gdscript::GDScriptSkipper),
+        TargetLanguage::Graphviz => Box::new(python::PythonSkipper),
+    }
+}

@@ -9,7 +9,7 @@
 use super::ast::{CodegenNode, Param, Visibility};
 use super::codegen_utils::{
     cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string,
-    extract_type_from_raw_domain, go_map_type, is_bool_type, is_float_type, is_int_type,
+    go_map_type, is_bool_type, is_float_type, is_int_type,
     is_string_type, java_map_type, kotlin_map_type, swift_map_type, to_snake_case,
     type_to_cpp_string, type_to_string, HandlerContext,
 };
@@ -1480,7 +1480,7 @@ pub(crate) fn generate_persistence_methods(
 
             // Serialize domain variables
             for var in &system.domain {
-                let type_str = extract_type_from_raw_domain(&var.raw_code, &var.name);
+                let type_str = type_to_string(&var.var_type);
 
                 let json_add = if is_int_type(&type_str) {
                     format!(
@@ -1576,7 +1576,7 @@ pub(crate) fn generate_persistence_methods(
 
             // Restore domain variables
             for var in &system.domain {
-                let type_str = extract_type_from_raw_domain(&var.raw_code, &var.name);
+                let type_str = type_to_string(&var.var_type);
 
                 let json_get = if is_int_type(&type_str) {
                     format!(
@@ -1900,29 +1900,11 @@ pub(crate) fn generate_persistence_methods(
 
             // Restore domain vars — detect type from raw_code if available
             for var in &system.domain {
-                // Try to determine Java type from raw_code (e.g., "int x = 0" → "int")
-                let java_type = if let Some(ref raw) = var.raw_code {
-                    let trimmed = raw.trim();
-                    if trimmed.starts_with("int ") {
-                        "int"
-                    } else if trimmed.starts_with("double ") || trimmed.starts_with("float ") {
-                        "double"
-                    } else if trimmed.starts_with("boolean ") {
-                        "boolean"
-                    } else if trimmed.starts_with("String ") {
-                        "String"
-                    } else if trimmed.starts_with("long ") {
-                        "long"
-                    } else {
-                        "Object"
+                let java_type = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                        java_map_type(t).leak()
                     }
-                } else {
-                    match &var.var_type {
-                        crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                            java_map_type(t).leak()
-                        }
-                        _ => "Object",
-                    }
+                    _ => "Object",
                 };
                 match java_type {
                     "int" => restore_body.push_str(&format!(
@@ -2075,21 +2057,18 @@ pub(crate) fn generate_persistence_methods(
 
             // Restore domain vars via JsonElement
             for var in &system.domain {
-                let cs_type = if let Some(ref raw) = var.raw_code {
-                    let trimmed = raw.trim();
-                    if trimmed.starts_with("int ") {
-                        "int"
-                    } else if trimmed.starts_with("double ") || trimmed.starts_with("float ") {
-                        "double"
-                    } else if trimmed.starts_with("bool ") {
-                        "bool"
-                    } else if trimmed.starts_with("string ") || trimmed.starts_with("String ") {
-                        "string"
-                    } else {
-                        "object"
+                let cs_type = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                        let mapped = csharp_map_type(t);
+                        match mapped.as_str() {
+                            "int" | "long" => "int",
+                            "double" | "float" => "double",
+                            "bool" => "bool",
+                            "string" | "String" => "string",
+                            _ => "object",
+                        }
                     }
-                } else {
-                    "object"
+                    _ => "object",
                 };
                 match cs_type {
                     "int" => restore_body.push_str(&format!(
@@ -2338,38 +2317,18 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str(&format!("    for (i in 0 until stack.length()) {{ instance._state_stack.add(instance.__deserComp(stack.get(i))!!) }}\n"));
             restore_body.push_str("}\n");
             for var in &system.domain {
-                let kt_type = if let Some(ref raw) = var.raw_code {
-                    let t = raw.trim();
-                    // Check for numeric integer initialization (= 0, = 42, = -1, etc.)
-                    let is_int = t.contains("Int") || {
-                        if let Some(eq_pos) = t.find('=') {
-                            let val = t[eq_pos + 1..].trim();
-                            val.parse::<i64>().is_ok()
-                        } else {
-                            false
+                let kt_type = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                        let mapped = kotlin_map_type(t);
+                        match mapped.as_str() {
+                            "Int" | "Long" => "Int",
+                            "Double" | "Float" => "Double",
+                            "Boolean" => "Boolean",
+                            "String" => "String",
+                            _ => "Any",
                         }
-                    };
-                    if is_int {
-                        "Int"
-                    } else if t.contains("String") || t.contains("= \"") {
-                        "String"
-                    } else if t.contains("Boolean") || t.contains("= true") || t.contains("= false")
-                    {
-                        "Boolean"
-                    } else if t.contains("Double") || {
-                        if let Some(eq_pos) = t.find('=') {
-                            let val = t[eq_pos + 1..].trim();
-                            val.contains('.') && val.parse::<f64>().is_ok()
-                        } else {
-                            false
-                        }
-                    } {
-                        "Double"
-                    } else {
-                        "Any"
                     }
-                } else {
-                    "Any"
+                    _ => "Any",
                 };
                 match kt_type {
                     "Int" => restore_body.push_str(&format!(
@@ -2508,62 +2467,19 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    for sc in stack { if let c = instance.__deserComp(sc) { instance._state_stack.append(c) } }\n");
             restore_body.push_str("}\n");
             for var in &system.domain {
-                let swift_type = if let Some(ref raw) = var.raw_code {
-                    let t = raw.trim();
-                    // Check for array types first (e.g. string[], number[], Int[], String[])
-                    let is_array = t.contains("[]") || t.contains("= []");
-                    if is_array {
-                        // Determine element type
-                        if t.contains("string[]") || t.contains("String[]") {
-                            "[String]"
-                        } else if t.contains("number[]") || t.contains("Int[]") {
-                            "[Int]"
-                        } else if t.contains("bool[]") || t.contains("Bool[]") {
-                            "[Bool]"
-                        } else if t.contains("Double[]") || t.contains("float[]") {
-                            "[Double]"
-                        } else {
-                            "[Any]"
-                        }
-                    } else {
-                        let is_int = t.contains("Int") || t.contains("number") || {
-                            if let Some(eq_pos) = t.find('=') {
-                                let val = t[eq_pos + 1..].trim();
-                                val.parse::<i64>().is_ok()
-                            } else {
-                                false
-                            }
-                        };
-                        if is_int {
-                            "Int"
-                        } else if t.contains("String") || t.contains("string") || t.contains("= \"")
-                        {
-                            "String"
-                        } else if t.contains("Bool")
-                            || t.contains("bool")
-                            || t.contains("= true")
-                            || t.contains("= false")
-                        {
-                            "Bool"
-                        } else if t.contains("Double")
-                            || t.contains("float")
-                            || t.contains("double")
-                            || {
-                                if let Some(eq_pos) = t.find('=') {
-                                    let val = t[eq_pos + 1..].trim();
-                                    val.contains('.') && val.parse::<f64>().is_ok()
-                                } else {
-                                    false
-                                }
-                            }
-                        {
-                            "Double"
-                        } else {
-                            "Any"
+                let swift_type = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                        let mapped = swift_map_type(t);
+                        match mapped.as_str() {
+                            "Int" => "Int",
+                            "Double" | "Float" => "Double",
+                            "Bool" => "Bool",
+                            "String" => "String",
+                            s if s.starts_with('[') => s.to_string().leak(),
+                            _ => "Any",
                         }
                     }
-                } else {
-                    "Any"
+                    _ => "Any",
                 };
                 match swift_type {
                     "Int" => restore_body.push_str(&format!(

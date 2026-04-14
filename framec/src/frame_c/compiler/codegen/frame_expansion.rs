@@ -3587,7 +3587,11 @@ pub(crate) fn extract_state_args(text: &str) -> Option<String> {
     None
 }
 
-/// Find the closing paren for a balanced paren block, returns index after ')'
+/// Find the closing paren for a balanced paren block, returns index after ')'.
+///
+/// Used for Frame-internal syntax (transition args, state args) where comments
+/// cannot appear. For native code paren matching, use `SyntaxSkipper::balanced_paren_end()`
+/// which handles language-specific comments, triple-quotes, raw strings, etc.
 pub(crate) fn find_balanced_paren(bytes: &[u8], mut i: usize, end: usize) -> Option<usize> {
     if i >= end || bytes[i] != b'(' {
         return None;

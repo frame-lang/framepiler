@@ -9,23 +9,7 @@
 //! `enter_structural_mode()`.
 
 use crate::frame_c::compiler::frame_ast::Span;
-use crate::frame_c::compiler::native_region_scanner::c::CSkipper;
-use crate::frame_c::compiler::native_region_scanner::cpp::CppSkipper;
-use crate::frame_c::compiler::native_region_scanner::csharp::CSharpSkipper;
-use crate::frame_c::compiler::native_region_scanner::dart::DartSkipper;
-use crate::frame_c::compiler::native_region_scanner::erlang::ErlangSkipper;
-use crate::frame_c::compiler::native_region_scanner::gdscript::GDScriptSkipper;
-use crate::frame_c::compiler::native_region_scanner::go::GoSkipper;
-use crate::frame_c::compiler::native_region_scanner::java::JavaSkipper;
-use crate::frame_c::compiler::native_region_scanner::javascript::JavaScriptSkipper;
-use crate::frame_c::compiler::native_region_scanner::kotlin::KotlinSkipper;
-use crate::frame_c::compiler::native_region_scanner::lua::LuaSkipper;
-use crate::frame_c::compiler::native_region_scanner::php::PhpSkipper;
-use crate::frame_c::compiler::native_region_scanner::python::PythonSkipper;
-use crate::frame_c::compiler::native_region_scanner::ruby::RubySkipper;
-use crate::frame_c::compiler::native_region_scanner::rust::RustSkipper;
-use crate::frame_c::compiler::native_region_scanner::swift::SwiftSkipper;
-use crate::frame_c::compiler::native_region_scanner::typescript::TypeScriptSkipper;
+use crate::frame_c::compiler::native_region_scanner::create_skipper;
 use crate::frame_c::compiler::native_region_scanner::unified::{
     skip_template_literal, SyntaxSkipper,
 };
@@ -1262,30 +1246,6 @@ impl<'a> Lexer<'a> {
 // ============================================================================
 // Convenience Functions
 // ============================================================================
-
-/// Create a language-specific SyntaxSkipper.
-fn create_skipper(lang: TargetLanguage) -> Box<dyn SyntaxSkipper> {
-    match lang {
-        TargetLanguage::Python3 => Box::new(PythonSkipper),
-        TargetLanguage::TypeScript => Box::new(TypeScriptSkipper),
-        TargetLanguage::Rust => Box::new(RustSkipper),
-        TargetLanguage::C => Box::new(CSkipper),
-        TargetLanguage::Cpp => Box::new(CppSkipper),
-        TargetLanguage::Java => Box::new(JavaSkipper),
-        TargetLanguage::CSharp => Box::new(CSharpSkipper),
-        TargetLanguage::Go => Box::new(GoSkipper),
-        TargetLanguage::JavaScript => Box::new(JavaScriptSkipper),
-        TargetLanguage::Php => Box::new(PhpSkipper),
-        TargetLanguage::Kotlin => Box::new(KotlinSkipper),
-        TargetLanguage::Swift => Box::new(SwiftSkipper),
-        TargetLanguage::Ruby => Box::new(RubySkipper),
-        TargetLanguage::Erlang => Box::new(ErlangSkipper),
-        TargetLanguage::Lua => Box::new(LuaSkipper),
-        TargetLanguage::Dart => Box::new(DartSkipper),
-        TargetLanguage::GDScript => Box::new(GDScriptSkipper),
-        TargetLanguage::Graphviz => Box::new(PythonSkipper), // Graphviz doesn't have native code
-    }
-}
 
 /// Convenience function to lex an entire system body in structural mode.
 /// Useful for testing. For the full pipeline, use the `Lexer` struct directly.

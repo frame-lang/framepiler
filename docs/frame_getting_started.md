@@ -832,24 +832,16 @@ Domain variables are declared in the `domain:` block. They're instance fields th
 }
 ```
 
-Domain variables are **native code** — the framepiler passes them through to the generated class as instance fields. The syntax matches your target language:
+Domain variables are instance fields declared in Frame's canonical syntax: `name : type = init`. The type and init are opaque strings — write your target language's type names and initializer expressions.
 
 ```frame
-# Python
 domain:
-    count: int = 0
-    name: str = "default"
-
-# TypeScript
-domain:
-    count: number = 0
-    name: string = "default"
-
-# Rust
-domain:
-    count: i32 = 0
-    name: String = String::from("default")
+    count : int = 0
+    name : str = "default"
+    items : list = []
 ```
+
+For dynamic targets (Python, JavaScript, Ruby, Lua), the type is optional: `count = 0`. The init expression is always target-native code.
 
 Access them using your language's normal syntax (`self.count` in Python, `this.count` in TypeScript, etc.).
 

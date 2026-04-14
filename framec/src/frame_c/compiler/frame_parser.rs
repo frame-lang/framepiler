@@ -1540,71 +1540,71 @@ impl FrameParser {
         Ok(vars)
     }
 
-    /// Parse a single domain variable (V4: captures native code verbatim)
+    /// Parse a single domain variable: `name [: type] = init`
     fn parse_domain_var(&mut self, _is_frame: bool) -> Result<DomainVar, ParseError> {
         let start = self.cursor;
+        let src = &self.source;
 
-        // Capture the entire line as raw native code
-        let line_start = self.cursor;
-        while self.cursor < self.source.len() {
-            let ch = self.source[self.cursor];
-            if ch == b'\n' {
-                break;
-            }
+        // 1. Scan name
+        let name_start = self.cursor;
+        while self.cursor < src.len() && (src[self.cursor].is_ascii_alphanumeric() || src[self.cursor] == b'_') {
             self.cursor += 1;
         }
-        let line_end = self.cursor;
+        let name = String::from_utf8_lossy(&src[name_start..self.cursor]).to_string();
 
-        // Extract the raw line (trimmed)
-        let raw_line = String::from_utf8_lossy(&self.source[line_start..line_end])
-            .trim()
-            .to_string();
+        while self.cursor < src.len() && (src[self.cursor] == b' ' || src[self.cursor] == b'\t') {
+            self.cursor += 1;
+        }
 
-        // Parse the line into structured fields via the per-shape
-        // tokenizer dispatcher in the pipeline_parser module. The legacy
-        // FrameParser uses the frame_ast::TargetLanguage enum (8
-        // variants); map it to visitors::TargetLanguage for the dispatch
-        // call.
-        let visitor_lang = match self.target {
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Python3 => {
-                crate::frame_c::visitors::TargetLanguage::Python3
+        // 2. Optional type after ':'
+        let var_type = if self.cursor < src.len() && src[self.cursor] == b':' {
+            self.cursor += 1;
+            while self.cursor < src.len() && (src[self.cursor] == b' ' || src[self.cursor] == b'\t') {
+                self.cursor += 1;
             }
-            crate::frame_c::compiler::frame_ast::TargetLanguage::TypeScript => {
-                crate::frame_c::visitors::TargetLanguage::TypeScript
+            let type_start = self.cursor;
+            let mut depth: i32 = 0;
+            while self.cursor < src.len() && src[self.cursor] != b'\n' {
+                match src[self.cursor] {
+                    b'<' | b'(' | b'[' | b'{' => { depth += 1; self.cursor += 1; }
+                    b'>' | b')' | b']' | b'}' => { depth -= 1; self.cursor += 1; }
+                    b'=' if depth == 0 => break,
+                    _ => { self.cursor += 1; }
+                }
             }
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Rust => {
-                crate::frame_c::visitors::TargetLanguage::Rust
-            }
-            crate::frame_c::compiler::frame_ast::TargetLanguage::CSharp => {
-                crate::frame_c::visitors::TargetLanguage::CSharp
-            }
-            crate::frame_c::compiler::frame_ast::TargetLanguage::C => {
-                crate::frame_c::visitors::TargetLanguage::C
-            }
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Cpp => {
-                crate::frame_c::visitors::TargetLanguage::Cpp
-            }
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Java => {
-                crate::frame_c::visitors::TargetLanguage::Java
-            }
-            crate::frame_c::compiler::frame_ast::TargetLanguage::Graphviz => {
-                crate::frame_c::visitors::TargetLanguage::Graphviz
-            }
+            let t = String::from_utf8_lossy(&src[type_start..self.cursor]).trim().to_string();
+            if t.is_empty() { Type::Unknown } else { Type::Custom(t) }
+        } else {
+            Type::Unknown
         };
 
-        let parsed = crate::frame_c::compiler::pipeline_parser::domain_native::parse_domain_field(
-            &raw_line,
-            visitor_lang,
-        )
-        .map_err(|e| ParseError::Expected(format!("malformed domain field: {:?}", e)))?;
+        while self.cursor < src.len() && (src[self.cursor] == b' ' || src[self.cursor] == b'\t') {
+            self.cursor += 1;
+        }
+
+        // 3. Init after '='
+        let init_text = if self.cursor < src.len() && src[self.cursor] == b'=' {
+            self.cursor += 1;
+            while self.cursor < src.len() && (src[self.cursor] == b' ' || src[self.cursor] == b'\t') {
+                self.cursor += 1;
+            }
+            let init_start = self.cursor;
+            while self.cursor < src.len() && src[self.cursor] != b'\n' {
+                self.cursor += 1;
+            }
+            let t = String::from_utf8_lossy(&src[init_start..self.cursor]).trim_end().to_string();
+            if t.is_empty() { None } else { Some(t) }
+        } else {
+            while self.cursor < src.len() && src[self.cursor] != b'\n' {
+                self.cursor += 1;
+            }
+            None
+        };
 
         Ok(DomainVar {
-            name: parsed.name,
-            var_type: parsed.var_type,
-            initializer_text: parsed.init_text,
-            initializer: None,
-            is_frame: false,
-            raw_code: Some(raw_line),
+            name,
+            var_type,
+            initializer_text: init_text,
             span: Span::new(start, self.cursor),
         })
     }

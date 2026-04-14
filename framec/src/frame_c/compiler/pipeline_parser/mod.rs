@@ -9,7 +9,7 @@
 //! chunk — no further source scanning is needed.
 
 pub mod call_args;
-pub mod domain_native;
+
 
 use crate::frame_c::compiler::frame_ast::*;
 use crate::frame_c::compiler::lexer::{LexError, Lexer, Spanned, Token};
@@ -1050,11 +1050,9 @@ impl<'a> Parser<'a> {
 
     /// Parse the domain section.
     ///
-    /// Each line is a native target-language field declaration. The
-    /// `domain_native` module's per-shape tokenizers parse each line
-    /// into structured `(name, type, init_text)` and the result is
-    /// stored on `DomainVar`. Codegen reads the structured fields
-    /// directly — no string surgery on raw source text downstream.
+    /// Each field uses canonical Frame syntax: `name [: type] = init`.
+    /// Type and init are opaque strings — Frame doesn't interpret them.
+    /// Multi-line init via `= ( ... )` wrapper is supported.
     fn parse_domain(&mut self) -> Result<Vec<DomainVar>, ParseError> {
         let mut vars = Vec::new();
         let src = self.lexer.source();
@@ -1120,43 +1118,201 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            // Reset pos to content start (after indent) and capture the full line
-            pos = word_start;
-            let content_start = pos;
-            while pos < src.len() && src[pos] != b'\n' {
-                pos += 1;
-            }
-            let raw_line = std::str::from_utf8(&src[content_start..pos])
-                .unwrap_or("")
-                .trim_end()
-                .to_string();
+            // Parse canonical domain field: name [: type] = init
+            let field_start = word_start;
+            // pos is already past the name (scanned above for section keyword check)
 
-            if raw_line.is_empty() {
+            // 1. Name: already scanned as `word` above
+            let name = word.to_string();
+            if name.is_empty() {
+                // Skip comment-only or unparseable lines
+                while pos < src.len() && src[pos] != b'\n' {
+                    pos += 1;
+                }
                 continue;
             }
 
-            // Parse the line into structured fields via the per-shape
-            // tokenizer dispatcher. The dispatcher tries the language's
-            // preferred shapes in priority order until one matches.
-            match domain_native::parse_domain_field(&raw_line, lang) {
-                Ok(parsed) => {
-                    vars.push(DomainVar {
-                        name: parsed.name,
-                        var_type: parsed.var_type,
-                        initializer_text: parsed.init_text,
-                        initializer: None,
-                        is_frame: false,
-                        raw_code: Some(raw_line),
-                        span: Span::new(content_start, pos),
-                    });
-                }
-                Err(e) => {
-                    return Err(ParseError {
-                        message: format!("malformed domain field: {:?}", e),
-                        span: Span::new(content_start, pos),
-                    });
-                }
+            // Skip whitespace after name
+            while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t') {
+                pos += 1;
             }
+
+            // 2. Optional type: if ':' follows
+            let var_type = if pos < src.len() && src[pos] == b':' {
+                pos += 1; // consume ':'
+                // Skip whitespace after ':'
+                while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t') {
+                    pos += 1;
+                }
+                // Scan type slot until top-level '=' (bracket-aware for generics)
+                let type_start = pos;
+                let mut bracket_depth: i32 = 0;
+                while pos < src.len() && src[pos] != b'\n' {
+                    match src[pos] {
+                        b'<' | b'(' | b'[' | b'{' => { bracket_depth += 1; pos += 1; }
+                        b'>' | b')' | b']' | b'}' => { bracket_depth -= 1; pos += 1; }
+                        b'=' if bracket_depth == 0 => break,
+                        _ => { pos += 1; }
+                    }
+                }
+                let type_text = std::str::from_utf8(&src[type_start..pos])
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if type_text.is_empty() {
+                    Type::Unknown
+                } else {
+                    Type::Custom(type_text)
+                }
+            } else {
+                Type::Unknown
+            };
+
+            // Skip whitespace before '='
+            while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t') {
+                pos += 1;
+            }
+
+            // 3. Optional '=' followed by init expression
+            if pos >= src.len() || src[pos] == b'\n' || src[pos] != b'=' {
+                // No '=' — field with no initializer (e.g., `count : int`)
+                while pos < src.len() && src[pos] != b'\n' {
+                    pos += 1;
+                }
+                vars.push(DomainVar {
+                    name,
+                    var_type,
+                    initializer_text: None,
+                    span: Span::new(field_start, pos),
+                });
+                continue;
+            }
+            pos += 1; // consume '='
+
+            // 4. Capture init expression (opaque)
+            // Skip whitespace after '='
+            while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t') {
+                pos += 1;
+            }
+
+            // Check for multi-line wrapper: '(' on this line with no matching ')' on same line
+            let init_text = if pos < src.len() && src[pos] == b'(' {
+                // Check if ')' is on the same line
+                let paren_pos = pos;
+                let mut check = pos + 1;
+                let mut depth = 1i32;
+                let mut same_line = false;
+                while check < src.len() && src[check] != b'\n' {
+                    match src[check] {
+                        b'(' => depth += 1,
+                        b')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                same_line = true;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    check += 1;
+                }
+
+                if same_line {
+                    // Single-line — capture to EOL
+                    let init_start = pos;
+                    while pos < src.len() && src[pos] != b'\n' {
+                        pos += 1;
+                    }
+                    std::str::from_utf8(&src[init_start..pos])
+                        .unwrap_or("")
+                        .trim_end()
+                        .to_string()
+                } else {
+                    // Multi-line wrapper: scan from after '(' to matching ')'
+                    pos = paren_pos + 1; // after opening '('
+                    let wrapper_content_start = pos;
+                    let mut depth = 1i32;
+                    while pos < src.len() && depth > 0 {
+                        match src[pos] {
+                            b'(' | b'[' | b'{' => depth += 1,
+                            b')' | b']' | b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break; // pos is at the closing ')'
+                                }
+                            }
+                            b'"' => {
+                                // Skip string literal
+                                pos += 1;
+                                while pos < src.len() && src[pos] != b'"' {
+                                    if src[pos] == b'\\' && pos + 1 < src.len() {
+                                        pos += 1;
+                                    }
+                                    pos += 1;
+                                }
+                            }
+                            b'\'' => {
+                                // Skip char/string literal
+                                pos += 1;
+                                while pos < src.len() && src[pos] != b'\'' {
+                                    if src[pos] == b'\\' && pos + 1 < src.len() {
+                                        pos += 1;
+                                    }
+                                    pos += 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                        pos += 1;
+                    }
+                    if depth != 0 {
+                        return Err(ParseError {
+                            message: format!("domain field '{}': unterminated multi-line initializer '('", name),
+                            span: Span::new(paren_pos, pos),
+                        });
+                    }
+                    // pos is now past the closing ')' — capture content between outer parens
+                    let wrapper_content_end = pos - 1; // before ')'
+                    let init = std::str::from_utf8(&src[wrapper_content_start..wrapper_content_end])
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    // Skip past any trailing whitespace on the closing ')' line
+                    while pos < src.len() && src[pos] != b'\n' {
+                        if src[pos] != b' ' && src[pos] != b'\t' {
+                            return Err(ParseError {
+                                message: format!("domain field '{}': unexpected tokens after closing ')'", name),
+                                span: Span::new(pos, pos + 1),
+                            });
+                        }
+                        pos += 1;
+                    }
+                    init
+                }
+            } else {
+                // Single-line init — capture to EOL
+                let init_start = pos;
+                while pos < src.len() && src[pos] != b'\n' {
+                    pos += 1;
+                }
+                std::str::from_utf8(&src[init_start..pos])
+                    .unwrap_or("")
+                    .trim_end()
+                    .to_string()
+            };
+
+            let init_opt = if init_text.is_empty() {
+                None
+            } else {
+                Some(init_text)
+            };
+
+            vars.push(DomainVar {
+                name,
+                var_type,
+                initializer_text: init_opt,
+                span: Span::new(field_start, pos),
+            });
         }
 
         self.lexer.set_cursor(pos);
@@ -1963,23 +2119,20 @@ mod tests {
 
     #[test]
     fn test_domain_simple() {
-        // Domain is native code pass-through — no `var` keyword
         let sys = parse_py("domain:\n    x = 0\n    name = \"hello\"");
         assert_eq!(sys.domain.len(), 2);
         assert_eq!(sys.domain[0].name, "x");
-        assert_eq!(sys.domain[0].raw_code, Some("x = 0".to_string()));
-        assert!(!sys.domain[0].is_frame);
+        assert_eq!(sys.domain[0].initializer_text, Some("0".to_string()));
         assert_eq!(sys.domain[1].name, "name");
-        assert_eq!(sys.domain[1].raw_code, Some("name = \"hello\"".to_string()));
+        assert_eq!(sys.domain[1].initializer_text, Some("\"hello\"".to_string()));
     }
 
     #[test]
     fn test_domain_with_types() {
-        // Domain uses native type annotations (Python-style)
         let sys = parse_py("domain:\n    count: int = 0");
         assert_eq!(sys.domain[0].name, "count");
-        assert_eq!(sys.domain[0].raw_code, Some("count: int = 0".to_string()));
-        assert!(!sys.domain[0].is_frame);
+        assert_eq!(sys.domain[0].initializer_text, Some("0".to_string()));
+        assert!(matches!(sys.domain[0].var_type, crate::frame_c::compiler::frame_ast::Type::Custom(ref s) if s == "int"));
     }
 
     #[test]

@@ -748,14 +748,9 @@ fn build_system_entry_from_frame_ast(system: &FrameSystemAst) -> SystemEntry {
         entry.operations.insert(operation.name.clone());
     }
 
-    // Extract domain variables (old style)
+    // Extract domain variables
     for var in &system.domain {
-        let var_type = if var.is_frame {
-            VarType::Frame
-        } else {
-            VarType::Native
-        };
-        entry.domain_vars.insert(var.name.clone(), var_type);
+        entry.domain_vars.insert(var.name.clone(), VarType::Native);
     }
 
     // Phase 7: Extract domain variables with full symbol info

@@ -1330,16 +1330,10 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
             };
 
             // Check for label: -> "label" $State
-            let label = if let Some(q_start) = after_arrow.find('"') {
+            let label = after_arrow.find('"').and_then(|q_start| {
                 let rest = &after_arrow[q_start + 1..];
-                if let Some(q_end) = rest.find('"') {
-                    Some(rest[..q_end].to_string())
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+                rest.find('"').map(|q_end| rest[..q_end].to_string())
+            });
 
             SegmentMetadata::Transition {
                 target_state: target,

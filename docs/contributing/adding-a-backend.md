@@ -132,20 +132,26 @@ Per-language, "where the constructor parameters are in scope" means:
 
 Six concrete steps. Each is a small change in a file that already exists.
 
-#### 1. Class field generator (`system_codegen.rs:464`)
+#### 1. Class field generator (`system_codegen.rs`)
 
-For each `domain_var` whose `raw_code` references a system param (use `raw_contains_word`), strip the initializer from the class declaration. Emit just the type with a neutral default. The real value is set in step 2.
+Domain fields use structured `DomainVar { name, var_type, initializer_text }`. The `synthesize_field_raw()` function renders per-language field declarations and automatically strips init expressions that reference system params (to avoid name collisions at class scope). Add your language to `synthesize_field_raw()`'s match arms if it needs special treatment.
 
-#### 2. Constructor body domain loop (`system_codegen.rs:619`)
+#### 2. Constructor body domain loop (`system_codegen.rs`)
 
 Add a `match syntax.language` branch for your backend that emits the domain field assignment in the constructor body using the language's self-prefix:
 
 ```rust
-} else if matches!(syntax.language, TargetLanguage::YourLang) {
-    body.push(CodegenNode::NativeBlock {
-        code: format!("<self-prefix>.{}", raw_code),  // e.g. "this.{}"
-        span: None,
-    });
+if matches!(syntax.language, TargetLanguage::YourLang) {
+    if init_refs_param {
+        if let Some(ref init_text) = init_text_opt {
+            let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::YourLang);
+            body.push(CodegenNode::NativeBlock {
+                code: format!("<self-prefix>.{} = {}", domain_var.name, init_expanded),
+                span: None,
+            });
+        }
+    }
+    continue;
 }
 ```
 

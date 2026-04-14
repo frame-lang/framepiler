@@ -7,7 +7,7 @@
 
 use super::ast::CodegenNode;
 use super::codegen_utils::{
-    convert_expression, convert_literal, expression_to_string, extract_type_from_raw_domain,
+    convert_expression, convert_literal, expression_to_string,
     is_bool_type, is_float_type, is_int_type, is_string_type, to_snake_case, type_to_string,
     HandlerContext,
 };

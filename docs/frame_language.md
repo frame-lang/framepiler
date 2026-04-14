@@ -41,6 +41,10 @@ Complete reference for the Frame language. For a tutorial introduction, see [Get
 
 Everything outside `@@target`, `@@codegen`, annotations, and `@@system` is native code and passes through unchanged.
 
+### Types and Expressions
+
+Frame has **no type system**. Wherever a type or expression appears in Frame syntax — interface params, state variables, domain fields, return types, initializers — Frame treats them as **opaque strings** and passes them through to the generated code verbatim. Write your target language's type names (`int`, `String`, `Vec<i32>`, `std::string`, etc.) and expressions. Frame does not parse, validate, or translate them.
+
 ### `@@target`
 
 ```
@@ -378,21 +382,22 @@ operations:
 
 ## Domain Section
 
-Instance variables. The domain block is **strictly native code** — use the target language's variable declaration syntax.
+Instance variables declared in canonical Frame syntax: `name : type = init`.
 
 ```frame
-# Python
 domain:
-    count: int = 0
-    label: str = "default"
-
-# C
-domain:
-    int count = 0
-    char* label = "default"
+    count : int = 0
+    label : str = "default"
+    items : list = [1, 2, 3]
 ```
 
-Domain variables persist across state transitions. The framepiler extracts variable **names** from each line for constructor initialization, persistence, and system parameter overrides.
+- **Type** is an opaque string — write the target language's type name (`int`, `String`, `Vec<i32>`, etc.)
+- **Init** is an opaque native expression — Frame passes it through verbatim
+- Type is optional for dynamic targets (Python, JS, Ruby, Lua, Erlang, PHP): `count = 0`
+- Init is optional for static targets that zero-initialize (C, C++, Go): `count : int`
+- Multi-line init uses paren wrapper: `items : list = (\n    [1, 2, 3]\n)`
+
+Domain variables persist across state transitions and are accessible via `self.field` / `this.field` / `this->field` (per target language) in handlers.
 
 ---
 

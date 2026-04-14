@@ -12,6 +12,8 @@
 //! 3. Return final assembled output
 
 use crate::frame_c::compiler::frame_ast::SystemParam;
+use crate::frame_c::compiler::native_region_scanner::create_skipper;
+use crate::frame_c::compiler::native_region_scanner::unified::SyntaxSkipper;
 use crate::frame_c::compiler::pipeline_parser::call_args::{
     parse_call_args, resolve_call, CallArgsError,
 };
@@ -186,156 +188,49 @@ fn expand_tagged_instantiations(
     lang: TargetLanguage,
 ) -> Result<String, AssemblyError> {
     let bytes = text.as_bytes();
+    let end = bytes.len();
     let mut result = String::new();
     let mut i = 0;
 
-    // Determine comment style based on language
-    let uses_hash_comments = matches!(
-        lang,
-        TargetLanguage::Python3 | TargetLanguage::Php | TargetLanguage::Ruby
-    );
-    let uses_c_style_comments = matches!(
-        lang,
-        TargetLanguage::TypeScript
-            | TargetLanguage::JavaScript
-            | TargetLanguage::Rust
-            | TargetLanguage::C
-            | TargetLanguage::Cpp
-            | TargetLanguage::Java
-            | TargetLanguage::Kotlin
-            | TargetLanguage::CSharp
-            | TargetLanguage::Php
-    );
+    // Use the language's SyntaxSkipper for comment/string detection —
+    // no duplicated logic, proper handling of triple-quotes, raw strings, etc.
+    let skipper = create_skipper(lang);
 
-    while i < bytes.len() {
-        // Skip # comments (Python)
-        if uses_hash_comments && bytes[i] == b'#' {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                result.push(bytes[i] as char);
-                i += 1;
-            }
+    while i < end {
+        // Delegate comment skipping to the language's SyntaxSkipper
+        if let Some(after) = skipper.skip_comment(bytes, i, end) {
+            result.push_str(&String::from_utf8_lossy(&bytes[i..after]));
+            i = after;
             continue;
         }
 
-        // Skip // and /* */ comments (C-style languages)
-        if uses_c_style_comments && bytes[i] == b'/' {
-            if i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
-                continue;
-            }
-            if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                result.push(bytes[i] as char);
-                result.push(bytes[i + 1] as char);
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
-                if i + 1 < bytes.len() {
-                    result.push(bytes[i] as char);
-                    result.push(bytes[i + 1] as char);
-                    i += 2;
-                }
-                continue;
-            }
-        }
-
-        // Skip string literals (double-quoted)
-        if bytes[i] == b'"' {
-            result.push(bytes[i] as char);
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'"' {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
-                result.push(bytes[i] as char);
-                i += 1;
-            }
-            if i < bytes.len() {
-                result.push(bytes[i] as char);
-                i += 1;
-            }
-            continue;
-        }
-
-        // Skip single-quoted strings/chars
-        if bytes[i] == b'\'' {
-            result.push(bytes[i] as char);
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'\'' {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
-                result.push(bytes[i] as char);
-                i += 1;
-            }
-            if i < bytes.len() {
-                result.push(bytes[i] as char);
-                i += 1;
-            }
+        // Delegate string skipping to the language's SyntaxSkipper
+        if let Some(after) = skipper.skip_string(bytes, i, end) {
+            result.push_str(&String::from_utf8_lossy(&bytes[i..after]));
+            i = after;
             continue;
         }
 
         // Look for @@ pattern
-        if i + 2 < bytes.len() && bytes[i] == b'@' && bytes[i + 1] == b'@' {
+        if i + 2 < end && bytes[i] == b'@' && bytes[i + 1] == b'@' {
             let start = i;
             i += 2;
 
             // Check for uppercase letter (system name start)
-            if i < bytes.len() && bytes[i].is_ascii_uppercase() {
+            if i < end && bytes[i].is_ascii_uppercase() {
                 let name_start = i;
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                while i < end && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
                 let name = std::str::from_utf8(&bytes[name_start..i]).unwrap_or("");
 
-                // Check for opening paren
-                if i < bytes.len() && bytes[i] == b'(' {
-                    let args_start = i + 1;
-                    let mut paren_depth = 1;
-                    i += 1;
-                    while i < bytes.len() && paren_depth > 0 {
-                        match bytes[i] {
-                            b'(' => paren_depth += 1,
-                            b')' => paren_depth -= 1,
-                            b'"' => {
-                                i += 1;
-                                while i < bytes.len() && bytes[i] != b'"' {
-                                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                                        i += 1;
-                                    }
-                                    i += 1;
-                                }
-                            }
-                            b'\'' => {
-                                i += 1;
-                                while i < bytes.len() && bytes[i] != b'\'' {
-                                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                                        i += 1;
-                                    }
-                                    i += 1;
-                                }
-                            }
-                            _ => {}
-                        }
-                        i += 1;
-                    }
+                // Use SyntaxSkipper's balanced_paren_end for argument extraction
+                if i < end && bytes[i] == b'(' {
+                    if let Some(close) = skipper.balanced_paren_end(bytes, i, end) {
+                        let args_text =
+                            std::str::from_utf8(&bytes[i + 1..close - 1]).unwrap_or("");
 
-                    if paren_depth == 0 {
                         if defined_systems.contains(name) {
-                            let args_text =
-                                std::str::from_utf8(&bytes[args_start..i - 1]).unwrap_or("");
-                            // Resolve the call against the system's declared
-                            // params: validate sigils/names, substitute Frame
-                            // defaults, produce a positional value list in
-                            // declaration order. If the system has no params
-                            // declared, fall back to passing the raw text
-                            // through (preserves zero-arg behavior).
                             let resolved_args = match params_by_name.get(name) {
                                 Some(params) if !params.is_empty() => {
                                     let parsed =
@@ -363,6 +258,7 @@ fn expand_tagged_instantiations(
                             };
                             let constructor = generate_constructor(name, &resolved_args, lang);
                             result.push_str(&constructor);
+                            i = close;
                             continue;
                         } else {
                             return Err(AssemblyError {

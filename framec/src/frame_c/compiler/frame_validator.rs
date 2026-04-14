@@ -27,6 +27,11 @@
 //! - E419: Exit args must match $<() handler params ((args) -> $State)
 //! - E410: Duplicate state variable in same state
 //!
+//! ## Domain Errors (E6xx)
+//! - E605: Static target requires explicit type on domain field
+//! - E613: Domain field name shadows a system parameter
+//! - E614: Duplicate domain field name
+//!
 //! ## Target-specific Errors (E5xx)
 //! - E501: Interface method name collides with reserved target-language method (GDScript)
 //!
@@ -328,6 +333,9 @@ impl FrameValidator {
         system: &SystemAst,
         target: crate::frame_c::visitors::TargetLanguage,
     ) {
+        // E605: Static targets require explicit type on domain fields
+        self.validate_domain_types(system, target);
+
         match target {
             crate::frame_c::visitors::TargetLanguage::GDScript => {
                 self.validate_gdscript_reserved_methods(system);
@@ -539,6 +547,65 @@ impl FrameValidator {
         // E401: Validate no Frame statements in operations
         for operation in &system.operations {
             self.validate_operation_no_frame_statements(operation);
+        }
+
+        // Domain field validation
+        self.validate_domain_fields(system);
+    }
+
+    /// E613: Domain field shadows system parameter
+    /// E614: Duplicate domain field name
+    fn validate_domain_fields(&mut self, system: &SystemAst) {
+        let param_names: HashSet<&str> = system.params.iter().map(|p| p.name.as_str()).collect();
+        let mut seen: HashSet<&str> = HashSet::new();
+
+        for var in &system.domain {
+            // E614: Duplicate domain field name
+            if !seen.insert(&var.name) {
+                self.errors.push(
+                    ValidationError::new(
+                        "E614",
+                        format!(
+                            "Duplicate domain field '{}' in system '{}'",
+                            var.name, system.name
+                        ),
+                    )
+                    .with_span(var.span.clone()),
+                );
+            }
+
+            // Note: Domain fields intentionally share names with Domain-kind system
+            // params (the param initializes the field). E613 is reserved for future
+            // use if we want to warn about non-Domain param shadowing.
+        }
+    }
+
+    /// E605: Static targets require explicit type on domain fields
+    fn validate_domain_types(
+        &mut self,
+        system: &SystemAst,
+        target: crate::frame_c::visitors::TargetLanguage,
+    ) {
+        use crate::frame_c::visitors::TargetLanguage::*;
+        // Only languages where the compiler cannot infer field types from init values.
+        // Kotlin, Swift, Dart, TypeScript, C#, Rust all have type inference.
+        let is_static = matches!(target, C | Cpp | Java | Go);
+        if !is_static {
+            return;
+        }
+        for var in &system.domain {
+            if matches!(var.var_type, Type::Unknown) {
+                self.errors.push(
+                    ValidationError::new(
+                        "E605",
+                        format!(
+                            "Domain field '{}' in system '{}' requires an explicit type for target '{:?}'",
+                            var.name, system.name, target
+                        ),
+                    )
+                    .with_span(var.span.clone()),
+                );
+            }
         }
     }
 

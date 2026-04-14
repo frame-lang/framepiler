@@ -272,9 +272,6 @@ mod tests {
             name: "counter".to_string(),
             var_type: Type::Custom("int".into()),
             initializer_text: None,
-            initializer: None,
-            is_frame: true,
-            raw_code: None,
             span: FrameSpan::new(70, 80),
         });
 
@@ -394,9 +391,6 @@ mod tests {
             name: "counter".to_string(),
             var_type: Type::Custom("int".into()),
             initializer_text: None,
-            initializer: None,
-            is_frame: true,
-            raw_code: None,
             span: FrameSpan::new(10, 30),
         });
 

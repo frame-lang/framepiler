@@ -10,7 +10,7 @@ use super::ast::*;
 use super::backend::get_backend;
 use super::codegen_utils::{
     convert_expression, convert_literal, cpp_map_type, cpp_wrap_any_arg, csharp_map_type,
-    expression_to_string, extract_type_from_raw_domain, go_map_type, is_bool_type, is_float_type,
+    expression_to_string, go_map_type, is_bool_type, is_float_type,
     is_int_type, is_string_type, java_map_type, kotlin_map_type, state_var_init_value,
     swift_map_type, to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
 };
@@ -86,7 +86,7 @@ fn init_references_param(init_text: &str, params: &[String]) -> bool {
     for p in params {
         if p.is_empty() { continue; }
         let mut found = false;
-        find_whole_words(bytes, p.as_bytes(), &[b'.'], |_, _| { found = true; false });
+        find_whole_words(bytes, p.as_bytes(), b".", |_, _| { found = true; false });
         if found { return true; }
     }
     false
@@ -107,7 +107,7 @@ fn prefix_php_vars(text: &str, params: &[String]) -> String {
                 let start = i + found;
                 let end = start + pb.len();
                 new_result.push_str(&result[i..start]);
-                if is_whole_word_at(bytes, start, end, &[b'$']) {
+                if is_whole_word_at(bytes, start, end, b"$") {
                     new_result.push('$');
                 }
                 new_result.push_str(p);
@@ -633,6 +633,7 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
                 | TargetLanguage::TypeScript
                 | TargetLanguage::JavaScript
                 | TargetLanguage::Php
+                | TargetLanguage::GDScript
         ) && init_references_param(init_text, sys_param_names);
         let strip_init = strip_unconditionally || strip_collision;
 
@@ -697,9 +698,17 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             .with_type(&type_str)
             .with_raw_code(&expanded_code);
 
-        // Populate the structured initializer slot when present.
-        if let Some(ref init) = &domain_var.initializer {
-            field = field.with_initializer(convert_expression(init));
+        // Populate the structured initializer slot from init text —
+        // but ONLY when the init wasn't stripped from the field declaration.
+        // If synthesize_field_raw stripped it (because it references a param),
+        // the init belongs in the constructor body, not the field declaration.
+        let init_text_str = domain_var.initializer_text.as_deref().unwrap_or("");
+        let strip_unconditionally = matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C);
+        let strip_collision = init_references_param(init_text_str, &sys_param_names);
+        if !(strip_unconditionally || strip_collision) {
+            if let Some(ref init_text) = &domain_var.initializer_text {
+                field = field.with_initializer(CodegenNode::Ident(init_text.clone()));
+            }
         }
 
         fields.push(field);
@@ -994,6 +1003,19 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             }
             continue;
         }
+        // GDScript — only emit constructor-body init when stripped.
+        if matches!(syntax.language, TargetLanguage::GDScript) {
+            if init_refs_param {
+                if let Some(ref init_text) = init_text_opt {
+                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::GDScript);
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("self.{} = {}", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+            }
+            continue;
+        }
         // TypeScript — only emit constructor-body init when stripped.
         // TypeScript would otherwise reject `name: string = name` at class
         // scope with TS2301 ("Initializer of instance member variable
@@ -1046,120 +1068,45 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 }
                 continue;
             }
-            // No collision — fall through to legacy raw_code branch.
+            // No collision — fall through to structured-field constructor init.
         }
-        if let Some(ref raw_code) = domain_var.raw_code {
-            // V4: Native code pass-through
-            // Expand @@SystemName() tagged instantiations in domain initializers
-            let raw_code = &expand_tagged_in_domain(raw_code, syntax.language);
-            // Python: emit as self.<raw_code> in __init__
-            // TypeScript: already in class fields, skip constructor init
-            // C: struct is zeroed by calloc
-            // Rust: need explicit init in struct literal
-            if matches!(syntax.language, TargetLanguage::Python3) {
-                body.push(CodegenNode::NativeBlock {
-                    code: format!("self.{}", raw_code),
-                    span: None,
-                });
-            } else if matches!(syntax.language, TargetLanguage::GDScript) {
-                // GDScript: strip type annotations and var keyword from self.field assignments
-                // "var name = value" -> "name = value"
-                // "name: type = value" -> "name = value"
-                let raw_code_stripped = if raw_code.starts_with("var ") {
-                    &raw_code[4..]
-                } else {
-                    raw_code
-                };
-                let gd_code = if let Some(colon_pos) = raw_code_stripped.find(':') {
-                    if let Some(eq_pos) = raw_code_stripped.find('=') {
-                        if colon_pos < eq_pos {
-                            let name_part = raw_code_stripped[..colon_pos].trim();
-                            let value_part = raw_code_stripped[eq_pos..].trim();
-                            format!("{} {}", name_part, value_part)
-                        } else {
-                            raw_code_stripped.to_string()
-                        }
-                    } else {
-                        // "name: type" with no initializer -> "name = null"
-                        let name_part = raw_code_stripped[..colon_pos].trim();
-                        format!("{} = null", name_part)
-                    }
-                } else {
-                    raw_code_stripped.to_string()
-                };
-                body.push(CodegenNode::NativeBlock {
-                    code: format!("self.{}", gd_code),
-                    span: None,
-                });
-            } else if matches!(syntax.language, TargetLanguage::Php) {
-                // PHP: emit as $this->field = value in __construct
-                body.push(CodegenNode::NativeBlock {
-                    code: format!("$this->{};", raw_code),
-                    span: None,
-                });
-            } else if matches!(syntax.language, TargetLanguage::Ruby) {
-                // Ruby: emit as @field = value in initialize
-                // Strip type annotation (e.g., "name: type = value" -> "name = value")
-                let ruby_code = if let Some(colon_pos) = raw_code.find(':') {
-                    if let Some(eq_pos) = raw_code.find('=') {
-                        if colon_pos < eq_pos {
-                            // Has type annotation: "name: type = value" -> "name = value"
-                            let name_part = raw_code[..colon_pos].trim();
-                            let value_part = raw_code[eq_pos..].trim();
-                            format!("{} {}", name_part, value_part)
-                        } else {
-                            raw_code.to_string()
-                        }
-                    } else {
-                        // "name: type" with no initializer -> "name = nil"
-                        let name_part = raw_code[..colon_pos].trim();
-                        format!("{} = nil", name_part)
-                    }
-                } else {
-                    raw_code.to_string()
-                };
-                body.push(CodegenNode::NativeBlock {
-                    code: format!("@{}", ruby_code),
-                    span: None,
-                });
-            } else if matches!(syntax.language, TargetLanguage::Lua) {
-                // Lua: emit `self.<name> = <init>` in the constructor
-                // body. Lua tables don't have field declarations at all,
-                // so domain init MUST happen at construction time.
-                // Translate Frame's empty-list `[]` literal to Lua's
-                // `{}` table literal so domains like `log: list = []`
-                // produce valid Lua.
-                if let Some(ref init_text) = domain_var.initializer_text {
-                    let mut init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Lua);
-                    if init_expanded.trim() == "[]" {
-                        init_expanded = "{}".to_string();
-                    }
+        // Languages without field-level declarations always emit constructor-body init.
+        // Python, Ruby, Lua, GDScript, Erlang — all init happens in the constructor.
+        if let Some(ref init_text) = domain_var.initializer_text {
+            let init_expanded = expand_tagged_in_domain(init_text, syntax.language);
+            match syntax.language {
+                TargetLanguage::Python3 => {
                     body.push(CodegenNode::NativeBlock {
                         code: format!("self.{} = {}", domain_var.name, init_expanded),
                         span: None,
                     });
                 }
-                continue;
-            } else if matches!(syntax.language, TargetLanguage::Rust) {
-                // For Rust, extract initializer from raw_code (after '=')
-                let init_expr = raw_code
-                    .split_once('=')
-                    .map(|(_, v)| v.trim().to_string())
-                    .unwrap_or_else(|| "Default::default()".to_string());
-                body.push(CodegenNode::assign(
-                    CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
-                    CodegenNode::Ident(init_expr),
-                ));
+                TargetLanguage::Ruby => {
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("@{} = {}", domain_var.name, init_expanded),
+                        span: None,
+                    });
+                }
+                TargetLanguage::Lua => {
+                    let mut lua_init = init_expanded;
+                    if lua_init.trim() == "[]" {
+                        lua_init = "{}".to_string();
+                    }
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!("self.{} = {}", domain_var.name, lua_init),
+                        span: None,
+                    });
+                }
+                TargetLanguage::Rust => {
+                    body.push(CodegenNode::assign(
+                        CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
+                        CodegenNode::Ident(init_expanded),
+                    ));
+                }
+                _ => {}
             }
-        } else if let Some(ref init) = &domain_var.initializer {
-            // Construct from parsed components
-            body.push(CodegenNode::assign(
-                CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
-                convert_expression(init),
-            ));
         } else if matches!(syntax.language, TargetLanguage::Rust) {
             // Rust requires all struct fields to be initialized.
-            // Domain vars with no initializer get Default::default().
             body.push(CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
                 CodegenNode::Ident("Default::default()".to_string()),
@@ -4270,7 +4217,7 @@ mod tests {
     use super::*;
     use crate::frame_c::compiler::codegen::codegen_utils::{
         convert_expression, convert_literal, cpp_map_type, cpp_wrap_any_arg, csharp_map_type,
-        expression_to_string, extract_type_from_raw_domain, go_map_type, is_bool_type,
+        expression_to_string, go_map_type, is_bool_type,
         is_float_type, is_int_type, is_string_type, java_map_type, kotlin_map_type,
         state_var_init_value, swift_map_type, to_snake_case, type_to_cpp_string, type_to_string,
         HandlerContext,
@@ -4307,9 +4254,6 @@ mod tests {
             name: "counter".to_string(),
             var_type: Type::Custom("int".into()),
             initializer_text: Some("0".to_string()),
-            initializer: Some(Expression::Literal(Literal::Int(0))),
-            is_frame: false,
-            raw_code: None,
             span: Span::new(0, 0),
         });
 
