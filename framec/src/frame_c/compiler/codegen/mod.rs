@@ -18,6 +18,7 @@ pub mod erlang_system;
 pub mod frame_expansion;
 pub mod interface_gen;
 pub mod runtime;
+pub mod rust_system;
 pub mod state_dispatch;
 pub mod system_codegen;
 

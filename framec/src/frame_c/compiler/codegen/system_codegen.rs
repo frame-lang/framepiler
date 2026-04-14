@@ -142,7 +142,23 @@ pub fn generate_system(
     if lang == TargetLanguage::Erlang {
         return super::erlang_system::generate_erlang_system(system, arcanum, source);
     }
+    // Rust: dedicated codegen with Rc<RefCell<Compartment>> ownership
+    if lang == TargetLanguage::Rust {
+        return super::rust_system::generate_rust_system(system, arcanum, source);
+    }
 
+    generate_system_shared(system, arcanum, lang, source)
+}
+
+/// Shared system codegen for class-based languages (15 of 17).
+/// Called directly by generate_system for non-Rust/non-Erlang targets,
+/// and temporarily by rust_system.rs during incremental migration.
+pub fn generate_system_shared(
+    system: &SystemAst,
+    arcanum: &Arcanum,
+    lang: TargetLanguage,
+    source: &[u8],
+) -> CodegenNode {
     let backend = get_backend(lang);
     let syntax = backend.class_syntax();
 
@@ -518,8 +534,8 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
     // Compartment field - canonical compartment architecture for ALL languages
     let (comp_field_type, nullable_comp_type) = match syntax.language {
         TargetLanguage::Rust => (
-            compartment_type.clone(),
-            format!("Option<{}>", compartment_type),
+            format!("std::rc::Rc<std::cell::RefCell<{}>>", compartment_type),
+            format!("Option<std::rc::Rc<std::cell::RefCell<{}>>>", compartment_type),
         ),
         TargetLanguage::Cpp => (
             format!("std::shared_ptr<{}>", compartment_type),
@@ -3153,24 +3169,25 @@ self.__router(&__e);
 // Process any pending transition
 while self.__next_compartment.is_some() {{
     let next_compartment = self.__next_compartment.take().unwrap();
-    // Exit current state (with exit_args from current compartment)
-    let exit_event = {}::new_with_params("<$", &self.__compartment.exit_args);
+    // Exit current state
+    let exit_args = std::mem::take(&mut self.__compartment.borrow_mut().exit_args);
+    let exit_event = {0}::new_with_args("<$", exit_args);
     self.__router(&exit_event);
     // Switch to new compartment
     self.__compartment = next_compartment;
     // Enter new state (or forward event)
-    if self.__compartment.forward_event.is_none() {{
-        let enter_event = {}::new_with_params("$>", &self.__compartment.enter_args);
+    let has_forward = self.__compartment.borrow().forward_event.is_some();
+    if !has_forward {{
+        let enter_args = std::mem::take(&mut self.__compartment.borrow_mut().enter_args);
+        let enter_event = {0}::new_with_args("$>", enter_args);
         self.__router(&enter_event);
     }} else {{
-        // Forward event to new state
-        let forward_event = self.__compartment.forward_event.take().unwrap();
+        let forward_event = self.__compartment.borrow_mut().forward_event.take().unwrap();
         if forward_event.message == "$>" {{
-            // Forwarding enter event - just send it
             self.__router(&forward_event);
         }} else {{
-            // Forwarding other event - send $> first, then forward
-            let enter_event = {}::new_with_params("$>", &self.__compartment.enter_args);
+            let enter_args = std::mem::take(&mut self.__compartment.borrow_mut().enter_args);
+            let enter_event = {0}::new_with_args("$>", enter_args);
             self.__router(&enter_event);
             self.__router(&forward_event);
         }}
@@ -3180,7 +3197,7 @@ while self.__next_compartment.is_some() {{
         ctx._transitioned = true;
     }}
 }}"#,
-                        event_class, event_class, event_class
+                        event_class
                     ),
                     span: None,
                 }],
