@@ -17,6 +17,221 @@ use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
 use crate::frame_c::compiler::frame_ast::{MachineAst, StateVarAst, SystemAst, Type};
 use crate::frame_c::visitors::TargetLanguage;
 
+// ============================================================================
+// Unified Dispatch Syntax — shared across all if/elif-style languages
+// ============================================================================
+
+/// Language-specific syntax for state dispatch code generation.
+/// One struct per language captures every varying piece, allowing a single
+/// `generate_unified_state_dispatch` function to emit correct code for
+/// all 16 if/elif-style languages. (Rust uses match and stays separate.)
+pub(crate) struct DispatchSyntax {
+    pub lang: TargetLanguage,
+    /// Statement terminator (";" for C-style, "" for Python/Ruby/Lua)
+    pub semi: &'static str,
+    /// Placeholder for empty handler body ("pass" for Python, "" for brace langs)
+    pub empty_body: &'static str,
+    /// Body indent prefix (always "    ")
+    pub indent: &'static str,
+    /// Close brace after handler body ("" for Python, "}\n" for brace langs)
+    pub close_block: &'static str,
+    /// Else clause start ("else:\n" for Python, "} else {\n" for brace langs)
+    pub else_start: &'static str,
+
+    // --- Callbacks for language-specific code fragments ---
+
+    /// First `if` condition matching event message
+    pub fmt_if: fn(message: &str) -> String,
+    /// Subsequent `elif`/`else if` condition
+    pub fmt_elif: fn(message: &str) -> String,
+    /// HSM compartment navigation preamble
+    pub fmt_hsm_nav: fn(state_name: &str) -> String,
+    /// Bind a state param to a local variable
+    pub fmt_bind_param: fn(name: &str, type_str: &str, system_name: &str) -> String,
+    /// Check-and-init a state var (inside enter handler or auto-init)
+    pub fmt_init_sv: fn(var_name: &str, init_val: &str, indent: &str, system_name: &str) -> String,
+    /// Unpack a handler param from event._parameters
+    pub fmt_unpack: fn(name: &str, type_str: &str, indent: &str, system_name: &str) -> String,
+    /// Forward call to parent state for `=> $^`
+    pub fmt_forward: fn(parent_name: &str, indent: &str, system_name: &str) -> String,
+}
+
+/// Create the DispatchSyntax for a given language.
+pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax> {
+    match lang {
+        TargetLanguage::Python3 => Some(DispatchSyntax {
+            lang,
+            semi: "",
+            empty_body: "pass",
+            indent: "    ",
+            close_block: "",
+            else_start: "else:\n",
+            fmt_if: |msg| format!("if __e._message == \"{}\":\n", msg),
+            fmt_elif: |msg| format!("elif __e._message == \"{}\":\n", msg),
+            fmt_hsm_nav: |state| {
+                let mut s = String::new();
+                s.push_str("# HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("__sv_comp = self.__compartment\n");
+                s.push_str(&format!("while __sv_comp is not None and __sv_comp.state != \"{}\":\n", state));
+                s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
+                s
+            },
+            fmt_bind_param: |name, _type_str, _sys| {
+                format!("{name} = self.__compartment.state_args.get(\"{name}\")\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if \"{var_name}\" not in __sv_comp.state_vars:\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val}\n"
+                )
+            },
+            fmt_unpack: |name, _type_str, indent, _sys| {
+                format!("{indent}{name} = __e._parameters[\"{name}\"]\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}self._state_{parent}(__e)\n")
+            },
+        }),
+        // Other languages will be added incrementally here
+        _ => None,
+    }
+}
+
+/// Unified state dispatch generator for all if/elif-style languages.
+/// Uses DispatchSyntax to emit language-correct code without duplication.
+pub(crate) fn generate_unified_state_dispatch(
+    system_name: &str,
+    state_name: &str,
+    handlers: &std::collections::HashMap<String, HandlerEntry>,
+    state_vars: &[StateVarAst],
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
+    source: &[u8],
+    ctx: &HandlerContext,
+    default_forward: bool,
+    syn: &DispatchSyntax,
+) -> String {
+    let mut code = String::new();
+    let mut first = true;
+    let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+
+    // 1. State param binding
+    for sp in state_params {
+        let type_str = match &sp.param_type {
+            Type::Custom(s) => s.as_str(),
+            Type::Unknown => "int",
+        };
+        code.push_str(&(syn.fmt_bind_param)(&sp.name, type_str, system_name));
+    }
+
+    // 2. HSM compartment navigation
+    if !state_vars.is_empty() {
+        code.push_str(&(syn.fmt_hsm_nav)(state_name));
+    }
+
+    // 3. Auto-generated enter handler for state var init (when no explicit $>)
+    if !state_vars.is_empty() && !has_enter_handler {
+        code.push_str(&(syn.fmt_if)("$>"));
+        for var in state_vars {
+            let init_val = if let Some(ref init) = var.init {
+                expression_to_string(init, syn.lang)
+            } else {
+                state_var_init_value(&var.var_type, syn.lang)
+            };
+            code.push_str(&(syn.fmt_init_sv)(&var.name, &init_val, syn.indent, system_name));
+        }
+        code.push_str(syn.close_block);
+        first = false;
+    }
+
+    // 4. Sort handlers for deterministic output
+    let mut sorted_handlers: Vec<_> = handlers.iter().collect();
+    sorted_handlers.sort_by_key(|(event, _)| *event);
+
+    for (event, handler) in sorted_handlers {
+        let message = match event.as_str() {
+            "$>" | "enter" => "$>",
+            "$<" | "exit" => "<$",
+            _ => event.as_str(),
+        };
+
+        // Emit condition
+        let condition = if first {
+            (syn.fmt_if)(message)
+        } else {
+            (syn.fmt_elif)(message)
+        };
+        first = false;
+        code.push_str(&condition);
+
+        // State var init in enter handler
+        if (event == "$>" || event == "enter") && !state_vars.is_empty() {
+            for var in state_vars {
+                let init_val = if let Some(ref init) = var.init {
+                    expression_to_string(init, syn.lang)
+                } else {
+                    state_var_init_value(&var.var_type, syn.lang)
+                };
+                code.push_str(&(syn.fmt_init_sv)(&var.name, &init_val, syn.indent, system_name));
+            }
+        }
+
+        // Param unpacking
+        for param in handler.params.iter() {
+            let type_str = match &param.symbol_type {
+                Some(t) => t.as_str(),
+                None => "int",
+            };
+            code.push_str(&(syn.fmt_unpack)(&param.name, type_str, syn.indent, system_name));
+        }
+
+        // Handler return init
+        let return_init_code =
+            emit_handler_return_init(handler, syn.lang, syn.indent, &ctx.system_name);
+        if !return_init_code.is_empty() {
+            code.push_str(&return_init_code);
+        }
+
+        // Handler body
+        let mut handler_ctx = ctx.clone();
+        handler_ctx.event_name = event.clone();
+        let body = splice_handler_body_from_span(&handler.body_span, source, syn.lang, &handler_ctx);
+
+        let mut body_has_content = !return_init_code.is_empty();
+        for line in body.lines() {
+            if !line.trim().is_empty() {
+                code.push_str(syn.indent);
+                code.push_str(line);
+                body_has_content = true;
+            }
+            code.push('\n');
+        }
+
+        // Empty body placeholder
+        if !body_has_content && !syn.empty_body.is_empty() {
+            code.push_str(syn.indent);
+            code.push_str(syn.empty_body);
+            code.push('\n');
+        }
+
+        code.push_str(syn.close_block);
+    }
+
+    // 5. Default forward
+    if default_forward {
+        if let Some(ref parent) = ctx.parent_state {
+            if !first {
+                code.push_str(syn.else_start);
+                code.push_str(&(syn.fmt_forward)(parent, syn.indent, system_name));
+                code.push_str(syn.close_block);
+            } else {
+                code.push_str(&(syn.fmt_forward)(parent, "", system_name));
+            }
+        }
+    }
+
+    code.trim_end().to_string()
+}
+
 /// Generate handler return_init code: sets the context return value at handler entry.
 /// Returns empty string if handler has no return_init.
 fn emit_handler_return_init(
@@ -299,7 +514,13 @@ pub(crate) fn generate_state_method(
     };
 
     // Generate the dispatch body based on __e._message / __e.message
-    let body_code = match lang {
+    // Use unified dispatch for languages that have DispatchSyntax defined.
+    let body_code = if let Some(syn) = dispatch_syntax_for(lang) {
+        generate_unified_state_dispatch(
+            _system_name, state_name, handlers, state_vars, state_params,
+            source, &ctx, default_forward, &syn,
+        )
+    } else { match lang {
         TargetLanguage::Python3 => generate_python_state_dispatch(
             _system_name,
             state_name,
@@ -454,7 +675,7 @@ pub(crate) fn generate_state_method(
         ),
         TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
         TargetLanguage::Graphviz => unreachable!(),
-    };
+    } };
 
     let params = match lang {
         TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
