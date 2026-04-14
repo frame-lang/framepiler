@@ -50,8 +50,9 @@ pub(crate) struct DispatchSyntax {
     pub fmt_bind_param: fn(name: &str, type_str: &str, system_name: &str) -> String,
     /// Check-and-init a state var (inside enter handler or auto-init)
     pub fmt_init_sv: fn(var_name: &str, init_val: &str, indent: &str, system_name: &str) -> String,
-    /// Unpack a handler param from event._parameters
-    pub fmt_unpack: fn(name: &str, type_str: &str, indent: &str, system_name: &str) -> String,
+    /// Unpack a handler param. `source` is "event" for interface handlers,
+    /// "enter" for $> handlers, "exit" for <$ handlers.
+    pub fmt_unpack: fn(name: &str, type_str: &str, indent: &str, system_name: &str, source: &str) -> String,
     /// Forward call to parent state for `=> $^`
     pub fmt_forward: fn(parent_name: &str, indent: &str, system_name: &str) -> String,
 }
@@ -85,7 +86,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val}\n"
                 )
             },
-            fmt_unpack: |name, _type_str, indent, _sys| {
+            fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}{name} = __e._parameters[\"{name}\"]\n")
             },
             fmt_forward: |parent, indent, _sys| {
@@ -118,7 +119,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val}\n"
                 )
             },
-            fmt_unpack: |name, _type_str, indent, _sys| {
+            fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}var {name} = __e._parameters[\"{name}\"]\n")
             },
             fmt_forward: |parent, indent, _sys| {
@@ -153,7 +154,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, _type_str, indent, _sys| {
+            fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}let {name} = __e._parameters[\"{name}\"];\n")
             },
             fmt_forward: |parent, indent, _sys| {
@@ -188,7 +189,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}end\n"
                 )
             },
-            fmt_unpack: |name, _type_str, indent, _sys| {
+            fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}{name} = __e._parameters[\"{name}\"]\n")
             },
             fmt_forward: |parent, indent, _sys| {
@@ -223,7 +224,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}end\n"
                 )
             },
-            fmt_unpack: |name, _type_str, indent, _sys| {
+            fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}local {name} = __e._parameters[\"{name}\"]\n")
             },
             fmt_forward: |parent, indent, _sys| {
@@ -258,7 +259,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, _type_str, indent, _sys| {
+            fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}${name} = $__e->_parameters[\"{name}\"];\n")
             },
             fmt_forward: |parent, indent, _sys| {
@@ -295,9 +296,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, type_str, indent, _sys| {
+            fmt_unpack: |name, type_str, indent, _sys, source| {
                 let cs_type = csharp_map_type(type_str);
-                format!("{indent}{cs_type} {name} = ({cs_type}) __e._parameters[\"{name}\"];\n")
+                let dict = match source {
+                    "enter" => "__compartment.enter_args",
+                    "exit" => "__compartment.exit_args",
+                    _ => "__e._parameters",
+                };
+                format!("{indent}var {name} = ({cs_type}) {dict}[\"{name}\"];\n")
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e);\n")
@@ -330,9 +336,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, type_str, indent, _sys| {
+            fmt_unpack: |name, type_str, indent, _sys, source| {
                 let java_type = java_map_type(type_str);
-                format!("{indent}{java_type} {name} = ({java_type}) __e._parameters.get(\"{name}\");\n")
+                let dict = match source {
+                    "enter" => "__compartment.enter_args",
+                    "exit" => "__compartment.exit_args",
+                    _ => "__e._parameters",
+                };
+                format!("{indent}var {name} = ({java_type}) {dict}.get(\"{name}\");\n")
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e);\n")
@@ -365,9 +376,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, type_str, indent, _sys| {
+            fmt_unpack: |name, type_str, indent, _sys, source| {
                 let kt_type = kotlin_map_type(type_str);
-                format!("{indent}val {name} = __e._parameters[\"{name}\"] as {kt_type}\n")
+                let dict = match source {
+                    "enter" => "__compartment.enter_args",
+                    "exit" => "__compartment.exit_args",
+                    _ => "__e._parameters",
+                };
+                format!("{indent}val {name} = {dict}[\"{name}\"] as {kt_type}\n")
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e)\n")
@@ -400,9 +416,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, type_str, indent, _sys| {
+            fmt_unpack: |name, type_str, indent, _sys, source| {
                 let sw_type = swift_map_type(type_str);
-                format!("{indent}let {name} = __e._parameters[\"{name}\"] as! {sw_type}\n")
+                let dict = match source {
+                    "enter" => "__compartment.enter_args",
+                    "exit" => "__compartment.exit_args",
+                    _ => "__e._parameters",
+                };
+                format!("{indent}let {name} = {dict}[\"{name}\"] as! {sw_type}\n")
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e)\n")
@@ -437,8 +458,13 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, _type_str, indent, _sys| {
-                format!("{indent}final {name} = __e._parameters?[\"{name}\"];\n")
+            fmt_unpack: |name, _type_str, indent, _sys, source| {
+                let dict = match source {
+                    "enter" => "__compartment.enter_args",
+                    "exit" => "__compartment.exit_args",
+                    _ => "__e._parameters?",
+                };
+                format!("{indent}final {name} = {dict}[\"{name}\"];\n")
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e);\n")
@@ -471,9 +497,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, type_str, indent, _sys| {
+            fmt_unpack: |name, type_str, indent, _sys, source| {
                 let cpp_type = cpp_map_type(type_str);
-                format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>(__e._parameters[\"{name}\"]);\n")
+                let dict = match source {
+                    "enter" => "__compartment->enter_args",
+                    "exit" => "__compartment->exit_args",
+                    _ => "__e._parameters",
+                };
+                format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>({dict}[\"{name}\"]);\n")
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e);\n")
@@ -506,9 +537,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, type_str, indent, _sys| {
+            fmt_unpack: |name, type_str, indent, _sys, source| {
                 let go_type = go_map_type(type_str);
-                format!("{indent}{name} := __e._parameters[\"{name}\"].({go_type})\n{indent}_ = {name}\n")
+                let dict = match source {
+                    "enter" => "s.__compartment.enterArgs",
+                    "exit" => "s.__compartment.exitArgs",
+                    _ => "__e._parameters",
+                };
+                format!("{indent}{name} := {dict}[\"{name}\"].({go_type})\n{indent}_ = {name}\n")
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}s._state_{parent}(__e)\n")
@@ -542,8 +578,13 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, type_str, indent, sys| {
-                format!("{indent}int {name} = (int)(intptr_t){sys}_FrameDict_get(__e->_parameters, \"{name}\");\n")
+            fmt_unpack: |name, type_str, indent, sys, source| {
+                let dict = match source {
+                    "enter" => format!("self->__compartment->enter_args"),
+                    "exit" => format!("self->__compartment->exit_args"),
+                    _ => format!("__e->_parameters"),
+                };
+                format!("{indent}int {name} = (int)(intptr_t){sys}_FrameDict_get({dict}, \"{name}\");\n")
             },
             fmt_forward: |parent, indent, sys| {
                 format!("{indent}{sys}_state_{parent}(self, __e);\n")
@@ -633,13 +674,21 @@ pub(crate) fn generate_unified_state_dispatch(
             }
         }
 
-        // Param unpacking
+        // Param unpacking — enter/exit handlers read from compartment args,
+        // interface handlers read from event._parameters
+        let param_source = if event == "$>" || event == "enter" {
+            "enter"
+        } else if event == "$<" || event == "exit" || event == "<$" {
+            "exit"
+        } else {
+            "event"
+        };
         for param in handler.params.iter() {
             let type_str = match &param.symbol_type {
                 Some(t) => t.as_str(),
                 None => "int",
             };
-            code.push_str(&(syn.fmt_unpack)(&param.name, type_str, syn.indent, system_name));
+            code.push_str(&(syn.fmt_unpack)(&param.name, type_str, syn.indent, system_name, param_source));
         }
 
         // Handler return init
