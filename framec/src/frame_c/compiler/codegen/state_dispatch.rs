@@ -416,8 +416,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             close_final: "}\n",
             else_start: "} else {\n",
             // Dart: escape $ in message strings to avoid string interpolation
-            fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg.replace('$', r"\$")),
-            fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg.replace('$', r"\$")),
+            fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg.replace('$', "\\$")),
+            fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg.replace('$', "\\$")),
             fmt_hsm_nav: |state, _sys| {
                 let mut s = String::new();
                 s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
@@ -438,7 +438,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, _type_str, indent, _sys| {
-                format!("{indent}var {name} = __e._parameters[\"{name}\"];\n")
+                format!("{indent}final {name} = __e._parameters?[\"{name}\"];\n")
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e);\n")
