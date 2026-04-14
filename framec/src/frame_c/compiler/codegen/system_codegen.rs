@@ -534,8 +534,8 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
     // Compartment field - canonical compartment architecture for ALL languages
     let (comp_field_type, nullable_comp_type) = match syntax.language {
         TargetLanguage::Rust => (
-            format!("std::rc::Rc<std::cell::RefCell<{}>>", compartment_type),
-            format!("Option<std::rc::Rc<std::cell::RefCell<{}>>>", compartment_type),
+            compartment_type.clone(),
+            format!("Option<{}>", compartment_type),
         ),
         TargetLanguage::Cpp => (
             format!("std::shared_ptr<{}>", compartment_type),
@@ -3169,25 +3169,24 @@ self.__router(&__e);
 // Process any pending transition
 while self.__next_compartment.is_some() {{
     let next_compartment = self.__next_compartment.take().unwrap();
-    // Exit current state
-    let exit_args = std::mem::take(&mut self.__compartment.borrow_mut().exit_args);
-    let exit_event = {0}::new_with_args("<$", exit_args);
+    // Exit current state (with exit_args from current compartment)
+    let exit_event = {0}::new_with_params("<$", &self.__compartment.exit_args);
     self.__router(&exit_event);
     // Switch to new compartment
     self.__compartment = next_compartment;
     // Enter new state (or forward event)
-    let has_forward = self.__compartment.borrow().forward_event.is_some();
-    if !has_forward {{
-        let enter_args = std::mem::take(&mut self.__compartment.borrow_mut().enter_args);
-        let enter_event = {0}::new_with_args("$>", enter_args);
+    if self.__compartment.forward_event.is_none() {{
+        let enter_event = {0}::new_with_params("$>", &self.__compartment.enter_args);
         self.__router(&enter_event);
     }} else {{
-        let forward_event = self.__compartment.borrow_mut().forward_event.take().unwrap();
+        // Forward event to new state
+        let forward_event = self.__compartment.forward_event.take().unwrap();
         if forward_event.message == "$>" {{
+            // Forwarding enter event - just send it
             self.__router(&forward_event);
         }} else {{
-            let enter_args = std::mem::take(&mut self.__compartment.borrow_mut().enter_args);
-            let enter_event = {0}::new_with_args("$>", enter_args);
+            // Forwarding other event - send $> first, then forward
+            let enter_event = {0}::new_with_params("$>", &self.__compartment.enter_args);
             self.__router(&enter_event);
             self.__router(&forward_event);
         }}
