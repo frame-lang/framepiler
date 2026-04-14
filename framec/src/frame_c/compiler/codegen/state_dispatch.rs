@@ -458,13 +458,25 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, _type_str, indent, _sys, source| {
+            fmt_unpack: |name, type_str, indent, _sys, source| {
                 let dict = match source {
                     "enter" => "__compartment.enter_args",
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters?",
                 };
-                format!("{indent}final {name} = {dict}[\"{name}\"];\n")
+                // Dart: cast to declared type to avoid dynamic/num issues
+                let dart_type = match type_str {
+                    "int" | "number" | "num" => "int",
+                    "double" | "float" => "double",
+                    "bool" | "boolean" => "bool",
+                    "String" | "str" | "string" => "String",
+                    _ => "",
+                };
+                if dart_type.is_empty() {
+                    format!("{indent}final {name} = {dict}[\"{name}\"];\n")
+                } else {
+                    format!("{indent}final {name} = {dict}[\"{name}\"] as {dart_type};\n")
+                }
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e);\n")
