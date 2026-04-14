@@ -506,7 +506,7 @@ return __result;"#,
 
                 if has_return && return_type_str != "void" && return_type_str != "Any" && return_type_str != "Object" {
                     let java_type = java_map_type(&return_type_str);
-                    code.push_str(&format!("var __result = ({}) _context_stack.get(_context_stack.size() - 1)._return;\n", java_type));
+                    code.push_str(&format!("{} __result = ({}) _context_stack.get(_context_stack.size() - 1)._return;\n", java_type, java_type));
                     code.push_str("_context_stack.remove(_context_stack.size() - 1);\n");
                     code.push_str("return __result;");
                 } else {

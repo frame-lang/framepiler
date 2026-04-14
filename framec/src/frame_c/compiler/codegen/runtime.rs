@@ -774,6 +774,30 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             Field::new("forward_event").with_visibility(Visibility::Public),
             Field::new("parent_compartment").with_visibility(Visibility::Public),
         ]
+    } else if matches!(lang, TargetLanguage::CSharp) {
+        vec![
+            Field::new("state")
+                .with_type("string")
+                .with_visibility(Visibility::Public),
+            Field::new("state_args")
+                .with_type("Dictionary<string, object>")
+                .with_visibility(Visibility::Public),
+            Field::new("state_vars")
+                .with_type("Dictionary<string, object>")
+                .with_visibility(Visibility::Public),
+            Field::new("enter_args")
+                .with_type("Dictionary<string, object>")
+                .with_visibility(Visibility::Public),
+            Field::new("exit_args")
+                .with_type("Dictionary<string, object>")
+                .with_visibility(Visibility::Public),
+            Field::new("forward_event")
+                .with_type(&format!("{}FrameEvent?", system.name))
+                .with_visibility(Visibility::Public),
+            Field::new("parent_compartment")
+                .with_type(&format!("{}?", &class_name))
+                .with_visibility(Visibility::Public),
+        ]
     } else {
         vec![]
     };
@@ -1437,7 +1461,7 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     // FrameEvent class
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("    public string _message;\n");
-    code.push_str("    public Dictionary<string, object> _parameters;\n");
+    code.push_str("    public Dictionary<string, object>? _parameters;\n");
     code.push_str(&format!(
         "\n    public {sys}FrameEvent(string message) {{\n"
     ));
@@ -1455,11 +1479,11 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     // FrameContext class
     code.push_str(&format!("class {sys}FrameContext {{\n"));
     code.push_str(&format!("    public {sys}FrameEvent _event;\n"));
-    code.push_str("    public object _return;\n");
+    code.push_str("    public object? _return;\n");
     code.push_str("    public Dictionary<string, object> _data;\n");
     code.push_str("    public bool _transitioned = false;\n");
     code.push_str(&format!(
-        "\n    public {sys}FrameContext({sys}FrameEvent ev, object defaultReturn) {{\n"
+        "\n    public {sys}FrameContext({sys}FrameEvent ev, object? defaultReturn = null) {{\n"
     ));
     code.push_str("        this._event = ev;\n");
     code.push_str("        this._return = defaultReturn;\n");
@@ -1475,9 +1499,9 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     code.push_str("    public Dictionary<string, object> state_vars;\n");
     code.push_str("    public Dictionary<string, object> enter_args;\n");
     code.push_str("    public Dictionary<string, object> exit_args;\n");
-    code.push_str(&format!("    public {sys}FrameEvent forward_event;\n"));
+    code.push_str(&format!("    public {sys}FrameEvent? forward_event;\n"));
     code.push_str(&format!(
-        "    public {sys}Compartment parent_compartment;\n"
+        "    public {sys}Compartment? parent_compartment;\n"
     ));
     code.push_str(&format!("\n    public {sys}Compartment(string state) {{\n"));
     code.push_str("        this.state = state;\n");

@@ -2351,15 +2351,19 @@ pub(crate) fn generate_frame_expansion(
                         .get(var_name.as_str())
                         .map(|t| swift_map_type(t))
                         .unwrap_or_else(|| "Int".to_string());
-                    let cast = if sw_type == "Any" {
-                        String::new()
+                    // Wrap in parens: `(expr as! Int)` prevents ambiguity
+                    // when followed by `<=`, `>=`, etc. (Swift parses
+                    // `as! Int <= 0` as `as! Int<...` generic syntax).
+                    if sw_type == "Any" {
+                        if ctx.use_sv_comp {
+                            format!("__sv_comp.state_vars[\"{}\"]", var_name)
+                        } else {
+                            format!("__compartment.state_vars[\"{}\"]", var_name)
+                        }
+                    } else if ctx.use_sv_comp {
+                        format!("(__sv_comp.state_vars[\"{}\"] as! {})", var_name, sw_type)
                     } else {
-                        format!(" as! {}", sw_type)
-                    };
-                    if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast)
-                    } else {
-                        format!("__compartment.state_vars[\"{}\"]{}", var_name, cast)
+                        format!("(__compartment.state_vars[\"{}\"] as! {})", var_name, sw_type)
                     }
                 }
                 TargetLanguage::Go => {
@@ -3844,18 +3848,16 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         .get(&var_name)
                         .map(|t| swift_map_type(t))
                         .unwrap_or_else(|| "Int".to_string());
-                    let cast = if sw_type == "Any" {
-                        String::new()
+                    if sw_type == "Any" {
+                        if ctx.use_sv_comp {
+                            result.push_str(&format!("__sv_comp.state_vars[\"{}\"]", var_name))
+                        } else {
+                            result.push_str(&format!("__compartment.state_vars[\"{}\"]", var_name))
+                        }
+                    } else if ctx.use_sv_comp {
+                        result.push_str(&format!("(__sv_comp.state_vars[\"{}\"] as! {})", var_name, sw_type))
                     } else {
-                        format!(" as! {}", sw_type)
-                    };
-                    if ctx.use_sv_comp {
-                        result.push_str(&format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast))
-                    } else {
-                        result.push_str(&format!(
-                            "__compartment.state_vars[\"{}\"]{}",
-                            var_name, cast
-                        ))
+                        result.push_str(&format!("(__compartment.state_vars[\"{}\"] as! {})", var_name, sw_type))
                     }
                 }
                 TargetLanguage::CSharp => {

@@ -525,8 +525,11 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             format!("std::shared_ptr<{}>", compartment_type),
             format!("std::shared_ptr<{}>", compartment_type),
         ),
-        TargetLanguage::Java | TargetLanguage::CSharp => {
+        TargetLanguage::Java => {
             (compartment_type.clone(), compartment_type.clone())
+        }
+        TargetLanguage::CSharp => {
+            (compartment_type.clone(), format!("{}?", compartment_type))
         }
         TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::Dart => {
             (compartment_type.clone(), format!("{}?", compartment_type))
@@ -1876,8 +1879,8 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                         for (i, ancestor) in ancestor_chain.iter().enumerate() {
                             let comp_var = format!("__parent_comp_{}", i);
                             hsm_init_code.push_str(&format!(
-                                "var {} = new {}(\"{}\");\n",
-                                comp_var, compartment_class, ancestor.name
+                                "{} {} = new {}(\"{}\");\n",
+                                compartment_class, comp_var, compartment_class, ancestor.name
                             ));
                             if prev_comp_var != "null" {
                                 hsm_init_code.push_str(&format!(
@@ -3419,7 +3422,7 @@ free(self);"#,
             let mut kernel_code = String::new();
             kernel_code.push_str("__router(__e);\n");
             kernel_code.push_str("while (__next_compartment != null) {\n");
-            kernel_code.push_str("    var next_compartment = __next_compartment;\n");
+            kernel_code.push_str(&format!("    {} next_compartment = __next_compartment;\n", compartment_class));
             kernel_code.push_str("    __next_compartment = null;\n");
             kernel_code.push_str(&format!(
                 "    {} exit_event = new {}(\"<$\");\n",
@@ -3434,7 +3437,7 @@ free(self);"#,
             ));
             kernel_code.push_str("        __router(enter_event);\n");
             kernel_code.push_str("    } else {\n");
-            kernel_code.push_str("        var forward_event = __compartment.forward_event;\n");
+            kernel_code.push_str(&format!("        {} forward_event = __compartment.forward_event;\n", event_class));
             kernel_code.push_str("        __compartment.forward_event = null;\n");
             kernel_code.push_str("        if (forward_event._message.equals(\"$>\")) {\n");
             kernel_code.push_str("            __router(forward_event);\n");
@@ -3448,7 +3451,7 @@ free(self);"#,
             kernel_code.push_str("        }\n");
             kernel_code.push_str("    }\n");
             kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-            kernel_code.push_str("    for (var ctx : _context_stack) {\n");
+            kernel_code.push_str(&format!("    for ({}FrameContext ctx : _context_stack) {{\n", system.name));
             kernel_code.push_str("        ctx._transitioned = true;\n");
             kernel_code.push_str("    }\n");
             kernel_code.push_str("}");
@@ -3719,7 +3722,7 @@ free(self);"#,
             let mut kernel_code = String::new();
             kernel_code.push_str("__router(__e);\n");
             kernel_code.push_str("while (__next_compartment != null) {\n");
-            kernel_code.push_str("    var next_compartment = __next_compartment;\n");
+            kernel_code.push_str(&format!("    {} next_compartment = __next_compartment;\n", compartment_class));
             kernel_code.push_str("    __next_compartment = null;\n");
             kernel_code.push_str(&format!(
                 "    {} exit_event = new {}(\"<$\");\n",
@@ -3734,7 +3737,7 @@ free(self);"#,
             ));
             kernel_code.push_str("        __router(enter_event);\n");
             kernel_code.push_str("    } else {\n");
-            kernel_code.push_str("        var forward_event = __compartment.forward_event;\n");
+            kernel_code.push_str(&format!("        {} forward_event = __compartment.forward_event;\n", event_class));
             kernel_code.push_str("        __compartment.forward_event = null;\n");
             kernel_code.push_str("        if (forward_event._message == \"$>\") {\n");
             kernel_code.push_str("            __router(forward_event);\n");

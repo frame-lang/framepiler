@@ -1072,7 +1072,7 @@ pub(crate) fn generate_dart_state_dispatch(
     // HSM Compartment Navigation
     if !state_vars.is_empty() {
         code.push_str(&format!(
-            "// HSM: Navigate to this state's compartment for state var access\ndynamic __sv_comp = this.__compartment;\nwhile (__sv_comp != null && __sv_comp.state != \"{}\") {{\n    __sv_comp = __sv_comp.parent_compartment;\n}}\n",
+            "// HSM: Navigate to this state's compartment for state var access\nvar __sv_comp_n = this.__compartment;\nwhile (__sv_comp_n != null && __sv_comp_n.state != \"{}\") {{\n    __sv_comp_n = __sv_comp_n.parent_compartment;\n}}\nvar __sv_comp = __sv_comp_n!;\n",
             state_name));
     }
 
@@ -2463,7 +2463,7 @@ pub(crate) fn generate_csharp_state_dispatch(
     // HSM Compartment Navigation
     if !state_vars.is_empty() {
         code.push_str(&format!(
-            "var __sv_comp = __compartment;\nwhile (__sv_comp != null && __sv_comp.state != \"{}\") {{ __sv_comp = __sv_comp.parent_compartment; }}\n",
+            "var __sv_comp_n = __compartment;\nwhile (__sv_comp_n != null && __sv_comp_n.state != \"{}\") {{ __sv_comp_n = __sv_comp_n.parent_compartment; }}\nvar __sv_comp = __sv_comp_n!;\n",
             state_name
         ));
     }
