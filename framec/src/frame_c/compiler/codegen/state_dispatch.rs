@@ -1154,8 +1154,9 @@ pub(crate) fn generate_rust_state_dispatch(
                 ));
                 continue;
             }
-            // Non-start state: extract lifecycle params from event
-            // (keyed by declared param name) and pass to handler.
+            // Non-start state: extract lifecycle params from event.
+            // Enter/exit args are stored as String on the compartment
+            // (for Clone compatibility), so we parse to the declared type.
             code.push_str(&format!("    \"{}\" => {{\n", message));
             for param in &handler.params {
                 let param_type = param.symbol_type.as_deref().unwrap_or("String");
@@ -1164,16 +1165,20 @@ pub(crate) fn generate_rust_state_dispatch(
                         "        let {0}: String = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
                         param.name
                     ),
-                    "i32" | "i64" | "isize" | "u32" | "u64" | "usize" | "int" => format!(
-                        "        let {0}: {1} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<{1}>()).copied().unwrap_or_default();\n",
-                        param.name, param_type
+                    "i32" => format!(
+                        "        let {0}: i32 = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
+                        param.name
                     ),
-                    "f32" | "f64" | "float" => format!(
-                        "        let {0}: {1} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<{1}>()).copied().unwrap_or_default();\n",
+                    "i64" => format!(
+                        "        let {0}: i64 = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
+                        param.name
+                    ),
+                    "f64" | "f32" => format!(
+                        "        let {0}: {1} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
                         param.name, param_type
                     ),
                     "bool" => format!(
-                        "        let {0}: bool = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<bool>()).copied().unwrap_or_default();\n",
+                        "        let {0}: bool = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
                         param.name
                     ),
                     _ => format!(

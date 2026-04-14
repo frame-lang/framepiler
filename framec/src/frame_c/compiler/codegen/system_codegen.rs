@@ -1101,18 +1101,36 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                     });
                 }
                 TargetLanguage::Rust => {
+                    // If a Domain-kind system param has the same name as this
+                    // field, use the param value instead of the domain default.
+                    let rust_init = if system.params.iter().any(|p| {
+                        p.name == domain_var.name
+                            && matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::Domain)
+                    }) {
+                        domain_var.name.clone()
+                    } else {
+                        init_expanded
+                    };
                     body.push(CodegenNode::assign(
                         CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
-                        CodegenNode::Ident(init_expanded),
+                        CodegenNode::Ident(rust_init),
                     ));
                 }
                 _ => {}
             }
         } else if matches!(syntax.language, TargetLanguage::Rust) {
             // Rust requires all struct fields to be initialized.
+            let rust_init = if system.params.iter().any(|p| {
+                p.name == domain_var.name
+                    && matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::Domain)
+            }) {
+                domain_var.name.clone()
+            } else {
+                "Default::default()".to_string()
+            };
             body.push(CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
-                CodegenNode::Ident("Default::default()".to_string()),
+                CodegenNode::Ident(rust_init),
             ));
         }
     }
