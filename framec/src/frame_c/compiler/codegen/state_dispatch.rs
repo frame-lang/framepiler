@@ -45,7 +45,7 @@ pub(crate) struct DispatchSyntax {
     /// Subsequent `elif`/`else if` condition
     pub fmt_elif: fn(message: &str) -> String,
     /// HSM compartment navigation preamble
-    pub fmt_hsm_nav: fn(state_name: &str) -> String,
+    pub fmt_hsm_nav: fn(state_name: &str, system_name: &str) -> String,
     /// Bind a state param to a local variable
     pub fmt_bind_param: fn(name: &str, type_str: &str, system_name: &str) -> String,
     /// Check-and-init a state var (inside enter handler or auto-init)
@@ -68,7 +68,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             else_start: "else:\n",
             fmt_if: |msg| format!("if __e._message == \"{}\":\n", msg),
             fmt_elif: |msg| format!("elif __e._message == \"{}\":\n", msg),
-            fmt_hsm_nav: |state| {
+            fmt_hsm_nav: |state, _sys| {
                 let mut s = String::new();
                 s.push_str("# HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("__sv_comp = self.__compartment\n");
@@ -101,7 +101,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             else_start: "else:\n",
             fmt_if: |msg| format!("if __e._message == \"{}\":\n", msg),
             fmt_elif: |msg| format!("elif __e._message == \"{}\":\n", msg),
-            fmt_hsm_nav: |state| {
+            fmt_hsm_nav: |state, _sys| {
                 let mut s = String::new();
                 s.push_str("# HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("var __sv_comp = self.__compartment\n");
@@ -134,7 +134,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             else_start: "} else {\n",
             fmt_if: |msg| format!("if (__e._message === \"{}\") {{\n", msg),
             fmt_elif: |msg| format!("}} else if (__e._message === \"{}\") {{\n", msg),
-            fmt_hsm_nav: |state| {
+            fmt_hsm_nav: |state, _sys| {
                 let mut s = String::new();
                 s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("let __sv_comp = this.__compartment;\n");
@@ -160,7 +160,396 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 format!("{indent}this._state_{parent}(__e);\n")
             },
         }),
-        // Other languages will be added incrementally here
+        TargetLanguage::Ruby => Some(DispatchSyntax {
+            lang,
+            semi: "",
+            empty_body: "",
+            indent: "    ",
+            close_final: "end\n",
+            else_start: "else\n",
+            fmt_if: |msg| format!("if __e._message == \"{}\"\n", msg),
+            fmt_elif: |msg| format!("elsif __e._message == \"{}\"\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("# HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("__sv_comp = @__compartment\n");
+                s.push_str(&format!("while __sv_comp != nil && __sv_comp.state != \"{}\"\n", state));
+                s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
+                s.push_str("end\n");
+                s
+            },
+            fmt_bind_param: |name, _type_str, _sys| {
+                format!("{name} = @__compartment.state_args[\"{name}\"]\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if !__sv_comp.state_vars.key?(\"{var_name}\")\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val}\n\
+                     {indent}end\n"
+                )
+            },
+            fmt_unpack: |name, _type_str, indent, _sys| {
+                format!("{indent}{name} = __e._parameters[\"{name}\"]\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}_state_{parent}(__e)\n")
+            },
+        }),
+        TargetLanguage::Lua => Some(DispatchSyntax {
+            lang,
+            semi: "",
+            empty_body: "",
+            indent: "    ",
+            close_final: "end\n",
+            else_start: "else\n",
+            fmt_if: |msg| format!("if __e._message == \"{}\" then\n", msg),
+            fmt_elif: |msg| format!("elseif __e._message == \"{}\" then\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("-- HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("local __sv_comp = self.__compartment\n");
+                s.push_str(&format!("while __sv_comp ~= nil and __sv_comp.state ~= \"{}\" do\n", state));
+                s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
+                s.push_str("end\n");
+                s
+            },
+            fmt_bind_param: |name, _type_str, _sys| {
+                format!("local {name} = self.__compartment.state_args[\"{name}\"]\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if __sv_comp.state_vars[\"{var_name}\"] == nil then\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val}\n\
+                     {indent}end\n"
+                )
+            },
+            fmt_unpack: |name, _type_str, indent, _sys| {
+                format!("{indent}local {name} = __e._parameters[\"{name}\"]\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}self:_state_{parent}(__e)\n")
+            },
+        }),
+        TargetLanguage::Php => Some(DispatchSyntax {
+            lang,
+            semi: ";",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if ($__e->_message == \"{}\") {{\n", msg),
+            fmt_elif: |msg| format!("}} elseif ($__e->_message == \"{}\") {{\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("$__sv_comp = $this->__compartment;\n");
+                s.push_str(&format!("while ($__sv_comp !== null && $__sv_comp->state !== \"{}\") {{\n", state));
+                s.push_str("    $__sv_comp = $__sv_comp->parent_compartment;\n");
+                s.push_str("}\n");
+                s
+            },
+            fmt_bind_param: |name, _type_str, _sys| {
+                format!("${name} = $this->__compartment->state_args[\"{name}\"];\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if (!isset($__sv_comp->state_vars[\"{var_name}\"])) {{\n\
+                     {indent}    $__sv_comp->state_vars[\"{var_name}\"] = {init_val};\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, _type_str, indent, _sys| {
+                format!("{indent}${name} = $__e->_parameters[\"{name}\"];\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}$this->_state_{parent}($__e);\n")
+            },
+        }),
+        TargetLanguage::CSharp => Some(DispatchSyntax {
+            lang,
+            semi: ";",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg),
+            fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("var __sv_comp_n = __compartment;\n");
+                s.push_str(&format!("while (__sv_comp_n != null && __sv_comp_n.state != \"{}\") {{\n", state));
+                s.push_str("    __sv_comp_n = __sv_comp_n.parent_compartment;\n");
+                s.push_str("}\n");
+                s.push_str("var __sv_comp = __sv_comp_n!;\n");
+                s
+            },
+            fmt_bind_param: |name, type_str, _sys| {
+                let cs_type = csharp_map_type(type_str);
+                format!("{cs_type} {name} = ({cs_type}) __compartment.state_args[\"{name}\"];\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if (!__sv_comp.state_vars.ContainsKey(\"{var_name}\")) {{\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val};\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, type_str, indent, _sys| {
+                let cs_type = csharp_map_type(type_str);
+                format!("{indent}{cs_type} {name} = ({cs_type}) __e._parameters[\"{name}\"];\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}_state_{parent}(__e);\n")
+            },
+        }),
+        TargetLanguage::Java => Some(DispatchSyntax {
+            lang,
+            semi: ";",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if (__e._message.equals(\"{}\")) {{\n", msg),
+            fmt_elif: |msg| format!("}} else if (__e._message.equals(\"{}\")) {{\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("var __sv_comp = __compartment;\n");
+                s.push_str(&format!("while (__sv_comp != null && !__sv_comp.state.equals(\"{}\")) {{ __sv_comp = __sv_comp.parent_compartment; }}\n", state));
+                s
+            },
+            fmt_bind_param: |name, type_str, _sys| {
+                let java_type = java_map_type(type_str);
+                format!("{java_type} {name} = ({java_type}) __compartment.state_args.get(\"{name}\");\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if (!__sv_comp.state_vars.containsKey(\"{var_name}\")) {{\n\
+                     {indent}    __sv_comp.state_vars.put(\"{var_name}\", {init_val});\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, type_str, indent, _sys| {
+                let java_type = java_map_type(type_str);
+                format!("{indent}{java_type} {name} = ({java_type}) __e._parameters.get(\"{name}\");\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}_state_{parent}(__e);\n")
+            },
+        }),
+        TargetLanguage::Kotlin => Some(DispatchSyntax {
+            lang,
+            semi: "",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg),
+            fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("var __sv_comp = __compartment\n");
+                s.push_str(&format!("while (__sv_comp != null && __sv_comp.state != \"{}\") {{ __sv_comp = __sv_comp.parent_compartment!! }}\n", state));
+                s
+            },
+            fmt_bind_param: |name, type_str, _sys| {
+                let kt_type = kotlin_map_type(type_str);
+                format!("val {name} = __compartment.state_args[\"{name}\"] as {kt_type}\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if (!__sv_comp.state_vars.containsKey(\"{var_name}\")) {{\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val}\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, type_str, indent, _sys| {
+                let kt_type = kotlin_map_type(type_str);
+                format!("{indent}val {name} = __e._parameters[\"{name}\"] as {kt_type}\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}_state_{parent}(__e)\n")
+            },
+        }),
+        TargetLanguage::Swift => Some(DispatchSyntax {
+            lang,
+            semi: "",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if __e._message == \"{}\" {{\n", msg),
+            fmt_elif: |msg| format!("}} else if __e._message == \"{}\" {{\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("var __sv_comp = __compartment\n");
+                s.push_str(&format!("while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment! }}\n", state));
+                s
+            },
+            fmt_bind_param: |name, type_str, _sys| {
+                let sw_type = swift_map_type(type_str);
+                format!("let {name} = __compartment.state_args[\"{name}\"] as! {sw_type}\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if __sv_comp.state_vars[\"{var_name}\"] == nil {{\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val}\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, type_str, indent, _sys| {
+                let sw_type = swift_map_type(type_str);
+                format!("{indent}let {name} = __e._parameters[\"{name}\"] as! {sw_type}\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}_state_{parent}(__e)\n")
+            },
+        }),
+        TargetLanguage::Dart => Some(DispatchSyntax {
+            lang,
+            semi: ";",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            // Dart: escape $ in message strings to avoid string interpolation
+            fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg.replace('$', r"\$")),
+            fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg.replace('$', r"\$")),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("var __sv_comp = __compartment;\n");
+                s.push_str(&format!("while (__sv_comp != null && __sv_comp.state != \"{}\") {{\n", state));
+                s.push_str("    __sv_comp = __sv_comp.parent_compartment!;\n");
+                s.push_str("}\n");
+                s
+            },
+            fmt_bind_param: |name, _type_str, _sys| {
+                format!("var {name} = __compartment.state_args[\"{name}\"];\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if (!__sv_comp.state_vars.containsKey(\"{var_name}\")) {{\n\
+                     {indent}    __sv_comp.state_vars[\"{var_name}\"] = {init_val};\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, _type_str, indent, _sys| {
+                format!("{indent}var {name} = __e._parameters[\"{name}\"];\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}_state_{parent}(__e);\n")
+            },
+        }),
+        TargetLanguage::Cpp => Some(DispatchSyntax {
+            lang,
+            semi: ";",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg),
+            fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("auto* __sv_comp = __compartment.get();\n");
+                s.push_str(&format!("while (__sv_comp && __sv_comp->state != \"{}\") {{ __sv_comp = __sv_comp->parent_compartment.get(); }}\n", state));
+                s
+            },
+            fmt_bind_param: |name, type_str, _sys| {
+                let cpp_type = cpp_map_type(type_str);
+                format!("{cpp_type} {name} = std::any_cast<{cpp_type}>(__compartment->state_args[\"{name}\"]);\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if (__sv_comp->state_vars.find(\"{var_name}\") == __sv_comp->state_vars.end()) {{\n\
+                     {indent}    __sv_comp->state_vars[\"{var_name}\"] = {init_val};\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, type_str, indent, _sys| {
+                let cpp_type = cpp_map_type(type_str);
+                format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>(__e._parameters[\"{name}\"]);\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}_state_{parent}(__e);\n")
+            },
+        }),
+        TargetLanguage::Go => Some(DispatchSyntax {
+            lang,
+            semi: "",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if __e._message == \"{}\" {{\n", msg),
+            fmt_elif: |msg| format!("}} else if __e._message == \"{}\" {{\n", msg),
+            fmt_hsm_nav: |state, _sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str("__sv_comp := s.__compartment\n");
+                s.push_str(&format!("for __sv_comp != nil && __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parentCompartment }}\n", state));
+                s
+            },
+            fmt_bind_param: |name, type_str, _sys| {
+                let go_type = go_map_type(type_str);
+                format!("{name} := s.__compartment.stateArgs[\"{name}\"].({go_type})\n_ = {name}\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, _sys| {
+                format!(
+                    "{indent}if _, ok := __sv_comp.stateVars[\"{var_name}\"]; !ok {{\n\
+                     {indent}    __sv_comp.stateVars[\"{var_name}\"] = {init_val}\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, type_str, indent, _sys| {
+                let go_type = go_map_type(type_str);
+                format!("{indent}{name} := __e._parameters[\"{name}\"].({go_type})\n{indent}_ = {name}\n")
+            },
+            fmt_forward: |parent, indent, _sys| {
+                format!("{indent}s._state_{parent}(__e)\n")
+            },
+        }),
+        TargetLanguage::C => Some(DispatchSyntax {
+            lang,
+            semi: ";",
+            empty_body: "",
+            indent: "    ",
+            close_final: "}\n",
+            else_start: "} else {\n",
+            fmt_if: |msg| format!("if (strcmp(__e->_message, \"{}\") == 0) {{\n", msg),
+            fmt_elif: |msg| format!("}} else if (strcmp(__e->_message, \"{}\") == 0) {{\n", msg),
+            fmt_hsm_nav: |state, sys| {
+                let mut s = String::new();
+                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
+                s.push_str(&format!("{}_Compartment* __sv_comp = self->__compartment;\n", sys));
+                s.push_str(&format!("while (__sv_comp != NULL && strcmp(__sv_comp->state, \"{}\") != 0) {{\n", state));
+                s.push_str("    __sv_comp = __sv_comp->parent_compartment;\n");
+                s.push_str("}\n");
+                s
+            },
+            fmt_bind_param: |name, type_str, sys| {
+                format!("int {name} = (int)(intptr_t){sys}_FrameDict_get(self->__compartment->state_args, \"{name}\");\n")
+            },
+            fmt_init_sv: |var_name, init_val, indent, sys| {
+                format!(
+                    "{indent}if (!{sys}_FrameDict_has(__sv_comp->state_vars, \"{var_name}\")) {{\n\
+                     {indent}    {sys}_FrameDict_set(__sv_comp->state_vars, \"{var_name}\", (void*)(intptr_t)({init_val}));\n\
+                     {indent}}}\n"
+                )
+            },
+            fmt_unpack: |name, type_str, indent, sys| {
+                format!("{indent}int {name} = (int)(intptr_t){sys}_FrameDict_get(__e->_parameters, \"{name}\");\n")
+            },
+            fmt_forward: |parent, indent, sys| {
+                format!("{indent}{sys}_state_{parent}(self, __e);\n")
+            },
+        }),
+        // Rust and Erlang stay separate (different dispatch patterns)
         _ => None,
     }
 }
@@ -193,7 +582,7 @@ pub(crate) fn generate_unified_state_dispatch(
 
     // 2. HSM compartment navigation
     if !state_vars.is_empty() {
-        code.push_str(&(syn.fmt_hsm_nav)(state_name));
+        code.push_str(&(syn.fmt_hsm_nav)(state_name, system_name));
     }
 
     // 3. Auto-generated enter handler for state var init (when no explicit $>)
