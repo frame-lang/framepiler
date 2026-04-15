@@ -119,7 +119,7 @@
                     }
 
                     // Terminators
-                    if b == b';' { break; }
+                    if b == b';' || b == b'}' { break; }
                     if b == b'/' && j + 1 < end && (bytes[j + 1] == b'/' || bytes[j + 1] == b'*') { break; }
 
                     // String starts

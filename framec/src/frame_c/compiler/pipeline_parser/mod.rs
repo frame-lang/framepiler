@@ -686,6 +686,10 @@ impl<'a> Parser<'a> {
                                 label: None,
                                 span: Span::new(tok.span.start, next.span.end),
                                 indent: 0,
+                                exit_args: None,
+                                enter_args: None,
+                                state_args: None,
+                                is_pop: false,
                             }));
                         }
                         Token::StringLit(label_text) => {
@@ -698,6 +702,10 @@ impl<'a> Parser<'a> {
                                     label: Some(label_text),
                                     span: Span::new(tok.span.start, target_tok.span.end),
                                     indent: 0,
+                                    exit_args: None,
+                                    enter_args: None,
+                                    state_args: None,
+                                    is_pop: false,
                                 }));
                             }
                         }
@@ -732,6 +740,10 @@ impl<'a> Parser<'a> {
                                         label: None,
                                         span: Span::new(tok.span.start, after_args.span.end),
                                         indent: 0,
+                                        exit_args: None,
+                                        enter_args: None,
+                                        state_args: None,
+                                        is_pop: false,
                                     }));
                                 }
                                 Token::StringLit(label_text) => {
@@ -745,6 +757,10 @@ impl<'a> Parser<'a> {
                                             label: Some(label_text),
                                             span: Span::new(tok.span.start, target_tok.span.end),
                                             indent: 0,
+                                            exit_args: None,
+                                            enter_args: None,
+                                            state_args: None,
+                                            is_pop: false,
                                         }));
                                     }
                                 }

@@ -11,7 +11,7 @@ use super::codegen_utils::{
     type_to_cpp_string, HandlerContext,
 };
 use super::frame_expansion::{
-    get_native_scanner, normalize_indentation, splice_handler_body_from_span,
+    emit_handler_body_via_statements, get_native_scanner, normalize_indentation,
 };
 use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
 use crate::frame_c::compiler::frame_ast::{MachineAst, StateVarAst, SystemAst, Type};
@@ -500,12 +500,22 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_bind_param: |name, type_str, _sys| {
                 let cpp_type = cpp_map_type(type_str);
-                format!("{cpp_type} {name} = std::any_cast<{cpp_type}>(__compartment->state_args[\"{name}\"]);\n")
+                if cpp_type == "std::any" {
+                    format!("auto {name} = __compartment->state_args[\"{name}\"];\n")
+                } else {
+                    format!("{cpp_type} {name} = std::any_cast<{cpp_type}>(__compartment->state_args[\"{name}\"]);\n")
+                }
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
+                // Wrap string literals in std::string() to avoid const char* / std::string mismatch in std::any
+                let wrapped = if init_val.trim().starts_with('"') && init_val.trim().ends_with('"') {
+                    format!("std::string({})", init_val)
+                } else {
+                    init_val.to_string()
+                };
                 format!(
                     "{indent}if (__sv_comp->state_vars.find(\"{var_name}\") == __sv_comp->state_vars.end()) {{\n\
-                     {indent}    __sv_comp->state_vars[\"{var_name}\"] = {init_val};\n\
+                     {indent}    __sv_comp->state_vars[\"{var_name}\"] = {wrapped};\n\
                      {indent}}}\n"
                 )
             },
@@ -516,7 +526,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     "exit" => "__compartment->exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>({dict}[\"{name}\"]);\n")
+                // Don't any_cast to std::any — just copy directly
+                if cpp_type == "std::any" {
+                    format!("{indent}auto {name} = {dict}[\"{name}\"];\n")
+                } else {
+                    format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>({dict}[\"{name}\"]);\n")
+                }
             },
             fmt_forward: |parent, indent, _sys| {
                 format!("{indent}_state_{parent}(__e);\n")
@@ -581,7 +596,11 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s
             },
             fmt_bind_param: |name, type_str, sys| {
-                format!("int {name} = (int)(intptr_t){sys}_FrameDict_get(self->__compartment->state_args, \"{name}\");\n")
+                let (c_type, cast) = match type_str {
+                    "str" | "string" | "String" | "char*" | "const char*" => ("const char*", "(const char*)"),
+                    _ => ("int", "(int)(intptr_t)"),
+                };
+                format!("{c_type} {name} = {cast}{sys}_FrameDict_get(self->__compartment->state_args, \"{name}\");\n")
             },
             fmt_init_sv: |var_name, init_val, indent, sys| {
                 format!(
@@ -596,7 +615,11 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     "exit" => format!("self->__compartment->exit_args"),
                     _ => format!("__e->_parameters"),
                 };
-                format!("{indent}int {name} = (int)(intptr_t){sys}_FrameDict_get({dict}, \"{name}\");\n")
+                let (c_type, cast) = match type_str {
+                    "str" | "string" | "String" | "char*" | "const char*" => ("const char*", "(const char*)"),
+                    _ => ("int", "(int)(intptr_t)"),
+                };
+                format!("{indent}{c_type} {name} = {cast}{sys}_FrameDict_get({dict}, \"{name}\");\n")
             },
             fmt_forward: |parent, indent, sys| {
                 format!("{indent}{sys}_state_{parent}(self, __e);\n")
@@ -713,7 +736,7 @@ pub(crate) fn generate_unified_state_dispatch(
         // Handler body
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = splice_handler_body_from_span(&handler.body_span, source, syn.lang, &handler_ctx);
+        let body = emit_handler_body_via_statements(&handler.body_span, source, syn.lang, &handler_ctx);
 
         let mut body_has_content = !return_init_code.is_empty();
         for line in body.lines() {
@@ -1399,7 +1422,7 @@ pub(crate) fn generate_handler_from_arcanum(
     // Splice the handler body: preserve native code, expand Frame segments
     let mut body_code = sys_param_preamble;
     body_code.push_str(&return_init_code);
-    body_code.push_str(&splice_handler_body_from_span(
+    body_code.push_str(&emit_handler_body_via_statements(
         &handler.body_span,
         source,
         lang,

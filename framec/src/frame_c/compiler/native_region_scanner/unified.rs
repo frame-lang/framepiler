@@ -844,7 +844,7 @@ pub fn find_line_end_c_like(bytes: &[u8], mut j: usize, end: usize) -> usize {
             continue;
         }
 
-        if b == b';' {
+        if b == b';' || b == b'}' {
             break;
         }
         if b == b'/' && j + 1 < end && (bytes[j + 1] == b'/' || bytes[j + 1] == b'*') {

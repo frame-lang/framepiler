@@ -1808,6 +1808,10 @@ impl FrameParser {
                     label: None,
                     span: Span::new(span.start, span.end),
                     indent,
+                    exit_args: None,
+                    enter_args: None,
+                    state_args: None,
+                    is_pop: false,
                 }))
             }
             FrameSegmentKind::Forward => {

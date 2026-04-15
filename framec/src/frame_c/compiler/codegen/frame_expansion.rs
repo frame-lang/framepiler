@@ -60,60 +60,186 @@ fn resolve_exit_arg_key(i: usize, ctx: &HandlerContext) -> String {
         .unwrap_or_else(|| i.to_string())
 }
 
-/// Splice handler body from a span (used by Arcanum-based generation)
-pub(crate) fn splice_handler_body_from_span(
+/// Wrap a C++ expression in std::string() if it's a string literal.
+/// Prevents std::bad_any_cast when storing in std::any (const char* vs std::string).
+fn cpp_wrap_string_literal(expr: &str) -> String {
+    let trimmed = expr.trim();
+    if trimmed.starts_with('"') && trimmed.ends_with('"') {
+        format!("std::string({})", trimmed)
+    } else {
+        expr.to_string()
+    }
+}
+
+/// Emit handler body by scanning for Frame segments and walking them as AST statements.
+///
+/// Pipeline: source bytes → scanner → regions → statements → expansion walk → output string.
+/// NativeCode passes through verbatim; Frame constructs are expanded per-language.
+pub(crate) fn emit_handler_body_via_statements(
     span: &crate::frame_c::compiler::ast::Span,
     source: &[u8],
     lang: TargetLanguage,
     ctx: &HandlerContext,
 ) -> String {
-    // Ensure span is within bounds
+    use crate::frame_c::compiler::frame_ast::Statement;
+    use crate::frame_c::compiler::native_region_scanner::regions_to_statements;
+
     if span.start >= source.len() || span.end > source.len() || span.start >= span.end {
         return String::new();
     }
 
     let body_bytes = &source[span.start..span.end];
-
-    // Find the opening brace
     let open_brace = match body_bytes.iter().position(|&b| b == b'{') {
         Some(pos) => pos,
         None => return String::from_utf8_lossy(body_bytes).trim().to_string(),
     };
 
-    // Scan for Frame segments within the body
+    // Scanner does the hard work
     let mut scanner = get_native_scanner(lang);
     let scan_result = match scanner.scan(body_bytes, open_brace) {
         Ok(r) => r,
         Err(_) => return String::new(),
     };
 
-    // Generate expansions for each Frame segment
-    let mut expansions = Vec::new();
-    for region in &scan_result.regions {
-        if let Region::FrameSegment { span, kind, indent, metadata } = region {
-            let expansion = generate_frame_expansion(body_bytes, span, *kind, *indent, lang, ctx, metadata);
-            expansions.push(expansion);
+    // Convert regions to typed AST statements
+    let statements = regions_to_statements(body_bytes, &scan_result.regions);
+
+    // Walk statements — NativeCode passes through, Frame constructs get expanded.
+    // We still call generate_frame_expansion() for Frame constructs by looking up
+    // the original Region to get the span/kind/metadata/indent it needs.
+    let mut out = String::new();
+    let mut frame_idx = 0usize; // Index into FrameSegment regions
+    let frame_regions: Vec<_> = scan_result.regions.iter()
+        .filter(|r| matches!(r, Region::FrameSegment { .. }))
+        .collect();
+
+    // Track which statement indices to skip (consumed by lookahead)
+    let mut skip_set = std::collections::HashSet::new();
+
+    for (stmt_idx, stmt) in statements.iter().enumerate() {
+        if skip_set.contains(&stmt_idx) {
+            // This statement was consumed by a prior lookahead — skip it
+            // but still advance frame_idx if it's a Frame statement
+            if !matches!(stmt, Statement::NativeCode(_)) {
+                frame_idx += 1;
+            }
+            continue;
+        }
+        match stmt {
+            Statement::NativeCode(text) => {
+                out.push_str(text);
+            }
+            _ => {
+                // Lookahead: if this is a Transition and a ContextReturnExpr follows
+                // (with only whitespace-only NativeCode between), the transition's
+                // `return;` would make the return-value unreachable. Fix: strip the
+                // `return`/`return;` from the transition expansion, emit the return-expr
+                // assignment, then re-add the return.
+                if matches!(stmt, Statement::Transition(_)) {
+                    // Find the next return-value statement after this transition.
+                    // Only reorder if the return-expr is at the same or deeper indent
+                    // as the transition (same block scope). If at shallower indent,
+                    // it's in a different scope and unrelated to this transition.
+                    let transition_indent = if frame_idx < frame_regions.len() {
+                        if let Region::FrameSegment { indent, .. } = frame_regions[frame_idx] {
+                            *indent
+                        } else { 0 }
+                    } else { 0 };
+
+                    let mut return_stmt_idx = None;
+                    for j in (stmt_idx + 1)..statements.len() {
+                        match &statements[j] {
+                            Statement::NativeCode(text) if text.trim().is_empty() => {
+                                // Check if the whitespace after the last \n has
+                                // enough indent to be in the same block
+                                if let Some(last_nl) = text.rfind('\n') {
+                                    let after_nl = &text[last_nl + 1..];
+                                    let ws_indent = after_nl.len();
+                                    if ws_indent < transition_indent {
+                                        break; // Shallower indent — different scope
+                                    }
+                                }
+                                continue;
+                            }
+                            Statement::ContextReturnExpr { .. } | Statement::ReturnCall { .. } => {
+                                return_stmt_idx = Some(j);
+                            }
+                            _ => {}
+                        }
+                        break;
+                    }
+                    if let Some(ret_idx) = return_stmt_idx {
+                        // Generate the transition expansion to check if it ends with return
+                        if frame_idx < frame_regions.len() {
+                            if let Region::FrameSegment { span: seg_span, kind, indent, metadata } = frame_regions[frame_idx] {
+                                let expansion = generate_frame_expansion(
+                                    body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
+                                );
+                                let trimmed = expansion.trim_end();
+                                let has_return = trimmed.ends_with("return;") || trimmed.ends_with("return");
+
+                                if has_return {
+                                    // Strip trailing return, emit return-expr before it
+                                    let stripped = if trimmed.ends_with("return;") {
+                                        &trimmed[..trimmed.len() - 7]
+                                    } else {
+                                        &trimmed[..trimmed.len() - 6]
+                                    };
+                                    out.push_str(stripped);
+                                    out.push('\n');
+                                    frame_idx += 1;
+
+                                    // Emit the return-expr
+                                    let mut fj = frame_idx;
+                                    for k in (stmt_idx + 1)..=ret_idx {
+                                        if !matches!(&statements[k], Statement::NativeCode(_)) {
+                                            if k == ret_idx && fj < frame_regions.len() {
+                                                if let Region::FrameSegment { span: seg_span, kind, indent, metadata } = frame_regions[fj] {
+                                                    let exp = generate_frame_expansion(
+                                                        body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
+                                                    );
+                                                    out.push_str(&exp);
+                                                    out.push('\n');
+                                                }
+                                            }
+                                            fj += 1;
+                                        }
+                                    }
+                                    skip_set.insert(ret_idx);
+                                    // Re-add the return with matching indent
+                                    let return_keyword = if matches!(lang,
+                                        TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby |
+                                        TargetLanguage::Lua | TargetLanguage::Kotlin | TargetLanguage::Swift |
+                                        TargetLanguage::Go
+                                    ) { "return" } else { "return;" };
+                                    let ret_indent = " ".repeat(*indent);
+                                    out.push_str(&ret_indent);
+                                    out.push_str(return_keyword);
+                                    continue; // Skip the normal frame expansion below
+                                }
+                                // No return in expansion — fall through to normal emit
+                            }
+                        }
+                    }
+                }
+
+                // Look up the corresponding original Region for expansion parameters
+                if frame_idx < frame_regions.len() {
+                    if let Region::FrameSegment { span: seg_span, kind, indent, metadata } = frame_regions[frame_idx] {
+                        let expansion = generate_frame_expansion(
+                            body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
+                        );
+                        out.push_str(&expansion);
+                    }
+                    frame_idx += 1;
+                }
+            }
         }
     }
 
-    // Use splicer to combine native + generated Frame code
-    let splicer = Splicer;
-    let spliced = splicer.splice(body_bytes, &scan_result.regions, &expansions);
-
-    if std::env::var("FRAME_DEBUG_SPLICER").is_ok() {
-        eprintln!(
-            "[splice_handler_body_from_span] Spliced result: {:?}",
-            spliced.text
-        );
-    }
-
-    // The splicer produces content WITHOUT the outer braces
-    // Normalize indentation: remove common leading whitespace from all lines
-    let text = spliced.text.trim_start_matches('\n').trim_end();
+    // Same post-processing as splice path
+    let text = out.trim_start_matches('\n').trim_end();
     let text = normalize_indentation(text);
-    // Strip unreachable code after terminal statements (strict languages)
-    // 1. Strip ;; (empty statement after return)
-    // 2. Remove lines after a bare "return;" / "return" until end of block
     if matches!(
         lang,
         TargetLanguage::Java
@@ -122,7 +248,6 @@ pub(crate) fn splice_handler_body_from_span(
             | TargetLanguage::CSharp
             | TargetLanguage::Go
     ) {
-        // Swift/Kotlin/Go don't use semicolons — strip trailing semicolons from lines
         let text = if matches!(
             lang,
             TargetLanguage::Swift | TargetLanguage::Kotlin | TargetLanguage::Go
@@ -131,10 +256,8 @@ pub(crate) fn splice_handler_body_from_span(
                 .map(|line| {
                     let trimmed = line.trim_end();
                     if trimmed.ends_with(';') {
-                        // Strip trailing semicolons, but handle ";;" -> nothing
                         let stripped = trimmed.trim_end_matches(';');
                         if stripped.is_empty() && line.trim() == ";" {
-                            // Lone semicolon line — remove entirely
                             String::new()
                         } else {
                             stripped.to_string()
@@ -153,6 +276,7 @@ pub(crate) fn splice_handler_body_from_span(
         text
     }
 }
+
 
 /// Strip unreachable code after terminal statements for Java.
 /// Java treats code after `return;` as a compile error, unlike TypeScript/C++ which ignore it.
@@ -2286,11 +2410,15 @@ pub(crate) fn generate_frame_expansion(
                         ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix)
                 }
                 TargetLanguage::C => {
-                    // For C, access via FrameDict_get with cast
-                    // Note: This is for reads; writes are handled by detecting assignment context
+                    // For C, access via FrameDict_get with type-aware cast
+                    let c_type = ctx.state_var_types.get(var_name.as_str()).map(|s| s.as_str()).unwrap_or("int");
+                    let cast = match c_type {
+                        "char*" | "const char*" | "str" | "string" | "String" => "(const char*)",
+                        _ => "(int)(intptr_t)",
+                    };
                     format!(
-                        "(int)(intptr_t){}_FrameDict_get(self->__compartment->state_vars, \"{}\")",
-                        ctx.system_name, var_name
+                        "{}{}_FrameDict_get(self->__compartment->state_vars, \"{}\")",
+                        cast, ctx.system_name, var_name
                     )
                 }
                 TargetLanguage::Cpp => {
@@ -2317,15 +2445,15 @@ pub(crate) fn generate_frame_expansion(
                         .get(var_name.as_str())
                         .map(|t| java_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let cast = if java_type == "Object" {
-                        String::new()
+                    let accessor = if ctx.use_sv_comp {
+                        format!("__sv_comp.state_vars.get(\"{}\")", var_name)
                     } else {
-                        format!("({}) ", java_type)
+                        format!("__compartment.state_vars.get(\"{}\")", var_name)
                     };
-                    if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars.get(\"{}\")", cast, var_name)
+                    if java_type == "Object" {
+                        accessor
                     } else {
-                        format!("{}__compartment.state_vars.get(\"{}\")", cast, var_name)
+                        format!("(({}) {})", java_type, accessor)
                     }
                 }
                 TargetLanguage::Kotlin => {
@@ -2658,7 +2786,10 @@ pub(crate) fn generate_frame_expansion(
                             };
                             format!("{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", indent_str, boxed_expr, indent_str)
                         }
-                        TargetLanguage::Cpp => format!("{}_context_stack.back()._return = std::any({});", indent_str, expanded_expr),
+                        TargetLanguage::Cpp => {
+                            let wrapped = cpp_wrap_string_literal(&expanded_expr);
+                            format!("{}_context_stack.back()._return = std::any({});", indent_str, wrapped)
+                        }
                         TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._return = {};", indent_str, expanded_expr),
                         TargetLanguage::Kotlin => format!("{}_context_stack[_context_stack.size - 1]._return = {}", indent_str, expanded_expr),
                         TargetLanguage::Swift => format!("{}_context_stack[_context_stack.count - 1]._return = {}", indent_str, expanded_expr),
@@ -2808,10 +2939,10 @@ pub(crate) fn generate_frame_expansion(
                     };
                     format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", boxed_expr, indent_str)
                 }
-                TargetLanguage::Cpp => format!(
-                    "_context_stack.back()._return = std::any({});",
-                    expanded_expr
-                ),
+                TargetLanguage::Cpp => {
+                    let wrapped = cpp_wrap_string_literal(&expanded_expr);
+                    format!("_context_stack.back()._return = std::any({});", wrapped)
+                }
                 TargetLanguage::Java => format!(
                     "_context_stack.get(_context_stack.size() - 1)._return = {};",
                     expanded_expr
@@ -3208,10 +3339,10 @@ pub(crate) fn generate_frame_expansion(
                     };
                     format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", boxed_expr, indent_str)
                 }
-                TargetLanguage::Cpp => format!(
-                    "_context_stack.back()._return = std::any({});",
-                    expanded_expr
-                ),
+                TargetLanguage::Cpp => {
+                    let wrapped = cpp_wrap_string_literal(&expanded_expr);
+                    format!("_context_stack.back()._return = std::any({});", wrapped)
+                }
                 TargetLanguage::Java => format!(
                     "_context_stack.get(_context_stack.size() - 1)._return = {};",
                     expanded_expr
@@ -3772,13 +3903,18 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix));
                 }
                 TargetLanguage::C => {
+                    let c_type = ctx.state_var_types.get(&var_name).map(|s| s.as_str()).unwrap_or("int");
+                    let cast = match c_type {
+                        "char*" | "const char*" | "str" | "string" | "String" => "(const char*)",
+                        _ => "(int)(intptr_t)",
+                    };
                     if ctx.use_sv_comp {
                         result.push_str(&format!(
-                            "(int)(intptr_t){}_FrameDict_get(__sv_comp->state_vars, \"{}\")",
-                            ctx.system_name, var_name
+                            "{}{}_FrameDict_get(__sv_comp->state_vars, \"{}\")",
+                            cast, ctx.system_name, var_name
                         ))
                     } else {
-                        result.push_str(&format!("(int)(intptr_t){}_FrameDict_get(self->__compartment->state_vars, \"{}\")", ctx.system_name, var_name))
+                        result.push_str(&format!("{}{}_FrameDict_get(self->__compartment->state_vars, \"{}\")", cast, ctx.system_name, var_name))
                     }
                 }
                 TargetLanguage::Cpp => {
@@ -3805,21 +3941,17 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         .get(&var_name)
                         .map(|t| java_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let cast = if java_type == "Object" {
-                        String::new()
+                    let accessor = if ctx.use_sv_comp {
+                        format!("__sv_comp.state_vars.get(\"{}\")", var_name)
                     } else {
-                        format!("({}) ", java_type)
+                        format!("__compartment.state_vars.get(\"{}\")", var_name)
                     };
-                    if ctx.use_sv_comp {
-                        result.push_str(&format!(
-                            "{}__sv_comp.state_vars.get(\"{}\")",
-                            cast, var_name
-                        ))
+                    if java_type == "Object" {
+                        result.push_str(&accessor);
                     } else {
-                        result.push_str(&format!(
-                            "{}__compartment.state_vars.get(\"{}\")",
-                            cast, var_name
-                        ))
+                        // Wrap cast in parens so method calls chain correctly:
+                        // ((String) map.get("k")).equals("v") not (String) map.get("k").equals("v")
+                        result.push_str(&format!("(({}) {})", java_type, accessor));
                     }
                 }
                 TargetLanguage::Kotlin => {
@@ -4007,10 +4139,48 @@ pub(crate) fn expand_system_state(lang: TargetLanguage) -> String {
 /// Operations are native code but `@@:system.state` is a read-only accessor
 /// that's safe in non-static operations.
 pub(crate) fn expand_system_state_in_code(code: &str, lang: TargetLanguage) -> String {
-    if !code.contains("@@:system.state") {
-        return code.to_string();
+    let mut result = code.to_string();
+
+    // Expand @@:system.state → compartment accessor
+    if result.contains("@@:system.state") {
+        result = result.replace("@@:system.state", &expand_system_state(lang));
     }
-    code.replace("@@:system.state", &expand_system_state(lang))
+
+    // Expand @@:(expr) → return expr
+    // In operation bodies, @@:(expr) means "return this value" (no context stack).
+    // This handles patterns like @@:(@@:system.state) where the inner was already expanded.
+    while let Some(start) = result.find("@@:(") {
+        let after = start + 4; // position after "@@:("
+        let bytes = result.as_bytes();
+        let mut depth = 1i32;
+        let mut j = after;
+        while j < bytes.len() && depth > 0 {
+            match bytes[j] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth > 0 { j += 1; }
+        }
+        if depth == 0 {
+            let expr = &result[after..j];
+            let expansion = match lang {
+                // Erlang: last expression IS the return value
+                TargetLanguage::Erlang => expr.to_string(),
+                // No-semicolon languages
+                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby |
+                TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::Lua |
+                TargetLanguage::Go => format!("return {}", expr),
+                // Semicolon languages
+                _ => format!("return {};", expr),
+            };
+            result = format!("{}{}{}", &result[..start], expansion, &result[j + 1..]);
+        } else {
+            break; // unmatched paren — bail
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]

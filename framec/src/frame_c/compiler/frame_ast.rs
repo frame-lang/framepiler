@@ -278,6 +278,35 @@ pub enum Statement {
     Expression(ExpressionAst),
     /// Native code chunk within handler body (V4 pipeline: Lexer extracts, Parser stores)
     NativeCode(String),
+
+    // === Frame context constructs (mid-line and standalone) ===
+
+    /// State variable read: $.varName
+    StateVarRead { name: String, span: Span },
+    /// State variable assignment: $.varName = expr
+    StateVarAssign { name: String, expr: String, span: Span },
+    /// Context return: @@:return (bare read) or @@:return = expr (assignment)
+    ContextReturn { assign_expr: Option<String>, span: Span },
+    /// Context return expression: @@:(expr)
+    ContextReturnExpr { expr: String, span: Span },
+    /// Return-call: @@:return(expr) — set return value AND exit handler
+    ReturnCall { expr: String, span: Span },
+    /// Context event: @@:event — interface event name (read-only)
+    ContextEvent { span: Span },
+    /// Context data read: @@:data["key"]
+    ContextData { key: String, span: Span },
+    /// Context data assignment: @@:data["key"] = expr
+    ContextDataAssign { key: String, expr: String, span: Span },
+    /// Context params: @@:params["key"]
+    ContextParams { key: String, span: Span },
+    /// Self-call: @@:self.method(args) — reentrant interface call
+    ContextSelfCall { method: String, args: String, span: Span },
+    /// Bare self reference: @@:self
+    ContextSelf { span: Span },
+    /// System state: @@:system.state — current state name
+    ContextSystemState { span: Span },
+    /// Tagged instantiation: @@SystemName(args)
+    TaggedInstantiation { system_name: String, args: String, span: Span },
 }
 
 /// Transition statement (-> $State)
@@ -291,6 +320,17 @@ pub struct TransitionAst {
     pub span: Span,
     /// Source indentation level (for proper code generation)
     pub indent: usize,
+    /// Raw exit/enter/state arg strings from scanner (for codegen).
+    /// These are populated by `regions_to_statements()`, not the parser.
+    #[doc(hidden)]
+    pub exit_args: Option<String>,
+    #[doc(hidden)]
+    pub enter_args: Option<String>,
+    #[doc(hidden)]
+    pub state_args: Option<String>,
+    /// Pop-transition flag (-> pop$)
+    #[doc(hidden)]
+    pub is_pop: bool,
 }
 
 /// Transition-forward statement (-> => $State)
@@ -707,6 +747,10 @@ mod tests {
             label: None,
             span: Span::new(10, 20),
             indent: 8,
+            exit_args: None,
+            enter_args: None,
+            state_args: None,
+            is_pop: false,
         };
 
         assert_eq!(transition.target, "Green");

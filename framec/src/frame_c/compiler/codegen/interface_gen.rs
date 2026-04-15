@@ -929,11 +929,9 @@ pub(crate) fn generate_operation(
     // Extract native code from source using span (oceans model)
     let mut code = extract_body_content(source, &operation.body.span);
 
-    // Expand @@:system.state in non-static operation bodies.
-    // Static operations have no `self` — they can't access the compartment.
-    if !operation.is_static {
-        code = super::frame_expansion::expand_system_state_in_code(&code, syntax.language);
-    }
+    // Expand @@:system.state and @@:(expr) in operation bodies.
+    // @@:system.state requires `self` (non-static only), but @@:(expr) works in both.
+    code = super::frame_expansion::expand_system_state_in_code(&code, syntax.language);
 
     // Backend handles is_static flag for @staticmethod decorator
     CodegenNode::Method {

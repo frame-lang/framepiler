@@ -16,7 +16,6 @@ use super::codegen_utils::{
 };
 use super::frame_expansion::{
     generate_frame_expansion, get_native_scanner, normalize_indentation,
-    splice_handler_body_from_span,
 };
 use super::interface_gen::{
     generate_action, generate_interface_wrappers, generate_operation, generate_persistence_methods,
@@ -37,7 +36,6 @@ use crate::frame_c::compiler::native_region_scanner::{
     swift::NativeRegionScannerSwift, typescript::NativeRegionScannerTs, FrameSegmentKind,
     NativeRegionScanner, Region,
 };
-use crate::frame_c::compiler::splice::Splicer;
 use crate::frame_c::visitors::TargetLanguage;
 
 /// Check if a word appears at a whole-word boundary in text.
@@ -1152,9 +1150,16 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
     }
 
     // Domain-kind system params override domain field defaults.
-    // Emit `self.field = param` for each Domain param AFTER domain field init.
+    // The domain init uses the literal default (e.g., `self.inventory = {}`).
+    // We must then assign the constructor arg: `self.inventory = inventory`.
+    // Note: the param name always matches the domain field name for Domain params.
     for p in &system.params {
         if matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::Domain) {
+            // Check that this param name actually matches a domain field
+            let has_matching_field = system.domain.iter().any(|d| d.name == p.name);
+            if !has_matching_field {
+                continue; // Skip — no matching domain field
+            }
             let assign_code = match syntax.language {
                 TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Lua => {
                     format!("self.{} = {}", p.name, p.name)

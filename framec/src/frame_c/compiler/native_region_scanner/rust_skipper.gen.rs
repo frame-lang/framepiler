@@ -1,5 +1,5 @@
 
-// Rust syntax skipper â Frame-generated state machine.
+// Rust syntax skipper — Frame-generated state machine.
 // Delegates to shared helpers where possible; inlines Rust-specific logic.
 //
 // Helpers used:
@@ -42,6 +42,7 @@ struct RustSyntaxSkipperFsmFrameContext {
     event: RustSyntaxSkipperFsmFrameEvent,
     _return: Option<Box<dyn std::any::Any>>,
     _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    _transitioned: bool,
 }
 
 impl RustSyntaxSkipperFsmFrameContext {
@@ -50,6 +51,7 @@ impl RustSyntaxSkipperFsmFrameContext {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -167,6 +169,10 @@ impl RustSyntaxSkipperFsm {
                     self.__router(&forward_event);
                 }
             }
+            // Mark all stacked contexts as transitioned
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
+            }
         }
     }
 
@@ -240,6 +246,20 @@ impl RustSyntaxSkipperFsm {
         self._context_stack.pop();
     }
 
+    fn _state_SkipComment(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
+        match __e.message.as_str() {
+            "$>" => { self._s_SkipComment_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_BalancedParenEnd(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
+        match __e.message.as_str() {
+            "$>" => { self._s_BalancedParenEnd_enter(__e); }
+            _ => {}
+        }
+    }
+
     fn _state_FindLineEnd(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
         match __e.message.as_str() {
             "$>" => { self._s_FindLineEnd_enter(__e); }
@@ -257,13 +277,6 @@ impl RustSyntaxSkipperFsm {
         }
     }
 
-    fn _state_BalancedParenEnd(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_BalancedParenEnd_enter(__e); }
-            _ => {}
-        }
-    }
-
     fn _state_SkipString(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
         match __e.message.as_str() {
             "$>" => { self._s_SkipString_enter(__e); }
@@ -271,11 +284,47 @@ impl RustSyntaxSkipperFsm {
         }
     }
 
-    fn _state_SkipComment(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_SkipComment_enter(__e); }
-            _ => {}
+    fn _s_SkipComment_enter(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
+        // Line comment via shared helper
+        if let Some(j) = skip_line_comment(&self.bytes, self.pos, self.end) {
+            self.result_pos = j;
+            self.success = 1;
+            return
         }
+        // Rust nested block comment (different from skip_block_comment — supports nesting)
+        let i = self.pos;
+        let end = self.end;
+        let bytes = &self.bytes;
+        if i + 1 < end && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            let mut j = i + 2;
+            let mut depth: i32 = 1;
+            while j + 1 < end && depth > 0 {
+                if bytes[j] == b'/' && bytes[j + 1] == b'*' {
+                    depth += 1;
+                    j += 2;
+                    continue;
+                }
+                if bytes[j] == b'*' && bytes[j + 1] == b'/' {
+                    depth -= 1;
+                    j += 2;
+                    continue;
+                }
+                j += 1;
+            }
+            self.result_pos = j;
+            self.success = 1;
+            return
+        }
+        self.success = 0;
+    }
+
+    fn _s_BalancedParenEnd_enter(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
+        if let Some(j) = balanced_paren_end_c_like(&self.bytes, self.pos, self.end) {
+            self.result_pos = j;
+            self.success = 1;
+            return
+        }
+        self.success = 0;
     }
 
     fn _s_FindLineEnd_enter(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
@@ -319,7 +368,7 @@ impl RustSyntaxSkipperFsm {
             }
         
             // Terminators
-            if b == b';' { break; }
+            if b == b';' || b == b'}' { break; }
             if b == b'/' && j + 1 < end && (bytes[j + 1] == b'/' || bytes[j + 1] == b'*') { break; }
         
             // String starts
@@ -349,22 +398,8 @@ impl RustSyntaxSkipperFsm {
         self.result_pos = j;
     }
 
-    fn _s_Init_do_skip_string(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = RustSyntaxSkipperFsmCompartment::new("SkipString");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
     fn _s_Init_do_balanced_paren_end(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
         let mut __compartment = RustSyntaxSkipperFsmCompartment::new("BalancedParenEnd");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_skip_comment(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = RustSyntaxSkipperFsmCompartment::new("SkipComment");
         __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
         self.__transition(__compartment);
         return;
@@ -377,13 +412,18 @@ impl RustSyntaxSkipperFsm {
         return;
     }
 
-    fn _s_BalancedParenEnd_enter(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
-        if let Some(j) = balanced_paren_end_c_like(&self.bytes, self.pos, self.end) {
-            self.result_pos = j;
-            self.success = 1;
-            return
-        }
-        self.success = 0;
+    fn _s_Init_do_skip_string(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = RustSyntaxSkipperFsmCompartment::new("SkipString");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_do_skip_comment(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = RustSyntaxSkipperFsmCompartment::new("SkipComment");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
     }
 
     fn _s_SkipString_enter(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
@@ -401,39 +441,4 @@ impl RustSyntaxSkipperFsm {
         }
         self.success = 0;
     }
-
-    fn _s_SkipComment_enter(&mut self, __e: &RustSyntaxSkipperFsmFrameEvent) {
-        // Line comment via shared helper
-        if let Some(j) = skip_line_comment(&self.bytes, self.pos, self.end) {
-            self.result_pos = j;
-            self.success = 1;
-            return
-        }
-        // Rust nested block comment (different from skip_block_comment — supports nesting)
-        let i = self.pos;
-        let end = self.end;
-        let bytes = &self.bytes;
-        if i + 1 < end && bytes[i] == b'/' && bytes[i + 1] == b'*' {
-            let mut j = i + 2;
-            let mut depth: i32 = 1;
-            while j + 1 < end && depth > 0 {
-                if bytes[j] == b'/' && bytes[j + 1] == b'*' {
-                    depth += 1;
-                    j += 2;
-                    continue;
-                }
-                if bytes[j] == b'*' && bytes[j + 1] == b'/' {
-                    depth -= 1;
-                    j += 2;
-                    continue;
-                }
-                j += 1;
-            }
-            self.result_pos = j;
-            self.success = 1;
-            return
-        }
-        self.success = 0;
-    }
 }
-

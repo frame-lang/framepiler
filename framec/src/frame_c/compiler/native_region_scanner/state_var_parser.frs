@@ -43,7 +43,9 @@ include!("expr_scanner.gen.rs");
                     j += 1;
                 }
 
-                if j < end && bytes[j] == b'=' && (j + 1 >= end || bytes[j + 1] != b'=') {
+                if j < end && bytes[j] == b'='
+                    && (j + 1 >= end || (bytes[j + 1] != b'=' && bytes[j + 1] != b'<' && bytes[j + 1] != b'>'))
+                {
                     // Assignment detected
                     j += 1; // Skip '='
                     self.pos = j;

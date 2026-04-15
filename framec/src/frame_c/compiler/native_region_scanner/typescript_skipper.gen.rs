@@ -1,5 +1,5 @@
 
-// TypeScript syntax skipper â Frame-generated state machine.
+// TypeScript syntax skipper — Frame-generated state machine.
 // Delegates to shared helpers where possible; inlines template literal awareness.
 //
 // Helpers used:
@@ -42,6 +42,7 @@ struct TypeScriptSyntaxSkipperFsmFrameContext {
     event: TypeScriptSyntaxSkipperFsmFrameEvent,
     _return: Option<Box<dyn std::any::Any>>,
     _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    _transitioned: bool,
 }
 
 impl TypeScriptSyntaxSkipperFsmFrameContext {
@@ -50,6 +51,7 @@ impl TypeScriptSyntaxSkipperFsmFrameContext {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -167,6 +169,10 @@ impl TypeScriptSyntaxSkipperFsm {
                     self.__router(&forward_event);
                 }
             }
+            // Mark all stacked contexts as transitioned
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
+            }
         }
     }
 
@@ -240,16 +246,6 @@ impl TypeScriptSyntaxSkipperFsm {
         self._context_stack.pop();
     }
 
-    fn _state_Init(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
-        match __e.message.as_str() {
-            "do_balanced_paren_end" => { self._s_Init_do_balanced_paren_end(__e); }
-            "do_find_line_end" => { self._s_Init_do_find_line_end(__e); }
-            "do_skip_comment" => { self._s_Init_do_skip_comment(__e); }
-            "do_skip_string" => { self._s_Init_do_skip_string(__e); }
-            _ => {}
-        }
-    }
-
     fn _state_FindLineEnd(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
         match __e.message.as_str() {
             "$>" => { self._s_FindLineEnd_enter(__e); }
@@ -271,39 +267,21 @@ impl TypeScriptSyntaxSkipperFsm {
         }
     }
 
+    fn _state_Init(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
+        match __e.message.as_str() {
+            "do_balanced_paren_end" => { self._s_Init_do_balanced_paren_end(__e); }
+            "do_find_line_end" => { self._s_Init_do_find_line_end(__e); }
+            "do_skip_comment" => { self._s_Init_do_skip_comment(__e); }
+            "do_skip_string" => { self._s_Init_do_skip_string(__e); }
+            _ => {}
+        }
+    }
+
     fn _state_SkipString(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
         match __e.message.as_str() {
             "$>" => { self._s_SkipString_enter(__e); }
             _ => {}
         }
-    }
-
-    fn _s_Init_do_skip_comment(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = TypeScriptSyntaxSkipperFsmCompartment::new("SkipComment");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_balanced_paren_end(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = TypeScriptSyntaxSkipperFsmCompartment::new("BalancedParenEnd");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_skip_string(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = TypeScriptSyntaxSkipperFsmCompartment::new("SkipString");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_find_line_end(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = TypeScriptSyntaxSkipperFsmCompartment::new("FindLineEnd");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
     }
 
     fn _s_FindLineEnd_enter(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
@@ -349,7 +327,7 @@ impl TypeScriptSyntaxSkipperFsm {
             }
         
             // Terminators
-            if b == b';' { break; }
+            if b == b';' || b == b'}' { break; }
             if b == b'/' && j + 1 < end && (bytes[j + 1] == b'/' || bytes[j + 1] == b'*') { break; }
         
             // String/template starts
@@ -420,10 +398,39 @@ impl TypeScriptSyntaxSkipperFsm {
             else if b == b'(' { depth += 1; i += 1; }
             else if b == b')' {
                 depth -= 1; i += 1;
-                if depth == 0 { self.result_pos = i; self.success = 1; return }
+                if depth == 0 { self.result_pos = i; self.success = 1;
+                                                                       return }
             } else { i += 1; }
         }
         self.success = 0;
+    }
+
+    fn _s_Init_do_find_line_end(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = TypeScriptSyntaxSkipperFsmCompartment::new("FindLineEnd");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_do_skip_comment(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = TypeScriptSyntaxSkipperFsmCompartment::new("SkipComment");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_do_balanced_paren_end(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = TypeScriptSyntaxSkipperFsmCompartment::new("BalancedParenEnd");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_do_skip_string(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = TypeScriptSyntaxSkipperFsmCompartment::new("SkipString");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
     }
 
     fn _s_SkipString_enter(&mut self, __e: &TypeScriptSyntaxSkipperFsmFrameEvent) {
@@ -442,4 +449,3 @@ impl TypeScriptSyntaxSkipperFsm {
         self.success = 0;
     }
 }
-

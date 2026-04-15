@@ -1,5 +1,5 @@
 
-// PHP syntax skipper â Frame-generated state machine.
+// PHP syntax skipper — Frame-generated state machine.
 // PHP has // and # line comments, /* */ block comments,
 // "..." and '...' strings, and heredoc/nowdoc (<<<EOT...EOT;).
 //
@@ -42,6 +42,7 @@ struct PhpSyntaxSkipperFsmFrameContext {
     event: PhpSyntaxSkipperFsmFrameEvent,
     _return: Option<Box<dyn std::any::Any>>,
     _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    _transitioned: bool,
 }
 
 impl PhpSyntaxSkipperFsmFrameContext {
@@ -50,6 +51,7 @@ impl PhpSyntaxSkipperFsmFrameContext {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -166,6 +168,10 @@ impl PhpSyntaxSkipperFsm {
                     self.__router(&enter_event);
                     self.__router(&forward_event);
                 }
+            }
+            // Mark all stacked contexts as transitioned
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
             }
         }
     }
@@ -301,6 +307,13 @@ impl PhpSyntaxSkipperFsm {
         return;
     }
 
+    fn _s_Init_do_skip_string(&mut self, __e: &PhpSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = PhpSyntaxSkipperFsmCompartment::new("SkipString");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
     fn _s_Init_do_skip_comment(&mut self, __e: &PhpSyntaxSkipperFsmFrameEvent) {
         let mut __compartment = PhpSyntaxSkipperFsmCompartment::new("SkipComment");
         __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
@@ -310,13 +323,6 @@ impl PhpSyntaxSkipperFsm {
 
     fn _s_Init_do_find_line_end(&mut self, __e: &PhpSyntaxSkipperFsmFrameEvent) {
         let mut __compartment = PhpSyntaxSkipperFsmCompartment::new("FindLineEnd");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_skip_string(&mut self, __e: &PhpSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = PhpSyntaxSkipperFsmCompartment::new("SkipString");
         __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
         self.__transition(__compartment);
         return;
@@ -341,7 +347,7 @@ impl PhpSyntaxSkipperFsm {
             }
         
             // Terminators
-            if b == b';' { break; }
+            if b == b';' || b == b'}' { break; }
             if b == b'/' && j + 1 < end && (bytes[j + 1] == b'/' || bytes[j + 1] == b'*') { break; }
             if b == b'#' { break; }
         
@@ -408,10 +414,10 @@ impl PhpSyntaxSkipperFsm {
             else if b == b'(' { depth += 1; i += 1; }
             else if b == b')' {
                 depth -= 1; i += 1;
-                if depth == 0 { self.result_pos = i; self.success = 1; return }
+                if depth == 0 { self.result_pos = i; self.success = 1;
+                                                                       return }
             } else { i += 1; }
         }
         self.success = 0;
     }
 }
-

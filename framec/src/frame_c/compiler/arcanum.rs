@@ -51,11 +51,12 @@ pub struct FrameSymbol {
 pub struct HandlerEntry {
     pub event: String,
     pub params: Vec<FrameSymbol>,
-    pub return_type: Option<String>, // Return type annotation if present
-    pub return_init: Option<String>, // Default return value: = @@:(expr)
-    pub body_span: Span,             // For splicer to extract body content
-    pub is_enter: bool,              // $>
-    pub is_exit: bool,               // $<
+    pub return_type: Option<String>,  // Return type annotation if present
+    pub return_init: Option<String>,  // Default return value: = @@:(expr)
+    pub body_span: Span,              // For splicer to extract body content (Path B)
+    pub body_statements: Vec<crate::frame_c::compiler::frame_ast::Statement>, // AST body for codegen (Path A)
+    pub is_enter: bool,               // $>
+    pub is_exit: bool,                // $<
 }
 
 /// Enhanced state entry with handlers
@@ -849,6 +850,7 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
             return_type: None, // Enter handlers don't have return types
             return_init: None,
             body_span: convert_span(&enter.body.span),
+            body_statements: enter.body.statements.clone(),
             is_enter: true,
             is_exit: false,
         };
@@ -872,6 +874,7 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
             return_type: None, // Exit handlers don't have return types
             return_init: None,
             body_span: convert_span(&exit.body.span),
+            body_statements: exit.body.statements.clone(),
             is_enter: false,
             is_exit: true,
         };
@@ -914,6 +917,7 @@ fn build_handler_entry_from_ast(handler: &FrameHandlerAst) -> HandlerEntry {
         return_type: handler.return_type.as_ref().map(type_to_string),
         return_init: handler.return_init.clone(),
         body_span: convert_span(&handler.body.span),
+        body_statements: handler.body.statements.clone(),
         is_enter: false,
         is_exit: false,
     }

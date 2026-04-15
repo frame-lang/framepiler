@@ -11,11 +11,10 @@ use super::codegen_utils::{
     is_bool_type, is_float_type, is_int_type, is_string_type, to_snake_case, type_to_string,
     HandlerContext,
 };
-use super::frame_expansion::splice_handler_body_from_span;
+use super::frame_expansion::emit_handler_body_via_statements;
 use crate::frame_c::compiler::arcanum::Arcanum;
 use crate::frame_c::compiler::frame_ast::{Expression, Literal, SystemAst, Type};
 use crate::frame_c::compiler::native_region_scanner::erlang::NativeRegionScannerErlang;
-use crate::frame_c::compiler::splice::Splicer;
 use crate::frame_c::visitors::TargetLanguage;
 
 /// Generate a complete Erlang gen_statem module from a Frame system.
@@ -1358,7 +1357,7 @@ pub(crate) fn generate_erlang_system(
                     start: enter.body.span.start,
                     end: enter.body.span.end,
                 };
-                let raw_enter = splice_handler_body_from_span(
+                let raw_enter = emit_handler_body_via_statements(
                     &enter_span,
                     source,
                     TargetLanguage::Erlang,
@@ -1492,7 +1491,7 @@ pub(crate) fn generate_erlang_system(
                     ));
                 }
 
-                // Use splice_handler_body_from_span for proper Frame statement expansion
+                // Use emit_handler_body_via_statements for proper Frame statement expansion
                 let handler_ctx = HandlerContext {
                     system_name: sys.to_string(),
                     state_name: state.name.clone(),
@@ -1510,7 +1509,7 @@ pub(crate) fn generate_erlang_system(
                     start: handler.body.span.start,
                     end: handler.body.span.end,
                 };
-                let raw_spliced = splice_handler_body_from_span(
+                let raw_spliced = emit_handler_body_via_statements(
                     &body_span,
                     source,
                     TargetLanguage::Erlang,
@@ -1849,7 +1848,7 @@ pub(crate) fn generate_erlang_system(
                     start: exit.body.span.start,
                     end: exit.body.span.end,
                 };
-                let raw_exit = splice_handler_body_from_span(
+                let raw_exit = emit_handler_body_via_statements(
                     &exit_span,
                     source,
                     TargetLanguage::Erlang,
@@ -2023,6 +2022,10 @@ pub(crate) fn generate_erlang_system(
                     (p.name.as_str(), cap)
                 })
                 .collect();
+
+            // Expand @@:system.state and @@:(expr) in operation bodies
+            let inner = super::frame_expansion::expand_system_state_in_code(inner, TargetLanguage::Erlang);
+            let inner = inner.as_str();
 
             // Process lines: strip return keyword, capitalize params, rewrite self
             let mut processed_lines: Vec<String> = Vec::new();

@@ -1,5 +1,5 @@
 
-// StateVarParser â FSM for parsing $.varName (read) and $.varName = expr (assignment).
+// StateVarParser — FSM for parsing $.varName (read) and $.varName = expr (assignment).
 //
 // Demonstrates hierarchical composition: $ScanExpr creates an ExprScannerFsm
 // sub-machine when it detects an assignment.
@@ -41,6 +41,7 @@ struct StateVarParserFsmFrameContext {
     event: StateVarParserFsmFrameEvent,
     _return: Option<Box<dyn std::any::Any>>,
     _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    _transitioned: bool,
 }
 
 impl StateVarParserFsmFrameContext {
@@ -49,6 +50,7 @@ impl StateVarParserFsmFrameContext {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -168,6 +170,10 @@ impl StateVarParserFsm {
                     self.__router(&forward_event);
                 }
             }
+            // Mark all stacked contexts as transitioned
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
+            }
         }
     }
 
@@ -217,6 +223,20 @@ impl StateVarParserFsm {
         self._context_stack.pop();
     }
 
+    fn _state_Done(&mut self, __e: &StateVarParserFsmFrameEvent) {
+        match __e.message.as_str() {
+            "$>" => { self._s_Done_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_CheckAssign(&mut self, __e: &StateVarParserFsmFrameEvent) {
+        match __e.message.as_str() {
+            "$>" => { self._s_CheckAssign_enter(__e); }
+            _ => {}
+        }
+    }
+
     fn _state_ScanIdent(&mut self, __e: &StateVarParserFsmFrameEvent) {
         match __e.message.as_str() {
             "$>" => { self._s_ScanIdent_enter(__e); }
@@ -231,13 +251,6 @@ impl StateVarParserFsm {
         }
     }
 
-    fn _state_Done(&mut self, __e: &StateVarParserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_Done_enter(__e); }
-            _ => {}
-        }
-    }
-
     fn _state_Init(&mut self, __e: &StateVarParserFsmFrameEvent) {
         match __e.message.as_str() {
             "do_parse" => { self._s_Init_do_parse(__e); }
@@ -245,10 +258,39 @@ impl StateVarParserFsm {
         }
     }
 
-    fn _state_CheckAssign(&mut self, __e: &StateVarParserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_CheckAssign_enter(__e); }
-            _ => {}
+    fn _s_Done_enter(&mut self, __e: &StateVarParserFsmFrameEvent) {
+        // Terminal state — results in domain vars;
+    }
+
+    fn _s_CheckAssign_enter(&mut self, __e: &StateVarParserFsmFrameEvent) {
+        // Lookahead: skip whitespace, check for = (but not ==)
+        let mut j = self.ident_end;
+        let end = self.end;
+        let bytes = &self.bytes;
+        
+        while j < end && (bytes[j] == b' ' || bytes[j] == b'\t') {
+            j += 1;
+        }
+        
+        if j < end && bytes[j] == b'='
+            && (j + 1 >= end || (bytes[j + 1] != b'=' && bytes[j + 1] != b'<' && bytes[j + 1] != b'>'))
+        {
+            // Assignment detected
+            j += 1; // Skip '='
+            self.pos = j;
+            self.is_assignment = true;
+            let mut __compartment = StateVarParserFsmCompartment::new("ScanExpr");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
+        } else {
+            // Read-only access
+            self.result_end = self.ident_end;
+            self.is_assignment = false;
+            let mut __compartment = StateVarParserFsmCompartment::new("Done");
+            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+            self.__transition(__compartment);
+            return;
         }
     }
 
@@ -285,45 +327,10 @@ impl StateVarParserFsm {
         return;
     }
 
-    fn _s_Done_enter(&mut self, __e: &StateVarParserFsmFrameEvent) {
-        // Terminal state — results in domain vars;
-    }
-
     fn _s_Init_do_parse(&mut self, __e: &StateVarParserFsmFrameEvent) {
         let mut __compartment = StateVarParserFsmCompartment::new("ScanIdent");
         __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
         self.__transition(__compartment);
         return;
     }
-
-    fn _s_CheckAssign_enter(&mut self, __e: &StateVarParserFsmFrameEvent) {
-        // Lookahead: skip whitespace, check for = (but not ==)
-        let mut j = self.ident_end;
-        let end = self.end;
-        let bytes = &self.bytes;
-        
-        while j < end && (bytes[j] == b' ' || bytes[j] == b'\t') {
-            j += 1;
-        }
-        
-        if j < end && bytes[j] == b'=' && (j + 1 >= end || bytes[j + 1] != b'=') {
-            // Assignment detected
-            j += 1; // Skip '='
-            self.pos = j;
-            self.is_assignment = true;
-            let mut __compartment = StateVarParserFsmCompartment::new("ScanExpr");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
-        } else {
-            // Read-only access
-            self.result_end = self.ident_end;
-            self.is_assignment = false;
-            let mut __compartment = StateVarParserFsmCompartment::new("Done");
-            __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-            self.__transition(__compartment);
-            return;
-        }
-    }
 }
-

@@ -1,5 +1,5 @@
 
-// JavaScript syntax skipper â Frame-generated state machine.
+// JavaScript syntax skipper — Frame-generated state machine.
 // Identical to TypeScript (same string/comment/template literal syntax).
 //
 // Helpers used:
@@ -42,6 +42,7 @@ struct JavaScriptSyntaxSkipperFsmFrameContext {
     event: JavaScriptSyntaxSkipperFsmFrameEvent,
     _return: Option<Box<dyn std::any::Any>>,
     _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    _transitioned: bool,
 }
 
 impl JavaScriptSyntaxSkipperFsmFrameContext {
@@ -50,6 +51,7 @@ impl JavaScriptSyntaxSkipperFsmFrameContext {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -167,6 +169,10 @@ impl JavaScriptSyntaxSkipperFsm {
                     self.__router(&forward_event);
                 }
             }
+            // Mark all stacked contexts as transitioned
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
+            }
         }
     }
 
@@ -240,9 +246,12 @@ impl JavaScriptSyntaxSkipperFsm {
         self._context_stack.pop();
     }
 
-    fn _state_SkipString(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
+    fn _state_Init(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
         match __e.message.as_str() {
-            "$>" => { self._s_SkipString_enter(__e); }
+            "do_balanced_paren_end" => { self._s_Init_do_balanced_paren_end(__e); }
+            "do_find_line_end" => { self._s_Init_do_find_line_end(__e); }
+            "do_skip_comment" => { self._s_Init_do_skip_comment(__e); }
+            "do_skip_string" => { self._s_Init_do_skip_string(__e); }
             _ => {}
         }
     }
@@ -254,12 +263,9 @@ impl JavaScriptSyntaxSkipperFsm {
         }
     }
 
-    fn _state_Init(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
+    fn _state_SkipString(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
         match __e.message.as_str() {
-            "do_balanced_paren_end" => { self._s_Init_do_balanced_paren_end(__e); }
-            "do_find_line_end" => { self._s_Init_do_find_line_end(__e); }
-            "do_skip_comment" => { self._s_Init_do_skip_comment(__e); }
-            "do_skip_string" => { self._s_Init_do_skip_string(__e); }
+            "$>" => { self._s_SkipString_enter(__e); }
             _ => {}
         }
     }
@@ -278,20 +284,32 @@ impl JavaScriptSyntaxSkipperFsm {
         }
     }
 
-    fn _s_SkipString_enter(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
-        // Template literal via shared helper (must check before simple string)
-        if let Some(j) = skip_template_literal(&self.bytes, self.pos, self.end) {
-            self.result_pos = j;
-            self.success = 1;
-            return
-        }
-        // Simple string via shared helper
-        if let Some(j) = skip_simple_string(&self.bytes, self.pos, self.end) {
-            self.result_pos = j;
-            self.success = 1;
-            return
-        }
-        self.success = 0;
+    fn _s_Init_do_balanced_paren_end(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = JavaScriptSyntaxSkipperFsmCompartment::new("BalancedParenEnd");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_do_find_line_end(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = JavaScriptSyntaxSkipperFsmCompartment::new("FindLineEnd");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_do_skip_string(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = JavaScriptSyntaxSkipperFsmCompartment::new("SkipString");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_do_skip_comment(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = JavaScriptSyntaxSkipperFsmCompartment::new("SkipComment");
+        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+        self.__transition(__compartment);
+        return;
     }
 
     fn _s_SkipComment_enter(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
@@ -308,32 +326,20 @@ impl JavaScriptSyntaxSkipperFsm {
         self.success = 0;
     }
 
-    fn _s_Init_do_balanced_paren_end(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = JavaScriptSyntaxSkipperFsmCompartment::new("BalancedParenEnd");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_skip_comment(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = JavaScriptSyntaxSkipperFsmCompartment::new("SkipComment");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_skip_string(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = JavaScriptSyntaxSkipperFsmCompartment::new("SkipString");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_find_line_end(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = JavaScriptSyntaxSkipperFsmCompartment::new("FindLineEnd");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
+    fn _s_SkipString_enter(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
+        // Template literal via shared helper (must check before simple string)
+        if let Some(j) = skip_template_literal(&self.bytes, self.pos, self.end) {
+            self.result_pos = j;
+            self.success = 1;
+            return
+        }
+        // Simple string via shared helper
+        if let Some(j) = skip_simple_string(&self.bytes, self.pos, self.end) {
+            self.result_pos = j;
+            self.success = 1;
+            return
+        }
+        self.success = 0;
     }
 
     fn _s_FindLineEnd_enter(&mut self, __e: &JavaScriptSyntaxSkipperFsmFrameEvent) {
@@ -378,7 +384,7 @@ impl JavaScriptSyntaxSkipperFsm {
             }
         
             // Terminators
-            if b == b';' { break; }
+            if b == b';' || b == b'}' { break; }
             if b == b'/' && j + 1 < end && (bytes[j + 1] == b'/' || bytes[j + 1] == b'*') { break; }
         
             // String/template starts
@@ -435,7 +441,8 @@ impl JavaScriptSyntaxSkipperFsm {
             else if b == b'(' { depth += 1; i += 1; }
             else if b == b')' {
                 depth -= 1; i += 1;
-                if depth == 0 { self.result_pos = i; self.success = 1; return }
+                if depth == 0 { self.result_pos = i; self.success = 1;
+                                                                       return }
             } else { i += 1; }
         }
         self.success = 0;
