@@ -56,26 +56,7 @@ impl LanguageBackend for GoBackend {
                 result.push_str(&format!("{}type {} struct {{\n", ctx.get_indent(), name));
                 ctx.push_indent();
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        result.push_str(&format!("{}{}\n", ctx.get_indent(), raw_code));
-                    } else {
-                        let type_ann = field
-                            .type_annotation
-                            .as_ref()
-                            .map(|t| self.map_type(t))
-                            .unwrap_or_else(|| "any".to_string());
-                        // Go: lowercase fields are unexported (private)
-                        let field_name = match field.visibility {
-                            Visibility::Public => capitalize_first(&field.name),
-                            _ => field.name.clone(),
-                        };
-                        result.push_str(&format!(
-                            "{}{} {}\n",
-                            ctx.get_indent(),
-                            field_name,
-                            type_ann
-                        ));
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
@@ -544,6 +525,23 @@ impl GoBackend {
             "void" | "None" => String::new(), // Go uses no return type for void
             other => other.to_string(),
         }
+    }
+
+    /// Emit a single Go struct field declaration line:
+    ///   `<indent><name> <type>\n`
+    ///
+    /// Go has no field-level visibility keyword (capitalization
+    /// handles export), no field-level init (factory functions assign),
+    /// and no field-level const. The type is taken verbatim — matching
+    /// the existing `synthesize_field_raw` behavior which does not apply
+    /// `map_type` to the user-supplied type string.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let type_str = field
+            .type_annotation
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("any");
+        format!("{}{} {}\n", ctx.get_indent(), field.name, type_str)
     }
 }
 
