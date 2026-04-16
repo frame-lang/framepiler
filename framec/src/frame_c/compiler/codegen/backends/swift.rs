@@ -63,64 +63,7 @@ impl LanguageBackend for SwiftBackend {
                 ctx.push_indent();
 
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        // Raw code from domain section — Swift requires var/let prefix
-                        // Also map Frame generic types (number, string, etc.) to Swift types
-                        let mapped_code = self.map_domain_types(raw_code);
-                        let trimmed = mapped_code.trim();
-                        let needs_var =
-                            !trimmed.starts_with("var ") && !trimmed.starts_with("let ");
-                        let var_prefix = if needs_var {
-                            if field.is_const {
-                                "let "
-                            } else {
-                                "var "
-                            }
-                        } else {
-                            ""
-                        };
-                        let vis = self.emit_visibility_swift(field.visibility);
-                        if vis.is_empty() {
-                            result.push_str(&format!(
-                                "{}{}{}\n",
-                                ctx.get_indent(),
-                                var_prefix,
-                                mapped_code
-                            ));
-                        } else {
-                            result.push_str(&format!(
-                                "{}{} {}{}\n",
-                                ctx.get_indent(),
-                                vis,
-                                var_prefix,
-                                mapped_code
-                            ));
-                        }
-                    } else {
-                        let vis = self.emit_visibility_swift(field.visibility);
-                        let type_ann = self.map_type(
-                            field
-                                .type_annotation
-                                .as_ref()
-                                .unwrap_or(&"Any?".to_string()),
-                        );
-                        if vis.is_empty() {
-                            result.push_str(&format!(
-                                "{}var {}: {}\n",
-                                ctx.get_indent(),
-                                field.name,
-                                type_ann
-                            ));
-                        } else {
-                            result.push_str(&format!(
-                                "{}{} var {}: {}\n",
-                                ctx.get_indent(),
-                                vis,
-                                field.name,
-                                type_ann
-                            ));
-                        }
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
                 if !fields.is_empty() && !methods.is_empty() {
                     result.push('\n');
@@ -613,6 +556,48 @@ impl SwiftBackend {
             }
         } else {
             raw.to_string()
+        }
+    }
+
+    /// Emit a single Swift class-property declaration line:
+    ///   `<indent>[<vis> ][let|var ]<name>: <type>[ = <init>]\n`
+    ///
+    /// `let` is emitted when `field.is_const`, `var` otherwise. The
+    /// type is run through `map_type` so Frame-canonical names (`int`,
+    /// `string`) become Swift-canonical (`Int`, `String`). Visibility
+    /// `internal` (Frame's `Protected`) becomes Swift's default and
+    /// is OMITTED rather than emitted explicitly — matches the
+    /// `emit_visibility_swift` empty-string convention used elsewhere.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let vis = self.emit_visibility_swift(field.visibility);
+        let var_kw = if field.is_const { "let " } else { "var " };
+        let type_str = match &field.type_annotation {
+            Some(t) => self.map_type(t),
+            None => "Any?".to_string(),
+        };
+        let init_suffix = match &field.initializer {
+            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            None => String::new(),
+        };
+        if vis.is_empty() {
+            format!(
+                "{}{}{}: {}{}\n",
+                ctx.get_indent(),
+                var_kw,
+                field.name,
+                type_str,
+                init_suffix
+            )
+        } else {
+            format!(
+                "{}{} {}{}: {}{}\n",
+                ctx.get_indent(),
+                vis,
+                var_kw,
+                field.name,
+                type_str,
+                init_suffix
+            )
         }
     }
 }
