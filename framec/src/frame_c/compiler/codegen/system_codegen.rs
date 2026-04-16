@@ -877,6 +877,63 @@ fn init_collection_stack(
     }
 }
 
+/// Decide whether the constructor body should emit a domain-field init
+/// statement, given the language and the field's properties.
+///
+/// Three groups:
+/// - **Always emit** (C, Go, Python, Ruby, Lua, Rust): no field-level
+///   init is available (C/Go) or none is generated (dynamic langs go
+///   straight to the constructor body).
+/// - **Emit only on collision** (Cpp, Java, Swift, C#, Dart, GDScript,
+///   TS, JS, PHP): the field has a literal init at declaration scope,
+///   except when that init references a system param — then the init
+///   moves into the constructor body to avoid the name-collision.
+/// - **Kotlin**: same as the OO group, but const fields with collisions
+///   are suppressed entirely (they're declared in the primary
+///   constructor as `val name: Type`).
+/// - **Erlang / Graphviz**: never go through this code path.
+fn should_emit_constructor_body_init(
+    lang: TargetLanguage,
+    is_const: bool,
+    init_refs_param: bool,
+) -> bool {
+    use TargetLanguage::*;
+    match lang {
+        C | Go | Python3 | Ruby | Lua | Rust => true,
+        Cpp | Java | Swift | CSharp | Dart | GDScript | TypeScript | JavaScript | Php => {
+            init_refs_param
+        }
+        Kotlin => init_refs_param && !is_const,
+        Erlang | Graphviz => false,
+    }
+}
+
+/// Format `field = init_value` using the per-language self-access form
+/// and statement terminator. Used to build the constructor body's
+/// domain-field init lines for every language EXCEPT Rust (which uses
+/// the structured `CodegenNode::assign` instead) and the C++ const-init
+/// case (which uses a member initializer list).
+fn format_field_assignment(lang: TargetLanguage, field_name: &str, init_value: &str) -> String {
+    use TargetLanguage::*;
+    match lang {
+        C => format!("self->{} = {};", field_name, init_value),
+        Cpp => format!("this->{} = {};", field_name, init_value),
+        Go => format!("s.{} = {}", field_name, init_value),
+        Java | CSharp | Dart | TypeScript | JavaScript => {
+            format!("this.{} = {};", field_name, init_value)
+        }
+        Swift | GDScript | Python3 | Lua => format!("self.{} = {}", field_name, init_value),
+        Kotlin => format!("this.{} = {}", field_name, init_value),
+        Php => format!("$this->{} = {};", field_name, init_value),
+        Ruby => format!("@{} = {}", field_name, init_value),
+        Rust | Erlang | Graphviz => unreachable!(
+            "format_field_assignment called for {:?} (Rust uses structured assign; \
+             Erlang/Graphviz never reach this code path)",
+            lang
+        ),
+    }
+}
+
 /// Generate the constructor
 fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> CodegenNode {
     let mut body = Vec::new();
@@ -903,255 +960,27 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
         body.push(node);
     }
 
-    // Initialize domain variables
+    // Initialize domain variables.
+    //
+    // Three concerns interleave per language:
+    //   1. WHETHER to emit a body init at all (see
+    //      `should_emit_constructor_body_init`).
+    //   2. HOW to spell `self.field = value` for the target
+    //      (see `format_field_assignment`).
+    //   3. Per-language adjustments to the init expression itself
+    //      (PHP `$`-prefix on param refs, Lua `[]` → `{}`, Rust
+    //      Domain-param override, C++ const → member init list).
+    //
+    // Rust is the structural odd-one-out: it uses `CodegenNode::assign`
+    // instead of a `NativeBlock` and must always init every field
+    // (including the no-init case, handled up front).
     let sys_param_names_for_init: Vec<String> =
         system.params.iter().map(|p| p.name.clone()).collect();
     for domain_var in &system.domain {
-        // For the strict-init OO backends (C++, Java, Swift, Kotlin, C#,
-        // Dart), `synthesize_field_raw` only strips the field-level init
-        // when the init expression references a system parameter. We
-        // mirror that decision here: emit the constructor-body assignment
-        // ONLY when the init was stripped, otherwise the field-decl init
-        // already handles initialization and a duplicate would either be
-        // redundant (literal init) or invalid (some langs reject double
-        // assignment of `val`/`final`/etc).
-        //
-        // C and Go are different — neither has any field-level init at
-        // all (C: no struct field defaults; Go: no struct field defaults
-        // outside literals), so they always emit constructor-body init.
-        let init_text_opt = domain_var.initializer_text.clone();
-        let init_refs_param = init_text_opt
-            .as_deref()
-            .map(|t| init_references_param(t, &sys_param_names_for_init))
-            .unwrap_or(false);
-        // C: factory-function body init. Always emit when there's an init.
-        if matches!(syntax.language, TargetLanguage::C) {
-            if let Some(ref init_text) = init_text_opt {
-                let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::C);
-                body.push(CodegenNode::NativeBlock {
-                    code: format!("self->{} = {};", domain_var.name, init_expanded),
-                    span: None,
-                });
-            }
-            continue;
-        }
-        // C++ — only emit constructor-body init when the field-level init
-        // was stripped (i.e., the init references a constructor param).
-        // For const fields: use member initializer list (can't assign in body).
-        if matches!(syntax.language, TargetLanguage::Cpp) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Cpp);
-                    if domain_var.is_const {
-                        // const members must be initialized in the init list
-                        cpp_init_list.push(format!("{}({})", domain_var.name, init_expanded));
-                    } else {
-                        body.push(CodegenNode::NativeBlock {
-                            code: format!("this->{} = {};", domain_var.name, init_expanded),
-                            span: None,
-                        });
-                    }
-                }
-            }
-            continue;
-        }
-        // Go: factory-function body init. Always emit (no field-level init).
-        if matches!(syntax.language, TargetLanguage::Go) {
-            if let Some(ref init_text) = init_text_opt {
-                let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Go);
-                body.push(CodegenNode::NativeBlock {
-                    code: format!("s.{} = {}", domain_var.name, init_expanded),
-                    span: None,
-                });
-            }
-            continue;
-        }
-        // Java — only emit constructor-body init when the field-level init
-        // was stripped.
-        if matches!(syntax.language, TargetLanguage::Java) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Java);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("this.{} = {};", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-            }
-            continue;
-        }
-        // Swift — only emit constructor-body init when stripped.
-        if matches!(syntax.language, TargetLanguage::Swift) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Swift);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("self.{} = {}", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-            }
-            continue;
-        }
-        // Kotlin — only emit constructor-body init when stripped.
-        // Skip const fields whose init references a param — those are declared
-        // as `val name: Type` in the primary constructor (no body assignment needed).
-        if matches!(syntax.language, TargetLanguage::Kotlin) {
-            if init_refs_param && !domain_var.is_const {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Kotlin);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("this.{} = {}", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-            }
-            continue;
-        }
-        // C# — only emit constructor-body init when stripped.
-        if matches!(syntax.language, TargetLanguage::CSharp) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::CSharp);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("this.{} = {};", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-            }
-            continue;
-        }
-        // Dart — only emit constructor-body init when stripped.
-        if matches!(syntax.language, TargetLanguage::Dart) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Dart);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("this.{} = {};", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-            }
-            continue;
-        }
-        // GDScript — only emit constructor-body init when stripped.
-        if matches!(syntax.language, TargetLanguage::GDScript) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded =
-                        expand_tagged_in_domain(init_text, TargetLanguage::GDScript);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("self.{} = {}", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-            }
-            continue;
-        }
-        // TypeScript — only emit constructor-body init when stripped.
-        // TypeScript would otherwise reject `name: string = name` at class
-        // scope with TS2301 ("Initializer of instance member variable
-        // 'name' cannot reference identifier 'name' declared in the
-        // constructor.").
-        if matches!(syntax.language, TargetLanguage::TypeScript) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded =
-                        expand_tagged_in_domain(init_text, TargetLanguage::TypeScript);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("this.{} = {};", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-            }
-            continue;
-        }
-        // JavaScript — same name-collision rule as TypeScript. JS class
-        // field initializers can't see constructor parameters either, so
-        // `name = name` at field scope reads the undeclared identifier.
-        if matches!(syntax.language, TargetLanguage::JavaScript) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded =
-                        expand_tagged_in_domain(init_text, TargetLanguage::JavaScript);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("this.{} = {};", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-            }
-            continue;
-        }
-        // PHP — same collision rule. PHP rejects field initializers that
-        // reference variables ("Constant expression contains invalid
-        // operations"), so any init referencing a constructor param
-        // moves into the __construct body as `$this->name = $param;`.
-        if matches!(syntax.language, TargetLanguage::Php) {
-            if init_refs_param {
-                if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Php);
-                    // Prefix $ to system param references in the init expression
-                    let init_with_php_vars =
-                        prefix_php_vars(&init_expanded, &sys_param_names_for_init);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("$this->{} = {};", domain_var.name, init_with_php_vars),
-                        span: None,
-                    });
-                }
-                continue;
-            }
-            // No collision — fall through to structured-field constructor init.
-        }
-        // Languages without field-level declarations always emit constructor-body init.
-        // Python, Ruby, Lua, GDScript, Erlang — all init happens in the constructor.
-        if let Some(ref init_text) = domain_var.initializer_text {
-            let init_expanded = expand_tagged_in_domain(init_text, syntax.language);
-            match syntax.language {
-                TargetLanguage::Python3 => {
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("self.{} = {}", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-                TargetLanguage::Ruby => {
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("@{} = {}", domain_var.name, init_expanded),
-                        span: None,
-                    });
-                }
-                TargetLanguage::Lua => {
-                    let mut lua_init = init_expanded;
-                    if lua_init.trim() == "[]" {
-                        lua_init = "{}".to_string();
-                    }
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("self.{} = {}", domain_var.name, lua_init),
-                        span: None,
-                    });
-                }
-                TargetLanguage::Rust => {
-                    // If a Domain-kind system param has the same name as this
-                    // field, use the param value instead of the domain default.
-                    let rust_init = if system.params.iter().any(|p| {
-                        p.name == domain_var.name
-                            && matches!(
-                                p.kind,
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain
-                            )
-                    }) {
-                        domain_var.name.clone()
-                    } else {
-                        init_expanded
-                    };
-                    body.push(CodegenNode::assign(
-                        CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
-                        CodegenNode::Ident(rust_init),
-                    ));
-                }
-                _ => {}
-            }
-        } else if matches!(syntax.language, TargetLanguage::Rust) {
-            // Rust requires all struct fields to be initialized.
+        // Rust requires all fields initialized; handle the no-init
+        // case up front before the regular path.
+        if matches!(syntax.language, TargetLanguage::Rust) && domain_var.initializer_text.is_none()
+        {
             let rust_init = if system.params.iter().any(|p| {
                 p.name == domain_var.name
                     && matches!(
@@ -1167,6 +996,64 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                 CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
                 CodegenNode::Ident(rust_init),
             ));
+            continue;
+        }
+
+        let init_text = match &domain_var.initializer_text {
+            Some(t) => t,
+            None => continue,
+        };
+        let init_refs_param = init_references_param(init_text, &sys_param_names_for_init);
+
+        if !should_emit_constructor_body_init(syntax.language, domain_var.is_const, init_refs_param)
+        {
+            continue;
+        }
+
+        let init_expanded = expand_tagged_in_domain(init_text, syntax.language);
+
+        // C++ const fields whose init references a constructor param
+        // must use the member initializer list — `const T x;` cannot
+        // be reassigned in the body. The list is rendered before the
+        // constructor body as `: x(value)`.
+        if matches!(syntax.language, TargetLanguage::Cpp) && domain_var.is_const {
+            cpp_init_list.push(format!("{}({})", domain_var.name, init_expanded));
+            continue;
+        }
+
+        // Per-language init-expression adjustments.
+        let final_init = match syntax.language {
+            // PHP rejects bare names in init expressions; system params
+            // need a `$` prefix to be valid PHP.
+            TargetLanguage::Php => prefix_php_vars(&init_expanded, &sys_param_names_for_init),
+            // Lua uses `{}` for empty tables, not `[]`.
+            TargetLanguage::Lua if init_expanded.trim() == "[]" => "{}".to_string(),
+            // Rust: a Domain-kind system param of the same name overrides
+            // the literal default.
+            TargetLanguage::Rust
+                if system.params.iter().any(|p| {
+                    p.name == domain_var.name
+                        && matches!(
+                            p.kind,
+                            crate::frame_c::compiler::frame_ast::ParamKind::Domain
+                        )
+                }) =>
+            {
+                domain_var.name.clone()
+            }
+            _ => init_expanded,
+        };
+
+        if matches!(syntax.language, TargetLanguage::Rust) {
+            body.push(CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
+                CodegenNode::Ident(final_init),
+            ));
+        } else {
+            body.push(CodegenNode::NativeBlock {
+                code: format_field_assignment(syntax.language, &domain_var.name, &final_init),
+                span: None,
+            });
         }
     }
 
