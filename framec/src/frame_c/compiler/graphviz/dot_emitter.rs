@@ -247,14 +247,11 @@ fn emit_edge(edge: &TransitionEdge, parent_names: &HashSet<&str>, out: &mut Stri
         }
     };
 
-    // Build edge label — use human-readable names for lifecycle events
+    // Build edge label — use explicit label from `-> "label" $State` if present,
+    // otherwise show the handler/event name (e.g. `coin`, `$>`, `<$`).
     let label_text = match &edge.label {
         Some(label) => escape_html(label),
-        None => match edge.event.as_str() {
-            "$>" => "[enter]".to_string(),
-            "<$" => "[exit]".to_string(),
-            other => other.to_string(),
-        },
+        None => edge.event.clone(),
     };
     let label = match &edge.guard {
         Some(guard) => format!(" {} [{}] ", label_text, escape_html(guard)),
