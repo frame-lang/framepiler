@@ -1,6 +1,6 @@
 # Frame Cookbook
 
-22 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
+19 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
 
 For language syntax details, see the [Frame Language Reference](frame_language.md). For a tutorial introduction, see [Getting Started](frame_getting_started.md).
 
@@ -17,17 +17,14 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 9. [Video Player](#9-video-player) — HSM with sub-states
 10. [Order Processor](#10-order-processor) — business process with branches
 11. [Approval Chain](#11-approval-chain) — multi-stage with forwarding
-12. [Character Controller](#12-character-controller) — game state machine
-13. [AI Agent](#13-ai-agent) — behavioral states with action logging
-14. [LED Blink Controller](#14-led-blink-controller) — timer-driven state cycling
-15. [Switch Debouncer](#15-switch-debouncer) — noise filtering
-16. [Mealy Machine](#16-mealy-machine) — output depends on state + input
-17. [Moore Machine](#17-moore-machine) — output depends on state only
-18. [Session Persistence](#18-session-persistence) — save/restore with @@persist
-19. [Async HTTP Client](#19-async-http-client) — async interface with two-phase init
-20. [Multi-System Composition](#20-multi-system-composition) — two systems interacting
-21. [Configurable Worker Pool](#21-configurable-worker-pool-parameterized-systems) — parameterized systems
-22. [Self-Calibrating Sensor](#22-self-calibrating-sensor-self-interface-call) — `@@:self` reentrant dispatch
+12. [Self-Calibrating Sensor](#12-self-calibrating-sensor) — `@@:self` reentrant dispatch + `@@:system.state`
+13. [Switch Debouncer](#13-switch-debouncer) — state vars as counters with thresholds
+14. [Early Return](#14-early-return) — `@@:return(expr)` for set-and-exit
+15. [Mealy & Moore Machines](#15-mealy--moore-machines) — classical automata in Frame
+16. [Session Persistence](#16-session-persistence) — save/restore with `@@persist`
+17. [Async HTTP Client](#17-async-http-client) — async interface with two-phase init
+18. [Multi-System Composition](#18-multi-system-composition) — two systems interacting
+19. [Configurable Worker Pool](#19-configurable-worker-pool-parameterized-systems) — parameterized systems
 
 ---
 
@@ -653,593 +650,11 @@ if __name__ == '__main__':
 
 ---
 
-## 12. Character Controller
-
-**Problem:** A game character with idle, walking, running, and jumping states.
-
-![12 state diagram](images/cookbook/12.svg)
-
-
-```frame
-@@target python_3
-
-@@system Character {
-    interface:
-        move()
-        sprint()
-        jump()
-        land()
-        stop()
-        state(): str
-
-    machine:
-        $Idle {
-            move() { -> $Walking }
-            jump() { -> $Jumping }
-            state(): str { @@:("idle") }
-        }
-        $Walking {
-            sprint() { -> $Running }
-            jump() { -> $Jumping }
-            stop() { -> $Idle }
-            state(): str { @@:("walking") }
-        }
-        $Running {
-            stop() { -> $Walking }
-            jump() { -> $Jumping }
-            state(): str { @@:("running") }
-        }
-        $Jumping {
-            land() { -> $Idle }
-            state(): str { @@:("jumping") }
-        }
-}
-
-if __name__ == '__main__':
-    c = @@Character()
-    print(c.state())    # idle
-    c.move()
-    print(c.state())    # walking
-    c.sprint()
-    print(c.state())    # running
-    c.jump()
-    print(c.state())    # jumping
-    c.move()            # ignored while jumping
-    print(c.state())    # jumping
-    c.land()
-    print(c.state())    # idle
-```
-
-**How it works:** The state determines which inputs are accepted. `move()` while jumping is silently ignored — no special code needed. `sprint()` only works from `$Walking`. This is much cleaner than `if (state == "jumping") return;` scattered through imperative code.
-
-**Features used:** state-based input filtering, multiple states with overlapping events
-
----
-
-## 13. AI Agent
-
-**Problem:** An AI agent that explores, flees from threats, and tracks its actions.
-
-![13 state diagram](images/cookbook/13.svg)
-
-
-```frame
-@@target python_3
-
-@@system Agent {
-    interface:
-        tick()
-        threat()
-        safe()
-        get_log(): str
-
-    machine:
-        $Exploring {
-            tick() {
-                self.action_log = self.action_log + "explore,"
-            }
-            threat() {
-                self.action_log = self.action_log + "flee,"
-                -> $Fleeing
-            }
-            get_log(): str { @@:(self.action_log) }
-        }
-        $Fleeing {
-            tick() {
-                self.action_log = self.action_log + "run,"
-            }
-            safe() {
-                self.action_log = self.action_log + "resume,"
-                -> $Exploring
-            }
-            get_log(): str { @@:(self.action_log) }
-        }
-
-    domain:
-        action_log: str = ""
-}
-
-if __name__ == '__main__':
-    a = @@Agent()
-    a.tick()
-    a.tick()
-    a.threat()
-    a.tick()
-    a.safe()
-    print(a.get_log())  # explore,explore,flee,run,resume,
-```
-
-**How it works:** Domain variable `action_log` persists across all states. Each state appends its action on `tick()`. Threat/safe events trigger state transitions. Both states handle `get_log()` to return the accumulated log.
-
-**Features used:** domain variables as accumulators, event-driven state transitions
-
----
-
-## 14. LED Blink Controller
-
-**Problem:** An LED that blinks on a timer, with on/off control.
-
-![14 state diagram](images/cookbook/14.svg)
-
-
-```frame
-@@target python_3
-
-@@system LedBlinker {
-    interface:
-        enable()
-        disable()
-        timer_tick()
-        is_lit(): bool
-
-    machine:
-        $Disabled {
-            enable() { -> $LedOff }
-        }
-        $LedOff {
-            timer_tick() { -> $LedOn }
-            disable() { -> $Disabled }
-            is_lit(): bool { @@:(False) }
-        }
-        $LedOn {
-            timer_tick() { -> $LedOff }
-            disable() { -> $Disabled }
-            is_lit(): bool { @@:(True) }
-        }
-}
-
-if __name__ == '__main__':
-    led = @@LedBlinker()
-    led.enable()
-    for i in range(5):
-        print(f"tick {i}: {'ON' if led.is_lit() else 'off'}")
-        led.timer_tick()
-```
-
-**How it works:** External timer calls `timer_tick()`, which toggles between `$LedOn` and `$LedOff`. `disable()` works from either on or off state, returning to `$Disabled` where timer ticks are ignored.
-
-**Features used:** timer-driven transitions, shared events across states
-
----
-
-## 15. Switch Debouncer
-
-**Problem:** Filter noisy switch input — only register a press after the signal stabilizes.
-
-![15 state diagram](images/cookbook/15.svg)
-
-
-```frame
-@@target python_3
-
-@@system Debouncer {
-    interface:
-        raw_high()
-        raw_low()
-        tick()
-        is_pressed(): bool
-
-    machine:
-        $Released {
-            $.stable_count: int = 0
-
-            raw_high() { $.stable_count = $.stable_count + 1 }
-            raw_low() { $.stable_count = 0 }
-            tick() {
-                if $.stable_count >= 3:
-                    -> "stable high" $Pressed
-            }
-            is_pressed(): bool { @@:(False) }
-        }
-        $Pressed {
-            $.stable_count: int = 0
-
-            raw_low() { $.stable_count = $.stable_count + 1 }
-            raw_high() { $.stable_count = 0 }
-            tick() {
-                if $.stable_count >= 3:
-                    -> "stable low" $Released
-            }
-            is_pressed(): bool { @@:(True) }
-        }
-}
-
-if __name__ == '__main__':
-    d = @@Debouncer()
-    # Noisy signal: high, low, high, high, high (stabilizes after 3)
-    for signal in [1, 0, 1, 1, 1]:
-        if signal:
-            d.raw_high()
-        else:
-            d.raw_low()
-        d.tick()
-    print(d.is_pressed())   # True
-```
-
-**How it works:** State variables `$.stable_count` track consecutive consistent readings. A bouncy signal resets the counter. Only after 3 consecutive stable readings does the state transition. State variables reset on entry, so both directions start clean.
-
-**Features used:** state variables as counters, threshold-based transitions
-
----
-
-## 16. Mealy Machine
-
-**Problem:** Output depends on both the current state AND the input (classic Mealy machine).
-
-![16 state diagram](images/cookbook/16.svg)
-
-
-```frame
-@@target python_3
-
-@@system MealyDetector {
-    interface:
-        input(bit: int): str
-
-    machine:
-        $S0 {
-            input(bit: int): str {
-                if bit == 1:
-                    @@:("0")
-                    -> $S1
-                else:
-                    @@:("0")
-            }
-        }
-        $S1 {
-            input(bit: int): str {
-                if bit == 0:
-                    @@:("1")
-                    -> $S0
-                else:
-                    @@:("0")
-            }
-        }
-}
-
-if __name__ == '__main__':
-    m = @@MealyDetector()
-    for bit in [1, 0, 1, 1, 0]:
-        print(f"in={bit} out={m.input(bit)}")
-```
-
-**How it works:** The output ("0" or "1") depends on BOTH the current state and the input bit. In `$S1`, receiving `0` outputs "1" (detected the pattern "10"). This is a sequence detector — it finds "10" patterns in a bitstream.
-
-**Features used:** conditional transitions with different return values per branch
-
----
-
-## 17. Moore Machine
-
-**Problem:** Output depends only on the current state (classic Moore machine).
-
-![17 state diagram](images/cookbook/17.svg)
-
-
-```frame
-@@target python_3
-
-@@system MooreParity {
-    interface:
-        input(bit: int)
-        output(): str
-
-    machine:
-        $Even {
-            input(bit: int) {
-                if bit == 1:
-                    -> $Odd
-            }
-            output(): str { @@:("even") }
-        }
-        $Odd {
-            input(bit: int) {
-                if bit == 1:
-                    -> $Even
-            }
-            output(): str { @@:("odd") }
-        }
-}
-
-if __name__ == '__main__':
-    m = @@MooreParity()
-    for bit in [1, 0, 1, 1, 0]:
-        m.input(bit)
-        print(f"in={bit} parity={m.output()}")
-```
-
-**How it works:** `output()` returns the same value regardless of input — it only depends on which state the system is in. This is a parity checker: it tracks whether an even or odd number of 1s have been seen.
-
-**Features used:** state-determined output, input processing separated from output
-
----
-
-## 18. Session Persistence
-
-**Problem:** Save a user session to disk and restore it later.
-
-![18 state diagram](images/cookbook/18.svg)
-
-
-```frame
-@@target python_3
-
-@@persist
-@@system Session {
-    interface:
-        login(user: str)
-        logout()
-        who(): str
-
-    machine:
-        $LoggedOut {
-            login(user: str) {
-                self.user = user
-                -> $LoggedIn
-            }
-            who(): str { @@:("nobody") }
-        }
-        $LoggedIn {
-            logout() {
-                self.user = ""
-                -> $LoggedOut
-            }
-            who(): str { @@:(self.user) }
-        }
-
-    domain:
-        user: str = ""
-}
-
-if __name__ == '__main__':
-    s = @@Session()
-    s.login("alice")
-    print(s.who())               # alice
-
-    # Save
-    data = s.save_state()
-
-    # Restore into a new instance
-    s2 = Session.restore_state(data)
-    print(s2.who())              # alice (state preserved)
-```
-
-**How it works:** `@@persist` generates `save_state()` and `restore_state()`. The saved data includes the current state (`$LoggedIn`), domain variables (`user = "alice"`), and the state stack. Restore does NOT fire the enter handler — it reconstructs the exact state.
-
-**Features used:** `@@persist`, save/restore, domain variables
-
----
-
-## 19. Async HTTP Client
-
-**Problem:** An HTTP client with async connect/fetch/disconnect.
-
-![19 state diagram](images/cookbook/19.svg)
-
-
-```frame
-@@target python_3
-
-import aiohttp
-import asyncio
-
-@@system HttpClient {
-    interface:
-        async connect(url: str)
-        async fetch(path: str): str
-        async disconnect()
-
-    machine:
-        $Idle {
-            $>() {
-                print("Ready")
-            }
-            connect(url: str) {
-                self.base_url = url
-                -> $Connected
-            }
-        }
-        $Connected {
-            $>() { print(f"Connected to {self.base_url}") }
-            <$() { print("Closing connection") }
-
-            fetch(path: str): str {
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(self.base_url + path) as resp:
-                        return await resp.text()
-            }
-            disconnect() { -> $Idle }
-        }
-
-    domain:
-        base_url: str = ""
-}
-
-async def main():
-    client = @@HttpClient()
-    await client.init()          # async two-phase init
-    await client.connect("https://example.com")
-    html = await client.fetch("/")
-    print(f"Got {len(html)} bytes")
-    await client.disconnect()
-
-asyncio.run(main())
-```
-
-**How it works:** `async` on interface methods makes the entire dispatch chain async. The constructor is synchronous — `await client.init()` fires the enter event separately (two-phase init). Native `await` in handler bodies works because the generated methods are async.
-
-**Features used:** `async` interface methods, two-phase init, native async code in handlers
-
----
-
-## 20. Multi-System Composition
-
-**Problem:** A logger and an app as separate systems, with the app using the logger.
-
-![20 App state diagram](images/cookbook/20_app.svg)
-![20 Logger state diagram](images/cookbook/20_logger.svg)
-
-
-```frame
-@@target python_3
-
-@@system Logger {
-    interface:
-        log(msg: str)
-
-    machine:
-        $Active {
-            log(msg: str) {
-                print(f"[LOG] {msg}")
-            }
-        }
-}
-
-@@system App {
-    interface:
-        start()
-        stop()
-
-    machine:
-        $Idle {
-            start() {
-                self.logger.log("App starting")
-                -> $Running
-            }
-        }
-        $Running {
-            $>() { self.logger.log("App running") }
-            stop() {
-                self.logger.log("App stopping")
-                -> $Idle
-            }
-        }
-
-    domain:
-        logger = @@Logger()
-}
-
-if __name__ == '__main__':
-    app = @@App()
-    app.start()
-    app.stop()
-```
-
-**How it works:** Two `@@system` blocks in one file generate two independent classes. `@@Logger()` in the domain section instantiates the logger as a domain variable. Systems interact through their public interfaces — they don't share state.
-
-**Features used:** multi-system files, `@@SystemName()` instantiation, domain variable initialization
-
----
-
-## 21. Configurable Worker Pool (Parameterized Systems)
-
-**Problem:** A task executor whose pool size and retry policy are set at construction time.
-
-![21 state diagram](images/cookbook/21.svg)
-
-```frame
-@@target python_3
-
-@@system WorkerPool($(max_retries: int), $>(start_msg: str), pool_size: int) {
-    interface:
-        submit(task: str)
-        get_status(): str
-
-    machine:
-        $Idle(max_retries: int) {
-            $>(start_msg: str) {
-                print(f"Pool ready: {start_msg}")
-            }
-
-            submit(task: str) {
-                self.pending.append(task)
-                if len(self.pending) >= self.pool_size:
-                    -> "batch full" $Processing
-            }
-
-            get_status(): str {
-                @@:(f"idle ({len(self.pending)}/{self.pool_size} pending)")
-            }
-        }
-
-        $Processing {
-            $>() {
-                print(f"Processing batch of {len(self.pending)} tasks")
-                self.pending.clear()
-            }
-
-            submit(task: str) {
-                self.pending.append(task)
-            }
-
-            get_status(): str {
-                @@:("processing")
-            }
-        }
-
-    domain:
-        pool_size: int = pool_size
-        pending: list = []
-}
-
-if __name__ == '__main__':
-    pool = @@WorkerPool($(5), $>("v1.0"), 3)
-    # → "Pool ready: v1.0"
-
-    pool.submit("task_a")
-    print(pool.get_status())    # "idle (1/3 pending)"
-
-    pool.submit("task_b")
-    pool.submit("task_c")       # batch threshold reached
-    # → "Processing batch of 3 tasks"
-
-    print(pool.get_status())    # "processing"
-```
-
-**How it works:** The system header declares three parameter groups in canonical order — state, enter, domain:
-
-| Parameter | Sigil | Kind | Where it goes |
-|-----------|-------|------|---------------|
-| `$(max_retries: int)` | `$()` | State | `compartment.state_args["max_retries"]` — readable in the start state's handlers as `max_retries` |
-| `$>(start_msg: str)` | `$>()` | Enter | `compartment.enter_args["start_msg"]` — readable in the start state's `$>` handler as `start_msg` |
-| `pool_size: int` | (bare) | Domain | `self.pool_size` via `domain: pool_size = pool_size` |
-
-At the call site, the caller tags each argument with the matching sigil:
-```python
-pool = @@WorkerPool($(5), $>("v1.0"), 3)
-```
-
-The framepiler substitutes Frame defaults for missing arguments and routes each to its compartment field. Transitions like `-> $Processing` create a new compartment with its own state_args, so state params are scoped per-state.
-
-**Features used:** system parameters (state, enter, domain), sigil-tagged call-site syntax, `@@:(expr)` context return, state transitions triggered by threshold
-
----
-
-## 22. Self-Calibrating Sensor (@@:self Interface Call)
+## 12. Self-Calibrating Sensor
 
 **Problem:** A sensor that calibrates itself by reading its own value through the interface, then applying an offset.
 
-![22 state diagram](images/cookbook/22.svg)
+![12 state diagram](images/cookbook/12.svg)
 
 
 ```frame
@@ -1325,3 +740,468 @@ This is intentional. Code after a self-call that triggered a transition was writ
 **When the guard does NOT fire:** If the self-call's handler does NOT transition (like `calibrate()` calling `@@:self.reading()`), code after the self-call executes normally. The guard only activates when a transition actually occurred.
 
 **Features used:** `@@:self.method()`, reentrant dispatch, return value from self-call, transition guard
+
+---
+
+## 13. Switch Debouncer
+
+**Problem:** Filter noisy switch input — only register a press after the signal stabilizes.
+
+![13 state diagram](images/cookbook/13.svg)
+
+
+```frame
+@@target python_3
+
+@@system Debouncer {
+    interface:
+        raw_high()
+        raw_low()
+        tick()
+        is_pressed(): bool
+
+    machine:
+        $Released {
+            $.stable_count: int = 0
+
+            raw_high() { $.stable_count = $.stable_count + 1 }
+            raw_low() { $.stable_count = 0 }
+            tick() {
+                if $.stable_count >= 3:
+                    -> "stable high" $Pressed
+            }
+            is_pressed(): bool { @@:(False) }
+        }
+        $Pressed {
+            $.stable_count: int = 0
+
+            raw_low() { $.stable_count = $.stable_count + 1 }
+            raw_high() { $.stable_count = 0 }
+            tick() {
+                if $.stable_count >= 3:
+                    -> "stable low" $Released
+            }
+            is_pressed(): bool { @@:(True) }
+        }
+}
+
+if __name__ == '__main__':
+    d = @@Debouncer()
+    # Noisy signal: high, low, high, high, high (stabilizes after 3)
+    for signal in [1, 0, 1, 1, 1]:
+        if signal:
+            d.raw_high()
+        else:
+            d.raw_low()
+        d.tick()
+    print(d.is_pressed())   # True
+```
+
+**How it works:** State variables `$.stable_count` track consecutive consistent readings. A bouncy signal resets the counter. Only after 3 consecutive stable readings does the state transition. State variables reset on entry, so both directions start clean.
+
+**Features used:** state variables as counters, threshold-based transitions
+
+---
+
+## 14. Early Return
+
+**Problem:** A handler that needs to validate inputs and exit early on failure, without nested if/else chains.
+
+![14 state diagram](images/cookbook/14.svg)
+
+
+```frame
+@@target python_3
+
+@@system Authenticator {
+    interface:
+        check(token: str): str
+
+    machine:
+        $Active {
+            check(token: str): str {
+                if token == "":
+                    @@:return("error: empty token")
+                if len(token) < 8:
+                    @@:return("error: token too short")
+                @@:("valid: " + token)
+            }
+        }
+}
+
+if __name__ == '__main__':
+    auth = @@Authenticator()
+    print(auth.check(""))                     # error: empty token
+    print(auth.check("short"))                # error: token too short
+    print(auth.check("valid-token-here"))     # valid: valid-token-here
+```
+
+**How it works:** `@@:return(expr)` does two things in one statement: it sets the interface return value AND exits the handler immediately. This replaces the common two-statement pattern of `@@:(expr)` followed by a native `return`.
+
+The three forms for setting return values:
+
+| Form | Effect |
+|------|--------|
+| `@@:(expr)` | Set return value; handler continues |
+| `@@:return = expr` | Same as `@@:(expr)`, more verbose |
+| `@@:return(expr)` | Set return value AND exit handler |
+
+`@@:return(expr)` shines in validation chains where each failure case wants to bail out cleanly. The final `@@:("valid: " + token)` handles the success case after all validations pass.
+
+**Features used:** `@@:return(expr)` set-and-exit form, validation chain pattern
+
+---
+
+## 15. Mealy & Moore Machines
+
+**Problem:** Classical automata theory distinguishes two output models — Mealy (output depends on state + input) and Moore (output depends on state only). Both are first-class in Frame.
+
+### Mealy: sequence detector for "10"
+
+![15 Mealy state diagram](images/cookbook/15_mealydetector.svg)
+
+
+```frame
+@@target python_3
+
+@@system MealyDetector {
+    interface:
+        input(bit: int): str
+
+    machine:
+        $S0 {
+            input(bit: int): str {
+                if bit == 1:
+                    @@:("0")
+                    -> $S1
+                else:
+                    @@:("0")
+            }
+        }
+        $S1 {
+            input(bit: int): str {
+                if bit == 0:
+                    @@:("1")
+                    -> $S0
+                else:
+                    @@:("0")
+            }
+        }
+}
+
+if __name__ == '__main__':
+    m = @@MealyDetector()
+    for bit in [1, 0, 1, 1, 0]:
+        print(f"in={bit} out={m.input(bit)}")
+```
+
+**Mealy semantics:** the `input()` handler in `$S1` returns "1" only when the input is `0` (detected the "10" pattern); other inputs return "0". Output is a function of (state, input).
+
+### Moore: parity checker
+
+![15 Moore state diagram](images/cookbook/15_mooreparity.svg)
+
+
+```frame
+@@target python_3
+
+@@system MooreParity {
+    interface:
+        input(bit: int)
+        output(): str
+
+    machine:
+        $Even {
+            input(bit: int) {
+                if bit == 1:
+                    -> $Odd
+            }
+            output(): str { @@:("even") }
+        }
+        $Odd {
+            input(bit: int) {
+                if bit == 1:
+                    -> $Even
+            }
+            output(): str { @@:("odd") }
+        }
+}
+
+if __name__ == '__main__':
+    m = @@MooreParity()
+    for bit in [1, 0, 1, 1, 0]:
+        m.input(bit)
+        print(f"in={bit} parity={m.output()}")
+```
+
+**Moore semantics:** `output()` returns the same value regardless of input — it depends only on the current state. `input()` is separate and only mutates state.
+
+**The distinction in Frame:**
+- **Mealy:** the input-handling event itself returns the output (`input(bit): str`).
+- **Moore:** the input event returns nothing (`input(bit)`); a separate `output()` event reports state.
+
+**Features used:** conditional return values, state-determined output, separation of input handling from output reporting
+
+---
+
+## 16. Session Persistence
+
+**Problem:** Save a user session to disk and restore it later.
+
+![16 state diagram](images/cookbook/16.svg)
+
+
+```frame
+@@target python_3
+
+@@persist
+@@system Session {
+    interface:
+        login(user: str)
+        logout()
+        who(): str
+
+    machine:
+        $LoggedOut {
+            login(user: str) {
+                self.user = user
+                -> $LoggedIn
+            }
+            who(): str { @@:("nobody") }
+        }
+        $LoggedIn {
+            logout() {
+                self.user = ""
+                -> $LoggedOut
+            }
+            who(): str { @@:(self.user) }
+        }
+
+    domain:
+        user: str = ""
+}
+
+if __name__ == '__main__':
+    s = @@Session()
+    s.login("alice")
+    print(s.who())               # alice
+
+    # Save
+    data = s.save_state()
+
+    # Restore into a new instance
+    s2 = Session.restore_state(data)
+    print(s2.who())              # alice (state preserved)
+```
+
+**How it works:** `@@persist` generates `save_state()` and `restore_state()`. The saved data includes the current state (`$LoggedIn`), domain variables (`user = "alice"`), and the state stack. Restore does NOT fire the enter handler — it reconstructs the exact state.
+
+**Features used:** `@@persist`, save/restore, domain variables
+
+---
+
+## 17. Async HTTP Client
+
+**Problem:** An HTTP client with async connect/fetch/disconnect.
+
+![17 state diagram](images/cookbook/17.svg)
+
+
+```frame
+@@target python_3
+
+import aiohttp
+import asyncio
+
+@@system HttpClient {
+    interface:
+        async connect(url: str)
+        async fetch(path: str): str
+        async disconnect()
+
+    machine:
+        $Idle {
+            $>() {
+                print("Ready")
+            }
+            connect(url: str) {
+                self.base_url = url
+                -> $Connected
+            }
+        }
+        $Connected {
+            $>() { print(f"Connected to {self.base_url}") }
+            <$() { print("Closing connection") }
+
+            fetch(path: str): str {
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(self.base_url + path) as resp:
+                        return await resp.text()
+            }
+            disconnect() { -> $Idle }
+        }
+
+    domain:
+        base_url: str = ""
+}
+
+async def main():
+    client = @@HttpClient()
+    await client.init()          # async two-phase init
+    await client.connect("https://example.com")
+    html = await client.fetch("/")
+    print(f"Got {len(html)} bytes")
+    await client.disconnect()
+
+asyncio.run(main())
+```
+
+**How it works:** `async` on interface methods makes the entire dispatch chain async. The constructor is synchronous — `await client.init()` fires the enter event separately (two-phase init). Native `await` in handler bodies works because the generated methods are async.
+
+**Features used:** `async` interface methods, two-phase init, native async code in handlers
+
+---
+
+## 18. Multi-System Composition
+
+**Problem:** A logger and an app as separate systems, with the app using the logger.
+
+![18 App state diagram](images/cookbook/18_app.svg)
+![18 Logger state diagram](images/cookbook/18_logger.svg)
+
+
+```frame
+@@target python_3
+
+@@system Logger {
+    interface:
+        log(msg: str)
+
+    machine:
+        $Active {
+            log(msg: str) {
+                print(f"[LOG] {msg}")
+            }
+        }
+}
+
+@@system App {
+    interface:
+        start()
+        stop()
+
+    machine:
+        $Idle {
+            start() {
+                self.logger.log("App starting")
+                -> $Running
+            }
+        }
+        $Running {
+            $>() { self.logger.log("App running") }
+            stop() {
+                self.logger.log("App stopping")
+                -> $Idle
+            }
+        }
+
+    domain:
+        logger = @@Logger()
+}
+
+if __name__ == '__main__':
+    app = @@App()
+    app.start()
+    app.stop()
+```
+
+**How it works:** Two `@@system` blocks in one file generate two independent classes. `@@Logger()` in the domain section instantiates the logger as a domain variable. Systems interact through their public interfaces — they don't share state.
+
+**Features used:** multi-system files, `@@SystemName()` instantiation, domain variable initialization
+
+---
+
+## 19. Configurable Worker Pool (Parameterized Systems)
+
+**Problem:** A task executor whose pool size and retry policy are set at construction time.
+
+![19 state diagram](images/cookbook/19.svg)
+
+```frame
+@@target python_3
+
+@@system WorkerPool($(max_retries: int), $>(start_msg: str), pool_size: int) {
+    interface:
+        submit(task: str)
+        get_status(): str
+
+    machine:
+        $Idle(max_retries: int) {
+            $>(start_msg: str) {
+                print(f"Pool ready: {start_msg}")
+            }
+
+            submit(task: str) {
+                self.pending.append(task)
+                if len(self.pending) >= self.pool_size:
+                    -> "batch full" $Processing
+            }
+
+            get_status(): str {
+                @@:(f"idle ({len(self.pending)}/{self.pool_size} pending)")
+            }
+        }
+
+        $Processing {
+            $>() {
+                print(f"Processing batch of {len(self.pending)} tasks")
+                self.pending.clear()
+            }
+
+            submit(task: str) {
+                self.pending.append(task)
+            }
+
+            get_status(): str {
+                @@:("processing")
+            }
+        }
+
+    domain:
+        pool_size: int = pool_size
+        pending: list = []
+}
+
+if __name__ == '__main__':
+    pool = @@WorkerPool($(5), $>("v1.0"), 3)
+    # → "Pool ready: v1.0"
+
+    pool.submit("task_a")
+    print(pool.get_status())    # "idle (1/3 pending)"
+
+    pool.submit("task_b")
+    pool.submit("task_c")       # batch threshold reached
+    # → "Processing batch of 3 tasks"
+
+    print(pool.get_status())    # "processing"
+```
+
+**How it works:** The system header declares three parameter groups in canonical order — state, enter, domain:
+
+| Parameter | Sigil | Kind | Where it goes |
+|-----------|-------|------|---------------|
+| `$(max_retries: int)` | `$()` | State | `compartment.state_args["max_retries"]` — readable in the start state's handlers as `max_retries` |
+| `$>(start_msg: str)` | `$>()` | Enter | `compartment.enter_args["start_msg"]` — readable in the start state's `$>` handler as `start_msg` |
+| `pool_size: int` | (bare) | Domain | `self.pool_size` via `domain: pool_size = pool_size` |
+
+At the call site, the caller tags each argument with the matching sigil:
+```python
+pool = @@WorkerPool($(5), $>("v1.0"), 3)
+```
+
+The framepiler substitutes Frame defaults for missing arguments and routes each to its compartment field. Transitions like `-> $Processing` create a new compartment with its own state_args, so state params are scoped per-state.
+
+**Features used:** system parameters (state, enter, domain), sigil-tagged call-site syntax, `@@:(expr)` context return, state transitions triggered by threshold
+
+---
+
