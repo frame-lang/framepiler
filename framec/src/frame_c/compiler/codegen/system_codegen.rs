@@ -618,137 +618,21 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             .with_type(&context_stack_type),
     );
 
-    /// Render a `DomainVar`'s structured fields back to a single source
-    /// line in whichever shape the target language's emit_field expects.
-    /// Used as a transitional bridge while per-backend emitters still
-    /// consume raw_code rather than the structured slots directly.
-    fn synthesize_field_raw(
-        var: &crate::frame_c::compiler::frame_ast::DomainVar,
-        lang: TargetLanguage,
-        sys_param_names: &[String],
-    ) -> String {
-        let type_text = match &var.var_type {
-            Type::Custom(s) => s.clone(),
-            Type::Unknown => String::new(),
-        };
-        // const modifier: emit the per-language keyword.
-        //
-        // - C++: always emit `const`. When the init references a param, the
-        //   constructor uses a member initializer list (`: field(value)`),
-        //   which is initial construction — NOT a re-assignment — so `const`
-        //   stays valid on the field declaration.
-        // - Java / C# / Dart: emit only when the init stays on the declaration.
-        //   If init references a param (stripped), the constructor body assigns
-        //   the field, and `final` / `readonly` on the field would conflict
-        //   with that assignment.
-        // - C / Go: never emit. C struct fields can't have field-level inits;
-        //   the factory function assigns, and `const` would block that.
-        let init_text_for_const = var.initializer_text.as_deref().unwrap_or("");
-        let init_on_decl = !init_references_param(init_text_for_const, sys_param_names);
-        let const_prefix = if var.is_const {
-            match lang {
-                TargetLanguage::Cpp => "const ",
-                TargetLanguage::Java if init_on_decl => "final ",
-                TargetLanguage::CSharp if init_on_decl => "readonly ",
-                TargetLanguage::Dart if init_on_decl => "final ",
-                _ => "",
-            }
-        } else {
-            ""
-        };
-        // Go and C never permit field-level initializers on struct
-        // declarations, so any domain field init MUST move to the
-        // factory function body. Strip unconditionally for those.
-        //
-        // For the OO languages with constructors (C++, Java, Swift,
-        // Kotlin, C#, Dart, TypeScript), only strip the field-level
-        // init when the init expression references a system parameter —
-        // that's the name-collision case `name: string = name;` where
-        // the RHS at field-declaration scope resolves to the field
-        // itself rather than the constructor parameter. (TypeScript
-        // explicitly rejects this with TS2301 at compile time.) For
-        // literal initializers (`var log = mutableListOf<String>()`,
-        // `int count = 0`), we leave the init at field-declaration
-        // scope so type inference still works.
-        let init_text = var.initializer_text.as_deref().unwrap_or("");
-        let strip_unconditionally = matches!(lang, TargetLanguage::Go | TargetLanguage::C);
-        let strip_collision = matches!(
-            lang,
-            TargetLanguage::Cpp
-                | TargetLanguage::Java
-                | TargetLanguage::Swift
-                | TargetLanguage::Kotlin
-                | TargetLanguage::CSharp
-                | TargetLanguage::Dart
-                | TargetLanguage::TypeScript
-                | TargetLanguage::JavaScript
-                | TargetLanguage::Php
-                | TargetLanguage::GDScript
-        ) && init_references_param(init_text, sys_param_names);
-        let strip_init = strip_unconditionally || strip_collision;
-
-        let init_suffix = if strip_init {
-            String::new()
-        } else {
-            match &var.initializer_text {
-                Some(t) => format!(" = {}", t),
-                None => String::new(),
-            }
-        };
-        // GoStyle: `<name> <type>[ = <init>]`. Go's emit_field expects
-        // this exact shape — name first, then type, no colon.
-        if matches!(lang, TargetLanguage::Go) {
-            if type_text.is_empty() {
-                return format!("{}{}", var.name, init_suffix);
-            }
-            return format!("{} {}{}", var.name, type_text, init_suffix);
-        }
-        // TypeFirst-shaped languages: `<type> <name>[ = <init>]`
-        let type_first = matches!(
-            lang,
-            TargetLanguage::C
-                | TargetLanguage::Cpp
-                | TargetLanguage::Java
-                | TargetLanguage::CSharp
-                | TargetLanguage::Dart
-        );
-        if type_first && !type_text.is_empty() {
-            format!("{}{} {}{}", const_prefix, type_text, var.name, init_suffix)
-        } else if !type_text.is_empty() && !matches!(lang, TargetLanguage::JavaScript) {
-            format!("{}{}: {}{}", const_prefix, var.name, type_text, init_suffix)
-        } else {
-            format!("{}{}{}", const_prefix, var.name, init_suffix)
-        }
-    }
-
-    // Domain variables.
-    //
-    // The pipeline parser's domain_native module produces structured
-    // Build a Field codegen node from each domain variable's structured
-    // slots (name, type, initializer). We also synthesize raw_code for
-    // backends that emit fields from the raw declaration text.
+    // Domain variables — build a structured `Field` for each. Backends
+    // consume the structured slots (name, type_annotation, initializer,
+    // is_const) directly via their own `emit_field` helpers; nothing
+    // re-parses a synthesized declaration string anymore.
     for domain_var in &system.domain {
         // Structured type slot: keep as None when the user wrote no
-        // type (Type::Unknown), so backends consuming the structured
-        // slot can omit the type annotation entirely (matching the
-        // raw_code path's behavior of using its own empty `type_text`
-        // for Unknown).
+        // type (Type::Unknown), so backends can omit the type
+        // annotation entirely and let the target language infer.
         let type_str_opt = match &domain_var.var_type {
             Type::Custom(s) => Some(s.clone()),
             Type::Unknown => None,
         };
-
-        // Synthesize raw_code in the appropriate format for this backend:
-        //   TypeFirst (C/C++/Java/...):  `<type> <name> = <init>`
-        //   AnnotatedName (Python/TS/Rust/...): `<name>: <type> = <init>`
-        //   BareName (Erlang/JS):        `<name> = <init>`
         let sys_param_names: Vec<String> = system.params.iter().map(|p| p.name.clone()).collect();
-        let synthesised_raw = synthesize_field_raw(domain_var, syntax.language, &sys_param_names);
-        let expanded_code = expand_tagged_in_domain(&synthesised_raw, syntax.language);
 
-        let mut field = Field::new(&domain_var.name)
-            .with_visibility(Visibility::Public)
-            .with_raw_code(&expanded_code);
+        let mut field = Field::new(&domain_var.name).with_visibility(Visibility::Public);
         if let Some(ref t) = type_str_opt {
             field = field.with_type(t);
         }

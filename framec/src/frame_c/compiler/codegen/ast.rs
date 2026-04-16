@@ -43,7 +43,6 @@ pub struct Field {
     pub is_static: bool,
     pub is_const: bool,
     pub initializer: Option<Box<CodegenNode>>,
-    pub raw_code: Option<String>, // V4: Native code pass-through
 }
 
 impl Field {
@@ -55,7 +54,6 @@ impl Field {
             is_static: false,
             is_const: false,
             initializer: None,
-            raw_code: None,
         }
     }
 
@@ -71,11 +69,6 @@ impl Field {
 
     pub fn with_initializer(mut self, init: CodegenNode) -> Self {
         self.initializer = Some(Box::new(init));
-        self
-    }
-
-    pub fn with_raw_code(mut self, code: &str) -> Self {
-        self.raw_code = Some(code.to_string());
         self
     }
 }
