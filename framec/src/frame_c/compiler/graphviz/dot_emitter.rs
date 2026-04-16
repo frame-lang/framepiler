@@ -184,13 +184,12 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
             }
         }
 
-        let body_text = handler_lines.join("<br ALIGN=\"LEFT\"/>\n");
-        // Indent each line
-        for (i, line) in body_text.split('\n').enumerate() {
-            if i > 0 {
-                writeln!(out).ok();
-            }
-            write!(out, "{}            {}", pad, line).ok();
+        // Each line is PRECEDED by <br ALIGN="LEFT"/> — including the first —
+        // because GraphViz's <br/> controls alignment of text AFTER it.
+        // Without a preceding <br/>, the first line defaults to centered.
+        // No indentation whitespace — GraphViz renders whitespace in <font> as text.
+        for line in &handler_lines {
+            write!(out, "<br ALIGN=\"LEFT\"/>{}", line).ok();
         }
         writeln!(out).ok();
 
@@ -217,13 +216,9 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
                 None => sv.name.clone(),
             })
             .collect();
-        write!(
-            out,
-            "{}            {}",
-            pad,
-            var_lines.join(&format!("<br ALIGN=\"LEFT\"/>\n{}            ", pad))
-        )
-        .ok();
+        for line in &var_lines {
+            write!(out, "<br ALIGN=\"LEFT\"/>{}", line).ok();
+        }
         writeln!(out).ok();
         writeln!(out, "{}        </font></td></tr>", pad).ok();
     }
