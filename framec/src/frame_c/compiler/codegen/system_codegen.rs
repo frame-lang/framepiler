@@ -631,14 +631,19 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             Type::Custom(s) => s.clone(),
             Type::Unknown => String::new(),
         };
-        // const modifier: type-first languages get a keyword prefix in the raw code
-        let const_prefix = if var.is_const {
+        // const modifier: emit language keyword only when init stays on declaration.
+        // If the init references a param (stripped), the constructor assigns it —
+        // const/final/readonly on the declaration would conflict with that assignment.
+        let init_text_for_const = var.initializer_text.as_deref().unwrap_or("");
+        let init_on_decl = !matches!(lang, TargetLanguage::Go | TargetLanguage::C)
+            && !init_references_param(init_text_for_const, sys_param_names);
+        let const_prefix = if var.is_const && init_on_decl {
             match lang {
                 TargetLanguage::Java => "final ",
                 TargetLanguage::CSharp => "readonly ",
                 TargetLanguage::C | TargetLanguage::Cpp => "const ",
                 TargetLanguage::Dart => "final ",
-                _ => "", // TS/Kotlin/Swift handled by backend emit_field; Python/etc. have no syntax
+                _ => "",
             }
         } else {
             ""
@@ -729,7 +734,13 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             .with_visibility(Visibility::Public)
             .with_type(&type_str)
             .with_raw_code(&expanded_code);
-        field.is_const = domain_var.is_const;
+        // Only emit const on the field when the init stays on the declaration.
+        // If the init references a param (stripped), the constructor assigns it —
+        // emitting const/readonly/val/let on the declaration would conflict.
+        let init_text = domain_var.initializer_text.as_deref().unwrap_or("");
+        let init_on_decl = !matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C)
+            && !init_references_param(init_text, &sys_param_names);
+        field.is_const = domain_var.is_const && init_on_decl;
 
         // Populate the structured initializer slot from init text —
         // but ONLY when the init wasn't stripped from the field declaration.
@@ -788,6 +799,9 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
 /// Generate the constructor
 fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> CodegenNode {
     let mut body = Vec::new();
+    // C++ member initializer list entries: `field(value), field2(value2)`
+    // Collected during domain init loop for const fields whose init was stripped.
+    let mut cpp_init_list: Vec<String> = Vec::new();
 
     // Initialize state stack - language specific
     match syntax.language {
