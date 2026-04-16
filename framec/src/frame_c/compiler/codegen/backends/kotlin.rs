@@ -125,93 +125,16 @@ impl LanguageBackend for KotlinBackend {
                 ));
                 ctx.push_indent();
 
-                // Collect primary constructor param names for const field suppression
+                // Const fields whose name collides with a primary-constructor
+                // param are declared as `val name: Type` directly on the class
+                // header (above) — skip them in the body.
                 let primary_param_names: std::collections::HashSet<&str> =
                     primary_params.iter().map(|p| p.name.as_str()).collect();
                 for field in fields {
-                    // Skip const fields that are declared in the primary constructor
-                    // (they're already `val name: Type` on the class header).
                     if field.is_const && primary_param_names.contains(field.name.as_str()) {
                         continue;
                     }
-                    if let Some(ref raw_code) = field.raw_code {
-                        // Raw code from domain section — Kotlin requires var/val prefix
-                        let trimmed = raw_code.trim();
-                        let needs_var =
-                            !trimmed.starts_with("var ") && !trimmed.starts_with("val ");
-                        let var_prefix = if needs_var {
-                            if field.is_const {
-                                "val "
-                            } else {
-                                "var "
-                            }
-                        } else {
-                            ""
-                        };
-                        // Kotlin requires every property to be initialized
-                        // or marked abstract. If the synthesized raw_code
-                        // has a colon-typed declaration but no `=` (the
-                        // init was stripped because it referenced a system
-                        // param), append a type-appropriate default
-                        // placeholder. The constructor's init block will
-                        // overwrite it with the real value.
-                        let raw_code_with_default =
-                            if !trimmed.contains('=') && trimmed.contains(':') {
-                                let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
-                                let type_part = parts.get(1).map(|s| s.trim()).unwrap_or("");
-                                let default = match type_part {
-                                    "Int" | "Long" | "Short" | "Byte" => "0",
-                                    "Float" | "Double" => "0.0",
-                                    "Boolean" => "false",
-                                    "String" => "\"\"",
-                                    _ => "null",
-                                };
-                                format!("{} = {}", trimmed, default)
-                            } else {
-                                raw_code.clone()
-                            };
-                        let vis = self.emit_visibility_kotlin(field.visibility);
-                        if vis.is_empty() {
-                            result.push_str(&format!(
-                                "{}{}{}\n",
-                                ctx.get_indent(),
-                                var_prefix,
-                                raw_code_with_default
-                            ));
-                        } else {
-                            result.push_str(&format!(
-                                "{}{} {}{}\n",
-                                ctx.get_indent(),
-                                vis,
-                                var_prefix,
-                                raw_code_with_default
-                            ));
-                        }
-                    } else {
-                        let vis = self.emit_visibility_kotlin(field.visibility);
-                        let type_ann = self.map_type(
-                            field
-                                .type_annotation
-                                .as_ref()
-                                .unwrap_or(&"Any?".to_string()),
-                        );
-                        if vis.is_empty() {
-                            result.push_str(&format!(
-                                "{}var {}: {}\n",
-                                ctx.get_indent(),
-                                field.name,
-                                type_ann
-                            ));
-                        } else {
-                            result.push_str(&format!(
-                                "{}{} var {}: {}\n",
-                                ctx.get_indent(),
-                                vis,
-                                field.name,
-                                type_ann
-                            ));
-                        }
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
                 if !fields.is_empty() && !methods.is_empty() {
                     result.push('\n');
@@ -696,6 +619,75 @@ impl KotlinBackend {
             "void" => "Unit".to_string(),
             "var" => "Any?".to_string(),
             other => other.to_string(),
+        }
+    }
+
+    /// Type-appropriate placeholder used when a Public domain field has
+    /// no declaration-scope initializer (because it was stripped to the
+    /// constructor body to take a system-param value). Kotlin requires
+    /// every property to be initialized; the placeholder is overwritten
+    /// by the `init { }` block.
+    fn kotlin_default_for_type(&self, type_str: &str) -> &'static str {
+        match type_str {
+            "Int" | "Long" | "Short" | "Byte" => "0",
+            "Float" | "Double" => "0.0",
+            "Boolean" => "false",
+            "String" => "\"\"",
+            _ => "null",
+        }
+    }
+
+    /// Emit a single Kotlin class-property declaration line:
+    ///   `<indent>[<vis> ][val|var ]<name>[: <type>][ = <init>]\n`
+    ///
+    /// Type slot:
+    /// - present → emit `: <type>` (after `map_type`)
+    /// - absent → omit; Kotlin infers from the initializer
+    ///
+    /// Initializer policy:
+    /// - structured `initializer` present → use it verbatim
+    /// - missing AND visibility is `Public` AND type is present → emit
+    ///   a type-appropriate placeholder (e.g. `0`, `""`) so Kotlin's
+    ///   "must be initialized" rule is satisfied; the constructor body
+    ///   overwrites with the real value
+    /// - missing AND non-`Public` (auto-generated kernel field) → emit
+    ///   no init; the `init { }` block performs the assignment
+    ///
+    /// Visibility `Public` is Kotlin's default and is OMITTED.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let vis = self.emit_visibility_kotlin(field.visibility);
+        let var_kw = if field.is_const { "val " } else { "var " };
+        let type_str_opt = field.type_annotation.as_ref().map(|t| self.map_type(t));
+        let type_suffix = match &type_str_opt {
+            Some(t) => format!(": {}", t),
+            None => String::new(),
+        };
+        let init_suffix = match (&field.initializer, field.visibility, &type_str_opt) {
+            (Some(init), _, _) => format!(" = {}", self.emit(init, ctx)),
+            (None, Visibility::Public, Some(t)) => {
+                format!(" = {}", self.kotlin_default_for_type(t))
+            }
+            (None, _, _) => String::new(),
+        };
+        if vis.is_empty() {
+            format!(
+                "{}{}{}{}{}\n",
+                ctx.get_indent(),
+                var_kw,
+                field.name,
+                type_suffix,
+                init_suffix
+            )
+        } else {
+            format!(
+                "{}{} {}{}{}{}\n",
+                ctx.get_indent(),
+                vis,
+                var_kw,
+                field.name,
+                type_suffix,
+                init_suffix
+            )
         }
     }
 }

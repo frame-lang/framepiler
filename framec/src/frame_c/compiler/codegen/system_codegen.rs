@@ -728,7 +728,15 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
     // slots (name, type, initializer). We also synthesize raw_code for
     // backends that emit fields from the raw declaration text.
     for domain_var in &system.domain {
-        let type_str = type_to_string(&domain_var.var_type);
+        // Structured type slot: keep as None when the user wrote no
+        // type (Type::Unknown), so backends consuming the structured
+        // slot can omit the type annotation entirely (matching the
+        // raw_code path's behavior of using its own empty `type_text`
+        // for Unknown).
+        let type_str_opt = match &domain_var.var_type {
+            Type::Custom(s) => Some(s.clone()),
+            Type::Unknown => None,
+        };
 
         // Synthesize raw_code in the appropriate format for this backend:
         //   TypeFirst (C/C++/Java/...):  `<type> <name> = <init>`
@@ -740,8 +748,10 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
 
         let mut field = Field::new(&domain_var.name)
             .with_visibility(Visibility::Public)
-            .with_type(&type_str)
             .with_raw_code(&expanded_code);
+        if let Some(ref t) = type_str_opt {
+            field = field.with_type(t);
+        }
         field.is_const = domain_var.is_const;
 
         // Populate the structured initializer slot from init text —
