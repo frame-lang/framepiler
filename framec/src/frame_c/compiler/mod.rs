@@ -16,7 +16,6 @@ pub mod validator;
 pub mod assembler;
 pub mod codegen;
 pub mod frame_ast;
-pub mod frame_parser;
 pub mod frame_validator;
 pub mod graphviz;
 pub mod lexer;

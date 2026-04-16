@@ -13,12 +13,45 @@
 
 use crate::frame_c::compiler::arcanum::Arcanum;
 use crate::frame_c::compiler::frame_ast::{
-    ForwardAst, FrameAst, HandlerAst, HandlerBody, InterfaceMethod, StateAst, Statement, SystemAst,
-    TransitionAst,
+    Expression, ForwardAst, FrameAst, HandlerAst, HandlerBody, InterfaceMethod, StateAst,
+    Statement, SystemAst, TransitionAst,
 };
 use crate::frame_c::compiler::validation::pass::{ValidationContext, ValidationPass};
 use crate::frame_c::compiler::validation::types::ValidationIssue;
 use std::collections::{HashMap, HashSet};
+
+/// Count actual transition arguments. The V4 pipeline parser bundles all
+/// transition args into a single `NativeExpr("(a, b, c)")` blob so
+/// `args.len()` is always 0 or 1 regardless of the real count. This
+/// peeks inside the blob and counts depth-0 commas so E405 still fires
+/// for `-> $Target(1, 2, 3)` against a 1-param state. Mirrors the
+/// `transition_arg_count` helper in `frame_validator.rs`.
+fn transition_arg_count(args: &[Expression]) -> usize {
+    if args.len() == 1 {
+        if let Expression::NativeExpr(s) = &args[0] {
+            let inner = s
+                .trim()
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .trim();
+            if inner.is_empty() {
+                return 0;
+            }
+            let mut count = 1;
+            let mut depth = 0;
+            for b in inner.bytes() {
+                match b {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    b',' if depth == 0 => count += 1,
+                    _ => {}
+                }
+            }
+            return count;
+        }
+    }
+    args.len()
+}
 
 /// Semantic validation pass
 ///
@@ -360,12 +393,13 @@ impl SemanticPass {
                     )),
             );
         } else {
-            // E405: Check STATE PARAMETER arity
-            // Transition args like -> $State(a, b) are passed to state params $State(a, b)
+            // E405: Check STATE PARAMETER arity. See `transition_arg_count`
+            // for why we can't just use `transition.args.len()` here.
             let Some(target_state) = state_map.get(&transition.target) else {
                 return;
             };
-            if target_state.params.len() != transition.args.len() {
+            let args_count = transition_arg_count(&transition.args);
+            if target_state.params.len() != args_count {
                 issues.push(
                     ValidationIssue::error(
                         "E405",
@@ -373,7 +407,7 @@ impl SemanticPass {
                             "State '{}' expects {} parameters but {} provided",
                             transition.target,
                             target_state.params.len(),
-                            transition.args.len()
+                            args_count
                         ),
                     )
                     .with_span(transition.span.clone())
@@ -582,8 +616,9 @@ impl SemanticPass {
 mod tests {
     use super::*;
     use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
-    use crate::frame_c::compiler::frame_ast::TargetLanguage;
-    use crate::frame_c::compiler::frame_parser::FrameParser;
+    use crate::frame_c::compiler::frame_ast::{ModuleAst, Span};
+    use crate::frame_c::compiler::{pipeline_parser, segmenter};
+    use crate::frame_c::visitors::TargetLanguage;
 
     fn make_context() -> ValidationContext<'static> {
         static CONFIG: crate::frame_c::compiler::validation::types::ValidationConfig =
@@ -596,6 +631,53 @@ mod tests {
         ValidationContext::new(&CONFIG)
     }
 
+    /// Build a FrameAst::Module from raw source via the V4 stages
+    /// (segmenter + pipeline_parser). Used to feed `SemanticPass.run`
+    /// directly without dragging in the legacy FrameParser.
+    fn parse_module_v4(source: &str) -> FrameAst {
+        let bytes = source.as_bytes();
+        let source_map = segmenter::segment_source(bytes, TargetLanguage::Python3)
+            .expect("segmenter failed in test");
+
+        let mut systems = Vec::new();
+        for segment in &source_map.segments {
+            if let segmenter::Segment::System {
+                name,
+                body_span,
+                header_params_span,
+                ..
+            } = segment
+            {
+                let span = Span::new(body_span.start, body_span.end);
+                let mut system = pipeline_parser::parse_system(
+                    &source_map.source,
+                    name.clone(),
+                    span,
+                    TargetLanguage::Python3,
+                )
+                .expect("parse_system failed in test");
+
+                if let Some(hp_span) = header_params_span {
+                    let hp = Span::new(hp_span.start, hp_span.end);
+                    if let Ok(params) =
+                        pipeline_parser::parse_system_header_params(&source_map.source, hp)
+                    {
+                        system.params = params;
+                    }
+                }
+
+                systems.push(system);
+            }
+        }
+
+        FrameAst::Module(ModuleAst {
+            name: String::new(),
+            systems,
+            imports: Vec::new(),
+            span: Span::new(0, 0),
+        })
+    }
+
     #[test]
     fn test_e402_unknown_state() {
         let source = r#"
@@ -606,8 +688,7 @@ mod tests {
         }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
+        let ast = parse_module_v4(source);
         let arcanum = build_arcanum_from_frame_ast(&ast);
         let mut ctx = make_context();
 
@@ -628,8 +709,7 @@ mod tests {
         $ActualParent { }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
+        let ast = parse_module_v4(source);
         let arcanum = build_arcanum_from_frame_ast(&ast);
         let mut ctx = make_context();
 
@@ -652,8 +732,7 @@ mod tests {
         $Target(x: int) { }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
+        let ast = parse_module_v4(source);
         let arcanum = build_arcanum_from_frame_ast(&ast);
         let mut ctx = make_context();
 
@@ -678,8 +757,7 @@ mod tests {
         $Target { }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
+        let ast = parse_module_v4(source);
         let arcanum = build_arcanum_from_frame_ast(&ast);
         let mut ctx = make_context();
 
@@ -705,8 +783,7 @@ mod tests {
         }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
+        let ast = parse_module_v4(source);
         let arcanum = build_arcanum_from_frame_ast(&ast);
         let mut ctx = make_context();
 
@@ -737,8 +814,7 @@ mod tests {
         }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
+        let ast = parse_module_v4(source);
         let arcanum = build_arcanum_from_frame_ast(&ast);
         let mut ctx = make_context();
 
@@ -769,8 +845,7 @@ mod tests {
         }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
+        let ast = parse_module_v4(source);
         let arcanum = build_arcanum_from_frame_ast(&ast);
         let mut ctx = make_context();
 

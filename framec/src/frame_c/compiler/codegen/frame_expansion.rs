@@ -4088,7 +4088,7 @@ pub(crate) fn get_native_scanner(lang: TargetLanguage) -> Box<dyn NativeRegionSc
         // not from native code). The validator still scans for Frame tokens
         // (e.g. @@:self.method()) during the graphviz compile path; those
         // tokens are target-language-agnostic, so any skipper works. Use the
-        // Python scanner as a neutral default — matches frame_parser.rs.
+        // Python scanner as a neutral default.
         TargetLanguage::Graphviz => Box::new(NativeRegionScannerPy),
     }
 }

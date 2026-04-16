@@ -13,10 +13,10 @@
 //!
 //! ## Reuse
 //!
-//! This consolidates and replaces:
+//! This consolidates and replaces (the legacy `frame_parser` module was
+//! removed once the V4 pipeline took over):
 //! - `PragmaScanner` (existing)
-//! - `skip_native_preamble()` in frame_parser.rs
-//! - `skip_pragmas()` in frame_parser.rs
+//! - the legacy preamble/pragma skipping helpers
 //! - `skip_pragmas_keep_native()` in compiler.rs
 //! - `extract_native_code()` in compiler.rs
 

@@ -495,33 +495,31 @@ impl FrameValidator {
                     .push(ValidationError::new("E402", msg).with_span(trans.span.clone()));
             }
         } else {
-            // State exists, check transition argument arity against STATE PARAMS
-            // Skip arity checking when args are NativeExpr blobs (native compiler handles it)
-            let has_native_args = trans
-                .args
-                .iter()
-                .any(|a| matches!(a, Expression::NativeExpr(_)));
-            if !has_native_args {
-                let args_count = trans.args.len();
-                if let Some(expected) = arcanum.get_state_param_count(system_name, &trans.target) {
-                    if expected != args_count {
-                        if !self
-                            .errors
-                            .iter()
-                            .any(|e| e.code == "E405" && e.span.as_ref() == Some(&trans.span))
-                        {
-                            self.errors.push(
-                                ValidationError::new(
-                                    "E405",
-                                    format!(
-                                        "State '{}' expects {} parameters but {} provided",
-                                        trans.target, expected, args_count
-                                    ),
-                                )
-                                .with_span(trans.span.clone()),
-                            );
-                        }
-                    }
+            // State exists, check transition argument arity against STATE PARAMS.
+            // V4's parser bundles transition args into a single
+            // `NativeExpr("(a, b, c)")` blob, so `args.len()` is always 0 or 1
+            // regardless of how many args were actually provided. Use
+            // `transition_arg_count` to count real args at depth 0 (handling
+            // nested calls like `getX(), b`), so E405 still fires for
+            // `-> $Target(1, 2, 3)` against a 1-param state.
+            let args_count = transition_arg_count(&trans.args);
+            if let Some(expected) = arcanum.get_state_param_count(system_name, &trans.target) {
+                if expected != args_count
+                    && !self
+                        .errors
+                        .iter()
+                        .any(|e| e.code == "E405" && e.span.as_ref() == Some(&trans.span))
+                {
+                    self.errors.push(
+                        ValidationError::new(
+                            "E405",
+                            format!(
+                                "State '{}' expects {} parameters but {} provided",
+                                trans.target, expected, args_count
+                            ),
+                        )
+                        .with_span(trans.span.clone()),
+                    );
                 }
             }
         }
@@ -1314,30 +1312,25 @@ impl FrameValidator {
                 .with_span(transition.span.clone()),
             );
         } else {
-            // E405: Check STATE PARAMETER arity
-            // Skip arity checking when args are NativeExpr blobs (native compiler handles it)
-            let has_native_args = transition
-                .args
-                .iter()
-                .any(|a| matches!(a, Expression::NativeExpr(_)));
-            if !has_native_args {
-                let Some(target_state) = state_map.get(&transition.target) else {
-                    return;
-                };
-                if target_state.params.len() != transition.args.len() {
-                    self.errors.push(
-                        ValidationError::new(
-                            "E405",
-                            format!(
-                                "State '{}' expects {} parameters but {} provided",
-                                transition.target,
-                                target_state.params.len(),
-                                transition.args.len()
-                            ),
-                        )
-                        .with_span(transition.span.clone()),
-                    );
-                }
+            // E405: Check STATE PARAMETER arity. See `transition_arg_count`
+            // for why we can't just use `args.len()` under V4.
+            let Some(target_state) = state_map.get(&transition.target) else {
+                return;
+            };
+            let args_count = transition_arg_count(&transition.args);
+            if target_state.params.len() != args_count {
+                self.errors.push(
+                    ValidationError::new(
+                        "E405",
+                        format!(
+                            "State '{}' expects {} parameters but {} provided",
+                            transition.target,
+                            target_state.params.len(),
+                            args_count
+                        ),
+                    )
+                    .with_span(transition.span.clone()),
+                );
             }
         }
     }
@@ -1490,24 +1483,54 @@ pub fn typescript_global_collision_rename(name: &str) -> Option<String> {
     }
 }
 
-/// Convenience function to validate Frame source code
+/// Convenience function to validate Frame source code via the V4
+/// pipeline. The legacy implementation went through `FrameParser` +
+/// `validate_with_arcanum` directly; the V4 pipeline runs the same
+/// validator (plus target-specific checks and the const/E615 pass
+/// that the legacy parser couldn't represent), so this delegates to
+/// it. Used only by this module's unit tests today.
 pub fn validate_frame_source(
     source: &str,
     target: TargetLanguage,
 ) -> Result<(), Vec<ValidationError>> {
-    use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
-    use crate::frame_c::compiler::frame_parser::FrameParser;
+    use crate::frame_c::compiler::pipeline::compile_module;
+    use crate::frame_c::compiler::pipeline::config::PipelineConfig;
+    use crate::frame_c::visitors::TargetLanguage as VTarget;
 
-    let mut parser = FrameParser::new(source.as_bytes(), target);
-    let ast = parser
-        .parse_module()
-        .map_err(|e| vec![ValidationError::new("E001", format!("Parse error: {}", e))])?;
+    // The frame_ast::TargetLanguage enum used here only knows the
+    // languages the legacy native scanner cared about. Map to the
+    // visitors::TargetLanguage variants the pipeline actually drives.
+    let v_target = match target {
+        TargetLanguage::Python3 => VTarget::Python3,
+        TargetLanguage::TypeScript => VTarget::TypeScript,
+        TargetLanguage::Rust => VTarget::Rust,
+        TargetLanguage::CSharp => VTarget::CSharp,
+        TargetLanguage::C => VTarget::C,
+        TargetLanguage::Cpp => VTarget::Cpp,
+        TargetLanguage::Java => VTarget::Java,
+        // Graphviz isn't a runtime target language but the pipeline
+        // accepts it for diagram generation; route validation through
+        // a neutral target so we still get the structural checks.
+        TargetLanguage::Graphviz => VTarget::Python3,
+    };
 
-    // Build Arcanum for semantic validation (E405 etc)
-    let arcanum = build_arcanum_from_frame_ast(&ast);
+    let config = PipelineConfig::production(v_target);
+    let result = compile_module(source.as_bytes(), &config).map_err(|e| {
+        vec![ValidationError::new(
+            "E000",
+            format!("Pipeline error: {}", e.error),
+        )]
+    })?;
 
-    let mut validator = FrameValidator::new();
-    validator.validate_with_arcanum(&ast, &arcanum)
+    if result.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(result
+            .errors
+            .iter()
+            .map(|e| ValidationError::new(&e.code, e.message.clone()))
+            .collect())
+    }
 }
 
 /// Count arguments in a parenthesized argument string like "(a, b, c)".
@@ -1564,6 +1587,21 @@ fn count_args(args: &str) -> usize {
     count
 }
 
+/// Count actual transition arguments. The V4 pipeline parser bundles all
+/// transition args into a single `NativeExpr("(a, b, c)")` blob (because
+/// arg expressions aren't typed and may contain native code), so
+/// `args.len()` is always 0 or 1 regardless of the real count. This helper
+/// peeks inside the NativeExpr blob and counts depth-0 commas so E405
+/// arity validation still works.
+fn transition_arg_count(args: &[Expression]) -> usize {
+    if args.len() == 1 {
+        if let Expression::NativeExpr(s) = &args[0] {
+            return count_args(s);
+        }
+    }
+    args.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1572,22 +1610,29 @@ mod tests {
     use crate::frame_c::visitors::TargetLanguage as VTarget;
 
     /// Helper: parse + run BOTH the general validator and the
-    /// target-specific validator. The pipeline runs them in this order
-    /// for real compiles, so the tests should mirror that.
+    /// target-specific validator. Delegates to the V4 pipeline, which
+    /// runs both phases in the same order as a real `framec compile`.
     fn validate_for_target(source: &str, target: VTarget) -> Result<(), Vec<ValidationError>> {
-        use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
-        use crate::frame_c::compiler::frame_parser::FrameParser;
+        use crate::frame_c::compiler::pipeline::compile_module;
+        use crate::frame_c::compiler::pipeline::config::PipelineConfig;
 
-        // FrameParser uses frame_ast::TargetLanguage, not visitors::TargetLanguage
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser
-            .parse_module()
-            .map_err(|e| vec![ValidationError::new("E001", format!("Parse error: {}", e))])?;
-        let arcanum = build_arcanum_from_frame_ast(&ast);
+        let config = PipelineConfig::production(target);
+        let result = compile_module(source.as_bytes(), &config).map_err(|e| {
+            vec![ValidationError::new(
+                "E000",
+                format!("Pipeline error: {}", e.error),
+            )]
+        })?;
 
-        let mut validator = FrameValidator::new();
-        validator.validate_with_arcanum(&ast, &arcanum)?;
-        validator.validate_target_specific(&ast, target)
+        if result.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(result
+                .errors
+                .iter()
+                .map(|e| ValidationError::new(&e.code, e.message.clone()))
+                .collect())
+        }
     }
 
     #[test]
@@ -1660,37 +1705,48 @@ mod tests {
         assert!(result.is_ok(), "safe names must pass: {:?}", result.err());
     }
 
-    /// Helper that mirrors `validate_for_target` but ALSO returns
-    /// the validator so the caller can inspect collected warnings
-    /// (W501 etc.) — `validate_for_target` only returns errors.
+    /// Helper that mirrors `validate_for_target` but ALSO returns the
+    /// pipeline's collected warnings (W501 etc.) alongside the
+    /// errors. Delegates to the V4 pipeline so warnings emitted at any
+    /// stage (including the V4-specific `frame_validator` warnings)
+    /// flow through unchanged.
     fn validate_for_target_with_warnings(
         source: &str,
         target: VTarget,
     ) -> (Result<(), Vec<ValidationError>>, Vec<ValidationError>) {
-        use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
-        use crate::frame_c::compiler::frame_parser::FrameParser;
+        use crate::frame_c::compiler::pipeline::compile_module;
+        use crate::frame_c::compiler::pipeline::config::PipelineConfig;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = match parser.parse_module() {
-            Ok(a) => a,
+        let config = PipelineConfig::production(target);
+        let compile_result = match compile_module(source.as_bytes(), &config) {
+            Ok(r) => r,
             Err(e) => {
                 return (
                     Err(vec![ValidationError::new(
-                        "E001",
-                        format!("Parse error: {}", e),
+                        "E000",
+                        format!("Pipeline error: {}", e.error),
                     )]),
                     vec![],
                 )
             }
         };
-        let arcanum = build_arcanum_from_frame_ast(&ast);
 
-        let mut validator = FrameValidator::new();
-        if let Err(errs) = validator.validate_with_arcanum(&ast, &arcanum) {
-            return (Err(errs), vec![]);
-        }
-        let result = validator.validate_target_specific(&ast, target);
-        let warnings = validator.take_warnings();
+        let warnings: Vec<ValidationError> = compile_result
+            .warnings
+            .iter()
+            .map(|w| ValidationError::new(&w.code, w.message.clone()))
+            .collect();
+
+        let result = if compile_result.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(compile_result
+                .errors
+                .iter()
+                .map(|e| ValidationError::new(&e.code, e.message.clone()))
+                .collect())
+        };
+
         (result, warnings)
     }
 
@@ -2062,10 +2118,11 @@ mod tests {
 
     #[test]
     fn test_validate_with_arcanum() {
-        use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
-        use crate::frame_c::compiler::frame_parser::FrameParser;
-
-        // System with valid transition
+        // Happy-path arcanum-backed validation: a system with valid
+        // transitions must pass. The V4 pipeline runs Arcanum
+        // construction + `validate_with_arcanum` internally, so this
+        // exercises the same code path the legacy direct-call test
+        // covered.
         let source = r#"
 @@system TestArcanum {
     machine:
@@ -2077,13 +2134,12 @@ mod tests {
         }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
-        let arcanum = build_arcanum_from_frame_ast(&ast);
-
-        let mut validator = FrameValidator::new();
-        let result = validator.validate_with_arcanum(&ast, &arcanum);
-        assert!(result.is_ok());
+        let result = validate_frame_source(source, TargetLanguage::Python3);
+        assert!(
+            result.is_ok(),
+            "expected clean validation, got {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -2131,10 +2187,8 @@ mod tests {
 
     #[test]
     fn test_validate_with_arcanum_invalid_state() {
-        use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
-        use crate::frame_c::compiler::frame_parser::FrameParser;
-
-        // System with invalid transition target
+        // Negative arcanum check: transition to an undefined state
+        // must surface E402 from the validator's arcanum-backed pass.
         let source = r#"
 @@system TestInvalid {
     machine:
@@ -2143,12 +2197,7 @@ mod tests {
         }
 }"#;
 
-        let mut parser = FrameParser::new(source.as_bytes(), TargetLanguage::Python3);
-        let ast = parser.parse_module().unwrap();
-        let arcanum = build_arcanum_from_frame_ast(&ast);
-
-        let mut validator = FrameValidator::new();
-        let result = validator.validate_with_arcanum(&ast, &arcanum);
+        let result = validate_frame_source(source, TargetLanguage::Python3);
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
