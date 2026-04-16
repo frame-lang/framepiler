@@ -78,25 +78,7 @@ impl LanguageBackend for JavaScriptBackend {
 
                 // Fields — no type annotations, no visibility keywords
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        // V4: Native code pass-through
-                        result.push_str(&format!("{}{};\n", ctx.get_indent(), raw_code));
-                    } else {
-                        let static_kw = if field.is_static { "static " } else { "" };
-                        let init = field
-                            .initializer
-                            .as_ref()
-                            .map(|i| format!(" = {}", self.emit(i, ctx)))
-                            .unwrap_or_default();
-
-                        result.push_str(&format!(
-                            "{}{}{}{};\n",
-                            ctx.get_indent(),
-                            static_kw,
-                            field.name,
-                            init
-                        ));
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
 
                 if !fields.is_empty() && !methods.is_empty() {
@@ -632,6 +614,29 @@ impl JavaScriptBackend {
             CodegenNode::Comment { .. } |
             CodegenNode::NativeBlock { .. } |  // Native blocks have their own semicolons
             CodegenNode::Empty
+        )
+    }
+
+    /// Emit a single JavaScript class-field declaration line:
+    ///   `<indent>[static ]<name>[ = <init>];\n`
+    ///
+    /// JS class fields carry no type annotation and no visibility
+    /// keyword. `is_const` is irrelevant for JS class fields (use
+    /// `Object.freeze` or naming convention instead) and is intentionally
+    /// not emitted — matching the existing `synthesize_field_raw` output
+    /// for JS, which never includes a const prefix.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let static_kw = if field.is_static { "static " } else { "" };
+        let init_suffix = match &field.initializer {
+            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            None => String::new(),
+        };
+        format!(
+            "{}{}{}{};\n",
+            ctx.get_indent(),
+            static_kw,
+            field.name,
+            init_suffix
         )
     }
 }
