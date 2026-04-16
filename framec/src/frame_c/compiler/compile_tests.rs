@@ -255,8 +255,7 @@ mod tests {
         let result = compile_module(invalid_frame, TargetLanguage::Python3);
 
         // Note: E406 may not be fully implemented yet, but test the intent
-        if result.is_err() {
-            let err = result.unwrap_err();
+        if let Err(err) = result {
             // Check for some kind of error about unknown method
             assert!(
                 err.error.contains("stop")

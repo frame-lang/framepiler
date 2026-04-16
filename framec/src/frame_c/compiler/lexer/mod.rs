@@ -1596,8 +1596,8 @@ mod tests {
 
     #[test]
     fn test_float_literal() {
-        let tokens = lex_py("3.14");
-        assert_eq!(tokens, vec![Token::FloatLit(3.14)]);
+        let tokens = lex_py("2.72");
+        assert_eq!(tokens, vec![Token::FloatLit(2.72)]);
     }
 
     #[test]

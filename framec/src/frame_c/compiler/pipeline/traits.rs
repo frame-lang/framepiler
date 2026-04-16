@@ -83,10 +83,7 @@ mod tests {
 
     #[test]
     fn test_get_scanner_python() {
-        let scanner = get_region_scanner(TargetLanguage::Python3);
-        // Just verify it returns a scanner
-        assert!(true);
-        let _ = scanner;
+        let _scanner = get_region_scanner(TargetLanguage::Python3);
     }
 
     #[test]

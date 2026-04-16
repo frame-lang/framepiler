@@ -4284,6 +4284,115 @@ fn generate_c_router_dispatch(system: &SystemAst) -> String {
 
     code
 }
+
+/// Expand `@@SystemName(args)` in domain variable initializers to native constructors.
+/// This handles the same pattern as the assembler's tagged instantiation expansion,
+/// but for domain code that is emitted during codegen (before the assembler runs).
+fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> String {
+    let bytes = raw_code.as_bytes();
+    let mut result = String::new();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // Look for @@ followed by uppercase letter
+        if i + 2 < bytes.len()
+            && bytes[i] == b'@'
+            && bytes[i + 1] == b'@'
+            && i + 2 < bytes.len()
+            && bytes[i + 2].is_ascii_uppercase()
+        {
+            let start = i;
+            i += 2;
+            let name_start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let name = std::str::from_utf8(&bytes[name_start..i]).unwrap_or("");
+
+            if i < bytes.len() && bytes[i] == b'(' {
+                // Find matching close paren
+                let args_start = i + 1;
+                let mut depth = 1;
+                i += 1;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        b'"' => {
+                            i += 1;
+                            while i < bytes.len() && bytes[i] != b'"' {
+                                if bytes[i] == b'\\' {
+                                    i += 1;
+                                }
+                                i += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                    if depth > 0 {
+                        i += 1;
+                    }
+                }
+                if depth == 0 {
+                    let args = std::str::from_utf8(&bytes[args_start..i]).unwrap_or("");
+                    i += 1; // skip closing )
+                            // Generate native constructor
+                    let constructor = match lang {
+                        TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                            format!("{}({})", name, args)
+                        }
+                        TargetLanguage::TypeScript
+                        | TargetLanguage::JavaScript
+                        | TargetLanguage::Cpp
+                        | TargetLanguage::Java
+                        | TargetLanguage::CSharp
+                        | TargetLanguage::Dart
+                        | TargetLanguage::Kotlin
+                        | TargetLanguage::Php => format!("new {}({})", name, args),
+                        TargetLanguage::Rust => format!("{}::new({})", name, args),
+                        TargetLanguage::C => format!("{}_new({})", name, args),
+                        TargetLanguage::Go => format!("New{}({})", name, args),
+                        TargetLanguage::Swift => format!("{}({})", name, args),
+                        TargetLanguage::Ruby => format!("{}.new({})", name, args),
+                        TargetLanguage::Lua => format!("{}.new({})", name, args),
+                        TargetLanguage::Erlang => {
+                            format!("{}:start_link({})", to_snake_case_simple(name), args)
+                        }
+                        TargetLanguage::Graphviz => name.to_string(),
+                    };
+                    result.push_str(&constructor);
+                    continue;
+                }
+            }
+            // Not a valid pattern — copy original
+            for b in &bytes[start..i] {
+                result.push(*b as char);
+            }
+            continue;
+        }
+
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
+/// Simple snake_case conversion for Erlang module names
+fn to_snake_case_simple(name: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(c.to_lowercase().next().unwrap_or(c));
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4399,112 +4508,4 @@ mod tests {
         assert!(!init_references_param("", &["balance".into()]));
         assert!(!init_references_param("balance", &[]));
     }
-}
-
-/// Expand `@@SystemName(args)` in domain variable initializers to native constructors.
-/// This handles the same pattern as the assembler's tagged instantiation expansion,
-/// but for domain code that is emitted during codegen (before the assembler runs).
-fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> String {
-    let bytes = raw_code.as_bytes();
-    let mut result = String::new();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        // Look for @@ followed by uppercase letter
-        if i + 2 < bytes.len()
-            && bytes[i] == b'@'
-            && bytes[i + 1] == b'@'
-            && i + 2 < bytes.len()
-            && bytes[i + 2].is_ascii_uppercase()
-        {
-            let start = i;
-            i += 2;
-            let name_start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-            let name = std::str::from_utf8(&bytes[name_start..i]).unwrap_or("");
-
-            if i < bytes.len() && bytes[i] == b'(' {
-                // Find matching close paren
-                let args_start = i + 1;
-                let mut depth = 1;
-                i += 1;
-                while i < bytes.len() && depth > 0 {
-                    match bytes[i] {
-                        b'(' => depth += 1,
-                        b')' => depth -= 1,
-                        b'"' => {
-                            i += 1;
-                            while i < bytes.len() && bytes[i] != b'"' {
-                                if bytes[i] == b'\\' {
-                                    i += 1;
-                                }
-                                i += 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                    if depth > 0 {
-                        i += 1;
-                    }
-                }
-                if depth == 0 {
-                    let args = std::str::from_utf8(&bytes[args_start..i]).unwrap_or("");
-                    i += 1; // skip closing )
-                            // Generate native constructor
-                    let constructor = match lang {
-                        TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                            format!("{}({})", name, args)
-                        }
-                        TargetLanguage::TypeScript
-                        | TargetLanguage::JavaScript
-                        | TargetLanguage::Cpp
-                        | TargetLanguage::Java
-                        | TargetLanguage::CSharp
-                        | TargetLanguage::Dart
-                        | TargetLanguage::Kotlin
-                        | TargetLanguage::Php => format!("new {}({})", name, args),
-                        TargetLanguage::Rust => format!("{}::new({})", name, args),
-                        TargetLanguage::C => format!("{}_new({})", name, args),
-                        TargetLanguage::Go => format!("New{}({})", name, args),
-                        TargetLanguage::Swift => format!("{}({})", name, args),
-                        TargetLanguage::Ruby => format!("{}.new({})", name, args),
-                        TargetLanguage::Lua => format!("{}.new({})", name, args),
-                        TargetLanguage::Erlang => {
-                            format!("{}:start_link({})", to_snake_case_simple(name), args)
-                        }
-                        TargetLanguage::Graphviz => name.to_string(),
-                    };
-                    result.push_str(&constructor);
-                    continue;
-                }
-            }
-            // Not a valid pattern — copy original
-            for b in &bytes[start..i] {
-                result.push(*b as char);
-            }
-            continue;
-        }
-
-        result.push(bytes[i] as char);
-        i += 1;
-    }
-    result
-}
-
-/// Simple snake_case conversion for Erlang module names
-fn to_snake_case_simple(name: &str) -> String {
-    let mut result = String::new();
-    for (i, c) in name.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                result.push('_');
-            }
-            result.push(c.to_lowercase().next().unwrap_or(c));
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
