@@ -532,6 +532,7 @@ impl FrameValidator {
         // Phase 1: Structural validation
         self.validate_section_order(system);
         self.validate_duplicate_sections(system);
+        self.validate_duplicate_system_params(system);
 
         // Build lookup tables
         let state_map = self.build_state_map(system);
@@ -587,8 +588,150 @@ impl FrameValidator {
         // Domain field validation
         self.validate_domain_fields(system);
 
+        // E416 / E417 / E418: System parameter semantics — must align with
+        // start state and domain declarations.
+        self.validate_system_param_semantics(system);
+
         // E615: Assignment to const domain field in handler bodies
         self.validate_const_field_assignments(system);
+    }
+
+    /// Cross-check the system header parameter list against the start
+    /// state's parameter list, the start state's `$>()` enter handler,
+    /// and the domain block:
+    ///
+    /// - **E416**: `$(name)` start-args must match the start state's
+    ///   declared params (order-insensitive, by name).
+    /// - **E417**: `$>(name)` enter-args must match the start state's
+    ///   `$>()` handler params; if no `$>()` handler exists, that's also
+    ///   E417.
+    /// - **E418**: each domain-kind param (bare name) must correspond
+    ///   to a declared variable in the `domain:` block.
+    fn validate_system_param_semantics(&mut self, system: &SystemAst) {
+        // Bucket the system params by kind.
+        let start_args: Vec<&str> = system
+            .params
+            .iter()
+            .filter(|p| matches!(p.kind, ParamKind::StateArg))
+            .map(|p| p.name.as_str())
+            .collect();
+        let enter_args: Vec<&str> = system
+            .params
+            .iter()
+            .filter(|p| matches!(p.kind, ParamKind::EnterArg))
+            .map(|p| p.name.as_str())
+            .collect();
+        let domain_args: Vec<&str> = system
+            .params
+            .iter()
+            .filter(|p| matches!(p.kind, ParamKind::Domain))
+            .map(|p| p.name.as_str())
+            .collect();
+
+        if start_args.is_empty() && enter_args.is_empty() && domain_args.is_empty() {
+            return;
+        }
+
+        // Resolve the start state. By convention it's the first state
+        // declared in the machine (the V4 parser preserves source order).
+        let start_state = match system.machine.as_ref().and_then(|m| m.states.first()) {
+            Some(s) => s,
+            None => return,
+        };
+
+        // E416: order-insensitive name comparison.
+        if !start_args.is_empty() || !start_state.params.is_empty() {
+            let mut want: Vec<&str> = start_args.clone();
+            want.sort_unstable();
+            let mut have: Vec<&str> = start_state.params.iter().map(|p| p.name.as_str()).collect();
+            have.sort_unstable();
+            if want != have {
+                self.errors.push(
+                    ValidationError::new(
+                        "E416",
+                        format!(
+                            "system '{}' start parameters ({:?}) must match start state '{}' parameters ({:?})",
+                            system.name, start_args, start_state.name,
+                            start_state.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>()
+                        ),
+                    )
+                    .with_span(system.span.clone()),
+                );
+            }
+        }
+
+        // E417: enter-args require a matching `$>()` handler on the start state.
+        if !enter_args.is_empty() {
+            match &start_state.enter {
+                None => {
+                    self.errors.push(
+                        ValidationError::new(
+                            "E417",
+                            format!(
+                                "system '{}' declares $>(...) enter parameters but start state '{}' has no $>() handler",
+                                system.name, start_state.name
+                            ),
+                        )
+                        .with_span(system.span.clone()),
+                    );
+                }
+                Some(enter_handler) => {
+                    let mut want: Vec<&str> = enter_args.clone();
+                    want.sort_unstable();
+                    let mut have: Vec<&str> = enter_handler
+                        .params
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect();
+                    have.sort_unstable();
+                    if want != have {
+                        self.errors.push(
+                            ValidationError::new(
+                                "E417",
+                                format!(
+                                    "system '{}' enter parameters ({:?}) must match start state '{}' $>() parameters ({:?})",
+                                    system.name, enter_args, start_state.name,
+                                    enter_handler.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>()
+                                ),
+                            )
+                            .with_span(system.span.clone()),
+                        );
+                    }
+                }
+            }
+        }
+
+        // E418: every domain-kind sys param must EITHER (a) match a
+        // domain field name (the param value initializes that field),
+        // OR (b) be referenced as an identifier inside some domain
+        // field's initializer expression. The latter pattern lets a
+        // user write `Counter(initial: int) { domain: value: int = initial }`
+        // — `initial` doesn't name a field but feeds one.
+        if !domain_args.is_empty() {
+            let domain_names: HashSet<&str> =
+                system.domain.iter().map(|v| v.name.as_str()).collect();
+            for dp in &domain_args {
+                let matches_field = domain_names.contains(dp);
+                let matches_init = system.domain.iter().any(|v| {
+                    v.initializer_text
+                        .as_deref()
+                        .map(|t| identifier_appears_in(t, dp))
+                        .unwrap_or(false)
+                });
+                if !matches_field && !matches_init {
+                    self.errors.push(
+                        ValidationError::new(
+                            "E418",
+                            format!(
+                                "system '{}' domain parameter '{}' has no matching variable in domain: block",
+                                system.name, dp
+                            ),
+                        )
+                        .with_span(system.span.clone()),
+                    );
+                }
+            }
+        }
     }
 
     /// E615: Direct assignment to a `const` domain field inside a handler
@@ -814,6 +957,27 @@ impl FrameValidator {
                 break; // Only report once per system
             }
             last_idx = idx as i32;
+        }
+    }
+
+    /// E111: Reject duplicate names across the system parameter list.
+    /// `@@system C(a, b, a)` collides on `a` regardless of which group
+    /// (domain / state-arg / enter-arg) each instance came from.
+    fn validate_duplicate_system_params(&mut self, system: &SystemAst) {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for param in &system.params {
+            if !seen.insert(param.name.as_str()) {
+                self.errors.push(
+                    ValidationError::new(
+                        "E111",
+                        format!(
+                            "duplicate system parameter '{}' in system {}",
+                            param.name, system.name
+                        ),
+                    )
+                    .with_span(param.span.clone()),
+                );
+            }
         }
     }
 
@@ -1348,6 +1512,35 @@ pub fn validate_frame_source(
 
 /// Count arguments in a parenthesized argument string like "(a, b, c)".
 /// Returns 0 for "()" or empty.
+/// Whether `ident` appears as a whole identifier inside `text`. Used by
+/// E418 to detect domain-field initializers that reference a domain-kind
+/// system parameter (e.g. `value: int = initial`).
+fn identifier_appears_in(text: &str, ident: &str) -> bool {
+    if ident.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    let key = ident.as_bytes();
+    let n = bytes.len();
+    let m = key.len();
+    if m > n {
+        return false;
+    }
+    let mut i = 0;
+    while i + m <= n {
+        if &bytes[i..i + m] == key {
+            let prev_ok = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            let next_ok =
+                i + m == n || !(bytes[i + m].is_ascii_alphanumeric() || bytes[i + m] == b'_');
+            if prev_ok && next_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 fn count_args(args: &str) -> usize {
     let inner = args
         .trim()
@@ -2146,6 +2339,173 @@ mod tests {
         assert!(
             codes.iter().any(|c| c == "E615"),
             "expected E615 on +=, got {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e111_duplicate_system_param() {
+        let source = r#"
+@@system C(dup, dup) {
+    interface:
+        bump()
+    machine:
+        $A {
+            bump() { }
+        }
+    domain:
+        dup : int = dup
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            codes.iter().any(|c| c == "E111"),
+            "expected E111, got {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e111_distinct_system_params_pass() {
+        let source = r#"
+@@system C(a, b) {
+    interface:
+        bump()
+    machine:
+        $A {
+            bump() { }
+        }
+    domain:
+        a : int = a
+        b : int = b
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            !codes.iter().any(|c| c == "E111"),
+            "false-positive E111 on distinct params: {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e416_start_params_mismatch() {
+        // System declares start arg `missing`; start state $A has no params.
+        let source = r#"
+@@system C($(missing)) {
+    interface:
+        bump()
+    machine:
+        $A {
+            bump() { }
+        }
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            codes.iter().any(|c| c == "E416"),
+            "expected E416, got {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e416_start_params_match_pass() {
+        let source = r#"
+@@system C($(x)) {
+    interface:
+        bump()
+    machine:
+        $A(x: int) {
+            bump() { }
+        }
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            !codes.iter().any(|c| c == "E416"),
+            "false-positive E416 when params match: {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e417_enter_params_no_handler() {
+        // System declares enter arg but start state has no $>() handler.
+        let source = r#"
+@@system C($>(missing)) {
+    interface:
+        bump()
+    machine:
+        $A {
+            bump() { }
+        }
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            codes.iter().any(|c| c == "E417"),
+            "expected E417 (no $>() handler), got {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e418_domain_param_no_match() {
+        // Domain param `missing` doesn't match any field name OR init reference.
+        let source = r#"
+@@system C(missing) {
+    interface:
+        bump()
+    machine:
+        $A {
+            bump() { }
+        }
+    domain:
+        value : int = 0
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            codes.iter().any(|c| c == "E418"),
+            "expected E418, got {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e418_param_matches_field_name_pass() {
+        let source = r#"
+@@system C(value) {
+    interface:
+        bump()
+    machine:
+        $A {
+            bump() { }
+        }
+    domain:
+        value : int = 0
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            !codes.iter().any(|c| c == "E418"),
+            "false-positive E418 when param name matches field: {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e418_param_referenced_in_init_pass() {
+        // `initial` doesn't name a field but is referenced in `value: int = initial`.
+        let source = r#"
+@@system C(initial) {
+    interface:
+        bump()
+    machine:
+        $A {
+            bump() { }
+        }
+    domain:
+        value : int = initial
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            !codes.iter().any(|c| c == "E418"),
+            "false-positive E418 when param referenced in field init: {:?}",
             codes
         );
     }
