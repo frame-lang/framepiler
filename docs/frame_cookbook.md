@@ -12,8 +12,8 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 4. [Login Flow](#4-login-flow) — multi-step form wizard
 5. [Connection Manager](#5-connection-manager) — lifecycle with enter/exit handlers
 6. [Retry with Backoff](#6-retry-with-backoff) — state variables as counters
-7. [Modal Dialog Stack](#7-modal-dialog-stack) — push/pop for navigation history
-8. [State Stack](#8-state-stack-pushpop) — state stack for history
+7. [Undo/Redo](#7-undoredo) — push/pop for snapshot history
+8. [Modal Dialog Stack](#8-modal-dialog-stack) — push/pop with enter args
 9. [Video Player](#9-video-player) — HSM with sub-states
 10. [Order Processor](#10-order-processor) — business process with branches
 11. [Approval Chain](#11-approval-chain) — multi-stage with forwarding
@@ -327,7 +327,66 @@ if __name__ == '__main__':
 
 ---
 
-## 7. Modal Dialog Stack
+## 7. Undo/Redo
+
+**Problem:** Track editing history and allow stepping backward.
+
+```frame
+@@target python_3
+
+@@system Editor {
+    interface:
+        type_char(c: str)
+        undo()
+        get_buffer(): str
+
+    machine:
+        $Init {
+            type_char(c: str) {
+                push$
+                -> (c) $Editing
+            }
+            undo() { }
+            get_buffer(): str { @@:("") }
+        }
+        $Editing {
+            $.buffer: str = ""
+
+            $>(snapshot: str) { $.buffer = snapshot }
+
+            type_char(c: str) {
+                push$
+                -> ($.buffer + c) $Editing
+            }
+            undo() {
+                -> pop$
+            }
+            get_buffer(): str { @@:($.buffer) }
+        }
+}
+
+if __name__ == '__main__':
+    e = @@Editor()
+    e.type_char("H")
+    e.type_char("i")
+    print(e.get_buffer())   # Hi
+    e.undo()
+    print(e.get_buffer())   # H
+    e.undo()
+    print(e.get_buffer())   # (empty)
+```
+
+**How it works:** Each `type_char` does two things: `push$` saves the current compartment onto the state stack, then `-> (new_buffer) $Editing` creates a *new* compartment with the updated buffer. The old compartment on the stack is never modified — it's a snapshot. `undo()` pops the snapshot, restoring `$.buffer` to its previous value.
+
+The `$Init` state handles the empty-editor case: the first `type_char` pushes `$Init` onto the stack and transitions into `$Editing`. Undoing all the way back pops to `$Init`, where `undo()` is a no-op and `get_buffer()` returns `""`.
+
+**Key insight:** `push$` alone saves a *reference* to the current compartment. `push$` followed by a *transition* saves the old compartment and creates a new one — that's the snapshot.
+
+**Features used:** `push$`, `-> pop$`, enter args (`-> (val) $State`), state variable preservation
+
+---
+
+## 8. Modal Dialog Stack
 
 **Problem:** Open nested modal dialogs and return to the previous one on close.
 
@@ -378,54 +437,9 @@ if __name__ == '__main__':
     print(dm.current())    # main (restored)
 ```
 
-**How it works:** `push$` saves the entire compartment (including state variables) onto the state stack before transitioning. `-> pop$` restores the previously saved compartment. Each dialog instance has its own `$.name` because state variables are per-compartment.
+**How it works:** `push$` saves the entire compartment (including state variables) onto the state stack before transitioning. `-> pop$` restores the previously saved compartment. Each dialog instance has its own `$.name` because state variables are per-compartment. This builds on the same `push$ + transition` snapshot pattern from recipe 7, applied to navigation.
 
 **Features used:** `push$`, `-> pop$`, enter args (`-> (name) $Dialog`), state variables
-
----
-
-## 8. State Stack (Push/Pop)
-
-**Problem:** Track state history and allow stepping backward.
-
-```frame
-@@target python_3
-
-@@system Editor {
-    interface:
-        type_char(c: str)
-        undo()
-        get_buffer(): str
-
-    machine:
-        $Editing {
-            $.buffer: str = ""
-
-            type_char(c: str) {
-                push$
-                $.buffer = $.buffer + c
-            }
-            undo() {
-                -> pop$
-            }
-            get_buffer(): str { @@:($.buffer) }
-        }
-}
-
-if __name__ == '__main__':
-    e = @@Editor()
-    e.type_char("H")
-    e.type_char("i")
-    print(e.get_buffer())   # Hi
-    e.undo()
-    print(e.get_buffer())   # Hi (reference semantics — same compartment)
-```
-
-**How it works:** `push$` saves a **reference** to the current compartment, not a copy. After `push$`, both the stack entry and the current compartment point to the same object. Modifying `$.buffer` after push$ changes the shared compartment, so `-> pop$` restores the same object — the buffer retains its modified value.
-
-For true snapshot undo, use `push$` with a transition (`push$ -> $Editing`) to create a new compartment. The old compartment on the stack preserves its pre-transition state.
-
-**Features used:** `push$`, `-> pop$`, reference semantics
 
 ---
 
