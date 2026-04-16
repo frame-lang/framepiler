@@ -166,10 +166,10 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
 
         let mut handler_lines: Vec<String> = Vec::new();
         if state.has_enter {
-            handler_lines.push("$&gt;() [enter]".to_string());
+            handler_lines.push("$&gt;()".to_string());
         }
         if state.has_exit {
-            handler_lines.push("&lt;$() [exit]".to_string());
+            handler_lines.push("&lt;$()".to_string());
         }
         for h in &state.handlers {
             if h.params.is_empty() {

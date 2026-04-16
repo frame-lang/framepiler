@@ -35,9 +35,9 @@
 <title>Running</title>
 <path fill="azure" stroke="none" d="M54.25,-78.25C54.25,-78.25 12,-78.25 12,-78.25 6,-78.25 0,-72.25 0,-66.25 0,-66.25 0,-12 0,-12 0,-6 6,0 12,0 12,0 54.25,0 54.25,0 60.25,0 66.25,-6 66.25,-12 66.25,-12 66.25,-66.25 66.25,-66.25 66.25,-72.25 60.25,-78.25 54.25,-78.25"/>
 <text xml:space="preserve" text-anchor="start" x="8" y="-57.95" font-family="Times,serif" font-weight="bold" font-size="14.00">Running</text>
-<text xml:space="preserve" text-anchor="start" x="8" y="-32.75" font-family="Times,serif" font-size="10.00">$&gt;() [enter]</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-32.75" font-family="Times,serif" font-size="10.00">$&gt;()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-21.5" font-family="Times,serif" font-size="10.00">stop()</text>
-<text xml:space="preserve" text-anchor="start" x="17.38" y="-10.25" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-10.25" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <polygon fill="#00688b" stroke="#00688b" points="0,-47.75 0,-47.75 66.25,-47.75 66.25,-47.75 0,-47.75"/>
 <path fill="none" stroke="#00688b" d="M12,0C12,0 54.25,0 54.25,0 60.25,0 66.25,-6 66.25,-12 66.25,-12 66.25,-66.25 66.25,-66.25 66.25,-72.25 60.25,-78.25 54.25,-78.25 54.25,-78.25 12,-78.25 12,-78.25 6,-78.25 0,-72.25 0,-66.25 0,-66.25 0,-12 0,-12 0,-6 6,0 12,0"/>
 </g>

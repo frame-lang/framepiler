@@ -185,17 +185,17 @@ if __name__ == '__main__':
             submit(value: str): str {
                 self.username = value
                 @@:("enter password")
-                -> $EnterPassword
+                -> "username entered" $EnterPassword
             }
         }
         $EnterPassword {
             submit(value: str): str {
                 if self.authenticate(self.username, value):
                     @@:("welcome")
-                    -> $LoggedIn
+                    -> "authenticated" $LoggedIn
                 else:
                     @@:("invalid - try again")
-                    -> $EnterUsername
+                    -> "bad credentials" $EnterUsername
             }
         }
         $LoggedIn {
@@ -251,7 +251,7 @@ if __name__ == '__main__':
         $Connecting {
             $>() {
                 print(f"Connecting to {self.host}...")
-                -> $Connected
+                -> "connected" $Connected
             }
         }
         $Connected {
@@ -307,12 +307,12 @@ if __name__ == '__main__':
             $>() {
                 self.attempts = self.attempts + 1
                 if self.try_operation():
-                    -> $Succeeded
+                    -> "succeeded" $Succeeded
                 else:
                     if self.attempts >= self.max_retries:
-                        -> $Failed
+                        -> "max retries" $Failed
                     else:
-                        -> $Trying
+                        -> "retry" $Trying
             }
             status(): str { @@:("trying") }
         }
@@ -548,16 +548,16 @@ if __name__ == '__main__':
         $Validating {
             $>() {
                 if self.validate(self.item):
-                    -> $Processing
+                    -> "valid" $Processing
                 else:
-                    -> $Rejected
+                    -> "invalid" $Rejected
             }
             status(): str { @@:("validating") }
         }
         $Processing {
             cancel(reason: str) {
                 print(f"Cancelled: {reason}")
-                -> $Idle
+                -> "cancelled" $Idle
             }
             status(): str { @@:("processing") }
         }
@@ -613,22 +613,22 @@ if __name__ == '__main__':
         $Review1 {
             approve(reviewer: str) {
                 print(f"Approved by {reviewer}")
-                -> $Review2
+                -> "approved" $Review2
             }
             reject(reviewer: str) {
                 print(f"Rejected by {reviewer}")
-                -> $Draft
+                -> "rejected" $Draft
             }
             status(): str { @@:("awaiting first review") }
         }
         $Review2 {
             approve(reviewer: str) {
                 print(f"Approved by {reviewer}")
-                -> $Published
+                -> "approved" $Published
             }
             reject(reviewer: str) {
                 print(f"Rejected by {reviewer}")
-                -> $Draft
+                -> "rejected" $Draft
             }
             status(): str { @@:("awaiting second review") }
         }
@@ -847,7 +847,7 @@ if __name__ == '__main__':
             raw_low() { $.stable_count = 0 }
             tick() {
                 if $.stable_count >= 3:
-                    -> $Pressed
+                    -> "stable high" $Pressed
             }
             is_pressed(): bool { @@:(False) }
         }
@@ -858,7 +858,7 @@ if __name__ == '__main__':
             raw_high() { $.stable_count = 0 }
             tick() {
                 if $.stable_count >= 3:
-                    -> $Released
+                    -> "stable low" $Released
             }
             is_pressed(): bool { @@:(True) }
         }
@@ -1174,7 +1174,7 @@ if __name__ == '__main__':
             submit(task: str) {
                 self.pending.append(task)
                 if len(self.pending) >= self.pool_size:
-                    -> $Processing
+                    -> "batch full" $Processing
             }
 
             get_status(): str {

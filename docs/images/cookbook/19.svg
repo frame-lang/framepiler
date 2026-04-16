@@ -19,7 +19,7 @@
 <title>Idle</title>
 <path fill="azure" stroke="none" d="M68.5,-231.5C68.5,-231.5 12,-231.5 12,-231.5 6,-231.5 0,-225.5 0,-219.5 0,-219.5 0,-165.25 0,-165.25 0,-159.25 6,-153.25 12,-153.25 12,-153.25 68.5,-153.25 68.5,-153.25 74.5,-153.25 80.5,-159.25 80.5,-165.25 80.5,-165.25 80.5,-219.5 80.5,-219.5 80.5,-225.5 74.5,-231.5 68.5,-231.5"/>
 <text xml:space="preserve" text-anchor="start" x="29" y="-211.2" font-family="Times,serif" font-weight="bold" font-size="14.00">Idle</text>
-<text xml:space="preserve" text-anchor="start" x="8" y="-186" font-family="Times,serif" font-size="10.00">$&gt;() [enter]</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-186" font-family="Times,serif" font-size="10.00">$&gt;()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-174.75" font-family="Times,serif" font-size="10.00">connect(url: str)</text>
 <text xml:space="preserve" text-anchor="start" x="26.75" y="-163.5" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <polygon fill="#00688b" stroke="#00688b" points="0,-201 0,-201 80.5,-201 80.5,-201 0,-201"/>
@@ -36,8 +36,8 @@
 <title>Connected</title>
 <path fill="azure" stroke="none" d="M67,-100.75C67,-100.75 13.5,-100.75 13.5,-100.75 7.5,-100.75 1.5,-94.75 1.5,-88.75 1.5,-88.75 1.5,-12 1.5,-12 1.5,-6 7.5,0 13.5,0 13.5,0 67,0 67,0 73,0 79,-6 79,-12 79,-12 79,-88.75 79,-88.75 79,-94.75 73,-100.75 67,-100.75"/>
 <text xml:space="preserve" text-anchor="start" x="9.5" y="-80.45" font-family="Times,serif" font-weight="bold" font-size="14.00">Connected</text>
-<text xml:space="preserve" text-anchor="start" x="9.5" y="-55.25" font-family="Times,serif" font-size="10.00">$&gt;() [enter]</text>
-<text xml:space="preserve" text-anchor="start" x="9.5" y="-44" font-family="Times,serif" font-size="10.00">&lt;$() [exit]</text>
+<text xml:space="preserve" text-anchor="start" x="9.5" y="-55.25" font-family="Times,serif" font-size="10.00">$&gt;()</text>
+<text xml:space="preserve" text-anchor="start" x="9.5" y="-44" font-family="Times,serif" font-size="10.00">&lt;$()</text>
 <text xml:space="preserve" text-anchor="start" x="9.5" y="-32.75" font-family="Times,serif" font-size="10.00">fetch(path: str)</text>
 <text xml:space="preserve" text-anchor="start" x="9.5" y="-21.5" font-family="Times,serif" font-size="10.00">disconnect()</text>
 <text xml:space="preserve" text-anchor="start" x="25.62" y="-10.25" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>

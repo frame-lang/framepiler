@@ -36,7 +36,7 @@
 <title>Dialog</title>
 <path fill="azure" stroke="none" d="M67,-209.58C67,-209.58 12,-209.58 12,-209.58 6,-209.58 0,-203.58 0,-197.58 0,-197.58 0,-87.83 0,-87.83 0,-81.83 6,-75.83 12,-75.83 12,-75.83 67,-75.83 67,-75.83 73,-75.83 79,-81.83 79,-87.83 79,-87.83 79,-197.58 79,-197.58 79,-203.58 73,-209.58 67,-209.58"/>
 <text xml:space="preserve" text-anchor="start" x="20.75" y="-189.28" font-family="Times,serif" font-weight="bold" font-size="14.00">Dialog</text>
-<text xml:space="preserve" text-anchor="start" x="8" y="-164.08" font-family="Times,serif" font-size="10.00">$&gt;() [enter]</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-164.08" font-family="Times,serif" font-size="10.00">$&gt;()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-152.83" font-family="Times,serif" font-size="10.00">open(name: str)</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-141.58" font-family="Times,serif" font-size="10.00">close()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-130.33" font-family="Times,serif" font-size="10.00">current()</text>
