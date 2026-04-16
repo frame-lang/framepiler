@@ -952,88 +952,18 @@ pub(crate) fn generate_state_handlers_via_arcanum(
         methods.push(method);
     }
 
-    // For Rust: Also generate individual handler methods that the dispatch calls
-    // (Python/TypeScript inline the handler code in the dispatch method)
     if matches!(lang, TargetLanguage::Rust) {
-        // The system header state and enter params are bound to the
-        // start state only — the constructor populates `self.__sys_<name>`
-        // for each system header param. For non-start states, params
-        // come from transitions (the existing pre-system-init mechanism)
-        // and are read from `__e.parameters` in the dispatch.
-        //
-        // We pass the start state's param names as `sys_param_locals`;
-        // every other state passes an empty slice and falls back to the
-        // existing extraction.
-        let start_state_name = machine
-            .states
-            .first()
-            .map(|s| s.name.clone())
-            .unwrap_or_default();
-        let start_state_param_names: Vec<String> = arcanum
-            .get_enhanced_states(system_name)
-            .iter()
-            .find(|s| s.name == start_state_name)
-            .map(|s| s.params.iter().map(|p| p.name.clone()).collect())
-            .unwrap_or_default();
-        for state_entry in arcanum.get_enhanced_states(system_name) {
-            let is_start_state = state_entry.name == start_state_name;
-            // For non-start states with declared params, build the list of
-            // declared param names so the handler preamble can bind from
-            // the typed `compartment.state_context::<State>(ref ctx)`.
-            let non_start_state_param_names: Vec<String> = if !is_start_state {
-                state_entry.params.iter().map(|p| p.name.clone()).collect()
-            } else {
-                Vec::new()
-            };
-            // Build state_var_types for this state so the Rust state var
-            // expansion can decide whether to add `.clone()` (non-Copy
-            // types like String) or not (Copy types like i64, bool).
-            let handler_state_var_types: std::collections::HashMap<String, String> = machine
-                .states
-                .iter()
-                .find(|s| s.name == state_entry.name)
-                .map(|s| {
-                    s.state_vars
-                        .iter()
-                        .map(|sv| {
-                            let type_str = match &sv.var_type {
-                                crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
-                                crate::frame_c::compiler::frame_ast::Type::Unknown => {
-                                    "int".to_string()
-                                }
-                            };
-                            (sv.name.clone(), type_str)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            for (_event, handler_entry) in &state_entry.handlers {
-                let empty: Vec<String> = Vec::new();
-                let sys_param_locals = if is_start_state {
-                    &start_state_param_names
-                } else {
-                    &empty
-                };
-                let method = generate_handler_from_arcanum(
-                    system_name,
-                    &state_entry.name,
-                    state_entry.parent.as_deref(),
-                    handler_entry,
-                    source,
-                    lang,
-                    has_state_vars,
-                    &defined_systems,
-                    sys_param_locals,
-                    is_start_state,
-                    &non_start_state_param_names,
-                    &state_param_names,
-                    &state_enter_param_names,
-                    &state_exit_param_names,
-                    &handler_state_var_types,
-                );
-                methods.push(method);
-            }
-        }
+        methods.extend(super::rust_system::generate_rust_handler_methods(
+            system_name,
+            machine,
+            arcanum,
+            source,
+            has_state_vars,
+            &defined_systems,
+            &state_param_names,
+            &state_enter_param_names,
+            &state_exit_param_names,
+        ));
     }
 
     methods

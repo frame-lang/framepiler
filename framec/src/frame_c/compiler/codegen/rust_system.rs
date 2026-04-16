@@ -10,8 +10,12 @@
 
 use super::ast::{CodegenNode, Param, Visibility};
 use super::codegen_utils::type_to_string;
+use super::state_dispatch::generate_handler_from_arcanum;
 use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
-use crate::frame_c::compiler::frame_ast::{InterfaceMethod, StateVarAst, SystemAst, Type};
+use crate::frame_c::compiler::frame_ast::{
+    InterfaceMethod, MachineAst, StateVarAst, SystemAst, Type,
+};
+use crate::frame_c::visitors::TargetLanguage;
 
 /// Generate the complete Rust system from a Frame AST.
 ///
@@ -327,6 +331,92 @@ pub(crate) fn generate_rust_state_dispatch(
 
     code.push_str("}");
     code
+}
+
+// ─── State Handlers ──────────────────────────────────────────────────
+
+/// Generate Rust individual handler methods (`_s_State_event`) that
+/// the state dispatch method calls. Other languages inline handler
+/// code in the dispatch; Rust emits separate methods.
+pub(crate) fn generate_rust_handler_methods(
+    system_name: &str,
+    machine: &MachineAst,
+    arcanum: &Arcanum,
+    source: &[u8],
+    has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+
+    let start_state_name = machine
+        .states
+        .first()
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
+    let start_state_param_names: Vec<String> = arcanum
+        .get_enhanced_states(system_name)
+        .iter()
+        .find(|s| s.name == start_state_name)
+        .map(|s| s.params.iter().map(|p| p.name.clone()).collect())
+        .unwrap_or_default();
+
+    for state_entry in arcanum.get_enhanced_states(system_name) {
+        let is_start_state = state_entry.name == start_state_name;
+        let non_start_state_param_names: Vec<String> = if !is_start_state {
+            state_entry.params.iter().map(|p| p.name.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        let handler_state_var_types: std::collections::HashMap<String, String> = machine
+            .states
+            .iter()
+            .find(|s| s.name == state_entry.name)
+            .map(|s| {
+                s.state_vars
+                    .iter()
+                    .map(|sv| {
+                        let type_str = match &sv.var_type {
+                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
+                            crate::frame_c::compiler::frame_ast::Type::Unknown => "int".to_string(),
+                        };
+                        (sv.name.clone(), type_str)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for (_event, handler_entry) in &state_entry.handlers {
+            let empty: Vec<String> = Vec::new();
+            let sys_param_locals = if is_start_state {
+                &start_state_param_names
+            } else {
+                &empty
+            };
+            let method = generate_handler_from_arcanum(
+                system_name,
+                &state_entry.name,
+                state_entry.parent.as_deref(),
+                handler_entry,
+                source,
+                TargetLanguage::Rust,
+                has_state_vars,
+                defined_systems,
+                sys_param_locals,
+                is_start_state,
+                &non_start_state_param_names,
+                state_param_names,
+                state_enter_param_names,
+                state_exit_param_names,
+                &handler_state_var_types,
+            );
+            methods.push(method);
+        }
+    }
+
+    methods
 }
 
 // ─── Interface Dispatch ──────────────────────────────────────────────
