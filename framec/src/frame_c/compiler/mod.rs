@@ -1,10 +1,4 @@
-use crate::frame_c::compiler::interface_parser::InterfaceParser;
-use crate::frame_c::compiler::mir_assembler::MirAssembler;
-use crate::frame_c::compiler::native_region_scanner as nscan;
-use crate::frame_c::compiler::native_region_scanner::NativeRegionScanner;
-use crate::frame_c::compiler::splice::Splicer;
-use crate::frame_c::compiler::system_parser::SystemParser;
-use crate::frame_c::compiler::validator::{BodyKind, ValidationResult, Validator, ValidatorPolicy};
+use crate::frame_c::compiler::validator::ValidationResult;
 use crate::frame_c::utils::{frame_exitcode, RunError};
 pub use crate::frame_c::visitors::TargetLanguage;
 
@@ -14,12 +8,8 @@ pub mod body_closer;
 pub mod expander;
 pub mod facade;
 pub mod frame_statement_parser;
-pub mod import_scanner;
 pub mod mir;
-pub mod mir_assembler;
-pub mod module_partitioner;
 pub mod native_region_scanner;
-pub mod outline_scanner;
 pub mod pragma_scanner;
 pub mod prolog_scanner;
 pub mod splice;
