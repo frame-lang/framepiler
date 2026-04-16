@@ -35,6 +35,9 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 
 **Problem:** Cycle through a fixed sequence of states on each event.
 
+![01 state diagram](images/cookbook/01.svg)
+
+
 ```frame
 @@target python_3
 
@@ -79,6 +82,9 @@ if __name__ == '__main__':
 
 **Problem:** A switch that alternates between on and off.
 
+![02 state diagram](images/cookbook/02.svg)
+
+
 ```frame
 @@target python_3
 
@@ -121,6 +127,9 @@ if __name__ == '__main__':
 
 **Problem:** A coin-operated turnstile that locks after each passage.
 
+![03 state diagram](images/cookbook/03.svg)
+
+
 ```frame
 @@target python_3
 
@@ -160,6 +169,9 @@ if __name__ == '__main__':
 ## 4. Login Flow
 
 **Problem:** A multi-step login: enter username, enter password, authenticate.
+
+![04 state diagram](images/cookbook/04.svg)
+
 
 ```frame
 @@target python_3
@@ -217,6 +229,9 @@ if __name__ == '__main__':
 
 **Problem:** A network connection with proper setup/teardown lifecycle.
 
+![05 state diagram](images/cookbook/05.svg)
+
+
 ```frame
 @@target python_3
 
@@ -269,6 +284,9 @@ if __name__ == '__main__':
 ## 6. Retry with Backoff
 
 **Problem:** Retry an operation up to N times before failing.
+
+![06 state diagram](images/cookbook/06.svg)
+
 
 ```frame
 @@target python_3
@@ -331,6 +349,9 @@ if __name__ == '__main__':
 
 **Problem:** Track editing history and allow stepping backward.
 
+![07 state diagram](images/cookbook/07.svg)
+
+
 ```frame
 @@target python_3
 
@@ -390,6 +411,9 @@ The `$Init` state handles the empty-editor case: the first `type_char` pushes `$
 
 **Problem:** Open nested modal dialogs and return to the previous one on close.
 
+![08 state diagram](images/cookbook/08.svg)
+
+
 ```frame
 @@target python_3
 
@@ -447,6 +471,9 @@ if __name__ == '__main__':
 
 **Problem:** A media player with play/pause/stop, where playing and paused are sub-states of "active."
 
+![09 state diagram](images/cookbook/09.svg)
+
+
 ```frame
 @@target python_3
 
@@ -497,6 +524,9 @@ if __name__ == '__main__':
 ## 10. Order Processor
 
 **Problem:** Process an order through validation, processing, and completion — with cancellation support.
+
+![10 state diagram](images/cookbook/10.svg)
+
 
 ```frame
 @@target python_3
@@ -562,6 +592,9 @@ if __name__ == '__main__':
 
 **Problem:** A document requires approval from two reviewers before it's published.
 
+![11 state diagram](images/cookbook/11.svg)
+
+
 ```frame
 @@target python_3
 
@@ -624,6 +657,9 @@ if __name__ == '__main__':
 
 **Problem:** A game character with idle, walking, running, and jumping states.
 
+![12 state diagram](images/cookbook/12.svg)
+
+
 ```frame
 @@target python_3
 
@@ -684,6 +720,9 @@ if __name__ == '__main__':
 
 **Problem:** An AI agent that explores, flees from threats, and tracks its actions.
 
+![13 state diagram](images/cookbook/13.svg)
+
+
 ```frame
 @@target python_3
 
@@ -740,6 +779,9 @@ if __name__ == '__main__':
 
 **Problem:** An LED that blinks on a timer, with on/off control.
 
+![14 state diagram](images/cookbook/14.svg)
+
+
 ```frame
 @@target python_3
 
@@ -783,6 +825,9 @@ if __name__ == '__main__':
 ## 15. Switch Debouncer
 
 **Problem:** Filter noisy switch input — only register a press after the signal stabilizes.
+
+![15 state diagram](images/cookbook/15.svg)
+
 
 ```frame
 @@target python_3
@@ -841,6 +886,9 @@ if __name__ == '__main__':
 
 **Problem:** Output depends on both the current state AND the input (classic Mealy machine).
 
+![16 state diagram](images/cookbook/16.svg)
+
+
 ```frame
 @@target python_3
 
@@ -885,6 +933,9 @@ if __name__ == '__main__':
 
 **Problem:** Output depends only on the current state (classic Moore machine).
 
+![17 state diagram](images/cookbook/17.svg)
+
+
 ```frame
 @@target python_3
 
@@ -926,6 +977,9 @@ if __name__ == '__main__':
 ## 18. Session Persistence
 
 **Problem:** Save a user session to disk and restore it later.
+
+![18 state diagram](images/cookbook/18.svg)
+
 
 ```frame
 @@target python_3
@@ -979,6 +1033,9 @@ if __name__ == '__main__':
 ## 19. Async HTTP Client
 
 **Problem:** An HTTP client with async connect/fetch/disconnect.
+
+![19 state diagram](images/cookbook/19.svg)
+
 
 ```frame
 @@target python_3
@@ -1039,6 +1096,10 @@ asyncio.run(main())
 
 **Problem:** A logger and an app as separate systems, with the app using the logger.
 
+![20 App state diagram](images/cookbook/20_app.svg)
+![20 Logger state diagram](images/cookbook/20_logger.svg)
+
+
 ```frame
 @@target python_3
 
@@ -1092,7 +1153,9 @@ if __name__ == '__main__':
 
 ## 21. Configurable Worker Pool (Parameterized Systems)
 
-A task executor whose pool size and retry policy are set at construction time. Domain, state, and enter parameters flow through the constructor to initialize the machine.
+**Problem:** A task executor whose pool size and retry policy are set at construction time.
+
+![21 state diagram](images/cookbook/21.svg)
 
 ```frame
 @@target python_3
@@ -1175,6 +1238,9 @@ The framepiler substitutes Frame defaults for missing arguments and routes each 
 ## 22. Self-Calibrating Sensor (@@:self Interface Call)
 
 **Problem:** A sensor that calibrates itself by reading its own value through the interface, then applying an offset.
+
+![22 state diagram](images/cookbook/22.svg)
+
 
 ```frame
 @@target python_3
