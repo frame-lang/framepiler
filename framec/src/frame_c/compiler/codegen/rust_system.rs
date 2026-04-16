@@ -18,24 +18,10 @@ use crate::frame_c::compiler::frame_ast::SystemAst;
 /// Called from `system_codegen::generate_system` when target is Rust.
 /// Returns a CodegenNode containing the full Rust implementation.
 pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]) -> CodegenNode {
-    // For now, delegate to the existing shared codegen path.
-    // This will be incrementally replaced with Rust-specific generation
-    // that uses Rc<RefCell<Compartment>> throughout.
-    //
-    // TODO: Move these Rust-specific pieces here:
-    //   1. Runtime types (FrameEvent, FrameContext, Compartment with Rc<RefCell<>>)
-    //   2. System struct fields (__compartment as Rc<RefCell<>>)
-    //   3. Constructor (struct literal with Rc::new(RefCell::new(...)))
-    //   4. Kernel (__kernel with borrow()/borrow_mut() access)
-    //   5. Router (__router with state matching)
-    //   6. State dispatch (match-based, already in state_dispatch.rs)
-    //   7. Transition (__transition with Rc assignment)
-    //   8. Push/Pop (Rc::clone instead of Compartment::clone)
-    //   9. Interface wrappers
-    //  10. Actions/Operations
-    //
-    // Each piece will be extracted from the shared path and adapted
-    // for Rust's ownership model.
+    // Delegates to the shared codegen path. A future refactor could
+    // extract Rust-specific pieces (Rc<RefCell<Compartment>>, ownership-
+    // aware transitions, borrow()/borrow_mut() accessors) into this
+    // module, mirroring how erlang_system.rs owns its full pipeline.
 
     let lang = crate::frame_c::visitors::TargetLanguage::Rust;
     let backend = super::backend::get_backend(lang);

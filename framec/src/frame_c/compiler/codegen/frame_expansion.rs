@@ -1637,7 +1637,6 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Lua => {
-                        // TODO: Lua-specific transition — follows Python pattern
                         let mut code = String::new();
                         if let Some(ref exit) = exit_str {
                             for (i, arg) in exit
@@ -2025,7 +2024,6 @@ pub(crate) fn generate_frame_expansion(
                     code
                 }
                 TargetLanguage::Lua => {
-                    // TODO: Lua-specific transition-forward
                     let mut code = String::new();
                     code.push_str(&format!(
                         "{}local __compartment = {}Compartment.new(\"{}\")\n",

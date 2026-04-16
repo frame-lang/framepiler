@@ -473,7 +473,7 @@ impl LanguageBackend for CBackend {
                     self.emit(iterable, ctx)
                 );
                 result.push_str(&format!(
-                    "{}/* TODO: implement iteration */",
+                    "{}/* C ForEach: not reachable — Frame uses native passthrough for loops */",
                     ctx.get_indent()
                 ));
                 result

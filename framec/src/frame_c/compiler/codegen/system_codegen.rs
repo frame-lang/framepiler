@@ -2506,12 +2506,9 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             // header-declared enter params; pass them through so the
             // start state's $>(name: type) handler can read them.
             //
-            // C optimization (TODO #41): if the start state has no
-            // declared enter params (`$>` handler with empty `params`),
-            // skip the indirection and pass NULL for the event's
-            // `_parameters`. The dispatch generates no `FrameDict_get`
-            // calls in that case, so the NULL is never dereferenced.
-            // For systems WITH enter params, behavior is unchanged.
+            // C optimization: if the start state has no declared enter
+            // params, pass NULL for the event's `_parameters` (the
+            // dispatch generates no `FrameDict_get` calls in that case).
             let start_state_has_enter_params = first_state
                 .enter
                 .as_ref()
