@@ -399,6 +399,33 @@ domain:
 
 Domain variables persist across state transitions and are accessible via `self.field` / `this.field` / `this->field` (per target language) in handlers.
 
+### `const` Modifier
+
+Prefix a domain field with `const` to mark it immutable after construction:
+
+```frame
+domain:
+    const max_retries : int = 3
+    const threshold   : int = threshold     // initialized from system param
+    counter           : int = 0             // mutable
+```
+
+A `const` field may be assigned exactly once — either via its initializer or via a system param of the same name in the constructor. Assignment in any handler body is rejected (E615).
+
+Per-target emission uses each language's idiomatic immutability keyword:
+
+| Target | Emitted as |
+|---|---|
+| C++ | `const T name;` (member init list when init refs a system param) |
+| Java | `final T name = init;` |
+| C# | `readonly T name = init;` |
+| Dart | `final T name = init;` |
+| Kotlin | `val name: T = init` (promoted to primary constructor on param collision) |
+| Swift | `let name: T = init` |
+| TypeScript | `readonly name: T = init;` |
+| Rust | (fields are immutable by default) |
+| Python / JS / PHP / Ruby / Lua / Erlang / GDScript / C / Go | comment-only marker; immutability not enforced at the target level |
+
 ---
 
 ## Frame Statements

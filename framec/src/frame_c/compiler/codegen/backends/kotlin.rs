@@ -75,27 +75,38 @@ impl LanguageBackend for KotlinBackend {
                 let primary_ctor = if primary_params.is_empty() {
                     String::new()
                 } else {
-                    // Collect domain field names to detect collisions.
-                    // Params that collide with a domain field use bare
-                    // syntax (no val/var) — they're only in scope inside
-                    // `init {}` where the field assignment happens.
-                    // Params that DON'T collide get `val` so they're
-                    // accessible as read-only properties throughout the
-                    // class (e.g., in handler bodies via `this.param`).
+                    // Collect domain field names/const-ness to detect collisions.
+                    // - Param collides with const field → promote to `val` (the field
+                    //   declaration is suppressed below, primary constructor IS the field)
+                    // - Param collides with mutable field → bare param (field decl + init body)
+                    // - No collision → `val` for accessibility in handler bodies
                     let field_names: std::collections::HashSet<&str> =
                         fields.iter().map(|f| f.name.as_str()).collect();
+                    let const_field_names: std::collections::HashSet<&str> = fields
+                        .iter()
+                        .filter(|f| f.is_const)
+                        .map(|f| f.name.as_str())
+                        .collect();
                     let params_str = primary_params
                         .iter()
                         .map(|p| {
                             let type_ann = self.map_type(
                                 p.type_annotation.as_ref().unwrap_or(&"Any?".to_string()),
                             );
-                            if field_names.contains(p.name.as_str()) {
-                                // Collides with domain field — bare param
-                                format!("{}: {}", p.name, type_ann)
+                            let default_suffix = p
+                                .default_value
+                                .as_ref()
+                                .map(|d| format!(" = {}", self.emit(d, ctx)))
+                                .unwrap_or_default();
+                            if const_field_names.contains(p.name.as_str()) {
+                                // const field — primary ctor declares it as val
+                                format!("val {}: {}{}", p.name, type_ann, default_suffix)
+                            } else if field_names.contains(p.name.as_str()) {
+                                // Mutable field collision — bare param
+                                format!("{}: {}{}", p.name, type_ann, default_suffix)
                             } else {
                                 // No collision — promote to val property
-                                format!("val {}: {}", p.name, type_ann)
+                                format!("val {}: {}{}", p.name, type_ann, default_suffix)
                             }
                         })
                         .collect::<Vec<_>>()
@@ -114,7 +125,15 @@ impl LanguageBackend for KotlinBackend {
                 ));
                 ctx.push_indent();
 
+                // Collect primary constructor param names for const field suppression
+                let primary_param_names: std::collections::HashSet<&str> =
+                    primary_params.iter().map(|p| p.name.as_str()).collect();
                 for field in fields {
+                    // Skip const fields that are declared in the primary constructor
+                    // (they're already `val name: Type` on the class header).
+                    if field.is_const && primary_param_names.contains(field.name.as_str()) {
+                        continue;
+                    }
                     if let Some(ref raw_code) = field.raw_code {
                         // Raw code from domain section — Kotlin requires var/val prefix
                         let trimmed = raw_code.trim();

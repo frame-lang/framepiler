@@ -33,6 +33,7 @@
 //! - E605: Static target requires explicit type on domain field
 //! - E613: Domain field name shadows a system parameter
 //! - E614: Duplicate domain field name
+//! - E615: Assignment to const domain field in handler body
 //!
 //! ## Target-specific Errors (E5xx)
 //! - E501: Interface method name collides with reserved target-language method (GDScript)
@@ -585,6 +586,115 @@ impl FrameValidator {
 
         // Domain field validation
         self.validate_domain_fields(system);
+
+        // E615: Assignment to const domain field in handler bodies
+        self.validate_const_field_assignments(system);
+    }
+
+    /// E615: Direct assignment to a `const` domain field inside a handler
+    /// body. Catches the obvious per-target self-access patterns; the target
+    /// language compiler catches anything else via the emitted
+    /// `final` / `readonly` / `const` / `val` / `let` keyword.
+    fn validate_const_field_assignments(&mut self, system: &SystemAst) {
+        let const_fields: Vec<&str> = system
+            .domain
+            .iter()
+            .filter(|v| v.is_const)
+            .map(|v| v.name.as_str())
+            .collect();
+        if const_fields.is_empty() {
+            return;
+        }
+
+        let machine = match &system.machine {
+            Some(m) => m,
+            None => return,
+        };
+
+        for state in &machine.states {
+            if let Some(ref h) = state.enter {
+                self.scan_body_for_const_assigns(&h.body, &const_fields, &system.name, "$>");
+            }
+            if let Some(ref h) = state.exit {
+                self.scan_body_for_const_assigns(&h.body, &const_fields, &system.name, "$<");
+            }
+            for h in &state.handlers {
+                self.scan_body_for_const_assigns(&h.body, &const_fields, &system.name, &h.event);
+            }
+        }
+    }
+
+    fn scan_body_for_const_assigns(
+        &mut self,
+        body: &HandlerBody,
+        const_fields: &[&str],
+        system_name: &str,
+        event_name: &str,
+    ) {
+        for stmt in &body.statements {
+            let code = match stmt {
+                Statement::NativeCode(s) => s.as_str(),
+                _ => continue,
+            };
+            for field in const_fields {
+                // Per-target self-access prefixes that resolve to the system
+                // instance: catches `self.x =`, `this->x =`, `@x =`, etc.
+                let prefixes = [
+                    format!("self.{}", field),
+                    format!("this.{}", field),
+                    format!("self->{}", field),
+                    format!("this->{}", field),
+                    format!("$this->{}", field),
+                    format!("@{}", field),
+                ];
+                let mut flagged = false;
+                for prefix in &prefixes {
+                    let mut search_from = 0usize;
+                    while let Some(rel) = code[search_from..].find(prefix.as_str()) {
+                        let abs = search_from + rel;
+                        let after = &code[abs + prefix.len()..];
+                        let trimmed = after.trim_start();
+                        // Match `=` or augmented assignment, but NOT `==`.
+                        let is_assign = (trimmed.starts_with('=')
+                            && !trimmed.starts_with("==")
+                            && !trimmed.starts_with("=>"))
+                            || trimmed.starts_with("+=")
+                            || trimmed.starts_with("-=")
+                            || trimmed.starts_with("*=")
+                            || trimmed.starts_with("/=")
+                            || trimmed.starts_with("%=");
+                        if is_assign {
+                            // Reject access to a sub-field: `self.x.foo = ...`
+                            // (the assignment is to `foo`, not to `x`).
+                            // The trim already handled whitespace before `=`,
+                            // so any `.` immediately after the prefix means
+                            // the user is accessing a member of the field,
+                            // not assigning to the field itself.
+                            let raw_after = &code[abs + prefix.len()..];
+                            if !raw_after.starts_with('.') && !raw_after.starts_with("->") {
+                                self.errors.push(
+                                    ValidationError::new(
+                                        "E615",
+                                        format!(
+                                            "Assignment to const domain field '{}' \
+                                             in system '{}' handler '{}'",
+                                            field, system_name, event_name
+                                        ),
+                                    )
+                                    .with_span(body.span.clone()),
+                                );
+                                flagged = true;
+                                break;
+                            }
+                        }
+                        search_from = abs + prefix.len();
+                    }
+                    if flagged {
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /// E420: `static` is only valid on operations
@@ -1931,5 +2041,112 @@ mod tests {
         let e604 = errs.iter().filter(|e| e.code == "E604").count();
         assert_eq!(e603, 1, "expected exactly 1 E603, got {:?}", errs);
         assert_eq!(e604, 1, "expected exactly 1 E604, got {:?}", errs);
+    }
+
+    /// Run the V4 pipeline (which understands `const`) and return the error codes.
+    /// The legacy `validate_for_target` helper above uses `FrameParser`, which
+    /// hardcodes `is_const: false` and so cannot exercise E615.
+    /// `validate_only` mode also routes through `FrameParser`, so use Production
+    /// mode which goes through `compile_ast_based` and the V4 pipeline parser.
+    fn v4_codes(source: &str) -> Vec<String> {
+        use crate::frame_c::compiler::pipeline::compile_module;
+        use crate::frame_c::compiler::pipeline::config::PipelineConfig;
+        let config = PipelineConfig::production(VTarget::Python3);
+        let result = compile_module(source.as_bytes(), &config).expect("pipeline ran");
+        result.errors.iter().map(|e| e.code.clone()).collect()
+    }
+
+    #[test]
+    fn test_e615_assignment_to_const_field() {
+        let source = r#"
+@@system Sensor {
+    interface:
+        bump()
+    machine:
+        $Active {
+            bump() {
+                self.threshold = 999
+            }
+        }
+    domain:
+        const threshold : int = 100
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            codes.iter().any(|c| c == "E615"),
+            "expected E615, got {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e615_not_emitted_for_comparison() {
+        let source = r#"
+@@system Sensor {
+    interface:
+        check()
+    machine:
+        $Active {
+            check() {
+                if self.threshold == 100:
+                    pass
+            }
+        }
+    domain:
+        const threshold : int = 100
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            !codes.iter().any(|c| c == "E615"),
+            "false-positive E615 on comparison: {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e615_not_emitted_for_mutable_field_assign() {
+        let source = r#"
+@@system Sensor {
+    interface:
+        bump()
+    machine:
+        $Active {
+            bump() {
+                self.value = 999
+            }
+        }
+    domain:
+        value : int = 0
+        const threshold : int = 100
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            !codes.iter().any(|c| c == "E615"),
+            "false-positive E615 on mutable assign: {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn test_e615_augmented_assign_caught() {
+        let source = r#"
+@@system Sensor {
+    interface:
+        bump()
+    machine:
+        $Active {
+            bump() {
+                self.threshold += 1
+            }
+        }
+    domain:
+        const threshold : int = 100
+}"#;
+        let codes = v4_codes(source);
+        assert!(
+            codes.iter().any(|c| c == "E615"),
+            "expected E615 on +=, got {:?}",
+            codes
+        );
     }
 }

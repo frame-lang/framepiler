@@ -631,18 +631,26 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             Type::Custom(s) => s.clone(),
             Type::Unknown => String::new(),
         };
-        // const modifier: emit language keyword only when init stays on declaration.
-        // If the init references a param (stripped), the constructor assigns it —
-        // const/final/readonly on the declaration would conflict with that assignment.
+        // const modifier: emit the per-language keyword.
+        //
+        // - C++: always emit `const`. When the init references a param, the
+        //   constructor uses a member initializer list (`: field(value)`),
+        //   which is initial construction — NOT a re-assignment — so `const`
+        //   stays valid on the field declaration.
+        // - Java / C# / Dart: emit only when the init stays on the declaration.
+        //   If init references a param (stripped), the constructor body assigns
+        //   the field, and `final` / `readonly` on the field would conflict
+        //   with that assignment.
+        // - C / Go: never emit. C struct fields can't have field-level inits;
+        //   the factory function assigns, and `const` would block that.
         let init_text_for_const = var.initializer_text.as_deref().unwrap_or("");
-        let init_on_decl = !matches!(lang, TargetLanguage::Go | TargetLanguage::C)
-            && !init_references_param(init_text_for_const, sys_param_names);
-        let const_prefix = if var.is_const && init_on_decl {
+        let init_on_decl = !init_references_param(init_text_for_const, sys_param_names);
+        let const_prefix = if var.is_const {
             match lang {
-                TargetLanguage::Java => "final ",
-                TargetLanguage::CSharp => "readonly ",
-                TargetLanguage::C | TargetLanguage::Cpp => "const ",
-                TargetLanguage::Dart => "final ",
+                TargetLanguage::Cpp => "const ",
+                TargetLanguage::Java if init_on_decl => "final ",
+                TargetLanguage::CSharp if init_on_decl => "readonly ",
+                TargetLanguage::Dart if init_on_decl => "final ",
                 _ => "",
             }
         } else {
@@ -734,13 +742,7 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             .with_visibility(Visibility::Public)
             .with_type(&type_str)
             .with_raw_code(&expanded_code);
-        // Only emit const on the field when the init stays on the declaration.
-        // If the init references a param (stripped), the constructor assigns it —
-        // emitting const/readonly/val/let on the declaration would conflict.
-        let init_text = domain_var.initializer_text.as_deref().unwrap_or("");
-        let init_on_decl = !matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C)
-            && !init_references_param(init_text, &sys_param_names);
-        field.is_const = domain_var.is_const && init_on_decl;
+        field.is_const = domain_var.is_const;
 
         // Populate the structured initializer slot from init text —
         // but ONLY when the init wasn't stripped from the field declaration.
@@ -962,14 +964,20 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
         }
         // C++ — only emit constructor-body init when the field-level init
         // was stripped (i.e., the init references a constructor param).
+        // For const fields: use member initializer list (can't assign in body).
         if matches!(syntax.language, TargetLanguage::Cpp) {
             if init_refs_param {
                 if let Some(ref init_text) = init_text_opt {
                     let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Cpp);
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!("this->{} = {};", domain_var.name, init_expanded),
-                        span: None,
-                    });
+                    if domain_var.is_const {
+                        // const members must be initialized in the init list
+                        cpp_init_list.push(format!("{}({})", domain_var.name, init_expanded));
+                    } else {
+                        body.push(CodegenNode::NativeBlock {
+                            code: format!("this->{} = {};", domain_var.name, init_expanded),
+                            span: None,
+                        });
+                    }
                 }
             }
             continue;
@@ -1013,8 +1021,10 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             continue;
         }
         // Kotlin — only emit constructor-body init when stripped.
+        // Skip const fields whose init references a param — those are declared
+        // as `val name: Type` in the primary constructor (no body assignment needed).
         if matches!(syntax.language, TargetLanguage::Kotlin) {
-            if init_refs_param {
+            if init_refs_param && !domain_var.is_const {
                 if let Some(ref init_text) = init_text_opt {
                     let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::Kotlin);
                     body.push(CodegenNode::NativeBlock {
@@ -2899,10 +2909,19 @@ self._context_stack.pop_back()"#,
         })
         .collect();
 
+    // For C++: emit const fields via member initializer list.
+    // The C++ backend formats super_call as ` : {expr}` before the body.
+    let super_call = if !cpp_init_list.is_empty() && matches!(syntax.language, TargetLanguage::Cpp)
+    {
+        Some(Box::new(CodegenNode::Ident(cpp_init_list.join(", "))))
+    } else {
+        None
+    };
+
     CodegenNode::Constructor {
         params,
         body,
-        super_call: None,
+        super_call,
     }
 }
 
