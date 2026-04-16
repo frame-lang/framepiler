@@ -80,31 +80,7 @@ impl LanguageBackend for PhpBackend {
 
                 // Fields
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        let vis = self.emit_visibility(field.visibility);
-                        result.push_str(&format!("{}{} ${};\n", ctx.get_indent(), vis, raw_code));
-                    } else {
-                        let vis = self.emit_visibility(field.visibility);
-                        let static_kw = if field.is_static { "static " } else { "" };
-                        if let Some(ref init) = field.initializer {
-                            result.push_str(&format!(
-                                "{}{} {}${} = {};\n",
-                                ctx.get_indent(),
-                                vis,
-                                static_kw,
-                                field.name,
-                                self.emit(init, ctx)
-                            ));
-                        } else {
-                            result.push_str(&format!(
-                                "{}{} {}${};\n",
-                                ctx.get_indent(),
-                                vis,
-                                static_kw,
-                                field.name
-                            ));
-                        }
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
                 if !fields.is_empty() && !methods.is_empty() {
                     result.push('\n');
@@ -611,6 +587,30 @@ impl PhpBackend {
                 | CodegenNode::Comment { .. }
                 | CodegenNode::NativeBlock { .. }
                 | CodegenNode::Empty
+        )
+    }
+
+    /// Emit a single PHP class-property declaration line:
+    ///   `<indent><vis> [static ]$<name>[ = <init>];\n`
+    ///
+    /// PHP property declarations don't carry type annotations (the
+    /// codegen could opt into PHP 7.4+ typed properties later but the
+    /// current `synthesize_field_raw` output for PHP omits the type
+    /// entirely — preserved here for byte-identical migration).
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let vis = self.emit_visibility(field.visibility);
+        let static_kw = if field.is_static { "static " } else { "" };
+        let init_suffix = match &field.initializer {
+            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            None => String::new(),
+        };
+        format!(
+            "{}{} {}${}{};\n",
+            ctx.get_indent(),
+            vis,
+            static_kw,
+            field.name,
+            init_suffix
         )
     }
 }
