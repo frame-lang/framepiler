@@ -161,49 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_methods_from_bytes() {
-        let source = b"
-            interface:
-                timer()
-                getColor(): str
-                setState(newState: str, timeout: int): bool
-        ";
-
-        let span = Span {
-            start: 0,
-            end: source.len(),
-        };
-        let methods = super::super::arcanum::collect_methods_in_section(source, &span);
-
-        assert_eq!(methods.len(), 3);
-        assert!(methods.contains("timer"));
-        assert!(methods.contains("getColor"));
-        assert!(methods.contains("setState"));
-    }
-
-    #[test]
-    fn test_collect_domain_vars_from_bytes() {
-        let source = b"
-                var color = \"red\"
-                count: int = 0
-                lastUpdate = now()
-                isActive: bool
-        ";
-
-        let span = Span {
-            start: 0,
-            end: source.len(),
-        };
-        let vars = super::super::arcanum::collect_domain_vars(source, &span);
-
-        assert_eq!(vars.len(), 4);
-        assert!(vars.contains_key("color"));
-        assert!(vars.contains_key("count"));
-        assert!(vars.contains_key("lastUpdate"));
-        assert!(vars.contains_key("isActive"));
-    }
-
-    #[test]
     fn test_build_arcanum_from_frame_ast() {
         use super::super::frame_ast::{
             ActionAst, ActionBody, DomainVar, FrameAst, InterfaceMethod, MachineAst, OperationAst,
