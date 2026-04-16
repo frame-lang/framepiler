@@ -60,25 +60,7 @@ impl LanguageBackend for CSharpBackend {
                 ctx.push_indent();
 
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        let vis = self.emit_visibility(field.visibility);
-                        result.push_str(&format!("{}{} {};\n", ctx.get_indent(), vis, raw_code));
-                    } else {
-                        let vis = self.emit_visibility(field.visibility);
-                        let type_ann = self.map_type(
-                            field
-                                .type_annotation
-                                .as_ref()
-                                .unwrap_or(&"object".to_string()),
-                        );
-                        result.push_str(&format!(
-                            "{}{} {} {};\n",
-                            ctx.get_indent(),
-                            vis,
-                            type_ann,
-                            field.name
-                        ));
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
                 if !fields.is_empty() && !methods.is_empty() {
                     result.push('\n');
@@ -552,6 +534,41 @@ impl CSharpBackend {
                 | CodegenNode::Comment { .. }
                 | CodegenNode::NativeBlock { .. }
                 | CodegenNode::Empty
+        )
+    }
+
+    /// Emit a single C# field declaration line:
+    ///   `<indent><vis> [readonly ]<type> <name>[ = <init>];\n`
+    ///
+    /// `readonly` is emitted only when the field has an initializer at
+    /// declaration scope. C# does allow constructor-body assignment of
+    /// `readonly` fields, but we preserve the existing conservative
+    /// policy from `synthesize_field_raw` (no `readonly` when init was
+    /// stripped) for byte-identical migration.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let vis = self.emit_visibility(field.visibility);
+        let readonly_kw = if field.is_const && field.initializer.is_some() {
+            "readonly "
+        } else {
+            ""
+        };
+        let type_str = field
+            .type_annotation
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("object");
+        let init_suffix = match &field.initializer {
+            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            None => String::new(),
+        };
+        format!(
+            "{}{} {}{} {}{};\n",
+            ctx.get_indent(),
+            vis,
+            readonly_kw,
+            type_str,
+            field.name,
+            init_suffix
         )
     }
 }
