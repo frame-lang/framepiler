@@ -140,11 +140,40 @@ impl LanguageBackend for KotlinBackend {
                     result.push('\n');
                 }
 
-                for (i, method) in methods.iter().enumerate() {
+                // Partition methods: emit non-static first, then group
+                // all static methods inside a single `companion object`.
+                let (statics, non_statics): (Vec<_>, Vec<_>) =
+                    methods.iter().enumerate().partition(|(_, m)| {
+                        matches!(
+                            m,
+                            CodegenNode::Method {
+                                is_static: true,
+                                ..
+                            }
+                        )
+                    });
+
+                for (i, (_, method)) in non_statics.iter().enumerate() {
                     if i > 0 {
                         result.push('\n');
                     }
                     result.push_str(&self.emit(method, ctx));
+                }
+
+                if !statics.is_empty() {
+                    if !non_statics.is_empty() {
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}companion object {{\n", ctx.get_indent()));
+                    ctx.push_indent();
+                    for (i, (_, method)) in statics.iter().enumerate() {
+                        if i > 0 {
+                            result.push('\n');
+                        }
+                        result.push_str(&self.emit(method, ctx));
+                    }
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
                 }
 
                 ctx.pop_indent();
@@ -188,49 +217,24 @@ impl LanguageBackend for KotlinBackend {
                     .map(|t| format!(": {}", self.map_type(t)))
                     .unwrap_or_default();
 
-                let mut result = if *is_static {
-                    // Kotlin: wrap in companion object for class-level access.
-                    // Each static method gets its own companion object block.
-                    // Kotlin allows only one companion per class, so this only
-                    // works for a single static method. For multiple statics,
-                    // a proper solution needs the class emitter to collect them.
-                    // TODO: collect all static methods and emit one companion block.
-                    format!(
-                        "{}companion object {{\n{}    {}fun {}({}){} {{\n",
-                        ctx.get_indent(),
-                        ctx.get_indent(),
-                        vis_prefix,
-                        name,
-                        params_str,
-                        return_str
-                    )
-                } else {
-                    format!(
-                        "{}{}fun {}({}){} {{\n",
-                        ctx.get_indent(),
-                        vis_prefix,
-                        name,
-                        params_str,
-                        return_str
-                    )
-                };
+                // Static methods are wrapped in a single `companion object`
+                // block by the Class emitter — emit a bare `fun` here.
+                let mut result = format!(
+                    "{}{}fun {}({}){} {{\n",
+                    ctx.get_indent(),
+                    vis_prefix,
+                    name,
+                    params_str,
+                    return_str
+                );
 
-                if *is_static {
-                    // Extra indent for companion object body
-                    ctx.push_indent();
-                }
                 ctx.push_indent();
                 for stmt in body {
                     result.push_str(&self.emit(stmt, ctx));
-                    // Kotlin: no semicolons
                     result.push('\n');
                 }
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
-                if *is_static {
-                    ctx.pop_indent();
-                    result.push_str(&format!("{}}}\n", ctx.get_indent())); // close companion object
-                }
                 result
             }
 
