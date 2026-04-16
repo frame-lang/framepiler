@@ -783,10 +783,7 @@ impl<'a> Lexer<'a> {
         }
         // -> (args) ...  — skip balanced parens, then look for $
         if self.source[k] == b'(' {
-            if let Some(k2) = self
-                .skipper
-                .balanced_paren_end(self.source, k, end)
-            {
+            if let Some(k2) = self.skipper.balanced_paren_end(self.source, k, end) {
                 k = k2;
                 while k < end && (self.source[k] == b' ' || self.source[k] == b'\t') {
                     k += 1;

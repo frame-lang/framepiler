@@ -56,268 +56,41 @@ pub(crate) fn header_param_names(hdr: &str) -> Vec<String> {
     names
 }
 
-// Collect domain variable names per system by scanning each `domain:` block.
+// Collect domain variable names per system via the V4 segmenter + parser.
+// No byte-level scanning here: the segmenter locates `@@system` blocks and
+// the V4 parser produces structured `DomainVar`s — we just project the names.
 pub(crate) fn collect_domain_vars_per_system(
     bytes: &[u8],
-    start: usize,
     lang: TargetLanguage,
 ) -> HashMap<String, Vec<String>> {
-    use crate::frame_c::compiler::body_closer as closer;
-    use std::collections::HashMap as Map;
+    use crate::frame_c::compiler::frame_ast::Span as AstSpan;
+    use crate::frame_c::compiler::pipeline_parser;
+    use crate::frame_c::compiler::segmenter;
 
-    fn close_system(bytes: &[u8], open: usize, lang: TargetLanguage) -> Option<usize> {
-        closer::close_body(bytes, open, lang).ok()
-    }
+    let mut result: HashMap<String, Vec<String>> = HashMap::new();
 
-    let mut result: Map<String, Vec<String>> = Map::new();
-    let n = bytes.len();
-    let mut i = start;
+    // Segmentation/parse failures here are silently absorbed: the main
+    // compile path surfaces them with proper diagnostics, and re-reporting
+    // through E418 would just be noise.
+    let Ok(source_map) = segmenter::segment_source(bytes, lang) else {
+        return result;
+    };
 
-    while i < n {
-        while i < n
-            && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
-        {
-            i += 1;
-        }
-        if i >= n {
-            break;
-        }
-        // Skip comment-only lines.
-        if bytes[i] == b'#' {
-            while i < n && bytes[i] != b'\n' {
-                i += 1;
-            }
+    for segment in &source_map.segments {
+        let segmenter::Segment::System {
+            name, body_span, ..
+        } = segment
+        else {
             continue;
-        }
-        if i + 1 < n && bytes[i] == b'/' {
-            let c2 = bytes[i + 1];
-            if c2 == b'/' {
-                while i < n && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            } else if c2 == b'*' {
-                i += 2;
-                while i + 1 < n {
-                    if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-                continue;
-            }
-        }
-        // Read potential `@@system` keyword, optionally preceded by `@@persist`.
-        let mut j = i;
-        while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
-            j += 1;
-        }
-        // Optional system-level attribute: `@@persist`.
-        if j + 9 <= n && &bytes[j..j + 9] == b"@@persist" {
-            j += 9;
-            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
-        }
-        // Require `@@system` keyword.
-        if j + 8 > n || &bytes[j..j + 8] != b"@@system" {
-            while i < n && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        j += 8;
-        // Read system name.
-        let mut k = j;
-        while k < n && (bytes[k] == b' ' || bytes[k] == b'\t') {
-            k += 1;
-        }
-        let name_start = k;
-        while k < n && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') {
-            k += 1;
-        }
-        if name_start == k {
-            while i < n && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        let sys_name = String::from_utf8_lossy(&bytes[name_start..k]).to_string();
-        // Find opening '{' for this system.
-        while k < n && bytes[k] != b'{' && bytes[k] != b'\n' {
-            k += 1;
-        }
-        if k >= n || bytes[k] != b'{' {
-            while i < n && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        let open = k;
-        let close = match close_system(bytes, open, lang) {
-            Some(c) => c,
-            None => {
-                while i < n && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            }
         };
-
-        // Collect section markers inside this system.
-        let mut marks: Vec<(usize, String)> = Vec::new();
-        let mut q = open + 1;
-        while q < close {
-            while q < close
-                && (bytes[q] == b' ' || bytes[q] == b'\t' || bytes[q] == b'\r' || bytes[q] == b'\n')
-            {
-                q += 1;
-            }
-            if q >= close {
-                break;
-            }
-            let line = q;
-            // Skip comments.
-            if bytes[q] == b'#' {
-                while q < close && bytes[q] != b'\n' {
-                    q += 1;
-                }
-                continue;
-            }
-            if q + 1 < close && bytes[q] == b'/' {
-                let c2 = bytes[q + 1];
-                if c2 == b'/' {
-                    while q < close && bytes[q] != b'\n' {
-                        q += 1;
-                    }
-                    continue;
-                } else if c2 == b'*' {
-                    q += 2;
-                    while q + 1 < close {
-                        if bytes[q] == b'*' && bytes[q + 1] == b'/' {
-                            q += 2;
-                            break;
-                        }
-                        q += 1;
-                    }
-                    continue;
-                }
-            }
-            let mut s = q;
-            while s < close && (bytes[s] == b' ' || bytes[s] == b'\t') {
-                s += 1;
-            }
-            let sec_start = s;
-            while s < close && (bytes[s].is_ascii_alphanumeric() || bytes[s] == b'_') {
-                s += 1;
-            }
-            if sec_start < s && s < close && bytes[s] == b':' {
-                let kw = String::from_utf8_lossy(&bytes[sec_start..s]).to_ascii_lowercase();
-                if kw.as_str() == "domain"
-                    || kw.as_str() == "operations"
-                    || kw.as_str() == "interface"
-                    || kw.as_str() == "machine"
-                    || kw.as_str() == "actions"
-                {
-                    marks.push((line, kw));
-                }
-            }
-            while q < close && bytes[q] != b'\n' {
-                q += 1;
-            }
-        }
-
-        // Find domain block range, if present.
-        if let Some((idx, (_, _))) = marks
-            .iter()
-            .enumerate()
-            .find(|(_, (_, kw))| kw.as_str() == "domain")
-        {
-            let dom_start = marks[idx].0;
-            let dom_end = if idx + 1 < marks.len() {
-                marks[idx + 1].0
-            } else {
-                close
-            };
-            // Skip the `domain:` line itself.
-            let mut p = dom_start;
-            while p < dom_end && bytes[p] != b'\n' {
-                p += 1;
-            }
-            if p < dom_end {
-                p += 1;
-            }
-            let mut names: Vec<String> = Vec::new();
-            while p < dom_end {
-                // Start of line inside domain block.
-                let mut s = p;
-                // Move to first non-space/tabs.
-                while s < dom_end && (bytes[s] == b' ' || bytes[s] == b'\t') {
-                    s += 1;
-                }
-                if s >= dom_end {
-                    break;
-                }
-                // Skip blank or comment-only lines.
-                if bytes[s] == b'#' {
-                    while p < dom_end && bytes[p] != b'\n' {
-                        p += 1;
-                    }
-                    if p < dom_end {
-                        p += 1;
-                    }
-                    continue;
-                }
-                // Optional 'var' keyword.
-                let mut j = s;
-                while j < dom_end && bytes[j].is_ascii_alphabetic() {
-                    j += 1;
-                }
-                let mut ident_start = s;
-                if j > s {
-                    let word = String::from_utf8_lossy(&bytes[s..j]).to_ascii_lowercase();
-                    if word == "var" {
-                        // Skip 'var' and following whitespace.
-                        let mut k2 = j;
-                        while k2 < dom_end && (bytes[k2] == b' ' || bytes[k2] == b'\t') {
-                            k2 += 1;
-                        }
-                        ident_start = k2;
-                    }
-                }
-                // Read identifier.
-                let mut ident_end = ident_start;
-                if ident_start < dom_end
-                    && ((bytes[ident_start] as char).is_ascii_alphabetic()
-                        || bytes[ident_start] == b'_')
-                {
-                    ident_end += 1;
-                    while ident_end < dom_end
-                        && ((bytes[ident_end] as char).is_ascii_alphanumeric()
-                            || bytes[ident_end] == b'_')
-                    {
-                        ident_end += 1;
-                    }
-                    let name = String::from_utf8_lossy(&bytes[ident_start..ident_end]).to_string();
-                    names.push(name);
-                }
-                // Move to next line.
-                while p < dom_end && bytes[p] != b'\n' {
-                    p += 1;
-                }
-                if p < dom_end {
-                    p += 1;
-                }
-            }
-            if !names.is_empty() {
-                result.insert(sys_name.clone(), names);
-            }
-        }
-
-        // Advance past this system.
-        i = close + 1;
-        continue;
+        let ast_span = AstSpan::new(body_span.start, body_span.end);
+        let Ok(sys_ast) = pipeline_parser::parse_system(bytes, name.clone(), ast_span, lang) else {
+            continue;
+        };
+        result.insert(
+            name.clone(),
+            sys_ast.domain.iter().map(|dv| dv.name.clone()).collect(),
+        );
     }
 
     result

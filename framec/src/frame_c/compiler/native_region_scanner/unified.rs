@@ -91,8 +91,6 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
     let end = close;
     let mut seg_start = i;
 
-
-
     while i < end {
         let b = bytes[i];
 

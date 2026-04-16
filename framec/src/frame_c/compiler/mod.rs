@@ -222,13 +222,8 @@ pub fn validate_module_with_mode(
         // continue to use a coarse known-state set for E402.
         let known_states = validator.collect_machine_state_names(bytes, outline_start);
         let arcanum_symtab = Some(arc_for_ctx.clone());
-        let sys_param_issues = validator.validate_system_param_semantics(
-            bytes,
-            outline_start,
-            lang,
-            &arc_for_ctx,
-            &items,
-        );
+        let sys_param_issues =
+            validator.validate_system_param_semantics(bytes, lang, &arc_for_ctx, &items);
         all_issues.extend(sys_param_issues);
         // Collect interface method names for system.method(...) validation using the system parser.
         let interface_methods =

@@ -130,7 +130,6 @@ impl Validator {
     pub fn validate_system_param_semantics(
         &self,
         bytes: &[u8],
-        start: usize,
         lang: TargetLanguage,
         arc: &Arcanum,
         _outline: &[OutlineItem],
@@ -166,7 +165,7 @@ impl Validator {
             }
             sys_params_by_name.insert(sys.name.clone(), params);
         }
-        let domain_vars_by_system = collect_domain_vars_per_system(bytes, start, lang);
+        let domain_vars_by_system = collect_domain_vars_per_system(bytes, lang);
 
         for (sys_name, _sys_entry) in &arc.systems {
             let sys_params = match sys_params_by_name.get(sys_name) {
