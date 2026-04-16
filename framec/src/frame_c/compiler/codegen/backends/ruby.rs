@@ -74,24 +74,13 @@ impl LanguageBackend for RubyBackend {
                 result.push_str(&format!("{}class {}{}\n", ctx.get_indent(), name, extends));
                 ctx.push_indent();
 
-                // Fields — Ruby uses attr_accessor for public fields
-                // For domain vars, emit raw code as-is
+                // Fields — Ruby uses attr_accessor for everything; the
+                // constructor handles per-field initialization. The
+                // structured Field slots (type, init, is_const) are
+                // intentionally unused — they'd only matter if we ever
+                // emit Ruby class-level constants, which we don't.
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        // Domain var raw code: emit as attr_accessor + init in initialize
-                        // The constructor handles initialization
-                        result.push_str(&format!(
-                            "{}attr_accessor :{}\n",
-                            ctx.get_indent(),
-                            field.name
-                        ));
-                    } else {
-                        result.push_str(&format!(
-                            "{}attr_accessor :{}\n",
-                            ctx.get_indent(),
-                            field.name
-                        ));
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
                 if !fields.is_empty() && !methods.is_empty() {
                     result.push('\n');
@@ -676,6 +665,14 @@ impl RubyBackend {
             })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// Emit a Ruby field as `attr_accessor :<name>`. Per-field type,
+    /// initializer, visibility, and is_const are all irrelevant for
+    /// Ruby class fields — initialization happens in the constructor
+    /// via `@name = value`.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        format!("{}attr_accessor :{}\n", ctx.get_indent(), field.name)
     }
 }
 
