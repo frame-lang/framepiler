@@ -105,319 +105,41 @@ pub fn validate_module(
 pub fn validate_module_with_mode(
     content_str: &str,
     lang: TargetLanguage,
-    strict_native: bool,
+    _strict_native: bool,
 ) -> Result<ValidationResult, RunError> {
-    let bytes = content_str.as_bytes();
-    // Partition the module. If partitioning fails due to outline issues (e.g., missing '{' after a header),
-    // fall back to a tolerant outline scan to surface structured diagnostics (E-codes) instead of a hard error.
-    let parts = match module_partitioner::ModulePartitioner::partition(bytes, lang) {
-        Ok(p) => p,
-        Err(e) => {
-            // Map body close and prolog errors from the partitioner into structured E-codes where possible.
-            let emsg = e.0;
-            if emsg.starts_with("prolog error:") {
-                // E105: Missing/invalid prolog; ensure a proper validator failure rather than a hard error
-                let mut issues = Vec::new();
-                let msg = if emsg.contains("NotFirstNonWhitespace") {
-                    "E105: expected @@target prolog as first non-whitespace token"
-                } else if emsg.contains("Missing") {
-                    "E105: expected @@target <lang> at start of file"
-                } else {
-                    "E105: invalid @@target prolog"
-                };
-                issues.push(crate::frame_c::compiler::validator::ValidationIssue {
-                    message: msg.into(),
-                });
-                return Ok(ValidationResult { ok: false, issues });
-            }
-            if emsg.starts_with("body close error:") {
-                let mapped = if emsg.contains("UnterminatedComment")
-                    || emsg.to_lowercase().contains("unterminated comment")
-                {
-                    vec![crate::frame_c::compiler::validator::ValidationIssue {
-                        message: "E106: unterminated comment".into(),
-                    }]
-                } else if emsg.contains("UnterminatedString")
-                    || emsg.to_lowercase().contains("unterminated string")
-                {
-                    vec![crate::frame_c::compiler::validator::ValidationIssue {
-                        message: "E100: unterminated string".into(),
-                    }]
-                } else if emsg.contains("UnmatchedBraces")
-                    || emsg.to_lowercase().contains("body not closed")
-                {
-                    vec![crate::frame_c::compiler::validator::ValidationIssue {
-                        message: "E103: unterminated body".into(),
-                    }]
-                } else {
-                    Vec::new()
-                };
-                if !mapped.is_empty() {
-                    return Ok(ValidationResult {
-                        ok: false,
-                        issues: mapped,
-                    });
-                }
-            }
-            // Tolerant outline scan will collect E111 and similar diagnostics.
-            let outline_start = 0usize; // tolerant scan will walk whole file
-            let (_items, outline_issues) =
-                crate::frame_c::compiler::outline_scanner::OutlineScanner.scan_collect(
-                    bytes,
-                    outline_start,
-                    lang,
-                );
-            if !outline_issues.is_empty() {
-                return Ok(ValidationResult {
-                    ok: false,
-                    issues: outline_issues,
-                });
-            } else {
-                // If we couldn't recover any diagnostics, return the original partition error
-                return Err(RunError::new(
-                    frame_exitcode::PARSE_ERR,
-                    "module partition error",
-                ));
-            }
-        }
-    };
-    let validator = Validator;
-    let mut all_issues = Vec::new();
-    // include import scanning issues
-    all_issues.extend(parts.import_issues.into_iter());
-    // Outer grammar: re-scan outline and enforce section placement
-    let outline_start = parts
-        .imports
-        .last()
-        .map(|s| s.end)
-        .or(parts.prolog.as_ref().map(|p| p.end))
-        .unwrap_or(0);
-    // Collect known state names and per-module context for validations that
-    // depend on Arcanum or system-wide information.
-    let (known_states, system_name, interface_methods, arcanum_symtab) = {
-        let (items, outline_issues) = crate::frame_c::compiler::outline_scanner::OutlineScanner
-            .scan_collect(bytes, outline_start, lang);
-        all_issues.extend(outline_issues);
-        let outer_issues = validator.validate_outer_grammar(bytes, outline_start, lang, &items);
-        all_issues.extend(outer_issues);
-        // Enforce per-system block ordering and uniqueness using ModuleAst (operations:, interface:, machine:, actions:, domain:)
-        // and validate machine state headers from the same AST.
-        let module_ast = SystemParser::parse_module(bytes, lang);
-        let block_order_issues = validator.validate_system_block_order_ast(&module_ast);
-        all_issues.extend(block_order_issues);
-        // Enforce single `fn main` per module.
-        let main_issues = validator.validate_main_functions(bytes, &items);
-        all_issues.extend(main_issues);
-        // machine section: simple state header check for '{' driven from ModuleAst.
-        let state_issues = validator.validate_machine_state_headers_ast(bytes, &module_ast);
-        all_issues.extend(state_issues);
-        // handlers must be nested inside a state block in machine:, validated against Arcanum/AST.
-        let arc_for_ctx =
-            crate::frame_c::compiler::arcanum::build_arcanum_from_module_ast(bytes, &module_ast);
-        let handler_scope_issues =
-            validator.validate_handlers_in_state_ast(bytes, &items, &module_ast, &arc_for_ctx);
-        all_issues.extend(handler_scope_issues);
-        // Collect known state names (coarse) and build Arcanum for symbol-precision.
-        // For PRT languages we rely on the ModuleAst-backed Arcanum; non-PRT languages
-        // continue to use a coarse known-state set for E402.
-        let known_states = arc_for_ctx.all_state_names();
-        let arcanum_symtab = Some(arc_for_ctx.clone());
-        let sys_param_issues =
-            validator.validate_system_param_semantics(bytes, lang, &arc_for_ctx, &items);
-        all_issues.extend(sys_param_issues);
-        // Collect interface method names for system.method(...) validation using the system parser.
-        let interface_methods =
-            InterfaceParser.collect_all_interface_method_names(bytes, &module_ast, lang);
-        // Best-effort scan for system name
-        let system_name = find_system_name(bytes, 0);
-        // Debug hook removed: known_states reporting was temporary for triage
-        (known_states, system_name, interface_methods, arcanum_symtab)
-    };
-    for b in parts.bodies {
-        let body_bytes = &bytes[b.open_byte..=b.close_byte];
-        // scan and assemble
-        let scan_res = match lang {
-            TargetLanguage::Python3 => nscan::python::NativeRegionScannerPy.scan(body_bytes, 0),
-            TargetLanguage::TypeScript => {
-                nscan::typescript::NativeRegionScannerTs.scan(body_bytes, 0)
-            }
-            TargetLanguage::CSharp => nscan::csharp::NativeRegionScannerCs.scan(body_bytes, 0),
-            TargetLanguage::C => nscan::c::NativeRegionScannerC.scan(body_bytes, 0),
-            TargetLanguage::Cpp => nscan::cpp::NativeRegionScannerCpp.scan(body_bytes, 0),
-            TargetLanguage::Java => nscan::java::NativeRegionScannerJava.scan(body_bytes, 0),
-            TargetLanguage::Rust => nscan::rust::NativeRegionScannerRust.scan(body_bytes, 0),
-            _ => {
-                return Err(RunError::new(
-                    frame_exitcode::PARSE_ERR,
-                    "target not supported",
-                ))
-            }
-        };
-        let scan = match scan_res {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(RunError::new(
-                    frame_exitcode::PARSE_ERR,
-                    &format!("Scan error: {:?}", e),
-                ))
-            }
-        };
-        let (mir, parse_issues) = MirAssembler.assemble_collect(body_bytes, &scan.regions);
-        if !parse_issues.is_empty() {
-            all_issues.extend(parse_issues);
-        }
-        let policy = ValidatorPolicy {
-            body_kind: Some(b.kind),
-        };
-        let mut res = validator.validate_regions_mir_with_policy(&scan.regions, &mir, policy);
-        // Validate that transition targets refer to known states.
-        match lang {
-            TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::Rust => {
-                if let Some(ref arc) = arcanum_symtab {
-                    let sys = system_name.as_deref();
-                    if !known_states.is_empty() {
-                        res.issues
-                            .extend(validator.validate_transition_targets_arcanum(
-                                &mir,
-                                arc,
-                                &known_states,
-                                sys,
-                            ));
-                    }
-                }
-            }
-            _ => {
-                if !known_states.is_empty() {
-                    res.issues
-                        .extend(validator.validate_transition_targets(&mir, &known_states));
-                }
-            }
-        }
-        // Optional advisory policy: state parameter arity (Stage 10B).
-        if std::env::var("FRAME_VALIDATE_NATIVE_POLICY")
-            .ok()
-            .as_deref()
-            == Some("1")
-        {
-            if let Some(ref arc) = arcanum_symtab {
-                let sys = system_name.as_deref();
-                res.issues
-                    .extend(validator.validate_transition_state_arity_arcanum(&mir, arc, sys));
-            }
-        }
-        // Parent-forward rule: require a parent for the enclosing state
-        if validator.has_machine_section(bytes, outline_start) {
-            if matches!(b.kind, BodyKind::Handler | BodyKind::Unknown) {
-                if mir
-                    .iter()
-                    .any(|m| matches!(m, crate::frame_c::compiler::mir::MirItem::Forward { .. }))
-                {
-                    let enclosing_state = b.state_id.as_deref();
-                    let mut ok_parent = false;
-                    if let Some(state_name) = enclosing_state {
-                        if let Some(ref arc) = arcanum_symtab {
-                            let sys = system_name.as_deref().unwrap_or("_");
-                            ok_parent =
-                                arc.has_parent(sys, state_name) || arc.has_parent("_", state_name);
-                        }
-                    }
-                    if !ok_parent {
-                        all_issues.push(crate::frame_c::compiler::validator::ValidationIssue {
-                            message: "E403: Cannot forward to parent: no parent available".into(),
-                        });
-                    }
-                }
-            }
-        }
-        // Enforce no native after terminal MIR at body level
-        let extra = validator.validate_terminal_last_native(body_bytes, &scan.regions, &mir, lang);
-        res.issues.extend(extra);
-        // Enforce that system.method(...) calls target interface methods.
-        if matches!(
-            b.kind,
-            BodyKind::Handler | BodyKind::Action | BodyKind::Operation
-        ) {
-            let sys_issues = validator.validate_system_calls_interface(
-                body_bytes,
-                &scan.regions,
-                &interface_methods,
-            );
-            res.issues.extend(sys_issues);
-        }
-        res.ok = res.issues.is_empty();
-        all_issues.extend(res.issues);
+    use crate::frame_c::compiler::pipeline::compile_ast_based;
+    use crate::frame_c::compiler::pipeline::config::PipelineConfig;
+    use crate::frame_c::compiler::validator::ValidationIssue;
 
-        // Stage 07 (native facade parsing):
-        // Enable by default for Python/TypeScript/Rust (hermetic parsers), or when strict_native is requested.
-        let enable_native = strict_native
-            || matches!(
-                lang,
-                TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::Rust
-            );
-        if enable_native {
-            let exps: Vec<String> = {
-                use crate::frame_c::compiler::expander::*;
-                let mut v = Vec::new();
-                let mut mi = 0usize;
-                for r in &scan.regions {
-                    if let crate::frame_c::compiler::native_region_scanner::Region::FrameSegment {
-                        indent,
-                        ..
-                    } = r
-                    {
-                        if mi >= mir.len() {
-                            break;
-                        }
-                        let m = &mir[mi];
-                        mi += 1;
-                        let s = match lang {
-                            TargetLanguage::Python3 => PyFacadeExpander.expand(m, *indent, None),
-                            TargetLanguage::TypeScript => TsFacadeExpander.expand(m, *indent, None),
-                            TargetLanguage::CSharp => CFacadeExpander.expand(m, *indent, None),
-                            TargetLanguage::C => CFacadeExpander.expand(m, *indent, None),
-                            TargetLanguage::Cpp => CFacadeExpander.expand(m, *indent, None),
-                            TargetLanguage::Java => CFacadeExpander.expand(m, *indent, None),
-                            TargetLanguage::Rust => RustFacadeExpander.expand(m, *indent, None),
-                            _ => String::new(),
-                        };
-                        v.push(s);
-                    }
-                }
-                v
-            };
-            let spliced = Splicer.splice(body_bytes, &scan.regions, &exps);
-            // Wrapper-call validation
-            for d in crate::frame_c::compiler::facade::validate_wrappers(&spliced.text, lang) {
-                if let Some((origin, src)) = spliced.map_spliced_range_to_origin(d.start, d.end) {
-                    let origin_str = match origin {
-                        crate::frame_c::compiler::splice::Origin::Frame { .. } => "frame",
-                        crate::frame_c::compiler::splice::Origin::Native { .. } => "native",
-                    };
-                    all_issues.push(crate::frame_c::compiler::validator::ValidationIssue {
-                        message: format!(
-                            "native syntax ({}:{}-{}): {}",
-                            origin_str, src.start, src.end, d.message
-                        ),
-                    });
-                } else {
-                    all_issues.push(crate::frame_c::compiler::validator::ValidationIssue {
-                        message: format!("native syntax: {}", d.message),
-                    });
-                }
-            }
-        }
-    }
-    let ok = all_issues.is_empty();
-    if strict_native && !ok {
-        // In strict/native mode, surface native diagnostics as a failing status for callers that want to gate on facades
-        return Err(RunError::new(
-            exitcode::DATAERR,
-            "native facade validation failed",
-        ));
-    }
+    // Delegate to the V4 pipeline. `compile_ast_based` runs the full
+    // segmenter → pipeline_parser → arcanum → frame_validator chain,
+    // which now covers every E-code the legacy validator emitted (see
+    // the V4 frame_validator.rs docstring for the complete catalog).
+    // The generated code from the codegen stage is discarded — for
+    // validation-only use cases this is the cost of running validation
+    // through the same pipeline that powers `framec compile`, in
+    // exchange for a single source of truth for what counts as a
+    // valid Frame source.
+    //
+    // The legacy `_strict_native` flag is intentionally ignored — the
+    // V4 pipeline runs the equivalent native-syntax checks as part of
+    // every backend's codegen (any malformed Frame statement that
+    // would have failed facade-expansion in the legacy path will
+    // surface as a codegen error here).
+    let config = PipelineConfig::production(lang);
+    let result = compile_ast_based(content_str.as_bytes(), &config)?;
+
+    let issues: Vec<ValidationIssue> = result
+        .errors
+        .iter()
+        .map(|e| ValidationIssue {
+            message: format!("{}: {}", e.code, e.message),
+        })
+        .collect();
+
     Ok(ValidationResult {
-        ok,
-        issues: all_issues,
+        ok: issues.is_empty(),
+        issues,
     })
 }
 
