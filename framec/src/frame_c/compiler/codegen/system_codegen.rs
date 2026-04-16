@@ -798,6 +798,85 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
     fields
 }
 
+/// Element type carried by one of the kernel's two stacks. C# and Go
+/// format the element type into the init expression; every other language
+/// either uses a default-constructed empty container or doesn't care
+/// about the element type at all.
+enum StackElementKind {
+    /// `_state_stack` — Compartment values; pointer-typed in Go.
+    Compartment,
+    /// `_context_stack` — FrameContext values; never pointer-typed.
+    FrameContext,
+}
+
+/// Emit the per-language initializer for a kernel stack field
+/// (`_state_stack` or `_context_stack`). Returns `None` for languages
+/// where no init is needed (C++: vectors default-construct empty;
+/// Graphviz: unreachable in this code path).
+fn init_collection_stack(
+    field_name: &str,
+    element_kind: StackElementKind,
+    system: &SystemAst,
+    syntax: &super::backend::ClassSyntax,
+) -> Option<CodegenNode> {
+    match syntax.language {
+        TargetLanguage::C => Some(CodegenNode::assign(
+            CodegenNode::field(CodegenNode::self_ref(), field_name),
+            CodegenNode::Ident(format!("{}_FrameVec_new()", system.name)),
+        )),
+        // C++ vectors default-construct as empty; no init needed.
+        TargetLanguage::Cpp => None,
+        TargetLanguage::Java => Some(CodegenNode::NativeBlock {
+            code: format!("{} = new ArrayList<>();", field_name),
+            span: None,
+        }),
+        TargetLanguage::Kotlin => Some(CodegenNode::NativeBlock {
+            code: format!("{} = mutableListOf()", field_name),
+            span: None,
+        }),
+        TargetLanguage::Swift => Some(CodegenNode::NativeBlock {
+            code: format!("{} = []", field_name),
+            span: None,
+        }),
+        TargetLanguage::CSharp => {
+            let elem = match element_kind {
+                StackElementKind::Compartment => format!("{}Compartment", system.name),
+                StackElementKind::FrameContext => format!("{}FrameContext", system.name),
+            };
+            Some(CodegenNode::NativeBlock {
+                code: format!("{} = new List<{}>();", field_name, elem),
+                span: None,
+            })
+        }
+        TargetLanguage::Go => {
+            // Go state-stack stores Compartment pointers; context-stack stores values.
+            let elem = match element_kind {
+                StackElementKind::Compartment => format!("*{}Compartment", system.name),
+                StackElementKind::FrameContext => format!("{}FrameContext", system.name),
+            };
+            Some(CodegenNode::NativeBlock {
+                code: format!("s.{} = make([]{}, 0)", field_name, elem),
+                span: None,
+            })
+        }
+        // Dynamic / array-literal languages.
+        TargetLanguage::Python3
+        | TargetLanguage::TypeScript
+        | TargetLanguage::JavaScript
+        | TargetLanguage::Php
+        | TargetLanguage::Ruby
+        | TargetLanguage::Erlang
+        | TargetLanguage::Rust
+        | TargetLanguage::Lua
+        | TargetLanguage::Dart
+        | TargetLanguage::GDScript => Some(CodegenNode::assign(
+            CodegenNode::field(CodegenNode::self_ref(), field_name),
+            CodegenNode::Array(vec![]),
+        )),
+        TargetLanguage::Graphviz => unreachable!(),
+    }
+}
+
 /// Generate the constructor
 fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> CodegenNode {
     let mut body = Vec::new();
@@ -805,129 +884,23 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
     // Collected during domain init loop for const fields whose init was stripped.
     let mut cpp_init_list: Vec<String> = Vec::new();
 
-    // Initialize state stack - language specific
-    match syntax.language {
-        TargetLanguage::C => {
-            // C: Use FrameVec_new()
-            body.push(CodegenNode::assign(
-                CodegenNode::field(CodegenNode::self_ref(), "_state_stack"),
-                CodegenNode::Ident(format!("{}_FrameVec_new()", system.name)),
-            ));
-        }
-        TargetLanguage::Cpp => {
-            // C++: vectors default-construct as empty, no init needed
-        }
-        TargetLanguage::Java => {
-            // Java: ArrayList fields are null by default, must init
-            body.push(CodegenNode::NativeBlock {
-                code: format!("_state_stack = new ArrayList<>();"),
-                span: None,
-            });
-        }
-        TargetLanguage::Kotlin => {
-            body.push(CodegenNode::NativeBlock {
-                code: format!("_state_stack = mutableListOf()"),
-                span: None,
-            });
-        }
-        TargetLanguage::Swift => {
-            body.push(CodegenNode::NativeBlock {
-                code: format!("_state_stack = []"),
-                span: None,
-            });
-        }
-        TargetLanguage::CSharp => {
-            // C#: List fields must be initialized
-            body.push(CodegenNode::NativeBlock {
-                code: format!("_state_stack = new List<{}Compartment>();", system.name),
-                span: None,
-            });
-        }
-        TargetLanguage::Go => {
-            // Go: slices are nil by default, initialize as empty
-            body.push(CodegenNode::NativeBlock {
-                code: format!("s._state_stack = make([]*{}Compartment, 0)", system.name),
-                span: None,
-            });
-        }
-        // Dynamic languages: empty array literal
-        TargetLanguage::Python3
-        | TargetLanguage::TypeScript
-        | TargetLanguage::JavaScript
-        | TargetLanguage::Php
-        | TargetLanguage::Ruby
-        | TargetLanguage::Erlang
-        | TargetLanguage::Rust
-        | TargetLanguage::Lua
-        | TargetLanguage::Dart
-        | TargetLanguage::GDScript => {
-            body.push(CodegenNode::assign(
-                CodegenNode::field(CodegenNode::self_ref(), "_state_stack"),
-                CodegenNode::Array(vec![]),
-            ));
-        }
-        TargetLanguage::Graphviz => unreachable!(),
+    // Initialize state stack and context stack — same shape per language,
+    // only the field name and element-type formatting differ.
+    if let Some(node) = init_collection_stack(
+        "_state_stack",
+        StackElementKind::Compartment,
+        system,
+        syntax,
+    ) {
+        body.push(node);
     }
-
-    // Initialize context stack (for reentrancy support) - language specific
-    match syntax.language {
-        TargetLanguage::C => {
-            // C: Use FrameVec_new()
-            body.push(CodegenNode::assign(
-                CodegenNode::field(CodegenNode::self_ref(), "_context_stack"),
-                CodegenNode::Ident(format!("{}_FrameVec_new()", system.name)),
-            ));
-        }
-        TargetLanguage::Cpp => {
-            // C++: vectors default-construct as empty, no init needed
-        }
-        TargetLanguage::Java => {
-            body.push(CodegenNode::NativeBlock {
-                code: format!("_context_stack = new ArrayList<>();"),
-                span: None,
-            });
-        }
-        TargetLanguage::Kotlin => {
-            body.push(CodegenNode::NativeBlock {
-                code: format!("_context_stack = mutableListOf()"),
-                span: None,
-            });
-        }
-        TargetLanguage::Swift => {
-            body.push(CodegenNode::NativeBlock {
-                code: format!("_context_stack = []"),
-                span: None,
-            });
-        }
-        TargetLanguage::CSharp => {
-            body.push(CodegenNode::NativeBlock {
-                code: format!("_context_stack = new List<{}FrameContext>();", system.name),
-                span: None,
-            });
-        }
-        TargetLanguage::Go => {
-            body.push(CodegenNode::NativeBlock {
-                code: format!("s._context_stack = make([]{}FrameContext, 0)", system.name),
-                span: None,
-            });
-        }
-        // Dynamic languages: empty array literal
-        TargetLanguage::Python3
-        | TargetLanguage::TypeScript
-        | TargetLanguage::JavaScript
-        | TargetLanguage::Php
-        | TargetLanguage::Ruby
-        | TargetLanguage::Erlang
-        | TargetLanguage::Rust
-        | TargetLanguage::Lua
-        | TargetLanguage::Dart
-        | TargetLanguage::GDScript => {
-            body.push(CodegenNode::assign(
-                CodegenNode::field(CodegenNode::self_ref(), "_context_stack"),
-                CodegenNode::Array(vec![]),
-            ));
-        }
-        TargetLanguage::Graphviz => unreachable!(),
+    if let Some(node) = init_collection_stack(
+        "_context_stack",
+        StackElementKind::FrameContext,
+        system,
+        syntax,
+    ) {
+        body.push(node);
     }
 
     // Initialize domain variables
