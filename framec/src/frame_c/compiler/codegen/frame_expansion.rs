@@ -4103,9 +4103,12 @@ pub(crate) fn get_native_scanner(lang: TargetLanguage) -> Box<dyn NativeRegionSc
         TargetLanguage::Lua => Box::new(NativeRegionScannerLua),
         TargetLanguage::Dart => Box::new(NativeRegionScannerDart),
         TargetLanguage::GDScript => Box::new(NativeRegionScannerGDScript),
-        TargetLanguage::Graphviz => {
-            panic!("No native region scanner for {:?}", lang)
-        }
+        // Graphviz is an output-only target (emitted from the SystemGraph IR,
+        // not from native code). The validator still scans for Frame tokens
+        // (e.g. @@:self.method()) during the graphviz compile path; those
+        // tokens are target-language-agnostic, so any skipper works. Use the
+        // Python scanner as a neutral default — matches frame_parser.rs.
+        TargetLanguage::Graphviz => Box::new(NativeRegionScannerPy),
     }
 }
 
