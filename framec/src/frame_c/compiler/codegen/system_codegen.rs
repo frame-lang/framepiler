@@ -2694,16 +2694,88 @@ fn generate_frame_machinery(
     let event_class = format!("{}FrameEvent", system.name);
 
     match lang {
-        TargetLanguage::Python3 => {
-            // __kernel method - the main event processing loop
-            // Routes event to current state, then processes any pending transition
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"# Route event to current state
+        TargetLanguage::Python3 => methods.extend(generate_python3_machinery(&event_class)),
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript => methods.extend(
+            generate_javascript_machinery(lang, &event_class, &compartment_class),
+        ),
+        TargetLanguage::Php => methods.extend(generate_php_machinery(&event_class)),
+        TargetLanguage::Ruby => methods.extend(generate_ruby_machinery(&event_class)),
+        TargetLanguage::Rust => methods.extend(generate_rust_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
+        TargetLanguage::C => methods.extend(generate_c_machinery(system)),
+        TargetLanguage::Cpp => methods.extend(generate_cpp_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
+        TargetLanguage::Java => methods.extend(generate_java_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
+        TargetLanguage::Kotlin => methods.extend(generate_kotlin_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
+        TargetLanguage::Swift => methods.extend(generate_swift_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
+        TargetLanguage::CSharp => methods.extend(generate_csharp_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
+        TargetLanguage::Go => methods.extend(generate_go_machinery(system)),
+        TargetLanguage::Erlang => {
+            // gen_statem: kernel/router/transition are built into OTP — no custom methods needed
+        }
+        TargetLanguage::Lua => methods.extend(generate_lua_machinery(&event_class)),
+        TargetLanguage::Dart => methods.extend(generate_dart_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
+        TargetLanguage::GDScript => methods.extend(generate_gdscript_machinery(&event_class)),
+        TargetLanguage::Graphviz => unreachable!(),
+    }
+
+    // Generate __push_transition method for Rust when there's a machine
+    // Uses mem::replace to move the current compartment to the stack (no clone)
+    if matches!(lang, TargetLanguage::Rust) && system.machine.is_some() {
+        methods.push(generate_rust_push_transition(system));
+    }
+
+    methods
+}
+
+// =====================================================================
+// Per-language frame-machinery helpers
+// =====================================================================
+//
+// Each `generate_<lang>_machinery` returns the kernel/router/transition
+// methods for one target language. They were previously inlined as
+// match arms inside `generate_frame_machinery`, which had grown to
+// ~1374 lines (one giant match across 17 backends). Splitting them
+// out gives each language an isolated, navigable function while
+// keeping codegen entirely in this file.
+
+fn generate_python3_machinery(event_class: &str) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    // __kernel method - the main event processing loop
+    // Routes event to current state, then processes any pending transition
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"# Route event to current state
 self.__router(__e)
 # Process any pending transition
 while self.__next_compartment is not None:
@@ -2733,61 +2805,69 @@ while self.__next_compartment is not None:
     # Mark all stacked contexts as transitioned
     for ctx in self._context_stack:
         ctx._transitioned = True"#,
-                        event_class, event_class, event_class
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                event_class, event_class, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router method - dispatches events to state methods
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: r#"state_name = self.__compartment.state
+    // __router method - dispatches events to state methods
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"state_name = self.__compartment.state
 handler_name = f"_state_{state_name}"
 handler = getattr(self, handler_name, None)
 if handler:
     handler(__e)"#
-                        .to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __transition method - caches next compartment (deferred transition)
-            // Does NOT execute transition - __kernel does that after handler returns
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "self.__next_compartment = next_compartment".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-            // __kernel method - the main event processing loop
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"// Route event to current state
+    // __transition method - caches next compartment (deferred transition)
+    // Does NOT execute transition - __kernel does that after handler returns
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "self.__next_compartment = next_compartment".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    methods
+}
+
+fn generate_javascript_machinery(
+    lang: TargetLanguage,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    // __kernel method - the main event processing loop
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"// Route event to current state
 this.__router(__e);
 // Process any pending transition
 while (this.__next_compartment !== null) {{
@@ -2821,73 +2901,77 @@ while (this.__next_compartment !== null) {{
         ctx._transitioned = true;
     }}
 }}"#,
-                        event_class, event_class, event_class
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                event_class, event_class, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router method - dispatches events to state methods
-            // TypeScript uses `(this as any)` for dynamic dispatch; JS uses `this` directly
-            let router_code = if matches!(syntax.language, TargetLanguage::TypeScript) {
-                r#"const state_name = this.__compartment.state;
+    // __router method - dispatches events to state methods
+    // TypeScript uses `(this as any)` for dynamic dispatch; JS uses `this` directly
+    let router_code = if matches!(lang, TargetLanguage::TypeScript) {
+        r#"const state_name = this.__compartment.state;
 const handler_name = `_state_${state_name}`;
 const handler = (this as any)[handler_name];
 if (handler) {
     handler.call(this, __e);
 }"#
-                .to_string()
-            } else {
-                r#"const state_name = this.__compartment.state;
+        .to_string()
+    } else {
+        r#"const state_name = this.__compartment.state;
 const handler_name = `_state_${state_name}`;
 const handler = this[handler_name];
 if (handler) {
     handler.call(this, __e);
 }"#
-                .to_string()
-            };
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+        .to_string()
+    };
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __transition method - caches next compartment (deferred transition)
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment").with_type(&compartment_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "this.__next_compartment = next_compartment;".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Php => {
-            // PHP: __kernel method - the main event processing loop
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"// Route event to current state
+    // __transition method - caches next compartment (deferred transition)
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment").with_type(compartment_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "this.__next_compartment = next_compartment;".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    methods
+}
+
+fn generate_php_machinery(event_class: &str) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    // PHP: __kernel method - the main event processing loop
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"// Route event to current state
 $this->__router($__e);
 // Process any pending transition
 while ($this->__next_compartment !== null) {{
@@ -2921,80 +3005,91 @@ while ($this->__next_compartment !== null) {{
         $ctx->_transitioned = true;
     }}
 }}"#,
-                        event_class, event_class, event_class
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                event_class, event_class, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // PHP: __router method - dispatches events to state methods
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: r#"$state_name = $this->__compartment->state;
+    // PHP: __router method - dispatches events to state methods
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"$state_name = $this->__compartment->state;
 $handler_name = "_state_" . $state_name;
 if (method_exists($this, $handler_name)) {
     $this->$handler_name($__e);
 }"#
-                    .to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+            .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // PHP: __transition method - caches next compartment (deferred transition)
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "$this->__next_compartment = $next_compartment;".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Ruby => {
-            methods.push(CodegenNode::Method { name: "__kernel".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: format!("# Route event to current state\n__router(__e)\nwhile @__next_compartment != nil\n    next_compartment = @__next_compartment\n    @__next_compartment = nil\n    exit_event = {0}.new(\"<$\", @__compartment.exit_args)\n    __router(exit_event)\n    @__compartment = next_compartment\n    if next_compartment.forward_event == nil\n        enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n        __router(enter_event)\n    else\n        forward_event = next_compartment.forward_event\n        next_compartment.forward_event = nil\n        if forward_event._message == \"$>\"\n            __router(forward_event)\n        else\n            enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n            __router(enter_event)\n            __router(forward_event)\n        end\n    end\n    # Mark all stacked contexts as transitioned\n    @_context_stack.each {{ |ctx| ctx._transitioned = true }}\nend", event_class), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
-            methods.push(CodegenNode::Method { name: "__router".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: "state_name = @__compartment.state\nhandler_name = \"_state_#{state_name}\"\nif respond_to?(handler_name, true)\n    send(handler_name, __e)\nend".to_string(), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "@__next_compartment = next_compartment".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Rust => {
-            // Rust: Full kernel/router/transition pattern matching Python/TypeScript
+    // PHP: __transition method - caches next compartment (deferred transition)
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "$this->__next_compartment = $next_compartment;".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __kernel method - the main event processing loop with deferred transitions
-            // Gets event from context stack (no parameter needed)
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"// Clone event from context stack (needed for borrow checker)
+    methods
+}
+
+fn generate_ruby_machinery(event_class: &str) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    methods.push(CodegenNode::Method { name: "__kernel".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: format!("# Route event to current state\n__router(__e)\nwhile @__next_compartment != nil\n    next_compartment = @__next_compartment\n    @__next_compartment = nil\n    exit_event = {0}.new(\"<$\", @__compartment.exit_args)\n    __router(exit_event)\n    @__compartment = next_compartment\n    if next_compartment.forward_event == nil\n        enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n        __router(enter_event)\n    else\n        forward_event = next_compartment.forward_event\n        next_compartment.forward_event = nil\n        if forward_event._message == \"$>\"\n            __router(forward_event)\n        else\n            enter_event = {0}.new(\"$>\", @__compartment.enter_args)\n            __router(enter_event)\n            __router(forward_event)\n        end\n    end\n    # Mark all stacked contexts as transitioned\n    @_context_stack.each {{ |ctx| ctx._transitioned = true }}\nend", event_class), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
+    methods.push(CodegenNode::Method { name: "__router".to_string(), params: vec![Param::new("__e")], return_type: None, body: vec![CodegenNode::NativeBlock { code: "state_name = @__compartment.state\nhandler_name = \"_state_#{state_name}\"\nif respond_to?(handler_name, true)\n    send(handler_name, __e)\nend".to_string(), span: None }], is_async: false, is_static: false, visibility: Visibility::Private, decorators: vec![] });
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "@__next_compartment = next_compartment".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+    methods
+}
+
+fn generate_rust_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    // Rust: Full kernel/router/transition pattern matching Python/TypeScript
+
+    // __kernel method - the main event processing loop with deferred transitions
+    // Gets event from context stack (no parameter needed)
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"// Clone event from context stack (needed for borrow checker)
 let __e = self._context_stack.last().unwrap().event.clone();
 // Route event to current state
 self.__router(&__e);
@@ -3028,59 +3123,63 @@ while self.__next_compartment.is_some() {{
         ctx._transitioned = true;
     }}
 }}"#,
-                        event_class
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router method - dispatches events to state dispatch methods
-            let router_code = generate_rust_router_dispatch(system);
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&format!("&{}", event_class))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __router method - dispatches events to state dispatch methods
+    let router_code = generate_rust_router_dispatch(system);
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(&format!("&{}", event_class))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __transition method - caches next compartment (deferred transition)
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment").with_type(&compartment_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "self.__next_compartment = Some(next_compartment);".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::C => {
-            // C: Full kernel/router/transition pattern with string comparison dispatch
-            let sys = &system.name;
+    // __transition method - caches next compartment (deferred transition)
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment").with_type(compartment_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "self.__next_compartment = Some(next_compartment);".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __kernel method - the main event processing loop
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&format!("{}_FrameEvent*", sys))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"// Route event to current state
+    methods
+}
+
+fn generate_c_machinery(system: &SystemAst) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    // C: Full kernel/router/transition pattern with string comparison dispatch
+    let sys = &system.name;
+
+    // __kernel method - the main event processing loop
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(&format!("{}_FrameEvent*", sys))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"// Route event to current state
 {sys}_router(self, __e);
 // Process any pending transition
 while (self->__next_compartment != NULL) {{
@@ -3120,57 +3219,55 @@ while (self->__next_compartment != NULL) {{
         (({sys}_FrameContext*)self->_context_stack->items[__i])->_transitioned = 1;
     }}
 }}"#,
-                        sys = sys
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                sys = sys
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router method - dispatches events to state handler functions
-            let router_code = generate_c_router_dispatch(system);
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&format!("{}_FrameEvent*", sys))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __router method - dispatches events to state handler functions
+    let router_code = generate_c_router_dispatch(system);
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(&format!("{}_FrameEvent*", sys))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __transition method - caches next compartment (deferred transition)
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![
-                    Param::new("next_compartment").with_type(&format!("{}_Compartment*", sys))
-                ],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "self->__next_compartment = next_compartment;".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __transition method - caches next compartment (deferred transition)
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment").with_type(&format!("{}_Compartment*", sys))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "self->__next_compartment = next_compartment;".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // destroy method - cleanup system resources
-            methods.push(CodegenNode::Method {
-                name: "destroy".to_string(),
-                params: vec![],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"// Unref current compartment (may free if not on stack)
+    // destroy method - cleanup system resources
+    methods.push(CodegenNode::Method {
+        name: "destroy".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"// Unref current compartment (may free if not on stack)
 if (self->__compartment) {sys}_Compartment_unref(self->__compartment);
 if (self->__next_compartment) {sys}_Compartment_unref(self->__next_compartment);
 // Unref all state stack entries
@@ -3182,626 +3279,670 @@ if (self->_state_stack) {{
 }}
 if (self->_context_stack) {sys}_FrameVec_destroy(self->_context_stack);
 free(self);"#,
-                        sys = sys
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Public,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Cpp => {
-            let states: Vec<&str> = system
-                .machine
-                .as_ref()
-                .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-                .unwrap_or_default();
+                sys = sys
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Public,
+        decorators: vec![],
+    });
 
-            // __kernel
-            let mut kernel_code = String::new();
-            kernel_code.push_str("__router(__e);\n");
-            kernel_code.push_str("while (__next_compartment) {\n");
-            kernel_code.push_str("    auto next_compartment = std::move(__next_compartment);\n");
-            kernel_code.push_str(&format!("    {} exit_event(\"<$\");\n", event_class));
-            kernel_code.push_str("    __router(exit_event);\n");
-            kernel_code.push_str("    __compartment = std::move(next_compartment);\n");
-            kernel_code.push_str("    if (!__compartment->forward_event) {\n");
-            kernel_code.push_str(&format!("        {} enter_event(\"$>\");\n", event_class));
-            kernel_code.push_str("        __router(enter_event);\n");
-            kernel_code.push_str("    } else {\n");
-            kernel_code.push_str(
-                "        auto forward_event = std::move(__compartment->forward_event);\n",
-            );
-            kernel_code.push_str("        if (forward_event->_message == \"$>\") {\n");
-            kernel_code.push_str("            __router(*forward_event);\n");
-            kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!(
-                "            {} enter_event(\"$>\");\n",
-                event_class
-            ));
-            kernel_code.push_str("            __router(enter_event);\n");
-            kernel_code.push_str("            __router(*forward_event);\n");
-            kernel_code.push_str("        }\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-            kernel_code.push_str("    for (auto& ctx : _context_stack) {\n");
-            kernel_code.push_str("        ctx._transitioned = true;\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("}");
+    methods
+}
 
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: kernel_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+fn generate_cpp_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
 
-            // __router
-            let mut router_code = String::new();
-            router_code.push_str("const auto& state_name = __compartment->state;\n");
-            for (i, state) in states.iter().enumerate() {
-                let prefix = if i == 0 { "if" } else { "} else if" };
-                router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
-                router_code.push_str(&format!("    _state_{}(__e);\n", state));
-            }
-            if !states.is_empty() {
-                router_code.push_str("}");
-            }
+    // __kernel
+    let mut kernel_code = String::new();
+    kernel_code.push_str("__router(__e);\n");
+    kernel_code.push_str("while (__next_compartment) {\n");
+    kernel_code.push_str("    auto next_compartment = std::move(__next_compartment);\n");
+    kernel_code.push_str(&format!("    {} exit_event(\"<$\");\n", event_class));
+    kernel_code.push_str("    __router(exit_event);\n");
+    kernel_code.push_str("    __compartment = std::move(next_compartment);\n");
+    kernel_code.push_str("    if (!__compartment->forward_event) {\n");
+    kernel_code.push_str(&format!("        {} enter_event(\"$>\");\n", event_class));
+    kernel_code.push_str("        __router(enter_event);\n");
+    kernel_code.push_str("    } else {\n");
+    kernel_code.push_str("        auto forward_event = std::move(__compartment->forward_event);\n");
+    kernel_code.push_str("        if (forward_event->_message == \"$>\") {\n");
+    kernel_code.push_str("            __router(*forward_event);\n");
+    kernel_code.push_str("        } else {\n");
+    kernel_code.push_str(&format!(
+        "            {} enter_event(\"$>\");\n",
+        event_class
+    ));
+    kernel_code.push_str("            __router(enter_event);\n");
+    kernel_code.push_str("            __router(*forward_event);\n");
+    kernel_code.push_str("        }\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+    kernel_code.push_str("    for (auto& ctx : _context_stack) {\n");
+    kernel_code.push_str("        ctx._transitioned = true;\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("}");
 
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: kernel_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __transition
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next")
-                    .with_type(&format!("std::shared_ptr<{}>", compartment_class))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "__next_compartment = next;".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Java => {
-            let states: Vec<&str> = system
-                .machine
-                .as_ref()
-                .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-                .unwrap_or_default();
+    // __router
+    let mut router_code = String::new();
+    router_code.push_str("const auto& state_name = __compartment->state;\n");
+    for (i, state) in states.iter().enumerate() {
+        let prefix = if i == 0 { "if" } else { "} else if" };
+        router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
+        router_code.push_str(&format!("    _state_{}(__e);\n", state));
+    }
+    if !states.is_empty() {
+        router_code.push_str("}");
+    }
 
-            // __kernel
-            let mut kernel_code = String::new();
-            kernel_code.push_str("__router(__e);\n");
-            kernel_code.push_str("while (__next_compartment != null) {\n");
-            kernel_code.push_str(&format!(
-                "    {} next_compartment = __next_compartment;\n",
-                compartment_class
-            ));
-            kernel_code.push_str("    __next_compartment = null;\n");
-            kernel_code.push_str(&format!(
-                "    {} exit_event = new {}(\"<$\");\n",
-                event_class, event_class
-            ));
-            kernel_code.push_str("    __router(exit_event);\n");
-            kernel_code.push_str("    __compartment = next_compartment;\n");
-            kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
-            kernel_code.push_str(&format!(
-                "        {} enter_event = new {}(\"$>\");\n",
-                event_class, event_class
-            ));
-            kernel_code.push_str("        __router(enter_event);\n");
-            kernel_code.push_str("    } else {\n");
-            kernel_code.push_str(&format!(
-                "        {} forward_event = __compartment.forward_event;\n",
-                event_class
-            ));
-            kernel_code.push_str("        __compartment.forward_event = null;\n");
-            kernel_code.push_str("        if (forward_event._message.equals(\"$>\")) {\n");
-            kernel_code.push_str("            __router(forward_event);\n");
-            kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!(
-                "            {} enter_event = new {}(\"$>\");\n",
-                event_class, event_class
-            ));
-            kernel_code.push_str("            __router(enter_event);\n");
-            kernel_code.push_str("            __router(forward_event);\n");
-            kernel_code.push_str("        }\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-            kernel_code.push_str(&format!(
-                "    for ({}FrameContext ctx : _context_stack) {{\n",
-                system.name
-            ));
-            kernel_code.push_str("        ctx._transitioned = true;\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("}");
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: kernel_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __transition
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![
+            Param::new("next").with_type(&format!("std::shared_ptr<{}>", compartment_class))
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "__next_compartment = next;".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router - if/else if chain with .equals()
-            let mut router_code = String::new();
-            router_code.push_str("String state_name = __compartment.state;\n");
-            for (i, state) in states.iter().enumerate() {
-                let prefix = if i == 0 { "if" } else { "} else if" };
-                router_code.push_str(&format!(
-                    "{} (state_name.equals(\"{}\")) {{\n",
-                    prefix, state
-                ));
-                router_code.push_str(&format!("    _state_{}(__e);\n", state));
-            }
-            if !states.is_empty() {
-                router_code.push_str("}");
-            }
+    methods
+}
 
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+fn generate_java_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
 
-            // __transition
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next").with_type(&compartment_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "__next_compartment = next;".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Kotlin => {
-            let states: Vec<&str> = system
-                .machine
-                .as_ref()
-                .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-                .unwrap_or_default();
+    // __kernel
+    let mut kernel_code = String::new();
+    kernel_code.push_str("__router(__e);\n");
+    kernel_code.push_str("while (__next_compartment != null) {\n");
+    kernel_code.push_str(&format!(
+        "    {} next_compartment = __next_compartment;\n",
+        compartment_class
+    ));
+    kernel_code.push_str("    __next_compartment = null;\n");
+    kernel_code.push_str(&format!(
+        "    {} exit_event = new {}(\"<$\");\n",
+        event_class, event_class
+    ));
+    kernel_code.push_str("    __router(exit_event);\n");
+    kernel_code.push_str("    __compartment = next_compartment;\n");
+    kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
+    kernel_code.push_str(&format!(
+        "        {} enter_event = new {}(\"$>\");\n",
+        event_class, event_class
+    ));
+    kernel_code.push_str("        __router(enter_event);\n");
+    kernel_code.push_str("    } else {\n");
+    kernel_code.push_str(&format!(
+        "        {} forward_event = __compartment.forward_event;\n",
+        event_class
+    ));
+    kernel_code.push_str("        __compartment.forward_event = null;\n");
+    kernel_code.push_str("        if (forward_event._message.equals(\"$>\")) {\n");
+    kernel_code.push_str("            __router(forward_event);\n");
+    kernel_code.push_str("        } else {\n");
+    kernel_code.push_str(&format!(
+        "            {} enter_event = new {}(\"$>\");\n",
+        event_class, event_class
+    ));
+    kernel_code.push_str("            __router(enter_event);\n");
+    kernel_code.push_str("            __router(forward_event);\n");
+    kernel_code.push_str("        }\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+    kernel_code.push_str(&format!(
+        "    for ({}FrameContext ctx : _context_stack) {{\n",
+        system.name
+    ));
+    kernel_code.push_str("        ctx._transitioned = true;\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("}");
 
-            // __kernel — Kotlin: no semicolons, no `new`, `==` instead of `.equals()`
-            let mut kernel_code = String::new();
-            kernel_code.push_str("__router(__e)\n");
-            kernel_code.push_str("while (__next_compartment != null) {\n");
-            kernel_code.push_str("    val next_compartment = __next_compartment!!\n");
-            kernel_code.push_str("    __next_compartment = null\n");
-            kernel_code.push_str(&format!("    val exit_event = {}(\"<$\")\n", event_class));
-            kernel_code.push_str("    __router(exit_event)\n");
-            kernel_code.push_str("    __compartment = next_compartment\n");
-            kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
-            kernel_code.push_str(&format!(
-                "        val enter_event = {}(\"$>\")\n",
-                event_class
-            ));
-            kernel_code.push_str("        __router(enter_event)\n");
-            kernel_code.push_str("    } else {\n");
-            kernel_code.push_str("        val forward_event = __compartment.forward_event!!\n");
-            kernel_code.push_str("        __compartment.forward_event = null\n");
-            kernel_code.push_str("        if (forward_event._message == \"$>\") {\n");
-            kernel_code.push_str("            __router(forward_event)\n");
-            kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!(
-                "            val enter_event = {}(\"$>\")\n",
-                event_class
-            ));
-            kernel_code.push_str("            __router(enter_event)\n");
-            kernel_code.push_str("            __router(forward_event)\n");
-            kernel_code.push_str("        }\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-            kernel_code.push_str("    for (ctx in _context_stack) {\n");
-            kernel_code.push_str("        ctx._transitioned = true\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("}");
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: kernel_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: kernel_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __router - if/else if chain with .equals()
+    let mut router_code = String::new();
+    router_code.push_str("String state_name = __compartment.state;\n");
+    for (i, state) in states.iter().enumerate() {
+        let prefix = if i == 0 { "if" } else { "} else if" };
+        router_code.push_str(&format!(
+            "{} (state_name.equals(\"{}\")) {{\n",
+            prefix, state
+        ));
+        router_code.push_str(&format!("    _state_{}(__e);\n", state));
+    }
+    if !states.is_empty() {
+        router_code.push_str("}");
+    }
 
-            // __router — Kotlin: when expression with == comparison
-            let mut router_code = String::new();
-            router_code.push_str("val state_name = __compartment.state\n");
-            for (i, state) in states.iter().enumerate() {
-                let prefix = if i == 0 { "if" } else { "} else if" };
-                router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
-                router_code.push_str(&format!("    _state_{}(__e)\n", state));
-            }
-            if !states.is_empty() {
-                router_code.push_str("}");
-            }
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __transition
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next").with_type(compartment_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "__next_compartment = next;".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __transition
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next").with_type(&compartment_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "__next_compartment = next".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Swift => {
-            let states: Vec<&str> = system
-                .machine
-                .as_ref()
-                .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-                .unwrap_or_default();
+    methods
+}
 
-            // __kernel — Swift: no semicolons, no `new`, `!=` for comparison
-            let mut kernel_code = String::new();
-            kernel_code.push_str("__router(__e)\n");
-            kernel_code.push_str("while __next_compartment != nil {\n");
-            kernel_code.push_str("    let next_compartment = __next_compartment!\n");
-            kernel_code.push_str("    __next_compartment = nil\n");
-            kernel_code.push_str(&format!(
-                "    let exit_event = {}(message: \"<$\")\n",
-                event_class
-            ));
-            kernel_code.push_str("    __router(exit_event)\n");
-            kernel_code.push_str("    __compartment = next_compartment\n");
-            kernel_code.push_str("    if __compartment.forward_event == nil {\n");
-            kernel_code.push_str(&format!(
-                "        let enter_event = {}(message: \"$>\")\n",
-                event_class
-            ));
-            kernel_code.push_str("        __router(enter_event)\n");
-            kernel_code.push_str("    } else {\n");
-            kernel_code.push_str("        let forward_event = __compartment.forward_event!\n");
-            kernel_code.push_str("        __compartment.forward_event = nil\n");
-            kernel_code.push_str("        if forward_event._message == \"$>\" {\n");
-            kernel_code.push_str("            __router(forward_event)\n");
-            kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!(
-                "            let enter_event = {}(message: \"$>\")\n",
-                event_class
-            ));
-            kernel_code.push_str("            __router(enter_event)\n");
-            kernel_code.push_str("            __router(forward_event)\n");
-            kernel_code.push_str("        }\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-            kernel_code.push_str("    for i in 0..<_context_stack.count {\n");
-            kernel_code.push_str("        _context_stack[i]._transitioned = true\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("}");
+fn generate_kotlin_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
 
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: kernel_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __kernel — Kotlin: no semicolons, no `new`, `==` instead of `.equals()`
+    let mut kernel_code = String::new();
+    kernel_code.push_str("__router(__e)\n");
+    kernel_code.push_str("while (__next_compartment != null) {\n");
+    kernel_code.push_str("    val next_compartment = __next_compartment!!\n");
+    kernel_code.push_str("    __next_compartment = null\n");
+    kernel_code.push_str(&format!("    val exit_event = {}(\"<$\")\n", event_class));
+    kernel_code.push_str("    __router(exit_event)\n");
+    kernel_code.push_str("    __compartment = next_compartment\n");
+    kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
+    kernel_code.push_str(&format!(
+        "        val enter_event = {}(\"$>\")\n",
+        event_class
+    ));
+    kernel_code.push_str("        __router(enter_event)\n");
+    kernel_code.push_str("    } else {\n");
+    kernel_code.push_str("        val forward_event = __compartment.forward_event!!\n");
+    kernel_code.push_str("        __compartment.forward_event = null\n");
+    kernel_code.push_str("        if (forward_event._message == \"$>\") {\n");
+    kernel_code.push_str("            __router(forward_event)\n");
+    kernel_code.push_str("        } else {\n");
+    kernel_code.push_str(&format!(
+        "            val enter_event = {}(\"$>\")\n",
+        event_class
+    ));
+    kernel_code.push_str("            __router(enter_event)\n");
+    kernel_code.push_str("            __router(forward_event)\n");
+    kernel_code.push_str("        }\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+    kernel_code.push_str("    for (ctx in _context_stack) {\n");
+    kernel_code.push_str("        ctx._transitioned = true\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("}");
 
-            // __router — Swift: if/else chain with == comparison
-            let mut router_code = String::new();
-            router_code.push_str("let state_name = __compartment.state\n");
-            for (i, state) in states.iter().enumerate() {
-                let prefix = if i == 0 { "if" } else { "} else if" };
-                router_code.push_str(&format!("{} state_name == \"{}\" {{\n", prefix, state));
-                router_code.push_str(&format!("    _state_{}(__e)\n", state));
-            }
-            if !states.is_empty() {
-                router_code.push_str("}");
-            }
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: kernel_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __router — Kotlin: when expression with == comparison
+    let mut router_code = String::new();
+    router_code.push_str("val state_name = __compartment.state\n");
+    for (i, state) in states.iter().enumerate() {
+        let prefix = if i == 0 { "if" } else { "} else if" };
+        router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
+        router_code.push_str(&format!("    _state_{}(__e)\n", state));
+    }
+    if !states.is_empty() {
+        router_code.push_str("}");
+    }
 
-            // __transition
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next").with_type(&compartment_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "__next_compartment = next".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::CSharp => {
-            let states: Vec<&str> = system
-                .machine
-                .as_ref()
-                .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-                .unwrap_or_default();
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __kernel
-            let mut kernel_code = String::new();
-            kernel_code.push_str("__router(__e);\n");
-            kernel_code.push_str("while (__next_compartment != null) {\n");
-            kernel_code.push_str(&format!(
-                "    {} next_compartment = __next_compartment;\n",
-                compartment_class
-            ));
-            kernel_code.push_str("    __next_compartment = null;\n");
-            kernel_code.push_str(&format!(
-                "    {} exit_event = new {}(\"<$\");\n",
-                event_class, event_class
-            ));
-            kernel_code.push_str("    __router(exit_event);\n");
-            kernel_code.push_str("    __compartment = next_compartment;\n");
-            kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
-            kernel_code.push_str(&format!(
-                "        {} enter_event = new {}(\"$>\");\n",
-                event_class, event_class
-            ));
-            kernel_code.push_str("        __router(enter_event);\n");
-            kernel_code.push_str("    } else {\n");
-            kernel_code.push_str(&format!(
-                "        {} forward_event = __compartment.forward_event;\n",
-                event_class
-            ));
-            kernel_code.push_str("        __compartment.forward_event = null;\n");
-            kernel_code.push_str("        if (forward_event._message == \"$>\") {\n");
-            kernel_code.push_str("            __router(forward_event);\n");
-            kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!(
-                "            {} enter_event = new {}(\"$>\");\n",
-                event_class, event_class
-            ));
-            kernel_code.push_str("            __router(enter_event);\n");
-            kernel_code.push_str("            __router(forward_event);\n");
-            kernel_code.push_str("        }\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-            kernel_code.push_str("    foreach (var ctx in _context_stack) {\n");
-            kernel_code.push_str("        ctx._transitioned = true;\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("}");
+    // __transition
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next").with_type(compartment_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "__next_compartment = next".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: kernel_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    methods
+}
 
-            // __router - if/else if chain with ==
-            let mut router_code = String::new();
-            router_code.push_str("string state_name = __compartment.state;\n");
-            for (i, state) in states.iter().enumerate() {
-                let prefix = if i == 0 { "if" } else { "} else if" };
-                router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
-                router_code.push_str(&format!("    _state_{}(__e);\n", state));
-            }
-            if !states.is_empty() {
-                router_code.push_str("}");
-            }
+fn generate_swift_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
 
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __kernel — Swift: no semicolons, no `new`, `!=` for comparison
+    let mut kernel_code = String::new();
+    kernel_code.push_str("__router(__e)\n");
+    kernel_code.push_str("while __next_compartment != nil {\n");
+    kernel_code.push_str("    let next_compartment = __next_compartment!\n");
+    kernel_code.push_str("    __next_compartment = nil\n");
+    kernel_code.push_str(&format!(
+        "    let exit_event = {}(message: \"<$\")\n",
+        event_class
+    ));
+    kernel_code.push_str("    __router(exit_event)\n");
+    kernel_code.push_str("    __compartment = next_compartment\n");
+    kernel_code.push_str("    if __compartment.forward_event == nil {\n");
+    kernel_code.push_str(&format!(
+        "        let enter_event = {}(message: \"$>\")\n",
+        event_class
+    ));
+    kernel_code.push_str("        __router(enter_event)\n");
+    kernel_code.push_str("    } else {\n");
+    kernel_code.push_str("        let forward_event = __compartment.forward_event!\n");
+    kernel_code.push_str("        __compartment.forward_event = nil\n");
+    kernel_code.push_str("        if forward_event._message == \"$>\" {\n");
+    kernel_code.push_str("            __router(forward_event)\n");
+    kernel_code.push_str("        } else {\n");
+    kernel_code.push_str(&format!(
+        "            let enter_event = {}(message: \"$>\")\n",
+        event_class
+    ));
+    kernel_code.push_str("            __router(enter_event)\n");
+    kernel_code.push_str("            __router(forward_event)\n");
+    kernel_code.push_str("        }\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+    kernel_code.push_str("    for i in 0..<_context_stack.count {\n");
+    kernel_code.push_str("        _context_stack[i]._transitioned = true\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("}");
 
-            // __transition
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next").with_type(&compartment_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "__next_compartment = next;".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Go => {
-            let states: Vec<&str> = system
-                .machine
-                .as_ref()
-                .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-                .unwrap_or_default();
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: kernel_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __kernel
-            let mut kernel_code = String::new();
-            kernel_code.push_str("s.__router(__e)\n");
-            kernel_code.push_str("for s.__next_compartment != nil {\n");
-            kernel_code.push_str("    next_compartment := s.__next_compartment\n");
-            kernel_code.push_str("    s.__next_compartment = nil\n");
-            kernel_code.push_str(&format!("    exit_event := &{}FrameEvent{{_message: \"<$\", _parameters: s.__compartment.exitArgs}}\n", system.name));
-            kernel_code.push_str("    s.__router(exit_event)\n");
-            kernel_code.push_str("    s.__compartment = next_compartment\n");
-            kernel_code.push_str("    if s.__compartment.forwardEvent == nil {\n");
-            kernel_code.push_str(&format!("        enter_event := &{}FrameEvent{{_message: \"$>\", _parameters: s.__compartment.enterArgs}}\n", system.name));
-            kernel_code.push_str("        s.__router(enter_event)\n");
-            kernel_code.push_str("    } else {\n");
-            kernel_code.push_str("        forward_event := s.__compartment.forwardEvent\n");
-            kernel_code.push_str("        s.__compartment.forwardEvent = nil\n");
-            kernel_code.push_str("        if forward_event._message == \"$>\" {\n");
-            kernel_code.push_str("            s.__router(forward_event)\n");
-            kernel_code.push_str("        } else {\n");
-            kernel_code.push_str(&format!("            enter_event := &{}FrameEvent{{_message: \"$>\", _parameters: s.__compartment.enterArgs}}\n", system.name));
-            kernel_code.push_str("            s.__router(enter_event)\n");
-            kernel_code.push_str("            s.__router(forward_event)\n");
-            kernel_code.push_str("        }\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-            kernel_code.push_str("    for i := range s._context_stack {\n");
-            kernel_code.push_str("        s._context_stack[i]._transitioned = true\n");
-            kernel_code.push_str("    }\n");
-            kernel_code.push_str("}");
+    // __router — Swift: if/else chain with == comparison
+    let mut router_code = String::new();
+    router_code.push_str("let state_name = __compartment.state\n");
+    for (i, state) in states.iter().enumerate() {
+        let prefix = if i == 0 { "if" } else { "} else if" };
+        router_code.push_str(&format!("{} state_name == \"{}\" {{\n", prefix, state));
+        router_code.push_str(&format!("    _state_{}(__e)\n", state));
+    }
+    if !states.is_empty() {
+        router_code.push_str("}");
+    }
 
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&format!("*{}FrameEvent", system.name))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: kernel_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router - switch on state string
-            let mut router_code = String::new();
-            router_code.push_str("switch s.__compartment.state {\n");
-            for state in &states {
-                router_code.push_str(&format!("case \"{}\":\n", state));
-                router_code.push_str(&format!("    s._state_{}(__e)\n", state));
-            }
-            router_code.push_str("}");
+    // __transition
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next").with_type(compartment_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "__next_compartment = next".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e").with_type(&format!("*{}FrameEvent", system.name))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: router_code,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    methods
+}
 
-            // __transition
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next").with_type(&format!("*{}Compartment", system.name))],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "s.__next_compartment = next".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Erlang => {
-            // gen_statem: kernel/router/transition are built into OTP — no custom methods needed
-        }
-        TargetLanguage::Lua => {
-            // __kernel method
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"-- Route event to current state
+fn generate_csharp_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
+
+    // __kernel
+    let mut kernel_code = String::new();
+    kernel_code.push_str("__router(__e);\n");
+    kernel_code.push_str("while (__next_compartment != null) {\n");
+    kernel_code.push_str(&format!(
+        "    {} next_compartment = __next_compartment;\n",
+        compartment_class
+    ));
+    kernel_code.push_str("    __next_compartment = null;\n");
+    kernel_code.push_str(&format!(
+        "    {} exit_event = new {}(\"<$\");\n",
+        event_class, event_class
+    ));
+    kernel_code.push_str("    __router(exit_event);\n");
+    kernel_code.push_str("    __compartment = next_compartment;\n");
+    kernel_code.push_str("    if (__compartment.forward_event == null) {\n");
+    kernel_code.push_str(&format!(
+        "        {} enter_event = new {}(\"$>\");\n",
+        event_class, event_class
+    ));
+    kernel_code.push_str("        __router(enter_event);\n");
+    kernel_code.push_str("    } else {\n");
+    kernel_code.push_str(&format!(
+        "        {} forward_event = __compartment.forward_event;\n",
+        event_class
+    ));
+    kernel_code.push_str("        __compartment.forward_event = null;\n");
+    kernel_code.push_str("        if (forward_event._message == \"$>\") {\n");
+    kernel_code.push_str("            __router(forward_event);\n");
+    kernel_code.push_str("        } else {\n");
+    kernel_code.push_str(&format!(
+        "            {} enter_event = new {}(\"$>\");\n",
+        event_class, event_class
+    ));
+    kernel_code.push_str("            __router(enter_event);\n");
+    kernel_code.push_str("            __router(forward_event);\n");
+    kernel_code.push_str("        }\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+    kernel_code.push_str("    foreach (var ctx in _context_stack) {\n");
+    kernel_code.push_str("        ctx._transitioned = true;\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("}");
+
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: kernel_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router - if/else if chain with ==
+    let mut router_code = String::new();
+    router_code.push_str("string state_name = __compartment.state;\n");
+    for (i, state) in states.iter().enumerate() {
+        let prefix = if i == 0 { "if" } else { "} else if" };
+        router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
+        router_code.push_str(&format!("    _state_{}(__e);\n", state));
+    }
+    if !states.is_empty() {
+        router_code.push_str("}");
+    }
+
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __transition
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next").with_type(compartment_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "__next_compartment = next;".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    methods
+}
+
+fn generate_go_machinery(system: &SystemAst) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
+
+    // __kernel
+    let mut kernel_code = String::new();
+    kernel_code.push_str("s.__router(__e)\n");
+    kernel_code.push_str("for s.__next_compartment != nil {\n");
+    kernel_code.push_str("    next_compartment := s.__next_compartment\n");
+    kernel_code.push_str("    s.__next_compartment = nil\n");
+    kernel_code.push_str(&format!("    exit_event := &{}FrameEvent{{_message: \"<$\", _parameters: s.__compartment.exitArgs}}\n", system.name));
+    kernel_code.push_str("    s.__router(exit_event)\n");
+    kernel_code.push_str("    s.__compartment = next_compartment\n");
+    kernel_code.push_str("    if s.__compartment.forwardEvent == nil {\n");
+    kernel_code.push_str(&format!("        enter_event := &{}FrameEvent{{_message: \"$>\", _parameters: s.__compartment.enterArgs}}\n", system.name));
+    kernel_code.push_str("        s.__router(enter_event)\n");
+    kernel_code.push_str("    } else {\n");
+    kernel_code.push_str("        forward_event := s.__compartment.forwardEvent\n");
+    kernel_code.push_str("        s.__compartment.forwardEvent = nil\n");
+    kernel_code.push_str("        if forward_event._message == \"$>\" {\n");
+    kernel_code.push_str("            s.__router(forward_event)\n");
+    kernel_code.push_str("        } else {\n");
+    kernel_code.push_str(&format!("            enter_event := &{}FrameEvent{{_message: \"$>\", _parameters: s.__compartment.enterArgs}}\n", system.name));
+    kernel_code.push_str("            s.__router(enter_event)\n");
+    kernel_code.push_str("            s.__router(forward_event)\n");
+    kernel_code.push_str("        }\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
+    kernel_code.push_str("    for i := range s._context_stack {\n");
+    kernel_code.push_str("        s._context_stack[i]._transitioned = true\n");
+    kernel_code.push_str("    }\n");
+    kernel_code.push_str("}");
+
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(&format!("*{}FrameEvent", system.name))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: kernel_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router - switch on state string
+    let mut router_code = String::new();
+    router_code.push_str("switch s.__compartment.state {\n");
+    for state in &states {
+        router_code.push_str(&format!("case \"{}\":\n", state));
+        router_code.push_str(&format!("    s._state_{}(__e)\n", state));
+    }
+    router_code.push_str("}");
+
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(&format!("*{}FrameEvent", system.name))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __transition
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next").with_type(&format!("*{}Compartment", system.name))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "s.__next_compartment = next".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    methods
+}
+
+fn generate_lua_machinery(event_class: &str) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    // __kernel method
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"-- Route event to current state
 self:__router(__e)
 -- Process any pending transition
 while self.__next_compartment ~= nil do
@@ -3832,60 +3973,68 @@ while self.__next_compartment ~= nil do
         ctx._transitioned = true
     end
 end"#,
-                        event_class, event_class, event_class
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                event_class, event_class, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router method — dispatches to state handler methods
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: r#"local state_name = self.__compartment.state
+    // __router method — dispatches to state handler methods
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"local state_name = self.__compartment.state
 local handler = self["_state_" .. state_name]
 if handler then
     handler(self, __e)
 end"#
-                        .to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __transition method — caches next compartment (deferred)
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "self.__next_compartment = next_compartment".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Dart => {
-            // __kernel method
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e").with_type(&event_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"// Route event to current state
+    // __transition method — caches next compartment (deferred)
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "self.__next_compartment = next_compartment".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    methods
+}
+
+fn generate_dart_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    // __kernel method
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"// Route event to current state
 __router(__e);
 // Process any pending transition
 while (__next_compartment != null) {{
@@ -3916,66 +4065,68 @@ while (__next_compartment != null) {{
         ctx._transitioned = true;
     }}
 }}"#,
-                        event_class, event_class, event_class
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                event_class, event_class, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router method — use switch dispatch on state name
-            {
-                let mut router_code = String::from("switch (__compartment.state) {\n");
-                if let Some(ref machine) = system.machine {
-                    for state in &machine.states {
-                        router_code.push_str(&format!("    case \"{}\":\n", state.name));
-                        router_code.push_str(&format!("        _state_{}(__e);\n", state.name));
-                        router_code.push_str("        break;\n");
-                    }
-                }
-                router_code.push_str("}");
-                methods.push(CodegenNode::Method {
-                    name: "__router".to_string(),
-                    params: vec![Param::new("__e").with_type(&event_class)],
-                    return_type: None,
-                    body: vec![CodegenNode::NativeBlock {
-                        code: router_code,
-                        span: None,
-                    }],
-                    is_async: false,
-                    is_static: false,
-                    visibility: Visibility::Private,
-                    decorators: vec![],
-                });
-            }
-
-            // __transition method
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment").with_type(&compartment_class)],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "__next_compartment = next_compartment;".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+    // __router method — use switch dispatch on state name
+    let mut router_code = String::from("switch (__compartment.state) {\n");
+    if let Some(ref machine) = system.machine {
+        for state in &machine.states {
+            router_code.push_str(&format!("    case \"{}\":\n", state.name));
+            router_code.push_str(&format!("        _state_{}(__e);\n", state.name));
+            router_code.push_str("        break;\n");
         }
-        TargetLanguage::GDScript => {
-            // __kernel method
-            methods.push(CodegenNode::Method {
-                name: "__kernel".to_string(),
-                params: vec![Param::new("__e")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: format!(
-                        r#"# Route event to current state
+    }
+    router_code.push_str("}");
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: router_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __transition method
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment").with_type(compartment_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "__next_compartment = next_compartment;".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    methods
+}
+
+fn generate_gdscript_machinery(event_class: &str) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+    // __kernel method
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"# Route event to current state
 self.__router(__e)
 # Process any pending transition
 while self.__next_compartment != null:
@@ -4003,61 +4154,53 @@ while self.__next_compartment != null:
     # Mark all stacked contexts as transitioned
     for ctx in self._context_stack:
         ctx._transitioned = true"#,
-                        event_class, event_class, event_class
-                    ),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                event_class, event_class, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __router method
-            methods.push(CodegenNode::Method {
-                name: "__router".to_string(),
-                params: vec![Param::new("__e")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: r#"var state_name = self.__compartment.state
+    // __router method
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"var state_name = self.__compartment.state
 var handler_name = "_state_" + state_name
 if self.has_method(handler_name):
     self.call(handler_name, __e)"#
-                        .to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
-            // __transition method
-            methods.push(CodegenNode::Method {
-                name: "__transition".to_string(),
-                params: vec![Param::new("next_compartment")],
-                return_type: None,
-                body: vec![CodegenNode::NativeBlock {
-                    code: "self.__next_compartment = next_compartment".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-        }
-        TargetLanguage::Graphviz => unreachable!(),
-    }
-
-    // Generate __push_transition method for Rust when there's a machine
-    // Uses mem::replace to move the current compartment to the stack (no clone)
-    if matches!(lang, TargetLanguage::Rust) && system.machine.is_some() {
-        methods.push(generate_rust_push_transition(system));
-    }
+    // __transition method
+    methods.push(CodegenNode::Method {
+        name: "__transition".to_string(),
+        params: vec![Param::new("next_compartment")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "self.__next_compartment = next_compartment".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
     methods
 }
+
 fn generate_rust_push_transition(system: &SystemAst) -> CodegenNode {
     let system_name = &system.name;
     let event_class = format!("{}FrameEvent", system_name);
