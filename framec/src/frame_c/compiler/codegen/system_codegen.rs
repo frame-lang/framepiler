@@ -640,10 +640,10 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
 
         // Populate the structured initializer slot from init text —
         // but ONLY when the init wasn't stripped from the field declaration.
-        // If synthesize_field_raw stripped it (because it references a param),
-        // the init belongs in the constructor body, not the field declaration.
+        // If the init references a system param, the assignment belongs in
+        // the constructor body, not the field declaration.
         // Apply expand_tagged_in_domain so backends consuming this slot get
-        // the same fully-expanded init text that raw_code carries.
+        // the fully-expanded init text (@@SystemName → native constructor).
         let init_text_str = domain_var.initializer_text.as_deref().unwrap_or("");
         let strip_unconditionally =
             matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C);

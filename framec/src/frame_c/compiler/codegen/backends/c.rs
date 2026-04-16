@@ -112,9 +112,7 @@ impl LanguageBackend for CBackend {
                 result.push('\n');
 
                 // Struct definition
-                // Note: C doesn't support raw_code pass-through for fields because
-                // Frame syntax (e.g., "var: type = init") is not valid C struct syntax.
-                // Always use parsed field info to construct proper C declarations.
+                // C struct fields are emitted from parsed field info (name + type).
                 result.push_str(&format!("{}struct {} {{\n", ctx.get_indent(), name));
                 ctx.push_indent();
                 for field in fields {

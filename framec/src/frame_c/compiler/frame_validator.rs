@@ -1483,12 +1483,9 @@ pub fn typescript_global_collision_rename(name: &str) -> Option<String> {
     }
 }
 
-/// Convenience function to validate Frame source code via the V4
-/// pipeline. The legacy implementation went through `FrameParser` +
-/// `validate_with_arcanum` directly; the V4 pipeline runs the same
-/// validator (plus target-specific checks and the const/E615 pass
-/// that the legacy parser couldn't represent), so this delegates to
-/// it. Used only by this module's unit tests today.
+/// Convenience function to validate Frame source code. Runs the full
+/// V4 pipeline (parse + validate + codegen) and surfaces any errors.
+/// Used only by this module's unit tests.
 pub fn validate_frame_source(
     source: &str,
     target: TargetLanguage,
@@ -1637,11 +1634,8 @@ mod tests {
 
     #[test]
     fn test_e501_gdscript_get_collision() {
-        // Use the simple bare-statement body shape that the legacy
-        // FrameParser groks (the V4 `@@:(...)` context-return syntax
-        // isn't handled by the legacy parser path used by the unit
-        // tests). The validator only inspects interface declarations
-        // and method names, so the body shape doesn't matter.
+        // The validator only inspects interface declarations and method
+        // names, so the handler body shape doesn't matter.
         let source = r#"
 @@system Robot {
     interface:
@@ -2285,11 +2279,7 @@ mod tests {
         assert_eq!(e604, 1, "expected exactly 1 E604, got {:?}", errs);
     }
 
-    /// Run the V4 pipeline (which understands `const`) and return the error codes.
-    /// The legacy `validate_for_target` helper above uses `FrameParser`, which
-    /// hardcodes `is_const: false` and so cannot exercise E615.
-    /// `validate_only` mode also routes through `FrameParser`, so use Production
-    /// mode which goes through `compile_ast_based` and the V4 pipeline parser.
+    /// Run the V4 pipeline and return the error codes.
     fn v4_codes(source: &str) -> Vec<String> {
         use crate::frame_c::compiler::pipeline::compile_module;
         use crate::frame_c::compiler::pipeline::config::PipelineConfig;

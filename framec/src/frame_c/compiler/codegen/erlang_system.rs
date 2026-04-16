@@ -1265,8 +1265,7 @@ pub(crate) fn generate_erlang_system(
     };
     let mut record_overrides: Vec<String> = Vec::new();
     // Domain field overrides for fields whose initializer references a
-    // header param. The structured `initializer_text` slot is the
-    // canonical source — no more `.find(':')` cascade on raw_code.
+    // header param.
     for var in &system.domain {
         if let Some(init_expr) = &var.initializer_text {
             if raw_references_param(init_expr) {

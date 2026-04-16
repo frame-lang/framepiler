@@ -602,8 +602,6 @@ impl CppBackend {
 
     /// Emit a single C++ field declaration line:
     ///   `<indent>[const ]<type> <name>[ = <init>];\n`
-    /// Driven entirely by the structured `Field` slots — no longer
-    /// consumes the transitional `raw_code` bridge.
     fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
         let const_kw = if field.is_const { "const " } else { "" };
         let type_str = field

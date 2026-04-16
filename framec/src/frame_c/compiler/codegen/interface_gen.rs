@@ -1907,7 +1907,7 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    for (int i = 0; i < __stack.length(); i++) { __instance._state_stack.add(__deserComp(__stack.get(i))); }\n");
             restore_body.push_str("}\n");
 
-            // Restore domain vars — detect type from raw_code if available
+            // Restore domain vars
             for var in &system.domain {
                 let java_type = match &var.var_type {
                     crate::frame_c::compiler::frame_ast::Type::Custom(t) => java_map_type(t).leak(),

@@ -331,33 +331,6 @@ pub(crate) fn convert_literal(lit: &Literal) -> CodegenNode {
     }
 }
 
-/// Extract type from raw domain declaration
-/// Handles formats: "name: type = init" (Frame) or "type name = init" (C-style)
-pub(crate) fn extract_type_from_raw_domain(raw_code: &Option<String>, name: &str) -> String {
-    match raw_code {
-        Some(code) => {
-            let code = code.trim();
-
-            // Try Frame-style: "name: type = init" or "name: type"
-            if let Some(colon_pos) = code.find(':') {
-                let before_colon = &code[..colon_pos].trim();
-                // Verify it's the variable name before the colon
-                if before_colon.ends_with(name) || *before_colon == name {
-                    let after_colon = &code[colon_pos + 1..];
-                    // Extract type until '=' or end of line
-                    let type_end = after_colon.find('=').unwrap_or(after_colon.len());
-                    return after_colon[..type_end].trim().to_string();
-                }
-            }
-
-            // Try C-style: "type name = init" - first word is type
-            let first_word = code.split_whitespace().next().unwrap_or("");
-            first_word.to_string()
-        }
-        None => String::new(),
-    }
-}
-
 /// Check if type string represents an integer type
 pub(crate) fn is_int_type(type_str: &str) -> bool {
     matches!(

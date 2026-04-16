@@ -631,9 +631,8 @@ mod tests {
         ValidationContext::new(&CONFIG)
     }
 
-    /// Build a FrameAst::Module from raw source via the V4 stages
-    /// (segmenter + pipeline_parser). Used to feed `SemanticPass.run`
-    /// directly without dragging in the legacy FrameParser.
+    /// Build a FrameAst::Module from raw source via segmenter +
+    /// pipeline_parser. Used to feed `SemanticPass.run` directly.
     fn parse_module_v4(source: &str) -> FrameAst {
         let bytes = source.as_bytes();
         let source_map = segmenter::segment_source(bytes, TargetLanguage::Python3)

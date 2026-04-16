@@ -94,21 +94,9 @@ pub fn validate_module_with_mode(
     use crate::frame_c::compiler::pipeline::config::PipelineConfig;
     use crate::frame_c::compiler::validator::ValidationIssue;
 
-    // Delegate to the V4 pipeline. `compile_ast_based` runs the full
-    // segmenter → pipeline_parser → arcanum → frame_validator chain,
-    // which now covers every E-code the legacy validator emitted (see
-    // the V4 frame_validator.rs docstring for the complete catalog).
-    // The generated code from the codegen stage is discarded — for
-    // validation-only use cases this is the cost of running validation
-    // through the same pipeline that powers `framec compile`, in
-    // exchange for a single source of truth for what counts as a
-    // valid Frame source.
-    //
-    // The legacy `_strict_native` flag is intentionally ignored — the
-    // V4 pipeline runs the equivalent native-syntax checks as part of
-    // every backend's codegen (any malformed Frame statement that
-    // would have failed facade-expansion in the legacy path will
-    // surface as a codegen error here).
+    // Run the full V4 pipeline and extract validation errors.
+    // The `_strict_native` flag is unused — native-syntax checks
+    // run as part of every backend's codegen stage.
     let config = PipelineConfig::production(lang);
     let result = compile_ast_based(content_str.as_bytes(), &config)?;
 

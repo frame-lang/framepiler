@@ -564,19 +564,6 @@ impl PhpBackend {
         }
     }
 
-    #[allow(dead_code)]
-    fn map_type(&self, t: &str) -> String {
-        match t {
-            "Any" => "mixed".to_string(),
-            "string" | "String" | "str" => "string".to_string(),
-            "int" | "i32" | "i64" | "number" => "int".to_string(),
-            "float" | "f64" | "f32" => "float".to_string(),
-            "bool" | "boolean" => "bool".to_string(),
-            "void" => "void".to_string(),
-            other => other.to_string(),
-        }
-    }
-
     fn needs_semicolon(&self, node: &CodegenNode) -> bool {
         !matches!(
             node,
