@@ -66,39 +66,7 @@ impl LanguageBackend for RustBackend {
                 result.push_str(&format!("{}pub struct {} {{\n", ctx.get_indent(), name));
                 ctx.push_indent();
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        // V4: Native code pass-through (with visibility)
-                        // For Rust struct fields, strip initializer (Rust doesn't allow `= value` in struct defs)
-                        let vis = if matches!(field.visibility, Visibility::Public) {
-                            "pub "
-                        } else {
-                            ""
-                        };
-                        let field_decl = if let Some(eq_pos) = raw_code.find('=') {
-                            raw_code[..eq_pos].trim_end()
-                        } else {
-                            raw_code.as_str()
-                        };
-                        result.push_str(&format!("{}{}{},\n", ctx.get_indent(), vis, field_decl));
-                    } else {
-                        let vis = if matches!(field.visibility, Visibility::Public) {
-                            "pub "
-                        } else {
-                            ""
-                        };
-                        let type_ann = field
-                            .type_annotation
-                            .as_ref()
-                            .map(|t| self.convert_type(t))
-                            .unwrap_or_else(|| "()".to_string());
-                        result.push_str(&format!(
-                            "{}{}{}: {},\n",
-                            ctx.get_indent(),
-                            vis,
-                            field.name,
-                            type_ann
-                        ));
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n\n", ctx.get_indent()));
@@ -704,6 +672,31 @@ impl RustBackend {
             }
             _ => true,
         }
+    }
+
+    /// Emit a single Rust struct-field declaration line:
+    ///   `<indent>[pub ]<name>: <type>,\n`
+    ///
+    /// Rust struct fields don't allow declaration-scope initializers
+    /// (`pub value: i64 = 0,` is a parse error) — initializers go in
+    /// the struct literal inside the constructor. So `field.initializer`
+    /// is intentionally not consumed here.
+    ///
+    /// `convert_type` runs over the type slot to map Frame-canonical
+    /// names (`int`, `Any`, `List`) to Rust forms (`i64`,
+    /// `Box<dyn std::any::Any>`, `Vec<...>`). User-supplied
+    /// Rust-canonical types (`i64`, `String`) pass through identity.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let vis = if matches!(field.visibility, Visibility::Public) {
+            "pub "
+        } else {
+            ""
+        };
+        let type_str = match &field.type_annotation {
+            Some(t) => self.convert_type(t),
+            None => "()".to_string(),
+        };
+        format!("{}{}{}: {},\n", ctx.get_indent(), vis, field.name, type_str)
     }
 }
 
