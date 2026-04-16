@@ -19,8 +19,8 @@
 <title>Init</title>
 <path fill="azure" stroke="none" d="M115,-318.58C115,-318.58 12,-318.58 12,-318.58 6,-318.58 0,-312.58 0,-306.58 0,-306.58 0,-252.33 0,-252.33 0,-246.33 6,-240.33 12,-240.33 12,-240.33 115,-240.33 115,-240.33 121,-240.33 127,-246.33 127,-252.33 127,-252.33 127,-306.58 127,-306.58 127,-312.58 121,-318.58 115,-318.58"/>
 <text xml:space="preserve" text-anchor="start" x="53" y="-298.28" font-family="Times,serif" font-weight="bold" font-size="14.00">Init</text>
-<text xml:space="preserve" text-anchor="start" x="12.5" y="-273.08" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;type_char(c: str)</text>
-<text xml:space="preserve" text-anchor="start" x="32" y="-261.83" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;undo()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-273.08" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;type_char(c: str)</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-261.83" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;undo()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-250.58" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;get_buffer() &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <polygon fill="#00688b" stroke="#00688b" points="0,-288.08 0,-288.08 127,-288.08 127,-288.08 0,-288.08"/>
 <path fill="none" stroke="#00688b" d="M12,-240.33C12,-240.33 115,-240.33 115,-240.33 121,-240.33 127,-246.33 127,-252.33 127,-252.33 127,-306.58 127,-306.58 127,-312.58 121,-318.58 115,-318.58 115,-318.58 12,-318.58 12,-318.58 6,-318.58 0,-312.58 0,-306.58 0,-306.58 0,-252.33 0,-252.33 0,-246.33 6,-240.33 12,-240.33"/>
@@ -36,9 +36,9 @@
 <title>Editing</title>
 <path fill="azure" stroke="none" d="M115,-187.83C115,-187.83 12,-187.83 12,-187.83 6,-187.83 0,-181.83 0,-175.83 0,-175.83 0,-87.83 0,-87.83 0,-81.83 6,-75.83 12,-75.83 12,-75.83 115,-75.83 115,-75.83 121,-75.83 127,-81.83 127,-87.83 127,-87.83 127,-175.83 127,-175.83 127,-181.83 121,-187.83 115,-187.83"/>
 <text xml:space="preserve" text-anchor="start" x="42.12" y="-167.53" font-family="Times,serif" font-weight="bold" font-size="14.00">Editing</text>
-<text xml:space="preserve" text-anchor="start" x="22.62" y="-142.33" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;$&gt;() [enter]</text>
-<text xml:space="preserve" text-anchor="start" x="12.5" y="-131.08" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;type_char(c: str)</text>
-<text xml:space="preserve" text-anchor="start" x="32" y="-119.83" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;undo()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-142.33" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;$&gt;() [enter]</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-131.08" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;type_char(c: str)</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-119.83" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;undo()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-108.58" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;get_buffer() &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-86.08" font-family="Times,serif" font-size="9.00" fill="#666666"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;buffer: str &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <polygon fill="#00688b" stroke="#00688b" points="0,-157.33 0,-157.33 127,-157.33 127,-157.33 0,-157.33"/>

@@ -19,9 +19,9 @@
 <title>Active</title>
 <path fill="azure" stroke="none" d="M145,-209C145,-209 12,-209 12,-209 6,-209 0,-203 0,-197 0,-197 0,-120.25 0,-120.25 0,-114.25 6,-108.25 12,-108.25 12,-108.25 145,-108.25 145,-108.25 151,-108.25 157,-114.25 157,-120.25 157,-120.25 157,-197 157,-197 157,-203 151,-209 145,-209"/>
 <text xml:space="preserve" text-anchor="start" x="60.12" y="-188.7" font-family="Times,serif" font-weight="bold" font-size="14.00">Active</text>
-<text xml:space="preserve" text-anchor="start" x="39.88" y="-163.5" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;calibrate()</text>
-<text xml:space="preserve" text-anchor="start" x="42.12" y="-152.25" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;reading()</text>
-<text xml:space="preserve" text-anchor="start" x="21.12" y="-141" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;trigger_shutdown()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-163.5" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;calibrate()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-152.25" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;reading()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-141" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;trigger_shutdown()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-129.75" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;attempt_post_shutdown()</text>
 <text xml:space="preserve" text-anchor="start" x="32.38" y="-118.5" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;status() &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <polygon fill="#00688b" stroke="#00688b" points="0,-178.5 0,-178.5 157,-178.5 157,-178.5 0,-178.5"/>

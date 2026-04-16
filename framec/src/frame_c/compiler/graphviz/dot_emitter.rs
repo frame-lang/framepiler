@@ -184,7 +184,7 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
             }
         }
 
-        let body_text = handler_lines.join("<br/>\n");
+        let body_text = handler_lines.join("<br ALIGN=\"LEFT\"/>\n");
         // Indent each line
         for (i, line) in body_text.split('\n').enumerate() {
             if i > 0 {
@@ -221,7 +221,7 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
             out,
             "{}            {}",
             pad,
-            var_lines.join(&format!("<br/>\n{}            ", pad))
+            var_lines.join(&format!("<br ALIGN=\"LEFT\"/>\n{}            ", pad))
         )
         .ok();
         writeln!(out).ok();

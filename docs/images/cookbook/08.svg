@@ -35,9 +35,9 @@
 <title>Dialog</title>
 <path fill="azure" stroke="none" d="M103,-187.83C103,-187.83 12,-187.83 12,-187.83 6,-187.83 0,-181.83 0,-175.83 0,-175.83 0,-87.83 0,-87.83 0,-81.83 6,-75.83 12,-75.83 12,-75.83 103,-75.83 103,-75.83 109,-75.83 115,-81.83 115,-87.83 115,-87.83 115,-175.83 115,-175.83 115,-181.83 109,-187.83 103,-187.83"/>
 <text xml:space="preserve" text-anchor="start" x="38.75" y="-167.53" font-family="Times,serif" font-weight="bold" font-size="14.00">Dialog</text>
-<text xml:space="preserve" text-anchor="start" x="16.62" y="-142.33" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;$&gt;() [enter]</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-142.33" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;$&gt;() [enter]</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-131.08" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;open(name: str)</text>
-<text xml:space="preserve" text-anchor="start" x="26" y="-119.83" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;close()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-119.83" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;close()</text>
 <text xml:space="preserve" text-anchor="start" x="8.75" y="-108.58" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;current() &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-86.08" font-family="Times,serif" font-size="9.00" fill="#666666"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;name: str &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <polygon fill="#00688b" stroke="#00688b" points="0,-157.33 0,-157.33 115,-157.33 115,-157.33 0,-157.33"/>

@@ -537,6 +537,89 @@ impl<'a> Lexer<'a> {
                     return Ok(());
                 }
 
+                // Mid-line Frame transition: -> $State / -> pop$ / -> => $State
+                // Disambiguated from native -> (C++ ptr->member) by requiring
+                // $State or pop$ after whitespace.
+                b'-' if self.cursor + 1 < end && self.source[self.cursor + 1] == b'>' => {
+                    if self.peek_frame_transition_target(self.cursor + 2, end) {
+                        let save = self.cursor;
+                        if native_start < save {
+                            let text = String::from_utf8_lossy(&self.source[native_start..save])
+                                .to_string();
+                            self.emit(Token::NativeCode(text), native_start, save);
+                        }
+                        if let Ok(Some(frame_tokens)) = self.lex_sol_transition(save, end) {
+                            for tok in frame_tokens {
+                                self.pending.push_back(tok);
+                            }
+                            return Ok(());
+                        }
+                        // Shouldn't reach here since peek confirmed target, but be safe
+                        self.cursor = save + 1;
+                        continue;
+                    }
+                    self.cursor += 1;
+                    continue;
+                }
+
+                // Mid-line Frame forward: => $^ or => $State
+                b'=' if self.cursor + 1 < end && self.source[self.cursor + 1] == b'>' => {
+                    let mut k = self.cursor + 2;
+                    while k < end && (self.source[k] == b' ' || self.source[k] == b'\t') {
+                        k += 1;
+                    }
+                    if k < end && self.source[k] == b'$' {
+                        let save = self.cursor;
+                        if native_start < save {
+                            let text = String::from_utf8_lossy(&self.source[native_start..save])
+                                .to_string();
+                            self.emit(Token::NativeCode(text), native_start, save);
+                        }
+                        if let Ok(Some(frame_tokens)) = self.lex_sol_forward(save, end) {
+                            for tok in frame_tokens {
+                                self.pending.push_back(tok);
+                            }
+                            return Ok(());
+                        }
+                        self.cursor = save + 1;
+                        continue;
+                    }
+                    self.cursor += 1;
+                    continue;
+                }
+
+                // Mid-line push$ / pop$
+                b'p' if self.cursor + 4 < end => {
+                    if &self.source[self.cursor..self.cursor + 5] == b"push$" {
+                        let save = self.cursor;
+                        if native_start < save {
+                            let text = String::from_utf8_lossy(&self.source[native_start..save])
+                                .to_string();
+                            self.emit(Token::NativeCode(text), native_start, save);
+                        }
+                        self.cursor += 5;
+                        self.emit(Token::PushState, save, self.cursor);
+                        self.skip_to_newline(end);
+                        return Ok(());
+                    }
+                    if self.cursor + 3 < end
+                        && &self.source[self.cursor..self.cursor + 4] == b"pop$"
+                    {
+                        let save = self.cursor;
+                        if native_start < save {
+                            let text = String::from_utf8_lossy(&self.source[native_start..save])
+                                .to_string();
+                            self.emit(Token::NativeCode(text), native_start, save);
+                        }
+                        self.cursor += 4;
+                        self.emit(Token::PopState, save, self.cursor);
+                        self.skip_to_newline(end);
+                        return Ok(());
+                    }
+                    self.cursor += 1;
+                    continue;
+                }
+
                 _ => {
                     self.cursor += 1;
                 }
@@ -666,7 +749,94 @@ impl<'a> Lexer<'a> {
         Ok(None)
     }
 
-    /// Lex a transition statement at SOL: -> $State, -> (args) $State, -> pop$, -> => $State
+    /// Peek past `->` (+ optional whitespace, enter args, label, `=> `) to confirm
+    /// a Frame transition target (`$State`, `pop$`) follows.  Returns `true` when
+    /// the `->` is almost certainly a Frame transition, `false` when it's more
+    /// likely a native operator (C++ `ptr->member`, Rust closure `|x| -> T`, etc.).
+    ///
+    /// `after_arrow` is the byte position immediately after `>` in `->`.
+    fn peek_frame_transition_target(&self, after_arrow: usize, end: usize) -> bool {
+        let mut k = after_arrow;
+        // Skip whitespace
+        while k < end && (self.source[k] == b' ' || self.source[k] == b'\t') {
+            k += 1;
+        }
+        if k >= end {
+            return false;
+        }
+        // -> => $State (transition forward)
+        if k + 1 < end && self.source[k] == b'=' && self.source[k + 1] == b'>' {
+            k += 2;
+            while k < end && (self.source[k] == b' ' || self.source[k] == b'\t') {
+                k += 1;
+            }
+            return k < end && self.source[k] == b'$';
+        }
+        // -> pop$
+        if k + 3 < end
+            && self.source[k] == b'p'
+            && self.source[k + 1] == b'o'
+            && self.source[k + 2] == b'p'
+            && self.source[k + 3] == b'$'
+        {
+            return true;
+        }
+        // -> (args) ...  — skip balanced parens, then look for $
+        if self.source[k] == b'(' {
+            if let Some(k2) = self
+                .skipper
+                .balanced_paren_end(self.source, k, end)
+            {
+                k = k2;
+                while k < end && (self.source[k] == b' ' || self.source[k] == b'\t') {
+                    k += 1;
+                }
+                // After (args), skip optional "label"
+                if k < end && (self.source[k] == b'"' || self.source[k] == b'\'') {
+                    let quote = self.source[k];
+                    k += 1;
+                    while k < end && self.source[k] != quote {
+                        if self.source[k] == b'\\' && k + 1 < end {
+                            k += 2;
+                        } else {
+                            k += 1;
+                        }
+                    }
+                    if k < end {
+                        k += 1;
+                    }
+                    while k < end && (self.source[k] == b' ' || self.source[k] == b'\t') {
+                        k += 1;
+                    }
+                }
+                return k < end && self.source[k] == b'$';
+            }
+            return false;
+        }
+        // -> "label" $State — skip label, check for $
+        if self.source[k] == b'"' || self.source[k] == b'\'' {
+            let quote = self.source[k];
+            k += 1;
+            while k < end && self.source[k] != quote {
+                if self.source[k] == b'\\' && k + 1 < end {
+                    k += 2;
+                } else {
+                    k += 1;
+                }
+            }
+            if k < end {
+                k += 1;
+            }
+            while k < end && (self.source[k] == b' ' || self.source[k] == b'\t') {
+                k += 1;
+            }
+            return k < end && self.source[k] == b'$';
+        }
+        // -> $State (simple)
+        self.source[k] == b'$'
+    }
+
+    /// Lex a transition statement: -> $State, -> (args) $State, -> pop$, -> => $State
     fn lex_sol_transition(
         &mut self,
         arrow_pos: usize,

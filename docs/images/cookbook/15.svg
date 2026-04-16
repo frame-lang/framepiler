@@ -19,9 +19,9 @@
 <title>Released</title>
 <path fill="azure" stroke="none" d="M124.75,-276.5C124.75,-276.5 12,-276.5 12,-276.5 6,-276.5 0,-270.5 0,-264.5 0,-264.5 0,-176.5 0,-176.5 0,-170.5 6,-164.5 12,-164.5 12,-164.5 124.75,-164.5 124.75,-164.5 130.75,-164.5 136.75,-170.5 136.75,-176.5 136.75,-176.5 136.75,-264.5 136.75,-264.5 136.75,-270.5 130.75,-276.5 124.75,-276.5"/>
 <text xml:space="preserve" text-anchor="start" x="42.88" y="-256.2" font-family="Times,serif" font-weight="bold" font-size="14.00">Released</text>
-<text xml:space="preserve" text-anchor="start" x="23" y="-231" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;raw_high()</text>
-<text xml:space="preserve" text-anchor="start" x="24.5" y="-219.75" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;raw_low()</text>
-<text xml:space="preserve" text-anchor="start" x="34.62" y="-208.5" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;tick()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-231" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;raw_high()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-219.75" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;raw_low()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-208.5" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;tick()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-197.25" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;is_pressed() &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-174.75" font-family="Times,serif" font-size="9.00" fill="#666666"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;stable_count: int &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <polygon fill="#00688b" stroke="#00688b" points="0,-246 0,-246 136.75,-246 136.75,-246 0,-246"/>
@@ -39,9 +39,9 @@
 <title>Pressed</title>
 <path fill="azure" stroke="none" d="M124.75,-112C124.75,-112 12,-112 12,-112 6,-112 0,-106 0,-100 0,-100 0,-12 0,-12 0,-6 6,0 12,0 12,0 124.75,0 124.75,0 130.75,0 136.75,-6 136.75,-12 136.75,-12 136.75,-100 136.75,-100 136.75,-106 130.75,-112 124.75,-112"/>
 <text xml:space="preserve" text-anchor="start" x="46.25" y="-91.7" font-family="Times,serif" font-weight="bold" font-size="14.00">Pressed</text>
-<text xml:space="preserve" text-anchor="start" x="24.5" y="-66.5" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;raw_low()</text>
-<text xml:space="preserve" text-anchor="start" x="23" y="-55.25" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;raw_high()</text>
-<text xml:space="preserve" text-anchor="start" x="34.62" y="-44" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;tick()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-66.5" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;raw_low()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-55.25" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;raw_high()</text>
+<text xml:space="preserve" text-anchor="start" x="8" y="-44" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;tick()</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-32.75" font-family="Times,serif" font-size="10.00"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;is_pressed() &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <text xml:space="preserve" text-anchor="start" x="8" y="-10.25" font-family="Times,serif" font-size="9.00" fill="#666666"> &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;stable_count: int &#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text>
 <polygon fill="#00688b" stroke="#00688b" points="0,-81.5 0,-81.5 136.75,-81.5 136.75,-81.5 0,-81.5"/>
