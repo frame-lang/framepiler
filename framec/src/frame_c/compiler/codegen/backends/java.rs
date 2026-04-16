@@ -66,25 +66,7 @@ impl LanguageBackend for JavaBackend {
                 ctx.push_indent();
 
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        let vis = self.emit_visibility(field.visibility);
-                        result.push_str(&format!("{}{} {};\n", ctx.get_indent(), vis, raw_code));
-                    } else {
-                        let vis = self.emit_visibility(field.visibility);
-                        let type_ann = self.map_type(
-                            field
-                                .type_annotation
-                                .as_ref()
-                                .unwrap_or(&"Object".to_string()),
-                        );
-                        result.push_str(&format!(
-                            "{}{} {} {};\n",
-                            ctx.get_indent(),
-                            vis,
-                            type_ann,
-                            field.name
-                        ));
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
                 if !fields.is_empty() && !methods.is_empty() {
                     result.push('\n');
@@ -537,6 +519,40 @@ impl JavaBackend {
             Visibility::Private => "private",
             Visibility::Protected => "protected",
         }
+    }
+
+    /// Emit a single Java field declaration line:
+    ///   `<indent><vis> [final ]<type> <name>[ = <init>];\n`
+    ///
+    /// `final` is emitted only when the field has an initializer at
+    /// declaration scope. When the init was stripped (because it
+    /// references a constructor param), the constructor body assigns
+    /// the field — incompatible with `final`.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let vis = self.emit_visibility(field.visibility);
+        let final_kw = if field.is_const && field.initializer.is_some() {
+            "final "
+        } else {
+            ""
+        };
+        let type_str = field
+            .type_annotation
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("Object");
+        let init_suffix = match &field.initializer {
+            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            None => String::new(),
+        };
+        format!(
+            "{}{} {}{} {}{};\n",
+            ctx.get_indent(),
+            vis,
+            final_kw,
+            type_str,
+            field.name,
+            init_suffix
+        )
     }
 
     fn map_type(&self, t: &str) -> String {
