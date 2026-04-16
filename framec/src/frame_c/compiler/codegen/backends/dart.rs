@@ -79,68 +79,7 @@ impl LanguageBackend for DartBackend {
 
                 // Fields
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        // Dart non-nullable fields require either an
-                        // initializer, a `late` modifier, or assignment
-                        // in every constructor. When the synthesized
-                        // raw_code has a typed declaration without `=`
-                        // (the init was stripped because it referenced
-                        // a system param), prepend `late ` so the
-                        // constructor body's `this.field = init;` is the
-                        // legal initialization point.
-                        let trimmed = raw_code.trim();
-                        let needs_late = !trimmed.contains('=')
-                            && !trimmed.starts_with("late ")
-                            && !trimmed.starts_with("static ")
-                            && trimmed.contains(' ');
-                        if needs_late {
-                            result.push_str(&format!("{}late {};\n", ctx.get_indent(), raw_code));
-                        } else {
-                            result.push_str(&format!("{}{};\n", ctx.get_indent(), raw_code));
-                        }
-                    } else {
-                        let static_kw = if field.is_static { "static " } else { "" };
-                        let converted_type = field
-                            .type_annotation
-                            .as_ref()
-                            .map(|t| self.convert_type(t))
-                            .unwrap_or_else(|| "dynamic".to_string());
-                        let init = field
-                            .initializer
-                            .as_ref()
-                            .map(|i| format!(" = {}", self.emit(i, ctx)))
-                            .unwrap_or_default();
-
-                        // Dart uses "Type name" for private fields (prefix with _)
-                        let vis_prefix = match field.visibility {
-                            Visibility::Private => "_",
-                            _ => "",
-                        };
-                        let field_name = if vis_prefix.is_empty() || field.name.starts_with('_') {
-                            field.name.clone()
-                        } else {
-                            format!("_{}", field.name)
-                        };
-
-                        // Dart: non-nullable fields without initializer need 'late' keyword
-                        let is_nullable =
-                            converted_type.ends_with('?') || converted_type == "dynamic";
-                        let late_kw = if init.is_empty() && !is_nullable && !field.is_static {
-                            "late "
-                        } else {
-                            ""
-                        };
-
-                        result.push_str(&format!(
-                            "{}{}{}{} {}{};\n",
-                            ctx.get_indent(),
-                            static_kw,
-                            late_kw,
-                            converted_type,
-                            field_name,
-                            init
-                        ));
-                    }
+                    result.push_str(&self.emit_field(field, ctx));
                 }
 
                 if !fields.is_empty() && !methods.is_empty() {
@@ -748,6 +687,51 @@ impl DartBackend {
                 | CodegenNode::Comment { .. }
                 | CodegenNode::NativeBlock { .. }
                 | CodegenNode::Empty
+        )
+    }
+
+    /// Emit a single Dart class-field declaration line:
+    ///   `<indent>[static ][late ]<type> <name>[ = <init>];\n`
+    ///
+    /// `late` is added when the field has no declaration-scope
+    /// initializer AND the type is non-nullable AND the field isn't
+    /// static — Dart requires non-nullable fields to have a definite
+    /// init point, and the constructor body's `this.field = ...`
+    /// satisfies that only with `late`.
+    ///
+    /// Private fields (Frame's `Visibility::Private`) get a leading
+    /// underscore added — Dart's library-private convention. Names
+    /// already starting with `_` are left as-is.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let static_kw = if field.is_static { "static " } else { "" };
+        let type_str = match &field.type_annotation {
+            Some(t) => self.convert_type(t),
+            None => "dynamic".to_string(),
+        };
+        let init_suffix = match &field.initializer {
+            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            None => String::new(),
+        };
+        let field_name =
+            if matches!(field.visibility, Visibility::Private) && !field.name.starts_with('_') {
+                format!("_{}", field.name)
+            } else {
+                field.name.clone()
+            };
+        let is_nullable = type_str.ends_with('?') || type_str == "dynamic";
+        let late_kw = if init_suffix.is_empty() && !is_nullable && !field.is_static {
+            "late "
+        } else {
+            ""
+        };
+        format!(
+            "{}{}{}{} {}{};\n",
+            ctx.get_indent(),
+            static_kw,
+            late_kw,
+            type_str,
+            field_name,
+            init_suffix
         )
     }
 }
