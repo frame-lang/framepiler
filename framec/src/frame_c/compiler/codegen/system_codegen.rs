@@ -748,13 +748,16 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         // but ONLY when the init wasn't stripped from the field declaration.
         // If synthesize_field_raw stripped it (because it references a param),
         // the init belongs in the constructor body, not the field declaration.
+        // Apply expand_tagged_in_domain so backends consuming this slot get
+        // the same fully-expanded init text that raw_code carries.
         let init_text_str = domain_var.initializer_text.as_deref().unwrap_or("");
         let strip_unconditionally =
             matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C);
         let strip_collision = init_references_param(init_text_str, &sys_param_names);
         if !(strip_unconditionally || strip_collision) {
             if let Some(ref init_text) = &domain_var.initializer_text {
-                field = field.with_initializer(CodegenNode::Ident(init_text.clone()));
+                let expanded_init = expand_tagged_in_domain(init_text, syntax.language);
+                field = field.with_initializer(CodegenNode::Ident(expanded_init));
             }
         }
 

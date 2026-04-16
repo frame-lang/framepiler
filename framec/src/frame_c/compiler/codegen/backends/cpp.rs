@@ -73,21 +73,7 @@ impl LanguageBackend for CppBackend {
                     result.push_str("private:\n");
                     ctx.push_indent();
                     for field in &private_fields {
-                        if let Some(ref raw_code) = field.raw_code {
-                            result.push_str(&format!("{}{};\n", ctx.get_indent(), raw_code));
-                        } else {
-                            let type_ann = field
-                                .type_annotation
-                                .as_ref()
-                                .unwrap_or(&"void*".to_string())
-                                .clone();
-                            result.push_str(&format!(
-                                "{}{} {};\n",
-                                ctx.get_indent(),
-                                type_ann,
-                                field.name
-                            ));
-                        }
+                        result.push_str(&self.emit_field(field, ctx));
                     }
                     if !private_fields.is_empty() && !private_methods.is_empty() {
                         result.push('\n');
@@ -125,21 +111,7 @@ impl LanguageBackend for CppBackend {
                     result.push_str("public:\n");
                     ctx.push_indent();
                     for field in &public_fields {
-                        if let Some(ref raw_code) = field.raw_code {
-                            result.push_str(&format!("{}{};\n", ctx.get_indent(), raw_code));
-                        } else {
-                            let type_ann = field
-                                .type_annotation
-                                .as_ref()
-                                .unwrap_or(&"void*".to_string())
-                                .clone();
-                            result.push_str(&format!(
-                                "{}{} {};\n",
-                                ctx.get_indent(),
-                                type_ann,
-                                field.name
-                            ));
-                        }
+                        result.push_str(&self.emit_field(field, ctx));
                     }
                     if !public_fields.is_empty() && !public_methods.is_empty() {
                         result.push('\n');
@@ -625,6 +597,31 @@ impl CppBackend {
                 | CodegenNode::Comment { .. }
                 | CodegenNode::NativeBlock { .. }
                 | CodegenNode::Empty
+        )
+    }
+
+    /// Emit a single C++ field declaration line:
+    ///   `<indent>[const ]<type> <name>[ = <init>];\n`
+    /// Driven entirely by the structured `Field` slots — no longer
+    /// consumes the transitional `raw_code` bridge.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
+        let const_kw = if field.is_const { "const " } else { "" };
+        let type_str = field
+            .type_annotation
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("void*");
+        let init_suffix = match &field.initializer {
+            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            None => String::new(),
+        };
+        format!(
+            "{}{}{} {}{};\n",
+            ctx.get_indent(),
+            const_kw,
+            type_str,
+            field.name,
+            init_suffix
         )
     }
 }
