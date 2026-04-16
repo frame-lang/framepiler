@@ -2124,12 +2124,11 @@ pub(crate) fn generate_frame_expansion(
             }
         }
         FrameSegmentKind::StackPush => {
-            // Check if this is a push-then-transition: push$ -> $State
-            let has_transition = segment_text.contains("->");
-            let target = if has_transition {
-                extract_transition_target(&segment_text)
-            } else {
-                String::new()
+            let target = match metadata {
+                SegmentMetadata::StackPush {
+                    transition_target: Some(t),
+                } => t.clone(),
+                _ => String::new(),
             };
 
             // push$ saves a REFERENCE to the current compartment on the
@@ -3667,53 +3666,6 @@ pub(crate) fn extract_dot_key(text: &str, prefix: &str) -> String {
         }
     }
     "".to_string()
-}
-
-/// Extract transition target from transition text
-pub(crate) fn extract_transition_target(text: &str) -> String {
-    // Find $StateName after -> in the transition text.
-    // Syntax: (exit_args)? -> (enter_args)? $State(state_args)?
-    //
-    // The target $State is preceded by $ and followed by ( or whitespace/EOL.
-    // Enter args in parens may contain $ (e.g., PHP $name). We find the
-    // LAST $Identifier that starts with an uppercase letter — state names
-    // are always PascalCase, while variables are lowercase.
-    if let Some(arrow_pos) = text.find("->") {
-        let after_arrow = &text[arrow_pos + 2..];
-        // Find $Uppercase — the state target. Scan from the end to
-        // prefer the last match (handles edge cases with $ in args).
-        let bytes = after_arrow.as_bytes();
-        let mut best_start = None;
-        for i in 0..bytes.len() {
-            if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_uppercase() {
-                best_start = Some(i + 1);
-            }
-        }
-        if let Some(start) = best_start {
-            let after_dollar = &after_arrow[start..];
-            let end = after_dollar
-                .find(|c: char| !c.is_alphanumeric() && c != '_')
-                .unwrap_or(after_dollar.len());
-            return after_dollar[..end].to_string();
-        }
-    }
-    // Fallback: last $Uppercase in full text
-    let bytes = text.as_bytes();
-    let mut best_start = None;
-    for i in 0..bytes.len() {
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_uppercase() {
-            best_start = Some(i + 1);
-        }
-    }
-    if let Some(start) = best_start {
-        let after_dollar = &text[start..];
-        let end = after_dollar
-            .find(|c: char| !c.is_alphanumeric() && c != '_')
-            .unwrap_or(after_dollar.len());
-        after_dollar[..end].to_string()
-    } else {
-        "Unknown".to_string()
-    }
 }
 
 /// Extract state variable name from "$.varName"

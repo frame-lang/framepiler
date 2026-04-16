@@ -55,6 +55,8 @@ pub enum SegmentMetadata {
     ReturnCall { expr: String },
     /// `@@:return = expr` or `@@:return` (bare read)
     ContextReturn { assign_expr: Option<String> },
+    /// `push$` optionally followed by `-> $State` on the same line
+    StackPush { transition_target: Option<String> },
     /// Segments with no additional parsed content
     None,
 }

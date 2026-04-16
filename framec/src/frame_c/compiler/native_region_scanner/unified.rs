@@ -1403,14 +1403,35 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
             }
         }
 
+        FrameSegmentKind::StackPush => {
+            // Detect push-with-transition: `push$ -> $State`
+            let transition_target = if let Some(arrow_pos) = text.find("->") {
+                let after_arrow = &text[arrow_pos + 2..];
+                let bytes = after_arrow.as_bytes();
+                let mut target_start = None;
+                for i in 0..bytes.len() {
+                    if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_uppercase()
+                    {
+                        target_start = Some(i + 1);
+                    }
+                }
+                target_start.map(|start| {
+                    let after_dollar = &after_arrow[start..];
+                    let end = after_dollar
+                        .find(|c: char| !c.is_alphanumeric() && c != '_')
+                        .unwrap_or(after_dollar.len());
+                    after_dollar[..end].to_string()
+                })
+            } else {
+                None
+            };
+            SegmentMetadata::StackPush { transition_target }
+        }
+
         // --- Others ---
         FrameSegmentKind::Forward
-        | FrameSegmentKind::StackPush
         | FrameSegmentKind::StackPop
-        | FrameSegmentKind::ReturnStatement => {
-            // These are simple statements with no variable content
-            SegmentMetadata::None
-        }
+        | FrameSegmentKind::ReturnStatement => SegmentMetadata::None,
     }
 }
 
