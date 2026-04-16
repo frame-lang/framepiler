@@ -184,13 +184,17 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
             }
         }
 
-        // Each line is PRECEDED by <br ALIGN="LEFT"/> — including the first —
-        // because GraphViz's <br/> controls alignment of text AFTER it.
-        // Without a preceding <br/>, the first line defaults to centered.
-        // No indentation whitespace — GraphViz renders whitespace in <font> as text.
-        for line in &handler_lines {
-            write!(out, "<br ALIGN=\"LEFT\"/>{}", line).ok();
+        // First line emitted directly; subsequent lines preceded by
+        // <br ALIGN="LEFT"/> to left-align within the text block.
+        // No whitespace padding — GraphViz renders whitespace in <font> literally.
+        for (idx, line) in handler_lines.iter().enumerate() {
+            if idx > 0 {
+                write!(out, "<br ALIGN=\"LEFT\"/>").ok();
+            }
+            write!(out, "{}", line).ok();
         }
+        // Trailing <br ALIGN="LEFT"/> forces last line's alignment too
+        write!(out, "<br ALIGN=\"LEFT\"/>").ok();
         writeln!(out).ok();
 
         writeln!(out, "{}        </font></td></tr>", pad).ok();
@@ -216,9 +220,13 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
                 None => sv.name.clone(),
             })
             .collect();
-        for line in &var_lines {
-            write!(out, "<br ALIGN=\"LEFT\"/>{}", line).ok();
+        for (idx, line) in var_lines.iter().enumerate() {
+            if idx > 0 {
+                write!(out, "<br ALIGN=\"LEFT\"/>").ok();
+            }
+            write!(out, "{}", line).ok();
         }
+        write!(out, "<br ALIGN=\"LEFT\"/>").ok();
         writeln!(out).ok();
         writeln!(out, "{}        </font></td></tr>", pad).ok();
     }
@@ -239,10 +247,14 @@ fn emit_edge(edge: &TransitionEdge, parent_names: &HashSet<&str>, out: &mut Stri
         }
     };
 
-    // Build edge label
+    // Build edge label — use human-readable names for lifecycle events
     let label_text = match &edge.label {
         Some(label) => escape_html(label),
-        None => edge.event.clone(),
+        None => match edge.event.as_str() {
+            "$>" => "[enter]".to_string(),
+            "<$" => "[exit]".to_string(),
+            other => other.to_string(),
+        },
     };
     let label = match &edge.guard {
         Some(guard) => format!(" {} [{}] ", label_text, escape_html(guard)),
