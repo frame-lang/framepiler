@@ -338,17 +338,6 @@ impl Arcanum {
     }
 }
 
-pub fn build_arcanum_from_outline_bytes(bytes: &[u8], _start: usize) -> Arcanum {
-    // DEPRECATED: kept temporarily for compatibility; prefer build_arcanum_from_module_ast.
-    // For now, delegate to a ModuleAst-based builder using the default language
-    // assumptions of the outer pipeline (Python3 is sufficient for brace/indent).
-    let module = crate::frame_c::compiler::system_parser::SystemParser::parse_module(
-        bytes,
-        crate::frame_c::visitors::TargetLanguage::Python3,
-    );
-    build_arcanum_from_module_ast(bytes, &module)
-}
-
 /// Extract method names from interface, actions, or operations sections
 pub(crate) fn collect_methods_in_section(bytes: &[u8], span: &Span) -> HashSet<String> {
     let mut methods = HashSet::new();

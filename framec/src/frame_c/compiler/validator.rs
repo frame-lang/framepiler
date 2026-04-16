@@ -74,10 +74,10 @@ impl Validator {
         issues.extend(block_order_issues);
         let state_issues = self.validate_machine_state_headers_ast(bytes, &module_ast);
         issues.extend(state_issues);
-        // Collect coarse state names and build Arcanum symbol table.
-        let known_states = self.collect_machine_state_names(bytes, outline_start);
+        // Build Arcanum symbol table, then derive state names from it.
         let arcanum =
             crate::frame_c::compiler::arcanum::build_arcanum_from_module_ast(bytes, &module_ast);
+        let known_states = arcanum.all_state_names();
         // Handlers must be nested inside a state block in machine:, now validated against Arcanum/AST.
         let handler_scope_issues =
             self.validate_handlers_in_state_ast(bytes, &items, &module_ast, &arcanum);
@@ -134,20 +134,25 @@ impl Validator {
         arc: &Arcanum,
         _outline: &[OutlineItem],
     ) -> Vec<ValidationIssue> {
+        use std::collections::{HashMap, HashSet};
+
         let mut issues: Vec<ValidationIssue> = Vec::new();
-        // Parse all systems once to obtain system parameters per name.
+
+        // Parse the module exactly once: extract per-system params (E111
+        // dedup) and stash each system's `machine:` span so the E417 check
+        // below can reuse it without re-parsing.
         let module_ast =
             crate::frame_c::compiler::system_parser::SystemParser::parse_module(bytes, lang);
-        let mut sys_params_by_name: std::collections::HashMap<String, super::ast::SystemParamsAst> =
-            std::collections::HashMap::new();
-        for sys in module_ast.systems {
-            let mut params = sys.params;
+        let mut sys_params_by_name: HashMap<String, super::ast::SystemParamsAst> = HashMap::new();
+        let mut machine_span_by_name: HashMap<String, super::ast::Span> = HashMap::new();
+        for sys in &module_ast.systems {
+            let mut params = sys.params.clone();
             params.start_params.sort();
             params.start_params.dedup();
             params.enter_params.sort();
             params.enter_params.dedup();
             // Reject duplicate declared names across all groups.
-            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut seen: HashSet<String> = HashSet::new();
             for name in params
                 .start_params
                 .iter()
@@ -164,6 +169,9 @@ impl Validator {
                 }
             }
             sys_params_by_name.insert(sys.name.clone(), params);
+            if let Some(ref ms) = sys.sections.machine {
+                machine_span_by_name.insert(sys.name.clone(), ms.clone());
+            }
         }
         let domain_vars_by_system = collect_domain_vars_per_system(bytes, lang);
 
@@ -217,21 +225,9 @@ impl Validator {
 
             // E417: enter params must match start state's $>() handler params.
             if !enter_params.is_empty() {
-                // Use the machine-section parser to locate the state's $>() handler.
-                let module_ast =
-                    crate::frame_c::compiler::system_parser::SystemParser::parse_module(
-                        bytes, lang,
-                    );
-                let mut machine_span: Option<crate::frame_c::compiler::ast::Span> = None;
-                for sys in &module_ast.systems {
-                    if sys.name == *sys_name {
-                        machine_span = sys.sections.machine.clone();
-                        break;
-                    }
-                }
-                let entry_params = match machine_span {
+                let entry_params = match machine_span_by_name.get(sys_name) {
                     Some(span) => crate::frame_c::compiler::machine_parser::MachineParser
-                        .find_entry_params_in_machine(bytes, &span, &start_state.name, lang),
+                        .find_entry_params_in_machine(bytes, span, &start_state.name, lang),
                     None => None,
                 };
                 if std::env::var("FRAME_DEBUG_SYSPARAMS").ok().as_deref() == Some("1") {
@@ -715,224 +711,6 @@ impl Validator {
         issues
     }
 
-    pub fn validate_machine_state_headers(
-        &self,
-        bytes: &[u8],
-        start: usize,
-    ) -> Vec<ValidationIssue> {
-        // Find machine: sections and ensure any '$State' header has a following '{'
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Sec {
-            Machine,
-            Other,
-        }
-        let n = bytes.len();
-        let mut i = start;
-        let mut marks: Vec<(usize, Sec)> = Vec::new();
-        while i < n {
-            while i < n
-                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
-            {
-                i += 1;
-            }
-            if i >= n {
-                break;
-            }
-            let line_start = i;
-            let mut j = i;
-            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
-            let kw_start = j;
-            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                j += 1;
-            }
-            if kw_start < j && j < n && bytes[j] == b':' {
-                let kw = String::from_utf8_lossy(&bytes[kw_start..j]).to_ascii_lowercase();
-                if kw.as_str() == "machine" {
-                    marks.push((line_start, Sec::Machine));
-                } else {
-                    marks.push((line_start, Sec::Other));
-                }
-            }
-            while i < n && bytes[i] != b'\n' {
-                i += 1;
-            }
-        }
-        // Build section ranges
-        let mut secs: Vec<(usize, usize, Sec)> = Vec::new();
-        for idx in 0..marks.len() {
-            let (spos, sec) = marks[idx];
-            let epos = if idx + 1 < marks.len() {
-                marks[idx + 1].0
-            } else {
-                n
-            };
-            secs.push((spos, epos, sec));
-        }
-        let mut issues: Vec<ValidationIssue> = Vec::new();
-        for (s, e, sec) in secs {
-            if sec != Sec::Machine {
-                continue;
-            }
-            let mut p = s;
-            while p < e {
-                // next SOL
-                while p < e
-                    && (bytes[p] == b' '
-                        || bytes[p] == b'\t'
-                        || bytes[p] == b'\r'
-                        || bytes[p] == b'\n')
-                {
-                    p += 1;
-                }
-                if p >= e {
-                    break;
-                }
-                // check for state header starting with '$'
-                if bytes[p] == b'$' {
-                    // Distinguish state headers ("$Name {") from Frame statements ("$$[+]", "=> $^", etc.).
-                    // State header requires an identifier start after '$'.
-                    let next = if p + 1 < e { bytes[p + 1] } else { b'\n' };
-                    let is_ident_start = next.is_ascii_alphabetic() || next == b'_';
-                    if is_ident_start {
-                        // scan to end of physical line or first '{'
-                        let mut q = p;
-                        let mut seen_lbrace = false;
-                        while q < e && bytes[q] != b'\n' {
-                            if bytes[q] == b'{' {
-                                seen_lbrace = true;
-                                break;
-                            }
-                            q += 1;
-                        }
-                        if !seen_lbrace {
-                            issues.push(ValidationIssue {
-                                message: "E112: missing '{' after state header in machine: section"
-                                    .into(),
-                            });
-                        }
-                    } else {
-                        // It's a Frame statement at SOL inside machine; skip for state-header validation.
-                    }
-                }
-                while p < e && bytes[p] != b'\n' {
-                    p += 1;
-                }
-            }
-        }
-        issues
-    }
-
-    // Collect all state names declared inside machine: sections as "$Name {".
-    pub fn collect_machine_state_names(&self, bytes: &[u8], start: usize) -> HashSet<String> {
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Sec {
-            Machine,
-            Other,
-        }
-        let n = bytes.len();
-        let mut i = start;
-        let mut marks: Vec<(usize, Sec)> = Vec::new();
-        while i < n {
-            // SOL skip
-            while i < n
-                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
-            {
-                i += 1;
-            }
-            if i >= n {
-                break;
-            }
-            let line_start = i;
-            // read ident and ':'
-            let mut j = i;
-            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
-            let kw_start = j;
-            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                j += 1;
-            }
-            if kw_start < j && j < n && bytes[j] == b':' {
-                let kw = String::from_utf8_lossy(&bytes[kw_start..j]).to_ascii_lowercase();
-                match kw.as_str() {
-                    "machine" | "actions" | "operations" | "interface" => {
-                        let sec = if kw.as_str() == "machine" {
-                            Sec::Machine
-                        } else {
-                            Sec::Other
-                        };
-                        marks.push((line_start, sec));
-                    }
-                    _ => {}
-                }
-            }
-            while i < n && bytes[i] != b'\n' {
-                i += 1;
-            }
-        }
-        // Build section ranges
-        let mut secs: Vec<(usize, usize, Sec)> = Vec::new();
-        for idx in 0..marks.len() {
-            let (spos, sec) = marks[idx];
-            let epos = if idx + 1 < marks.len() {
-                marks[idx + 1].0
-            } else {
-                n
-            };
-            secs.push((spos, epos, sec));
-        }
-        let mut names = HashSet::new();
-        for (s, e, sec) in secs {
-            if sec != Sec::Machine {
-                continue;
-            }
-            let mut p = s;
-            while p < e {
-                // skip ws
-                while p < e
-                    && (bytes[p] == b' '
-                        || bytes[p] == b'\t'
-                        || bytes[p] == b'\r'
-                        || bytes[p] == b'\n')
-                {
-                    p += 1;
-                }
-                if p >= e {
-                    break;
-                }
-                if bytes[p] == b'$' {
-                    let mut k = p + 1;
-                    if k < e && (bytes[k].is_ascii_alphabetic() || bytes[k] == b'_') {
-                        k += 1;
-                        while k < e && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') {
-                            k += 1;
-                        }
-                        let name = String::from_utf8_lossy(&bytes[p + 1..k]).to_string();
-                        // ensure this looks like a state header line (has '{' before EOL)
-                        let mut q = k;
-                        let mut has_lbrace = false;
-                        while q < e && bytes[q] != b'\n' {
-                            if bytes[q] == b'{' {
-                                has_lbrace = true;
-                                break;
-                            }
-                            q += 1;
-                        }
-                        if has_lbrace {
-                            names.insert(name);
-                        }
-                    }
-                }
-                while p < e && bytes[p] != b'\n' {
-                    p += 1;
-                }
-            }
-        }
-        names
-    }
-
     pub fn validate_transition_targets(
         &self,
         mir: &[MirItem],
@@ -1021,112 +799,6 @@ impl Validator {
             }
             while i < n && bytes[i] != b'\n' {
                 i += 1;
-            }
-        }
-        false
-    }
-
-    // Detect whether any state in any machine section declares a parent ("$Child => $Parent").
-    pub fn has_any_parent_relationship(&self, bytes: &[u8], start: usize) -> bool {
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Sec {
-            Machine,
-            Other,
-        }
-        let n = bytes.len();
-        let mut i = start;
-        // Mark section starts
-        let mut marks: Vec<(usize, Sec)> = Vec::new();
-        while i < n {
-            // SOL skip
-            while i < n
-                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\r' || bytes[i] == b'\n')
-            {
-                i += 1;
-            }
-            if i >= n {
-                break;
-            }
-            let line_start = i;
-            // read ident and ':'
-            let mut j = i;
-            while j < n && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
-            }
-            let kw_start = j;
-            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                j += 1;
-            }
-            if kw_start < j && j < n && bytes[j] == b':' {
-                let kw = String::from_utf8_lossy(&bytes[kw_start..j]).to_ascii_lowercase();
-                match kw.as_str() {
-                    "machine" | "actions" | "operations" | "interface" => {
-                        let sec = if kw.as_str() == "machine" {
-                            Sec::Machine
-                        } else {
-                            Sec::Other
-                        };
-                        marks.push((line_start, sec));
-                    }
-                    _ => {}
-                }
-            }
-            while i < n && bytes[i] != b'\n' {
-                i += 1;
-            }
-        }
-        // Build section ranges and scan only machine sections for "$... => $..." on header lines
-        for idx in 0..marks.len() {
-            let (spos, sec) = marks[idx];
-            let epos = if idx + 1 < marks.len() {
-                marks[idx + 1].0
-            } else {
-                n
-            };
-            if sec != Sec::Machine {
-                continue;
-            }
-            let mut p = spos;
-            while p < epos {
-                // skip ws
-                while p < epos
-                    && (bytes[p] == b' '
-                        || bytes[p] == b'\t'
-                        || bytes[p] == b'\r'
-                        || bytes[p] == b'\n')
-                {
-                    p += 1;
-                }
-                if p >= epos {
-                    break;
-                }
-                if bytes[p] == b'$' {
-                    // scan "$Child"
-                    let mut k = p + 1;
-                    if k < epos && (bytes[k].is_ascii_alphabetic() || bytes[k] == b'_') {
-                        k += 1;
-                        while k < epos && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') {
-                            k += 1;
-                        }
-                        // skip whitespace
-                        while k < epos && (bytes[k] == b' ' || bytes[k] == b'\t') {
-                            k += 1;
-                        }
-                        // check for "=> $"
-                        if k + 3 < epos && bytes[k] == b'=' && bytes[k + 1] == b'>' {
-                            let mut q = k + 2;
-                            while q < epos && (bytes[q] == b' ' || bytes[q] == b'\t') {
-                                q += 1;
-                            }
-                            if q < epos && bytes[q] == b'$' {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                while p < epos && bytes[p] != b'\n' {
-                    p += 1;
-                }
             }
         }
         false

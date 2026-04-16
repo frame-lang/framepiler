@@ -1637,66 +1637,6 @@ impl FrameParser {
         })
     }
 
-    /// Extract variable name from native declaration line.
-    ///
-    /// **DEPRECATED:** the legacy heuristic name extractor. Kept for the
-    /// few remaining call sites that pre-date the structured domain field
-    /// parser. New code should use
-    /// `pipeline_parser::domain_native::parse_domain_field` which produces
-    /// the full structured `(name, type, init_text)` tuple.
-    #[allow(dead_code)]
-    fn extract_var_name_from_native(&self, line: &str) -> String {
-        let line = line.trim();
-
-        // Skip common keywords at start
-        let keywords = [
-            "var", "let", "const", "mut", "static", "int", "float", "double", "char", "bool",
-            "i32", "i64", "f32", "f64", "String", "str", "number", "string", "boolean", "void",
-            "auto",
-        ];
-
-        let mut rest = line;
-
-        // Skip leading type/keyword tokens until we find the identifier
-        loop {
-            rest = rest.trim_start();
-            let mut found_keyword = false;
-            for kw in &keywords {
-                if rest.starts_with(kw) {
-                    let after = &rest[kw.len()..];
-                    if after.is_empty() || !after.starts_with(|c: char| c.is_alphanumeric()) {
-                        rest = after;
-                        found_keyword = true;
-                        break;
-                    }
-                }
-            }
-            // Handle pointer/reference markers
-            rest = rest
-                .trim_start_matches('*')
-                .trim_start_matches('&')
-                .trim_start();
-            if !found_keyword {
-                break;
-            }
-        }
-
-        // Now extract the identifier
-        let name: String = rest
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-
-        if name.is_empty() {
-            // Fallback: just take the whole line as name (will likely cause issues)
-            line.chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect()
-        } else {
-            name
-        }
-    }
-
     /// Check if current position is a section keyword
     fn is_section_keyword(&self) -> bool {
         self.peek_keyword("interface:")

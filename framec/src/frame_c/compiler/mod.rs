@@ -220,7 +220,7 @@ pub fn validate_module_with_mode(
         // Collect known state names (coarse) and build Arcanum for symbol-precision.
         // For PRT languages we rely on the ModuleAst-backed Arcanum; non-PRT languages
         // continue to use a coarse known-state set for E402.
-        let known_states = validator.collect_machine_state_names(bytes, outline_start);
+        let known_states = arc_for_ctx.all_state_names();
         let arcanum_symtab = Some(arc_for_ctx.clone());
         let sys_param_issues =
             validator.validate_system_param_semantics(bytes, lang, &arc_for_ctx, &items);
