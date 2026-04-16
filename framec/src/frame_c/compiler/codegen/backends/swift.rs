@@ -70,7 +70,9 @@ impl LanguageBackend for SwiftBackend {
                         let trimmed = mapped_code.trim();
                         let needs_var =
                             !trimmed.starts_with("var ") && !trimmed.starts_with("let ");
-                        let var_prefix = if needs_var { "var " } else { "" };
+                        let var_prefix = if needs_var {
+                            if field.is_const { "let " } else { "var " }
+                        } else { "" };
                         let vis = self.emit_visibility_swift(field.visibility);
                         if vis.is_empty() {
                             result.push_str(&format!(

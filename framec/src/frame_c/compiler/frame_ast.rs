@@ -568,6 +568,8 @@ pub struct DomainVar {
     /// Initializer expression as raw target-language text.
     /// Frame doesn't interpret this — codegen emits it verbatim.
     pub initializer_text: Option<String>,
+    /// `const` modifier — field is immutable after construction.
+    pub is_const: bool,
     pub span: Span,
 }
 

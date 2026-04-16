@@ -1608,6 +1608,7 @@ impl FrameParser {
             name,
             var_type,
             initializer_text: init_text,
+            is_const: false,
             span: Span::new(start, self.cursor),
         })
     }

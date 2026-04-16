@@ -1163,12 +1163,23 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            // Parse canonical domain field: name [: type] = init
+            // Parse canonical domain field: [const] name [: type] = init
             let field_start = word_start;
-            // pos is already past the name (scanned above for section keyword check)
 
-            // 1. Name: already scanned as `word` above
-            let name = word.to_string();
+            // 0. Check for `const` modifier
+            let (is_const, name) = if word == "const" {
+                while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t') {
+                    pos += 1;
+                }
+                let name_start = pos;
+                while pos < src.len() && (src[pos].is_ascii_alphanumeric() || src[pos] == b'_') {
+                    pos += 1;
+                }
+                (true, std::str::from_utf8(&src[name_start..pos]).unwrap_or("").to_string())
+            } else {
+                (false, word.to_string())
+            };
+
             if name.is_empty() {
                 // Skip comment-only or unparseable lines
                 while pos < src.len() && src[pos] != b'\n' {
@@ -1228,6 +1239,7 @@ impl<'a> Parser<'a> {
                     name,
                     var_type,
                     initializer_text: None,
+                    is_const,
                     span: Span::new(field_start, pos),
                 });
                 continue;
@@ -1356,6 +1368,7 @@ impl<'a> Parser<'a> {
                 name,
                 var_type,
                 initializer_text: init_opt,
+                is_const,
                 span: Span::new(field_start, pos),
             });
         }

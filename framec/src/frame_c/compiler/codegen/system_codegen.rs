@@ -623,6 +623,18 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             Type::Custom(s) => s.clone(),
             Type::Unknown => String::new(),
         };
+        // const modifier: type-first languages get a keyword prefix in the raw code
+        let const_prefix = if var.is_const {
+            match lang {
+                TargetLanguage::Java => "final ",
+                TargetLanguage::CSharp => "readonly ",
+                TargetLanguage::C | TargetLanguage::Cpp => "const ",
+                TargetLanguage::Dart => "final ",
+                _ => "", // TS/Kotlin/Swift handled by backend emit_field; Python/etc. have no syntax
+            }
+        } else {
+            ""
+        };
         // Go and C never permit field-level initializers on struct
         // declarations, so any domain field init MUST move to the
         // factory function body. Strip unconditionally for those.
@@ -680,16 +692,11 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
                 | TargetLanguage::Dart
         );
         if type_first && !type_text.is_empty() {
-            format!("{} {}{}", type_text, var.name, init_suffix)
+            format!("{}{} {}{}", const_prefix, type_text, var.name, init_suffix)
         } else if !type_text.is_empty() && !matches!(lang, TargetLanguage::JavaScript) {
-            // AnnotatedName: `<name>: <type>[ = <init>]`
-            // JavaScript is excluded — JS class fields don't support
-            // `: type` annotations (only TypeScript does). JS falls
-            // through to the BareName branch below.
-            format!("{}: {}{}", var.name, type_text, init_suffix)
+            format!("{}{}: {}{}", const_prefix, var.name, type_text, init_suffix)
         } else {
-            // BareName / unknown type / JavaScript: `<name>[ = <init>]`
-            format!("{}{}", var.name, init_suffix)
+            format!("{}{}{}", const_prefix, var.name, init_suffix)
         }
     }
 
@@ -714,6 +721,7 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             .with_visibility(Visibility::Public)
             .with_type(&type_str)
             .with_raw_code(&expanded_code);
+        field.is_const = domain_var.is_const;
 
         // Populate the structured initializer slot from init text —
         // but ONLY when the init wasn't stripped from the field declaration.
@@ -1156,9 +1164,15 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
     for p in &system.params {
         if matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::Domain) {
             // Check that this param name actually matches a domain field
-            let has_matching_field = system.domain.iter().any(|d| d.name == p.name);
-            if !has_matching_field {
+            let matching_field = system.domain.iter().find(|d| d.name == p.name);
+            if matching_field.is_none() {
                 continue; // Skip — no matching domain field
+            }
+            // Skip if the domain field's init already references this param
+            // (avoids double assignment, which breaks final/readonly/const)
+            let field_init = matching_field.unwrap().initializer_text.as_deref().unwrap_or("");
+            if field_init.trim() == p.name {
+                continue; // Domain init already assigns from this param
             }
             let assign_code = match syntax.language {
                 TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Lua => {
@@ -4341,6 +4355,7 @@ mod tests {
             name: "counter".to_string(),
             var_type: Type::Custom("int".into()),
             initializer_text: Some("0".to_string()),
+            is_const: false,
             span: Span::new(0, 0),
         });
 

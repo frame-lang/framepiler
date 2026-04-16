@@ -120,7 +120,9 @@ impl LanguageBackend for KotlinBackend {
                         let trimmed = raw_code.trim();
                         let needs_var =
                             !trimmed.starts_with("var ") && !trimmed.starts_with("val ");
-                        let var_prefix = if needs_var { "var " } else { "" };
+                        let var_prefix = if needs_var {
+                            if field.is_const { "val " } else { "var " }
+                        } else { "" };
                         // Kotlin requires every property to be initialized
                         // or marked abstract. If the synthesized raw_code
                         // has a colon-typed declaration but no `=` (the

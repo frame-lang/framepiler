@@ -693,14 +693,56 @@ pub fn segment_source(source: &[u8], lang: TargetLanguage) -> Result<SourceMap, 
             use crate::frame_c::compiler::native_region_scanner::gdscript::GDScriptSkipper;
             segment(&GDScriptSkipper, source)
         }
-        // Non-V4 targets — should never reach the segmenter.
-        // No _ => arm: the compiler enforces that new TargetLanguage variants
-        // must be added here explicitly.
-        TargetLanguage::Graphviz => Err(SegmentError::InvalidTarget {
-            value: format!("{:?}", lang),
-            pos: 0,
-        }),
+        // Graphviz is an output-only target — the source is still written in
+        // one of the 17 native-code languages. Look up the source language
+        // from the file's `@@target` directive and segment with its skipper.
+        // If no directive is present, fall back to Python3 (comment/string
+        // semantics are close enough for segmentation of most dynamic langs).
+        TargetLanguage::Graphviz => {
+            let source_lang = detect_source_language(source).unwrap_or(TargetLanguage::Python3);
+            segment_source(source, source_lang)
+        }
     }
+}
+
+/// Scan the source for a leading `@@target <lang>` pragma and return the
+/// declared source language, if any. Only looks at the prolog region
+/// (before any `@@system` block) — pragmas appearing later are not the
+/// source-language declaration.
+fn detect_source_language(source: &[u8]) -> Option<TargetLanguage> {
+    let n = source.len();
+    let mut i = 0;
+    while i + 1 < n {
+        // Stop scanning once we hit @@system; the target pragma must come first.
+        if source[i] == b'@' && source[i + 1] == b'@' {
+            let rest = &source[i..];
+            if rest.starts_with(b"@@target") {
+                let after = i + b"@@target".len();
+                // Skip whitespace, then read an identifier.
+                let mut j = after;
+                while j < n && (source[j] == b' ' || source[j] == b'\t') {
+                    j += 1;
+                }
+                let val_start = j;
+                while j < n && (source[j].is_ascii_alphanumeric() || source[j] == b'_') {
+                    j += 1;
+                }
+                if val_start < j {
+                    if let Ok(val) = std::str::from_utf8(&source[val_start..j]) {
+                        if let Ok(lang) = TargetLanguage::try_from(val) {
+                            return Some(lang);
+                        }
+                    }
+                }
+                return None;
+            }
+            if rest.starts_with(b"@@system") {
+                return None;
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 // ============================================================================

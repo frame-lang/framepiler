@@ -41,6 +41,7 @@ pub struct Field {
     pub type_annotation: Option<String>,
     pub visibility: Visibility,
     pub is_static: bool,
+    pub is_const: bool,
     pub initializer: Option<Box<CodegenNode>>,
     pub raw_code: Option<String>, // V4: Native code pass-through
 }
@@ -52,6 +53,7 @@ impl Field {
             type_annotation: None,
             visibility: Visibility::Private,
             is_static: false,
+            is_const: false,
             initializer: None,
             raw_code: None,
         }

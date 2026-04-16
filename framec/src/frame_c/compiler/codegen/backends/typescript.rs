@@ -79,8 +79,8 @@ impl LanguageBackend for TypeScriptBackend {
                 // Fields
                 for field in fields {
                     if let Some(ref raw_code) = field.raw_code {
-                        // V4: Native code pass-through
-                        result.push_str(&format!("{}private {};\n", ctx.get_indent(), raw_code));
+                        let readonly = if field.is_const { "readonly " } else { "" };
+                        result.push_str(&format!("{}private {}{};\n", ctx.get_indent(), readonly, raw_code));
                     } else {
                         let vis = match field.visibility {
                             Visibility::Public => "public ",
