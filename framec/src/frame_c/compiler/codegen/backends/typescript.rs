@@ -76,44 +76,17 @@ impl LanguageBackend for TypeScriptBackend {
 
                 ctx.push_indent();
 
-                // Fields
+                // Fields. The main system class encapsulates all of its
+                // state behind interface methods, so its fields are
+                // always emitted as `private` regardless of Frame's
+                // visibility flag. Support classes (FrameEvent /
+                // FrameContext / Compartment) are pure data containers
+                // and use Frame's visibility flag verbatim.
+                let is_support_class = name.ends_with("FrameEvent")
+                    || name.ends_with("FrameContext")
+                    || name.ends_with("Compartment");
                 for field in fields {
-                    if let Some(ref raw_code) = field.raw_code {
-                        let readonly = if field.is_const { "readonly " } else { "" };
-                        result.push_str(&format!(
-                            "{}private {}{};\n",
-                            ctx.get_indent(),
-                            readonly,
-                            raw_code
-                        ));
-                    } else {
-                        let vis = match field.visibility {
-                            Visibility::Public => "public ",
-                            Visibility::Private => "private ",
-                            Visibility::Protected => "protected ",
-                        };
-                        let static_kw = if field.is_static { "static " } else { "" };
-                        let type_ann = field
-                            .type_annotation
-                            .as_ref()
-                            .map(|t| format!(": {}", self.convert_type(t)))
-                            .unwrap_or_default();
-                        let init = field
-                            .initializer
-                            .as_ref()
-                            .map(|i| format!(" = {}", self.emit(i, ctx)))
-                            .unwrap_or_default();
-
-                        result.push_str(&format!(
-                            "{}{}{}{}{}{};\n",
-                            ctx.get_indent(),
-                            vis,
-                            static_kw,
-                            field.name,
-                            type_ann,
-                            init
-                        ));
-                    }
+                    result.push_str(&self.emit_field(field, ctx, !is_support_class));
                 }
 
                 if !fields.is_empty() && !methods.is_empty() {
@@ -688,6 +661,50 @@ impl TypeScriptBackend {
             CodegenNode::Comment { .. } |
             CodegenNode::NativeBlock { .. } |  // Native blocks have their own semicolons
             CodegenNode::Empty
+        )
+    }
+
+    /// Emit a single TypeScript class-field declaration line:
+    ///   `<indent><vis> [static ][readonly ]<name>[: <type>][ = <init>];\n`
+    ///
+    /// `force_private` collapses `Public` and `Private` into `private`
+    /// for fields on the main system class — Frame's "Public" domain
+    /// fields are accessed through interface methods, not directly.
+    /// Support classes (FrameEvent / FrameContext / Compartment) pass
+    /// `force_private = false` so Frame's visibility flag flows
+    /// through verbatim.
+    ///
+    /// `convert_type` is applied to the type slot so internal
+    /// placeholders (e.g. `"List"` for the kernel's stack types) map
+    /// to TypeScript-native forms (`"Array<any>"`). Domain field types
+    /// written by the user are typically already TS-native (`number`,
+    /// `string`) so the conversion is identity for those cases.
+    fn emit_field(&self, field: &Field, ctx: &mut EmitContext, force_private: bool) -> String {
+        let vis = match field.visibility {
+            Visibility::Protected => "protected",
+            Visibility::Public if !force_private => "public",
+            Visibility::Public | Visibility::Private => "private",
+        };
+        let static_kw = if field.is_static { "static " } else { "" };
+        let readonly_kw = if field.is_const { "readonly " } else { "" };
+        let type_ann = field
+            .type_annotation
+            .as_ref()
+            .map(|t| format!(": {}", self.convert_type(t)))
+            .unwrap_or_default();
+        let init_suffix = match &field.initializer {
+            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            None => String::new(),
+        };
+        format!(
+            "{}{} {}{}{}{}{};\n",
+            ctx.get_indent(),
+            vis,
+            static_kw,
+            readonly_kw,
+            field.name,
+            type_ann,
+            init_suffix
         )
     }
 }
