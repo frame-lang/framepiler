@@ -2697,7 +2697,7 @@ fn generate_frame_machinery(
         ),
         TargetLanguage::Php => methods.extend(generate_php_machinery(&event_class)),
         TargetLanguage::Ruby => methods.extend(generate_ruby_machinery(&event_class)),
-        TargetLanguage::Rust => methods.extend(generate_rust_machinery(
+        TargetLanguage::Rust => methods.extend(super::rust_system::generate_rust_machinery(
             system,
             &event_class,
             &compartment_class,
@@ -2745,7 +2745,7 @@ fn generate_frame_machinery(
     // Generate __push_transition method for Rust when there's a machine
     // Uses mem::replace to move the current compartment to the stack (no clone)
     if matches!(lang, TargetLanguage::Rust) && system.machine.is_some() {
-        methods.push(generate_rust_push_transition(system));
+        methods.push(super::rust_system::generate_rust_push_transition(system));
     }
 
     methods
@@ -3067,100 +3067,6 @@ fn generate_ruby_machinery(event_class: &str) -> Vec<CodegenNode> {
         visibility: Visibility::Private,
         decorators: vec![],
     });
-    methods
-}
-
-fn generate_rust_machinery(
-    system: &SystemAst,
-    event_class: &str,
-    compartment_class: &str,
-) -> Vec<CodegenNode> {
-    let mut methods = Vec::new();
-    // Rust: Full kernel/router/transition pattern matching Python/TypeScript
-
-    // __kernel method - the main event processing loop with deferred transitions
-    // Gets event from context stack (no parameter needed)
-    methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"// Clone event from context stack (needed for borrow checker)
-let __e = self._context_stack.last().unwrap().event.clone();
-// Route event to current state
-self.__router(&__e);
-// Process any pending transition
-while self.__next_compartment.is_some() {{
-    let next_compartment = self.__next_compartment.take().unwrap();
-    // Exit current state (with exit_args from current compartment)
-    let exit_event = {0}::new_with_params("<$", &self.__compartment.exit_args);
-    self.__router(&exit_event);
-    // Switch to new compartment
-    self.__compartment = next_compartment;
-    // Enter new state (or forward event)
-    if self.__compartment.forward_event.is_none() {{
-        let enter_event = {0}::new_with_params("$>", &self.__compartment.enter_args);
-        self.__router(&enter_event);
-    }} else {{
-        // Forward event to new state
-        let forward_event = self.__compartment.forward_event.take().unwrap();
-        if forward_event.message == "$>" {{
-            // Forwarding enter event - just send it
-            self.__router(&forward_event);
-        }} else {{
-            // Forwarding other event - send $> first, then forward
-            let enter_event = {0}::new_with_params("$>", &self.__compartment.enter_args);
-            self.__router(&enter_event);
-            self.__router(&forward_event);
-        }}
-    }}
-    // Mark all stacked contexts as transitioned
-    for ctx in self._context_stack.iter_mut() {{
-        ctx._transitioned = true;
-    }}
-}}"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __router method - dispatches events to state dispatch methods
-    let router_code = generate_rust_router_dispatch(system);
-    methods.push(CodegenNode::Method {
-        name: "__router".to_string(),
-        params: vec![Param::new("__e").with_type(&format!("&{}", event_class))],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: router_code,
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __transition method - caches next compartment (deferred transition)
-    methods.push(CodegenNode::Method {
-        name: "__transition".to_string(),
-        params: vec![Param::new("next_compartment").with_type(compartment_class)],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: "self.__next_compartment = Some(next_compartment);".to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
     methods
 }
 
@@ -4196,68 +4102,6 @@ if self.has_method(handler_name):
     });
 
     methods
-}
-
-fn generate_rust_push_transition(system: &SystemAst) -> CodegenNode {
-    let system_name = &system.name;
-    let event_class = format!("{}FrameEvent", system_name);
-    let compartment_class = format!("{}Compartment", system_name);
-
-    let code = format!(
-        r#"// Exit current state (old compartment still in place for routing)
-let exit_event = {event_class}::new_with_params("<$", &self.__compartment.exit_args);
-self.__router(&exit_event);
-// Swap: old compartment moves to stack, new takes its place
-let old = std::mem::replace(&mut self.__compartment, new_compartment);
-self._state_stack.push(old);
-// Enter new state (or forward event) — matches kernel logic
-if self.__compartment.forward_event.is_none() {{
-    let enter_event = {event_class}::new_with_params("$>", &self.__compartment.enter_args);
-    self.__router(&enter_event);
-}} else {{
-    let forward_event = self.__compartment.forward_event.take().unwrap();
-    if forward_event.message == "$>" {{
-        self.__router(&forward_event);
-    }} else {{
-        let enter_event = {event_class}::new_with_params("$>", &self.__compartment.enter_args);
-        self.__router(&enter_event);
-        self.__router(&forward_event);
-    }}
-}}"#,
-        event_class = event_class
-    );
-
-    CodegenNode::Method {
-        name: "__push_transition".to_string(),
-        params: vec![Param::new("new_compartment").with_type(&compartment_class)],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock { code, span: None }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    }
-}
-
-/// Generate Rust router dispatch match statement
-///
-/// Routes events to _state_X methods based on current compartment state
-fn generate_rust_router_dispatch(system: &SystemAst) -> String {
-    let mut code = String::new();
-    code.push_str("match self.__compartment.state.as_str() {\n");
-
-    if let Some(ref machine) = system.machine {
-        for state in &machine.states {
-            code.push_str(&format!(
-                "    \"{}\" => self._state_{}(__e),\n",
-                state.name, state.name
-            ));
-        }
-    }
-
-    code.push_str("    _ => {}\n");
-    code.push_str("}");
-    code
 }
 
 /// Generate C router dispatch using if-else chain with strcmp
