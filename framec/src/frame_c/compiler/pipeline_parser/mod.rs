@@ -10,7 +10,6 @@
 
 pub mod call_args;
 
-
 use crate::frame_c::compiler::frame_ast::*;
 use crate::frame_c::compiler::lexer::{LexError, Lexer, Spanned, Token};
 use crate::frame_c::visitors::TargetLanguage;
@@ -1175,7 +1174,12 @@ impl<'a> Parser<'a> {
                 while pos < src.len() && (src[pos].is_ascii_alphanumeric() || src[pos] == b'_') {
                     pos += 1;
                 }
-                (true, std::str::from_utf8(&src[name_start..pos]).unwrap_or("").to_string())
+                (
+                    true,
+                    std::str::from_utf8(&src[name_start..pos])
+                        .unwrap_or("")
+                        .to_string(),
+                )
             } else {
                 (false, word.to_string())
             };
@@ -1196,7 +1200,7 @@ impl<'a> Parser<'a> {
             // 2. Optional type: if ':' follows
             let var_type = if pos < src.len() && src[pos] == b':' {
                 pos += 1; // consume ':'
-                // Skip whitespace after ':'
+                          // Skip whitespace after ':'
                 while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t') {
                     pos += 1;
                 }
@@ -1205,10 +1209,18 @@ impl<'a> Parser<'a> {
                 let mut bracket_depth: i32 = 0;
                 while pos < src.len() && src[pos] != b'\n' {
                     match src[pos] {
-                        b'<' | b'(' | b'[' | b'{' => { bracket_depth += 1; pos += 1; }
-                        b'>' | b')' | b']' | b'}' => { bracket_depth -= 1; pos += 1; }
+                        b'<' | b'(' | b'[' | b'{' => {
+                            bracket_depth += 1;
+                            pos += 1;
+                        }
+                        b'>' | b')' | b']' | b'}' => {
+                            bracket_depth -= 1;
+                            pos += 1;
+                        }
                         b'=' if bracket_depth == 0 => break,
-                        _ => { pos += 1; }
+                        _ => {
+                            pos += 1;
+                        }
                     }
                 }
                 let type_text = std::str::from_utf8(&src[type_start..pos])
@@ -1324,21 +1336,28 @@ impl<'a> Parser<'a> {
                     }
                     if depth != 0 {
                         return Err(ParseError {
-                            message: format!("domain field '{}': unterminated multi-line initializer '('", name),
+                            message: format!(
+                                "domain field '{}': unterminated multi-line initializer '('",
+                                name
+                            ),
                             span: Span::new(paren_pos, pos),
                         });
                     }
                     // pos is now past the closing ')' — capture content between outer parens
                     let wrapper_content_end = pos - 1; // before ')'
-                    let init = std::str::from_utf8(&src[wrapper_content_start..wrapper_content_end])
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
+                    let init =
+                        std::str::from_utf8(&src[wrapper_content_start..wrapper_content_end])
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
                     // Skip past any trailing whitespace on the closing ')' line
                     while pos < src.len() && src[pos] != b'\n' {
                         if src[pos] != b' ' && src[pos] != b'\t' {
                             return Err(ParseError {
-                                message: format!("domain field '{}': unexpected tokens after closing ')'", name),
+                                message: format!(
+                                    "domain field '{}': unexpected tokens after closing ')'",
+                                    name
+                                ),
                                 span: Span::new(pos, pos + 1),
                             });
                         }
@@ -2182,7 +2201,10 @@ mod tests {
         assert_eq!(sys.domain[0].name, "x");
         assert_eq!(sys.domain[0].initializer_text, Some("0".to_string()));
         assert_eq!(sys.domain[1].name, "name");
-        assert_eq!(sys.domain[1].initializer_text, Some("\"hello\"".to_string()));
+        assert_eq!(
+            sys.domain[1].initializer_text,
+            Some("\"hello\"".to_string())
+        );
     }
 
     #[test]
@@ -2190,7 +2212,9 @@ mod tests {
         let sys = parse_py("domain:\n    count: int = 0");
         assert_eq!(sys.domain[0].name, "count");
         assert_eq!(sys.domain[0].initializer_text, Some("0".to_string()));
-        assert!(matches!(sys.domain[0].var_type, crate::frame_c::compiler::frame_ast::Type::Custom(ref s) if s == "int"));
+        assert!(
+            matches!(sys.domain[0].var_type, crate::frame_c::compiler::frame_ast::Type::Custom(ref s) if s == "int")
+        );
     }
 
     #[test]

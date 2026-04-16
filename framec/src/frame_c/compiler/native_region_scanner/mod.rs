@@ -37,40 +37,24 @@ pub enum SegmentMetadata {
         is_pop: bool,
     },
     /// `$.varName` (read) or `$.varName = expr` (assign)
-    StateVar {
-        name: String,
-    },
+    StateVar { name: String },
     /// `@@:params.key`
-    ContextParams {
-        key: String,
-    },
+    ContextParams { key: String },
     /// `@@:data.key` (read) or `@@:data.key = expr` (assign)
     ContextData {
         key: String,
         assign_expr: Option<String>,
     },
     /// `@@:self.method(args)`
-    SelfCall {
-        method: String,
-        args: String,
-    },
+    SelfCall { method: String, args: String },
     /// `@@SystemName(args)`
-    TaggedInstantiation {
-        system_name: String,
-        args: String,
-    },
+    TaggedInstantiation { system_name: String, args: String },
     /// `@@:(expr)` — may contain nested Frame segments
-    ReturnExpr {
-        expr: String,
-    },
+    ReturnExpr { expr: String },
     /// `@@:return(expr)` — set return + exit
-    ReturnCall {
-        expr: String,
-    },
+    ReturnCall { expr: String },
     /// `@@:return = expr` or `@@:return` (bare read)
-    ContextReturn {
-        assign_expr: Option<String>,
-    },
+    ContextReturn { assign_expr: Option<String> },
     /// Segments with no additional parsed content
     None,
 }
@@ -174,15 +158,26 @@ pub fn regions_to_statements(
                 let text = String::from_utf8_lossy(&bytes[span.start..span.end]).to_string();
                 stmts.push(Statement::NativeCode(text));
             }
-            Region::FrameSegment { span, kind, indent, metadata } => {
+            Region::FrameSegment {
+                span,
+                kind,
+                indent,
+                metadata,
+            } => {
                 let seg_span = Span::new(span.start, span.end);
                 let raw = || String::from_utf8_lossy(&bytes[span.start..span.end]).to_string();
 
                 match kind {
                     FrameSegmentKind::Transition => {
                         if let SegmentMetadata::Transition {
-                            target_state, exit_args, enter_args, state_args, label, is_pop,
-                        } = metadata {
+                            target_state,
+                            exit_args,
+                            enter_args,
+                            state_args,
+                            label,
+                            is_pop,
+                        } = metadata
+                        {
                             stmts.push(Statement::Transition(TransitionAst {
                                 target: target_state.clone(),
                                 args: vec![],
@@ -244,7 +239,8 @@ pub fn regions_to_statements(
                         if let SegmentMetadata::StateVar { name } = metadata {
                             // Extract assignment expression from raw text after "$.name = "
                             let text = raw();
-                            let expr = text.find('=')
+                            let expr = text
+                                .find('=')
                                 .map(|i| text[i + 1..].trim().to_string())
                                 .unwrap_or_default();
                             stmts.push(Statement::StateVarAssign {
@@ -324,7 +320,8 @@ pub fn regions_to_statements(
                         }
                     }
                     FrameSegmentKind::TaggedInstantiation => {
-                        if let SegmentMetadata::TaggedInstantiation { system_name, args } = metadata {
+                        if let SegmentMetadata::TaggedInstantiation { system_name, args } = metadata
+                        {
                             stmts.push(Statement::TaggedInstantiation {
                                 system_name: system_name.clone(),
                                 args: args.clone(),
@@ -357,7 +354,8 @@ pub fn regions_to_statements(
                     FrameSegmentKind::ReturnStatement => {
                         // Extract return expression if present
                         let text = raw();
-                        let value = text.strip_prefix("return")
+                        let value = text
+                            .strip_prefix("return")
                             .map(|rest| rest.trim())
                             .filter(|s| !s.is_empty())
                             .map(|s| Expression::NativeExpr(s.to_string()));

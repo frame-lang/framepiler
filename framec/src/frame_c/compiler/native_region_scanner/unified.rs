@@ -1112,11 +1112,11 @@ pub fn skip_ruby_percent_literal(bytes: &[u8], i: usize, end: usize) -> Option<u
 fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetadata {
     match kind {
         // --- Context accessors ---
-
         FrameSegmentKind::ContextParams => {
             // @@:params.key → extract key
             if let Some(rest) = text.strip_prefix("@@:params.") {
-                let key: String = rest.chars()
+                let key: String = rest
+                    .chars()
                     .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                     .collect();
                 SegmentMetadata::ContextParams { key }
@@ -1128,10 +1128,14 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         FrameSegmentKind::ContextData => {
             // @@:data.key → extract key
             if let Some(rest) = text.strip_prefix("@@:data.") {
-                let key: String = rest.chars()
+                let key: String = rest
+                    .chars()
                     .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                     .collect();
-                SegmentMetadata::ContextData { key, assign_expr: None }
+                SegmentMetadata::ContextData {
+                    key,
+                    assign_expr: None,
+                }
             } else {
                 SegmentMetadata::None
             }
@@ -1140,14 +1144,19 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         FrameSegmentKind::ContextDataAssign => {
             // @@:data.key = expr → extract key and expr
             if let Some(rest) = text.strip_prefix("@@:data.") {
-                let key: String = rest.chars()
+                let key: String = rest
+                    .chars()
                     .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                     .collect();
                 let after_key = &rest[key.len()..];
-                let expr = after_key.trim()
+                let expr = after_key
+                    .trim()
                     .strip_prefix('=')
                     .map(|e| e.trim().trim_end_matches(';').trim().to_string());
-                SegmentMetadata::ContextData { key, assign_expr: expr }
+                SegmentMetadata::ContextData {
+                    key,
+                    assign_expr: expr,
+                }
             } else {
                 SegmentMetadata::None
             }
@@ -1160,7 +1169,9 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                 let rest = rest.trim();
                 if rest.starts_with('=') && !rest.starts_with("==") {
                     let expr = rest[1..].trim().trim_end_matches(';').trim().to_string();
-                    SegmentMetadata::ContextReturn { assign_expr: Some(expr) }
+                    SegmentMetadata::ContextReturn {
+                        assign_expr: Some(expr),
+                    }
                 } else {
                     SegmentMetadata::ContextReturn { assign_expr: None }
                 }
@@ -1183,7 +1194,9 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                         b')' => depth -= 1,
                         _ => {}
                     }
-                    if depth > 0 { p += 1; }
+                    if depth > 0 {
+                        p += 1;
+                    }
                 }
                 let expr = trimmed[after_open..p].to_string();
                 SegmentMetadata::ReturnExpr { expr }
@@ -1204,7 +1217,6 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         }
 
         // --- Self and system ---
-
         FrameSegmentKind::ContextSelfCall => {
             // @@:self.method(args) → extract method and args
             if let Some(rest) = text.strip_prefix("@@:self.") {
@@ -1220,18 +1232,20 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
             }
         }
 
-        FrameSegmentKind::ContextSelf | FrameSegmentKind::ContextSystemState
-            | FrameSegmentKind::ContextSystemBare | FrameSegmentKind::ContextEvent => {
+        FrameSegmentKind::ContextSelf
+        | FrameSegmentKind::ContextSystemState
+        | FrameSegmentKind::ContextSystemBare
+        | FrameSegmentKind::ContextEvent => {
             // These carry no variable content — the kind is sufficient
             SegmentMetadata::None
         }
 
         // --- State variables ---
-
         FrameSegmentKind::StateVar | FrameSegmentKind::StateVarAssign => {
             // $.varName or $.varName = expr → extract name
             if let Some(rest) = text.strip_prefix("$.") {
-                let name: String = rest.chars()
+                let name: String = rest
+                    .chars()
                     .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                     .collect();
                 SegmentMetadata::StateVar { name }
@@ -1241,7 +1255,6 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         }
 
         // --- Transitions ---
-
         FrameSegmentKind::Transition | FrameSegmentKind::TransitionForward => {
             // (exit)? -> (=>)? (enter)? $State(state_args)?
             // or -> pop$
@@ -1279,7 +1292,11 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
             let before_arrow = &trimmed[..arrow_pos].trim();
             let exit_args = if before_arrow.starts_with('(') {
                 let inner = before_arrow.trim_start_matches('(').trim_end_matches(')');
-                if !inner.is_empty() { Some(inner.to_string()) } else { None }
+                if !inner.is_empty() {
+                    Some(inner.to_string())
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -1295,11 +1312,23 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                     let mut depth = 0;
                     let mut end = 0;
                     for (k, &b) in paren_text.as_bytes().iter().enumerate() {
-                        if b == b'(' { depth += 1; }
-                        if b == b')' { depth -= 1; if depth == 0 { end = k + 1; break; } }
+                        if b == b'(' {
+                            depth += 1;
+                        }
+                        if b == b')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = k + 1;
+                                break;
+                            }
+                        }
                     }
                     let inner = &paren_text[1..end.saturating_sub(1)];
-                    if !inner.is_empty() { Some(inner.to_string()) } else { None }
+                    if !inner.is_empty() {
+                        Some(inner.to_string())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -1317,11 +1346,24 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                     let mut depth = 0;
                     let mut end = j;
                     for k in j..bytes.len() {
-                        if bytes[k] == b'(' { depth += 1; }
-                        if bytes[k] == b')' { depth -= 1; if depth == 0 { end = k + 1; break; } }
+                        if bytes[k] == b'(' {
+                            depth += 1;
+                        }
+                        if bytes[k] == b')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = k + 1;
+                                break;
+                            }
+                        }
                     }
-                    let inner = String::from_utf8_lossy(&bytes[j + 1..end.saturating_sub(1)]).to_string();
-                    if !inner.is_empty() { Some(inner) } else { None }
+                    let inner =
+                        String::from_utf8_lossy(&bytes[j + 1..end.saturating_sub(1)]).to_string();
+                    if !inner.is_empty() {
+                        Some(inner)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -1346,7 +1388,6 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         }
 
         // --- Tagged instantiation ---
-
         FrameSegmentKind::TaggedInstantiation => {
             // @@SystemName(args)
             if let Some(rest) = text.strip_prefix("@@") {
@@ -1363,9 +1404,10 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         }
 
         // --- Others ---
-
-        FrameSegmentKind::Forward | FrameSegmentKind::StackPush
-            | FrameSegmentKind::StackPop | FrameSegmentKind::ReturnStatement => {
+        FrameSegmentKind::Forward
+        | FrameSegmentKind::StackPush
+        | FrameSegmentKind::StackPop
+        | FrameSegmentKind::ReturnStatement => {
             // These are simple statements with no variable content
             SegmentMetadata::None
         }
@@ -1570,9 +1612,9 @@ mod tests {
     /// Helper: scan a body and return metadata for all FrameSegments
     fn scan_for_metadata(body: &str) -> Vec<(FrameSegmentKind, SegmentMetadata)> {
         let bytes = body.as_bytes();
-        let result = scan_native_regions(&RustSkipper, bytes, 0)
-            .expect("scan should succeed");
-        result.regions
+        let result = scan_native_regions(&RustSkipper, bytes, 0).expect("scan should succeed");
+        result
+            .regions
             .iter()
             .filter_map(|r| match r {
                 Region::FrameSegment { kind, metadata, .. } => Some((*kind, metadata.clone())),
@@ -1645,7 +1687,11 @@ mod tests {
         let metas = scan_for_metadata("{ -> $Active }");
         assert_eq!(metas.len(), 1);
         match &metas[0].1 {
-            SegmentMetadata::Transition { target_state, is_pop, .. } => {
+            SegmentMetadata::Transition {
+                target_state,
+                is_pop,
+                ..
+            } => {
                 assert_eq!(target_state, "Active");
                 assert!(!is_pop);
             }
@@ -1668,7 +1714,11 @@ mod tests {
         let metas = scan_for_metadata("{ -> (\"hello\") $Dialog }");
         assert_eq!(metas.len(), 1);
         match &metas[0].1 {
-            SegmentMetadata::Transition { target_state, enter_args, .. } => {
+            SegmentMetadata::Transition {
+                target_state,
+                enter_args,
+                ..
+            } => {
                 assert_eq!(target_state, "Dialog");
                 assert!(enter_args.is_some());
             }

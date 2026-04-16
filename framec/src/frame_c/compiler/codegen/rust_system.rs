@@ -17,11 +17,7 @@ use crate::frame_c::compiler::frame_ast::SystemAst;
 ///
 /// Called from `system_codegen::generate_system` when target is Rust.
 /// Returns a CodegenNode containing the full Rust implementation.
-pub fn generate_rust_system(
-    system: &SystemAst,
-    arcanum: &Arcanum,
-    source: &[u8],
-) -> CodegenNode {
+pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]) -> CodegenNode {
     // For now, delegate to the existing shared codegen path.
     // This will be incrementally replaced with Rust-specific generation
     // that uses Rc<RefCell<Compartment>> throughout.

@@ -594,7 +594,8 @@ impl CppBackend {
                     _ => type_ann,
                 };
                 if let Some(ref default_val) = p.default_value {
-                    let default_str = self.emit(default_val, &mut super::super::backend::EmitContext::new());
+                    let default_str =
+                        self.emit(default_val, &mut super::super::backend::EmitContext::new());
                     format!("{} {} = {}", type_ann, p.name, default_str)
                 } else {
                     format!("{} {}", type_ann, p.name)

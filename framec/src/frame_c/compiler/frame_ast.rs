@@ -280,13 +280,19 @@ pub enum Statement {
     NativeCode(String),
 
     // === Frame context constructs (mid-line and standalone) ===
-
     /// State variable read: $.varName
     StateVarRead { name: String, span: Span },
     /// State variable assignment: $.varName = expr
-    StateVarAssign { name: String, expr: String, span: Span },
+    StateVarAssign {
+        name: String,
+        expr: String,
+        span: Span,
+    },
     /// Context return: @@:return (bare read) or @@:return = expr (assignment)
-    ContextReturn { assign_expr: Option<String>, span: Span },
+    ContextReturn {
+        assign_expr: Option<String>,
+        span: Span,
+    },
     /// Context return expression: @@:(expr)
     ContextReturnExpr { expr: String, span: Span },
     /// Return-call: @@:return(expr) — set return value AND exit handler
@@ -296,17 +302,29 @@ pub enum Statement {
     /// Context data read: @@:data["key"]
     ContextData { key: String, span: Span },
     /// Context data assignment: @@:data["key"] = expr
-    ContextDataAssign { key: String, expr: String, span: Span },
+    ContextDataAssign {
+        key: String,
+        expr: String,
+        span: Span,
+    },
     /// Context params: @@:params["key"]
     ContextParams { key: String, span: Span },
     /// Self-call: @@:self.method(args) — reentrant interface call
-    ContextSelfCall { method: String, args: String, span: Span },
+    ContextSelfCall {
+        method: String,
+        args: String,
+        span: Span,
+    },
     /// Bare self reference: @@:self
     ContextSelf { span: Span },
     /// System state: @@:system.state — current state name
     ContextSystemState { span: Span },
     /// Tagged instantiation: @@SystemName(args)
-    TaggedInstantiation { system_name: String, args: String, span: Span },
+    TaggedInstantiation {
+        system_name: String,
+        args: String,
+        span: Span,
+    },
 }
 
 /// Transition statement (-> $State)

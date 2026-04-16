@@ -227,8 +227,7 @@ fn expand_tagged_instantiations(
                 // Use SyntaxSkipper's balanced_paren_end for argument extraction
                 if i < end && bytes[i] == b'(' {
                     if let Some(close) = skipper.balanced_paren_end(bytes, i, end) {
-                        let args_text =
-                            std::str::from_utf8(&bytes[i + 1..close - 1]).unwrap_or("");
+                        let args_text = std::str::from_utf8(&bytes[i + 1..close - 1]).unwrap_or("");
 
                         if defined_systems.contains(name) {
                             let resolved_args = match params_by_name.get(name) {

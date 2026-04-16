@@ -7,9 +7,8 @@
 
 use super::ast::CodegenNode;
 use super::codegen_utils::{
-    convert_expression, convert_literal, expression_to_string,
-    is_bool_type, is_float_type, is_int_type, is_string_type, to_snake_case, type_to_string,
-    HandlerContext,
+    convert_expression, convert_literal, expression_to_string, is_bool_type, is_float_type,
+    is_int_type, is_string_type, to_snake_case, type_to_string, HandlerContext,
 };
 use super::frame_expansion::emit_handler_body_via_statements;
 use crate::frame_c::compiler::arcanum::Arcanum;
@@ -2024,7 +2023,8 @@ pub(crate) fn generate_erlang_system(
                 .collect();
 
             // Expand @@:system.state and @@:(expr) in operation bodies
-            let inner = super::frame_expansion::expand_system_state_in_code(inner, TargetLanguage::Erlang);
+            let inner =
+                super::frame_expansion::expand_system_state_in_code(inner, TargetLanguage::Erlang);
             let inner = inner.as_str();
 
             // Process lines: strip return keyword, capitalize params, rewrite self

@@ -39,7 +39,6 @@ pub(crate) struct DispatchSyntax {
     pub else_start: &'static str,
 
     // --- Callbacks for language-specific code fragments ---
-
     /// First `if` condition matching event message
     pub fmt_if: fn(message: &str) -> String,
     /// Subsequent `elif`/`else if` condition
@@ -52,7 +51,8 @@ pub(crate) struct DispatchSyntax {
     pub fmt_init_sv: fn(var_name: &str, init_val: &str, indent: &str, system_name: &str) -> String,
     /// Unpack a handler param. `source` is "event" for interface handlers,
     /// "enter" for $> handlers, "exit" for <$ handlers.
-    pub fmt_unpack: fn(name: &str, type_str: &str, indent: &str, system_name: &str, source: &str) -> String,
+    pub fmt_unpack:
+        fn(name: &str, type_str: &str, indent: &str, system_name: &str, source: &str) -> String,
     /// Forward call to parent state for `=> $^`
     pub fmt_forward: fn(parent_name: &str, indent: &str, system_name: &str) -> String,
 }
@@ -73,7 +73,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 let mut s = String::new();
                 s.push_str("# HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("__sv_comp = self.__compartment\n");
-                s.push_str(&format!("while __sv_comp is not None and __sv_comp.state != \"{}\":\n", state));
+                s.push_str(&format!(
+                    "while __sv_comp is not None and __sv_comp.state != \"{}\":\n",
+                    state
+                ));
                 s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
                 s
             },
@@ -89,9 +92,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}{name} = __e._parameters[\"{name}\"]\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}self._state_{parent}(__e)\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}self._state_{parent}(__e)\n"),
         }),
         TargetLanguage::GDScript => Some(DispatchSyntax {
             lang,
@@ -106,7 +107,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 let mut s = String::new();
                 s.push_str("# HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("var __sv_comp = self.__compartment\n");
-                s.push_str(&format!("while __sv_comp != null and __sv_comp.state != \"{}\":\n", state));
+                s.push_str(&format!(
+                    "while __sv_comp != null and __sv_comp.state != \"{}\":\n",
+                    state
+                ));
                 s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
                 s
             },
@@ -122,9 +126,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}var {name} = __e._parameters[\"{name}\"]\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}self._state_{parent}(__e)\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}self._state_{parent}(__e)\n"),
         }),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => Some(DispatchSyntax {
             lang,
@@ -139,7 +141,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 let mut s = String::new();
                 s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("let __sv_comp = this.__compartment;\n");
-                s.push_str(&format!("while (__sv_comp !== null && __sv_comp.state !== \"{}\") {{\n", state));
+                s.push_str(&format!(
+                    "while (__sv_comp !== null && __sv_comp.state !== \"{}\") {{\n",
+                    state
+                ));
                 s.push_str("    __sv_comp = __sv_comp.parent_compartment;\n");
                 s.push_str("}\n");
                 s
@@ -157,9 +162,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}let {name} = __e._parameters[\"{name}\"];\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}this._state_{parent}(__e);\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}this._state_{parent}(__e);\n"),
         }),
         TargetLanguage::Ruby => Some(DispatchSyntax {
             lang,
@@ -174,7 +177,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 let mut s = String::new();
                 s.push_str("# HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("__sv_comp = @__compartment\n");
-                s.push_str(&format!("while __sv_comp != nil && __sv_comp.state != \"{}\"\n", state));
+                s.push_str(&format!(
+                    "while __sv_comp != nil && __sv_comp.state != \"{}\"\n",
+                    state
+                ));
                 s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
                 s.push_str("end\n");
                 s
@@ -192,9 +198,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}{name} = __e._parameters[\"{name}\"]\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}_state_{parent}(__e)\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e)\n"),
         }),
         TargetLanguage::Lua => Some(DispatchSyntax {
             lang,
@@ -209,7 +213,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 let mut s = String::new();
                 s.push_str("-- HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("local __sv_comp = self.__compartment\n");
-                s.push_str(&format!("while __sv_comp ~= nil and __sv_comp.state ~= \"{}\" do\n", state));
+                s.push_str(&format!(
+                    "while __sv_comp ~= nil and __sv_comp.state ~= \"{}\" do\n",
+                    state
+                ));
                 s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
                 s.push_str("end\n");
                 s
@@ -227,9 +234,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}local {name} = __e._parameters[\"{name}\"]\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}self:_state_{parent}(__e)\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}self:_state_{parent}(__e)\n"),
         }),
         TargetLanguage::Php => Some(DispatchSyntax {
             lang,
@@ -244,7 +249,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 let mut s = String::new();
                 s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("$__sv_comp = $this->__compartment;\n");
-                s.push_str(&format!("while ($__sv_comp !== null && $__sv_comp->state !== \"{}\") {{\n", state));
+                s.push_str(&format!(
+                    "while ($__sv_comp !== null && $__sv_comp->state !== \"{}\") {{\n",
+                    state
+                ));
                 s.push_str("    $__sv_comp = $__sv_comp->parent_compartment;\n");
                 s.push_str("}\n");
                 s
@@ -262,9 +270,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             fmt_unpack: |name, _type_str, indent, _sys, _source| {
                 format!("{indent}${name} = $__e->_parameters[\"{name}\"];\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}$this->_state_{parent}($__e);\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}$this->_state_{parent}($__e);\n"),
         }),
         TargetLanguage::CSharp => Some(DispatchSyntax {
             lang,
@@ -279,7 +285,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 let mut s = String::new();
                 s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("var __sv_comp_n = __compartment;\n");
-                s.push_str(&format!("while (__sv_comp_n != null && __sv_comp_n.state != \"{}\") {{\n", state));
+                s.push_str(&format!(
+                    "while (__sv_comp_n != null && __sv_comp_n.state != \"{}\") {{\n",
+                    state
+                ));
                 s.push_str("    __sv_comp_n = __sv_comp_n.parent_compartment;\n");
                 s.push_str("}\n");
                 s.push_str("var __sv_comp = __sv_comp_n!;\n");
@@ -305,9 +314,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 };
                 format!("{indent}var {name} = ({cs_type}) {dict}[\"{name}\"];\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}_state_{parent}(__e);\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
         }),
         TargetLanguage::Java => Some(DispatchSyntax {
             lang,
@@ -345,9 +352,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 };
                 format!("{indent}var {name} = ({java_type}) {dict}.get(\"{name}\");\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}_state_{parent}(__e);\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
         }),
         TargetLanguage::Kotlin => Some(DispatchSyntax {
             lang,
@@ -385,9 +390,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 };
                 format!("{indent}val {name} = {dict}[\"{name}\"] as {kt_type}\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}_state_{parent}(__e)\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e)\n"),
         }),
         TargetLanguage::Swift => Some(DispatchSyntax {
             lang,
@@ -425,9 +428,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 };
                 format!("{indent}let {name} = {dict}[\"{name}\"] as! {sw_type}\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}_state_{parent}(__e)\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e)\n"),
         }),
         TargetLanguage::Dart => Some(DispatchSyntax {
             lang,
@@ -438,12 +439,20 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             else_start: "} else {\n",
             // Dart: escape $ in message strings to avoid string interpolation
             fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg.replace('$', "\\$")),
-            fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg.replace('$', "\\$")),
+            fmt_elif: |msg| {
+                format!(
+                    "}} else if (__e._message == \"{}\") {{\n",
+                    msg.replace('$', "\\$")
+                )
+            },
             fmt_hsm_nav: |state, _sys| {
                 let mut s = String::new();
                 s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
                 s.push_str("var __sv_comp = __compartment;\n");
-                s.push_str(&format!("while (__sv_comp != null && __sv_comp.state != \"{}\") {{\n", state));
+                s.push_str(&format!(
+                    "while (__sv_comp != null && __sv_comp.state != \"{}\") {{\n",
+                    state
+                ));
                 s.push_str("    __sv_comp = __sv_comp.parent_compartment!;\n");
                 s.push_str("}\n");
                 s
@@ -478,9 +487,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     format!("{indent}final {name} = {dict}[\"{name}\"] as {dart_type};\n")
                 }
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}_state_{parent}(__e);\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
         }),
         TargetLanguage::Cpp => Some(DispatchSyntax {
             lang,
@@ -508,7 +515,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 // Wrap string literals in std::string() to avoid const char* / std::string mismatch in std::any
-                let wrapped = if init_val.trim().starts_with('"') && init_val.trim().ends_with('"') {
+                let wrapped = if init_val.trim().starts_with('"') && init_val.trim().ends_with('"')
+                {
                     format!("std::string({})", init_val)
                 } else {
                     init_val.to_string()
@@ -533,9 +541,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>({dict}[\"{name}\"]);\n")
                 }
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}_state_{parent}(__e);\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
         }),
         TargetLanguage::Go => Some(DispatchSyntax {
             lang,
@@ -573,9 +579,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 };
                 format!("{indent}{name} := {dict}[\"{name}\"].({go_type})\n{indent}_ = {name}\n")
             },
-            fmt_forward: |parent, indent, _sys| {
-                format!("{indent}s._state_{parent}(__e)\n")
-            },
+            fmt_forward: |parent, indent, _sys| format!("{indent}s._state_{parent}(__e)\n"),
         }),
         TargetLanguage::C => Some(DispatchSyntax {
             lang,
@@ -589,15 +593,23 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             fmt_hsm_nav: |state, sys| {
                 let mut s = String::new();
                 s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
-                s.push_str(&format!("{}_Compartment* __sv_comp = self->__compartment;\n", sys));
-                s.push_str(&format!("while (__sv_comp != NULL && strcmp(__sv_comp->state, \"{}\") != 0) {{\n", state));
+                s.push_str(&format!(
+                    "{}_Compartment* __sv_comp = self->__compartment;\n",
+                    sys
+                ));
+                s.push_str(&format!(
+                    "while (__sv_comp != NULL && strcmp(__sv_comp->state, \"{}\") != 0) {{\n",
+                    state
+                ));
                 s.push_str("    __sv_comp = __sv_comp->parent_compartment;\n");
                 s.push_str("}\n");
                 s
             },
             fmt_bind_param: |name, type_str, sys| {
                 let (c_type, cast) = match type_str {
-                    "str" | "string" | "String" | "char*" | "const char*" => ("const char*", "(const char*)"),
+                    "str" | "string" | "String" | "char*" | "const char*" => {
+                        ("const char*", "(const char*)")
+                    }
                     _ => ("int", "(int)(intptr_t)"),
                 };
                 format!("{c_type} {name} = {cast}{sys}_FrameDict_get(self->__compartment->state_args, \"{name}\");\n")
@@ -616,10 +628,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     _ => format!("__e->_parameters"),
                 };
                 let (c_type, cast) = match type_str {
-                    "str" | "string" | "String" | "char*" | "const char*" => ("const char*", "(const char*)"),
+                    "str" | "string" | "String" | "char*" | "const char*" => {
+                        ("const char*", "(const char*)")
+                    }
                     _ => ("int", "(int)(intptr_t)"),
                 };
-                format!("{indent}{c_type} {name} = {cast}{sys}_FrameDict_get({dict}, \"{name}\");\n")
+                format!(
+                    "{indent}{c_type} {name} = {cast}{sys}_FrameDict_get({dict}, \"{name}\");\n"
+                )
             },
             fmt_forward: |parent, indent, sys| {
                 format!("{indent}{sys}_state_{parent}(self, __e);\n")
@@ -670,7 +686,12 @@ pub(crate) fn generate_unified_state_dispatch(
             } else {
                 state_var_init_value(&var.var_type, syn.lang)
             };
-            code.push_str(&(syn.fmt_init_sv)(&var.name, &init_val, syn.indent, system_name));
+            code.push_str(&(syn.fmt_init_sv)(
+                &var.name,
+                &init_val,
+                syn.indent,
+                system_name,
+            ));
         }
         // Note: for brace langs, the closing } is handled by the next
         // fmt_elif ("} else if") or the final close_final at the end.
@@ -705,7 +726,12 @@ pub(crate) fn generate_unified_state_dispatch(
                 } else {
                     state_var_init_value(&var.var_type, syn.lang)
                 };
-                code.push_str(&(syn.fmt_init_sv)(&var.name, &init_val, syn.indent, system_name));
+                code.push_str(&(syn.fmt_init_sv)(
+                    &var.name,
+                    &init_val,
+                    syn.indent,
+                    system_name,
+                ));
             }
         }
 
@@ -723,7 +749,13 @@ pub(crate) fn generate_unified_state_dispatch(
                 Some(t) => t.as_str(),
                 None => "int",
             };
-            code.push_str(&(syn.fmt_unpack)(&param.name, type_str, syn.indent, system_name, param_source));
+            code.push_str(&(syn.fmt_unpack)(
+                &param.name,
+                type_str,
+                syn.indent,
+                system_name,
+                param_source,
+            ));
         }
 
         // Handler return init
@@ -736,7 +768,8 @@ pub(crate) fn generate_unified_state_dispatch(
         // Handler body
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
-        let body = emit_handler_body_via_statements(&handler.body_span, source, syn.lang, &handler_ctx);
+        let body =
+            emit_handler_body_via_statements(&handler.body_span, source, syn.lang, &handler_ctx);
 
         let mut body_has_content = !return_init_code.is_empty();
         for line in body.lines() {
@@ -754,7 +787,6 @@ pub(crate) fn generate_unified_state_dispatch(
             code.push_str(syn.empty_body);
             code.push('\n');
         }
-
     }
 
     // 5. Default forward or close final block
@@ -1061,24 +1093,32 @@ pub(crate) fn generate_state_method(
     // Use unified dispatch for languages that have DispatchSyntax defined.
     let body_code = if let Some(syn) = dispatch_syntax_for(lang) {
         generate_unified_state_dispatch(
-            _system_name, state_name, handlers, state_vars, state_params,
-            source, &ctx, default_forward, &syn,
-        )
-    } else {
-        // Only Rust and Erlang use separate dispatch paths
-        match lang {
-        TargetLanguage::Rust => generate_rust_state_dispatch(
             _system_name,
             state_name,
             handlers,
             state_vars,
-            parent_state,
+            state_params,
+            source,
+            &ctx,
             default_forward,
-            is_start_state,
-        ),
-        TargetLanguage::Erlang => String::new(),
-        _ => unreachable!("All other languages use unified dispatch"),
-    } };
+            &syn,
+        )
+    } else {
+        // Only Rust and Erlang use separate dispatch paths
+        match lang {
+            TargetLanguage::Rust => generate_rust_state_dispatch(
+                _system_name,
+                state_name,
+                handlers,
+                state_vars,
+                parent_state,
+                default_forward,
+                is_start_state,
+            ),
+            TargetLanguage::Erlang => String::new(),
+            _ => unreachable!("All other languages use unified dispatch"),
+        }
+    };
 
     let params = match lang {
         TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {

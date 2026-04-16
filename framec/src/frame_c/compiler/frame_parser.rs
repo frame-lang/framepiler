@@ -1550,7 +1550,9 @@ impl FrameParser {
 
         // 1. Scan name
         let name_start = self.cursor;
-        while self.cursor < src.len() && (src[self.cursor].is_ascii_alphanumeric() || src[self.cursor] == b'_') {
+        while self.cursor < src.len()
+            && (src[self.cursor].is_ascii_alphanumeric() || src[self.cursor] == b'_')
+        {
             self.cursor += 1;
         }
         let name = String::from_utf8_lossy(&src[name_start..self.cursor]).to_string();
@@ -1562,21 +1564,36 @@ impl FrameParser {
         // 2. Optional type after ':'
         let var_type = if self.cursor < src.len() && src[self.cursor] == b':' {
             self.cursor += 1;
-            while self.cursor < src.len() && (src[self.cursor] == b' ' || src[self.cursor] == b'\t') {
+            while self.cursor < src.len() && (src[self.cursor] == b' ' || src[self.cursor] == b'\t')
+            {
                 self.cursor += 1;
             }
             let type_start = self.cursor;
             let mut depth: i32 = 0;
             while self.cursor < src.len() && src[self.cursor] != b'\n' {
                 match src[self.cursor] {
-                    b'<' | b'(' | b'[' | b'{' => { depth += 1; self.cursor += 1; }
-                    b'>' | b')' | b']' | b'}' => { depth -= 1; self.cursor += 1; }
+                    b'<' | b'(' | b'[' | b'{' => {
+                        depth += 1;
+                        self.cursor += 1;
+                    }
+                    b'>' | b')' | b']' | b'}' => {
+                        depth -= 1;
+                        self.cursor += 1;
+                    }
                     b'=' if depth == 0 => break,
-                    _ => { self.cursor += 1; }
+                    _ => {
+                        self.cursor += 1;
+                    }
                 }
             }
-            let t = String::from_utf8_lossy(&src[type_start..self.cursor]).trim().to_string();
-            if t.is_empty() { Type::Unknown } else { Type::Custom(t) }
+            let t = String::from_utf8_lossy(&src[type_start..self.cursor])
+                .trim()
+                .to_string();
+            if t.is_empty() {
+                Type::Unknown
+            } else {
+                Type::Custom(t)
+            }
         } else {
             Type::Unknown
         };
@@ -1588,15 +1605,22 @@ impl FrameParser {
         // 3. Init after '='
         let init_text = if self.cursor < src.len() && src[self.cursor] == b'=' {
             self.cursor += 1;
-            while self.cursor < src.len() && (src[self.cursor] == b' ' || src[self.cursor] == b'\t') {
+            while self.cursor < src.len() && (src[self.cursor] == b' ' || src[self.cursor] == b'\t')
+            {
                 self.cursor += 1;
             }
             let init_start = self.cursor;
             while self.cursor < src.len() && src[self.cursor] != b'\n' {
                 self.cursor += 1;
             }
-            let t = String::from_utf8_lossy(&src[init_start..self.cursor]).trim_end().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            let t = String::from_utf8_lossy(&src[init_start..self.cursor])
+                .trim_end()
+                .to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         } else {
             while self.cursor < src.len() && src[self.cursor] != b'\n' {
                 self.cursor += 1;
@@ -1758,7 +1782,9 @@ impl FrameParser {
                 Region::NativeText { .. } => {
                     // Skip native text - it's preserved by the splicer, not stored in AST
                 }
-                Region::FrameSegment { span, kind, indent, .. } => {
+                Region::FrameSegment {
+                    span, kind, indent, ..
+                } => {
                     // StateVar, StateVarAssign, and Context segments
                     // are inline expressions handled by the splicer during code generation
                     if *kind == FrameSegmentKind::StateVar

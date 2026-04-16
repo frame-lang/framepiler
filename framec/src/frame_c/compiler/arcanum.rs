@@ -51,12 +51,12 @@ pub struct FrameSymbol {
 pub struct HandlerEntry {
     pub event: String,
     pub params: Vec<FrameSymbol>,
-    pub return_type: Option<String>,  // Return type annotation if present
-    pub return_init: Option<String>,  // Default return value: = @@:(expr)
-    pub body_span: Span,              // For splicer to extract body content (Path B)
+    pub return_type: Option<String>, // Return type annotation if present
+    pub return_init: Option<String>, // Default return value: = @@:(expr)
+    pub body_span: Span,             // For splicer to extract body content (Path B)
     pub body_statements: Vec<crate::frame_c::compiler::frame_ast::Statement>, // AST body for codegen (Path A)
-    pub is_enter: bool,               // $>
-    pub is_exit: bool,                // $<
+    pub is_enter: bool,                                                       // $>
+    pub is_exit: bool,                                                        // $<
 }
 
 /// Enhanced state entry with handlers

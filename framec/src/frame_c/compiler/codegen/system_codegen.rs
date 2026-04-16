@@ -10,13 +10,11 @@ use super::ast::*;
 use super::backend::get_backend;
 use super::codegen_utils::{
     convert_expression, convert_literal, cpp_map_type, cpp_wrap_any_arg, csharp_map_type,
-    expression_to_string, go_map_type, is_bool_type, is_float_type,
-    is_int_type, is_string_type, java_map_type, kotlin_map_type, state_var_init_value,
-    swift_map_type, to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
+    expression_to_string, go_map_type, is_bool_type, is_float_type, is_int_type, is_string_type,
+    java_map_type, kotlin_map_type, state_var_init_value, swift_map_type, to_snake_case,
+    type_to_cpp_string, type_to_string, HandlerContext,
 };
-use super::frame_expansion::{
-    generate_frame_expansion, get_native_scanner, normalize_indentation,
-};
+use super::frame_expansion::{generate_frame_expansion, get_native_scanner, normalize_indentation};
 use super::interface_gen::{
     generate_action, generate_interface_wrappers, generate_operation, generate_persistence_methods,
 };
@@ -55,7 +53,12 @@ fn is_whole_word_at(bytes: &[u8], start: usize, end: usize, extra_leading: &[u8]
 
 /// Find all whole-word occurrences of `word` in `text`, calling `callback` for each.
 /// The callback receives (start, end) byte positions.
-fn find_whole_words(text: &[u8], word: &[u8], extra_leading: &[u8], mut callback: impl FnMut(usize, usize) -> bool) {
+fn find_whole_words(
+    text: &[u8],
+    word: &[u8],
+    extra_leading: &[u8],
+    mut callback: impl FnMut(usize, usize) -> bool,
+) {
     let mut i = 0;
     while i + word.len() <= text.len() {
         if let Some(found) = text[i..].windows(word.len()).position(|w| w == word) {
@@ -82,10 +85,17 @@ fn init_references_param(init_text: &str, params: &[String]) -> bool {
     }
     let bytes = init_text.as_bytes();
     for p in params {
-        if p.is_empty() { continue; }
+        if p.is_empty() {
+            continue;
+        }
         let mut found = false;
-        find_whole_words(bytes, p.as_bytes(), b".", |_, _| { found = true; false });
-        if found { return true; }
+        find_whole_words(bytes, p.as_bytes(), b".", |_, _| {
+            found = true;
+            false
+        });
+        if found {
+            return true;
+        }
     }
     false
 }
@@ -95,7 +105,9 @@ fn init_references_param(init_text: &str, params: &[String]) -> bool {
 fn prefix_php_vars(text: &str, params: &[String]) -> String {
     let mut result = text.to_string();
     for p in params {
-        if p.is_empty() { continue; }
+        if p.is_empty() {
+            continue;
+        }
         let mut new_result = String::new();
         let bytes = result.as_bytes();
         let pb = p.as_bytes();
@@ -539,12 +551,8 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
             format!("std::shared_ptr<{}>", compartment_type),
             format!("std::shared_ptr<{}>", compartment_type),
         ),
-        TargetLanguage::Java => {
-            (compartment_type.clone(), compartment_type.clone())
-        }
-        TargetLanguage::CSharp => {
-            (compartment_type.clone(), format!("{}?", compartment_type))
-        }
+        TargetLanguage::Java => (compartment_type.clone(), compartment_type.clone()),
+        TargetLanguage::CSharp => (compartment_type.clone(), format!("{}?", compartment_type)),
         TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::Dart => {
             (compartment_type.clone(), format!("{}?", compartment_type))
         }
@@ -728,7 +736,8 @@ fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> 
         // If synthesize_field_raw stripped it (because it references a param),
         // the init belongs in the constructor body, not the field declaration.
         let init_text_str = domain_var.initializer_text.as_deref().unwrap_or("");
-        let strip_unconditionally = matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C);
+        let strip_unconditionally =
+            matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C);
         let strip_collision = init_references_param(init_text_str, &sys_param_names);
         if !(strip_unconditionally || strip_collision) {
             if let Some(ref init_text) = &domain_var.initializer_text {
@@ -1032,7 +1041,8 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
         if matches!(syntax.language, TargetLanguage::GDScript) {
             if init_refs_param {
                 if let Some(ref init_text) = init_text_opt {
-                    let init_expanded = expand_tagged_in_domain(init_text, TargetLanguage::GDScript);
+                    let init_expanded =
+                        expand_tagged_in_domain(init_text, TargetLanguage::GDScript);
                     body.push(CodegenNode::NativeBlock {
                         code: format!("self.{} = {}", domain_var.name, init_expanded),
                         span: None,
@@ -1127,7 +1137,10 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
                     // field, use the param value instead of the domain default.
                     let rust_init = if system.params.iter().any(|p| {
                         p.name == domain_var.name
-                            && matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::Domain)
+                            && matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::Domain
+                            )
                     }) {
                         domain_var.name.clone()
                     } else {
@@ -1144,7 +1157,10 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             // Rust requires all struct fields to be initialized.
             let rust_init = if system.params.iter().any(|p| {
                 p.name == domain_var.name
-                    && matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::Domain)
+                    && matches!(
+                        p.kind,
+                        crate::frame_c::compiler::frame_ast::ParamKind::Domain
+                    )
             }) {
                 domain_var.name.clone()
             } else {
@@ -1162,7 +1178,10 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
     // We must then assign the constructor arg: `self.inventory = inventory`.
     // Note: the param name always matches the domain field name for Domain params.
     for p in &system.params {
-        if matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::Domain) {
+        if matches!(
+            p.kind,
+            crate::frame_c::compiler::frame_ast::ParamKind::Domain
+        ) {
             // Check that this param name actually matches a domain field
             let matching_field = system.domain.iter().find(|d| d.name == p.name);
             if matching_field.is_none() {
@@ -1170,7 +1189,11 @@ fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax
             }
             // Skip if the domain field's init already references this param
             // (avoids double assignment, which breaks final/readonly/const)
-            let field_init = matching_field.unwrap().initializer_text.as_deref().unwrap_or("");
+            let field_init = matching_field
+                .unwrap()
+                .initializer_text
+                .as_deref()
+                .unwrap_or("");
             if field_init.trim() == p.name {
                 continue; // Domain init already assigns from this param
             }
@@ -3485,7 +3508,10 @@ free(self);"#,
             let mut kernel_code = String::new();
             kernel_code.push_str("__router(__e);\n");
             kernel_code.push_str("while (__next_compartment != null) {\n");
-            kernel_code.push_str(&format!("    {} next_compartment = __next_compartment;\n", compartment_class));
+            kernel_code.push_str(&format!(
+                "    {} next_compartment = __next_compartment;\n",
+                compartment_class
+            ));
             kernel_code.push_str("    __next_compartment = null;\n");
             kernel_code.push_str(&format!(
                 "    {} exit_event = new {}(\"<$\");\n",
@@ -3500,7 +3526,10 @@ free(self);"#,
             ));
             kernel_code.push_str("        __router(enter_event);\n");
             kernel_code.push_str("    } else {\n");
-            kernel_code.push_str(&format!("        {} forward_event = __compartment.forward_event;\n", event_class));
+            kernel_code.push_str(&format!(
+                "        {} forward_event = __compartment.forward_event;\n",
+                event_class
+            ));
             kernel_code.push_str("        __compartment.forward_event = null;\n");
             kernel_code.push_str("        if (forward_event._message.equals(\"$>\")) {\n");
             kernel_code.push_str("            __router(forward_event);\n");
@@ -3514,7 +3543,10 @@ free(self);"#,
             kernel_code.push_str("        }\n");
             kernel_code.push_str("    }\n");
             kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-            kernel_code.push_str(&format!("    for ({}FrameContext ctx : _context_stack) {{\n", system.name));
+            kernel_code.push_str(&format!(
+                "    for ({}FrameContext ctx : _context_stack) {{\n",
+                system.name
+            ));
             kernel_code.push_str("        ctx._transitioned = true;\n");
             kernel_code.push_str("    }\n");
             kernel_code.push_str("}");
@@ -3785,7 +3817,10 @@ free(self);"#,
             let mut kernel_code = String::new();
             kernel_code.push_str("__router(__e);\n");
             kernel_code.push_str("while (__next_compartment != null) {\n");
-            kernel_code.push_str(&format!("    {} next_compartment = __next_compartment;\n", compartment_class));
+            kernel_code.push_str(&format!(
+                "    {} next_compartment = __next_compartment;\n",
+                compartment_class
+            ));
             kernel_code.push_str("    __next_compartment = null;\n");
             kernel_code.push_str(&format!(
                 "    {} exit_event = new {}(\"<$\");\n",
@@ -3800,7 +3835,10 @@ free(self);"#,
             ));
             kernel_code.push_str("        __router(enter_event);\n");
             kernel_code.push_str("    } else {\n");
-            kernel_code.push_str(&format!("        {} forward_event = __compartment.forward_event;\n", event_class));
+            kernel_code.push_str(&format!(
+                "        {} forward_event = __compartment.forward_event;\n",
+                event_class
+            ));
             kernel_code.push_str("        __compartment.forward_event = null;\n");
             kernel_code.push_str("        if (forward_event._message == \"$>\") {\n");
             kernel_code.push_str("            __router(forward_event);\n");
@@ -4318,10 +4356,9 @@ mod tests {
     use super::*;
     use crate::frame_c::compiler::codegen::codegen_utils::{
         convert_expression, convert_literal, cpp_map_type, cpp_wrap_any_arg, csharp_map_type,
-        expression_to_string, go_map_type, is_bool_type,
-        is_float_type, is_int_type, is_string_type, java_map_type, kotlin_map_type,
-        state_var_init_value, swift_map_type, to_snake_case, type_to_cpp_string, type_to_string,
-        HandlerContext,
+        expression_to_string, go_map_type, is_bool_type, is_float_type, is_int_type,
+        is_string_type, java_map_type, kotlin_map_type, state_var_init_value, swift_map_type,
+        to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
     };
     use crate::frame_c::compiler::frame_ast::{
         DomainVar, Expression, Literal, Span, SystemAst, Type,

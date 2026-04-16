@@ -8,10 +8,9 @@
 
 use super::ast::{CodegenNode, Param, Visibility};
 use super::codegen_utils::{
-    cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string,
-    go_map_type, is_bool_type, is_float_type, is_int_type,
-    is_string_type, java_map_type, kotlin_map_type, swift_map_type, to_snake_case,
-    type_to_cpp_string, type_to_string, HandlerContext,
+    cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string, go_map_type,
+    is_bool_type, is_float_type, is_int_type, is_string_type, java_map_type, kotlin_map_type,
+    swift_map_type, to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
 };
 use crate::frame_c::compiler::frame_ast::{
     ActionAst, InterfaceMethod, MethodParam, OperationAst, Span, SystemAst, Type,
@@ -1911,9 +1910,7 @@ pub(crate) fn generate_persistence_methods(
             // Restore domain vars — detect type from raw_code if available
             for var in &system.domain {
                 let java_type = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                        java_map_type(t).leak()
-                    }
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => java_map_type(t).leak(),
                     _ => "Object",
                 };
                 match java_type {

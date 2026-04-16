@@ -109,7 +109,9 @@ pub(crate) fn emit_handler_body_via_statements(
     // the original Region to get the span/kind/metadata/indent it needs.
     let mut out = String::new();
     let mut frame_idx = 0usize; // Index into FrameSegment regions
-    let frame_regions: Vec<_> = scan_result.regions.iter()
+    let frame_regions: Vec<_> = scan_result
+        .regions
+        .iter()
         .filter(|r| matches!(r, Region::FrameSegment { .. }))
         .collect();
 
@@ -143,8 +145,12 @@ pub(crate) fn emit_handler_body_via_statements(
                     let transition_indent = if frame_idx < frame_regions.len() {
                         if let Region::FrameSegment { indent, .. } = frame_regions[frame_idx] {
                             *indent
-                        } else { 0 }
-                    } else { 0 };
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    };
 
                     let mut return_stmt_idx = None;
                     for j in (stmt_idx + 1)..statements.len() {
@@ -171,12 +177,19 @@ pub(crate) fn emit_handler_body_via_statements(
                     if let Some(ret_idx) = return_stmt_idx {
                         // Generate the transition expansion to check if it ends with return
                         if frame_idx < frame_regions.len() {
-                            if let Region::FrameSegment { span: seg_span, kind, indent, metadata } = frame_regions[frame_idx] {
+                            if let Region::FrameSegment {
+                                span: seg_span,
+                                kind,
+                                indent,
+                                metadata,
+                            } = frame_regions[frame_idx]
+                            {
                                 let expansion = generate_frame_expansion(
                                     body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
                                 );
                                 let trimmed = expansion.trim_end();
-                                let has_return = trimmed.ends_with("return;") || trimmed.ends_with("return");
+                                let has_return =
+                                    trimmed.ends_with("return;") || trimmed.ends_with("return");
 
                                 if has_return {
                                     // Strip trailing return, emit return-expr before it
@@ -194,9 +207,16 @@ pub(crate) fn emit_handler_body_via_statements(
                                     for k in (stmt_idx + 1)..=ret_idx {
                                         if !matches!(&statements[k], Statement::NativeCode(_)) {
                                             if k == ret_idx && fj < frame_regions.len() {
-                                                if let Region::FrameSegment { span: seg_span, kind, indent, metadata } = frame_regions[fj] {
+                                                if let Region::FrameSegment {
+                                                    span: seg_span,
+                                                    kind,
+                                                    indent,
+                                                    metadata,
+                                                } = frame_regions[fj]
+                                                {
                                                     let exp = generate_frame_expansion(
-                                                        body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
+                                                        body_bytes, seg_span, *kind, *indent, lang,
+                                                        ctx, metadata,
                                                     );
                                                     out.push_str(&exp);
                                                     out.push('\n');
@@ -207,11 +227,20 @@ pub(crate) fn emit_handler_body_via_statements(
                                     }
                                     skip_set.insert(ret_idx);
                                     // Re-add the return with matching indent
-                                    let return_keyword = if matches!(lang,
-                                        TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby |
-                                        TargetLanguage::Lua | TargetLanguage::Kotlin | TargetLanguage::Swift |
-                                        TargetLanguage::Go
-                                    ) { "return" } else { "return;" };
+                                    let return_keyword = if matches!(
+                                        lang,
+                                        TargetLanguage::Python3
+                                            | TargetLanguage::GDScript
+                                            | TargetLanguage::Ruby
+                                            | TargetLanguage::Lua
+                                            | TargetLanguage::Kotlin
+                                            | TargetLanguage::Swift
+                                            | TargetLanguage::Go
+                                    ) {
+                                        "return"
+                                    } else {
+                                        "return;"
+                                    };
                                     let ret_indent = " ".repeat(*indent);
                                     out.push_str(&ret_indent);
                                     out.push_str(return_keyword);
@@ -225,7 +254,13 @@ pub(crate) fn emit_handler_body_via_statements(
 
                 // Look up the corresponding original Region for expansion parameters
                 if frame_idx < frame_regions.len() {
-                    if let Region::FrameSegment { span: seg_span, kind, indent, metadata } = frame_regions[frame_idx] {
+                    if let Region::FrameSegment {
+                        span: seg_span,
+                        kind,
+                        indent,
+                        metadata,
+                    } = frame_regions[frame_idx]
+                    {
                         let expansion = generate_frame_expansion(
                             body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
                         );
@@ -276,7 +311,6 @@ pub(crate) fn emit_handler_body_via_statements(
         text
     }
 }
-
 
 /// Strip unreachable code after terminal statements for Java.
 /// Java treats code after `return;` as a compile error, unlike TypeScript/C++ which ignore it.
@@ -442,16 +476,27 @@ pub(crate) fn generate_frame_expansion(
             } else {
                 // Extract transition components from metadata (preferred)
                 // or fall back to text re-parsing
-                let (target, exit_args, enter_args, state_args) = if let SegmentMetadata::Transition {
-                    target_state, exit_args, enter_args, state_args, ..
-                } = metadata {
-                    (target_state.clone(), exit_args.clone(), enter_args.clone(), state_args.clone())
-                } else {
-                    let t = extract_transition_target(&segment_text);
-                    let (ex, en) = extract_transition_args(&segment_text);
-                    let st = extract_state_args(&segment_text);
-                    (t, ex, en, st)
-                };
+                let (target, exit_args, enter_args, state_args) =
+                    if let SegmentMetadata::Transition {
+                        target_state,
+                        exit_args,
+                        enter_args,
+                        state_args,
+                        ..
+                    } = metadata
+                    {
+                        (
+                            target_state.clone(),
+                            exit_args.clone(),
+                            enter_args.clone(),
+                            state_args.clone(),
+                        )
+                    } else {
+                        let t = extract_transition_target(&segment_text);
+                        let (ex, en) = extract_transition_args(&segment_text);
+                        let st = extract_state_args(&segment_text);
+                        (t, ex, en, st)
+                    };
 
                 // Expand state variable references in arguments
                 let exit_str = exit_args.map(|a| expand_expression(&a, lang, ctx));
@@ -2411,7 +2456,11 @@ pub(crate) fn generate_frame_expansion(
                 }
                 TargetLanguage::C => {
                     // For C, access via FrameDict_get with type-aware cast
-                    let c_type = ctx.state_var_types.get(var_name.as_str()).map(|s| s.as_str()).unwrap_or("int");
+                    let c_type = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
+                        .map(|s| s.as_str())
+                        .unwrap_or("int");
                     let cast = match c_type {
                         "char*" | "const char*" | "str" | "string" | "String" => "(const char*)",
                         _ => "(int)(intptr_t)",
@@ -2491,7 +2540,10 @@ pub(crate) fn generate_frame_expansion(
                     } else if ctx.use_sv_comp {
                         format!("(__sv_comp.state_vars[\"{}\"] as! {})", var_name, sw_type)
                     } else {
-                        format!("(__compartment.state_vars[\"{}\"] as! {})", var_name, sw_type)
+                        format!(
+                            "(__compartment.state_vars[\"{}\"] as! {})",
+                            var_name, sw_type
+                        )
                     }
                 }
                 TargetLanguage::Go => {
@@ -2765,7 +2817,10 @@ pub(crate) fn generate_frame_expansion(
             let trimmed = segment_text.trim();
             if is_assignment {
                 // Assignment: @@:return = expr
-                let expr = if let SegmentMetadata::ContextReturn { assign_expr: Some(e) } = metadata {
+                let expr = if let SegmentMetadata::ContextReturn {
+                    assign_expr: Some(e),
+                } = metadata
+                {
                     e.as_str()
                 } else {
                     let eq_pos = trimmed.find('=').unwrap();
@@ -2773,84 +2828,123 @@ pub(crate) fn generate_frame_expansion(
                 };
                 let expanded_expr = expand_expression(expr, lang, ctx);
                 match lang {
-                        TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._context_stack[-1]._return = {}", indent_str, expanded_expr),
-                        TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._return = {};", indent_str, expanded_expr),
-                        TargetLanguage::C => format!("{}{}_CTX(self)->_return = (void*)(intptr_t)({});", indent_str, ctx.system_name, expanded_expr),
-                        TargetLanguage::Rust => {
-                            // For Rust, evaluate expression first to avoid borrow conflicts.
-                            // Wrap string literals: "x" is &str but downcast expects String.
-                            let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
-                                format!("String::from({})", expanded_expr.trim())
-                            } else {
-                                expanded_expr.clone()
-                            };
-                            format!("{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", indent_str, boxed_expr, indent_str)
-                        }
-                        TargetLanguage::Cpp => {
-                            let wrapped = cpp_wrap_string_literal(&expanded_expr);
-                            format!("{}_context_stack.back()._return = std::any({});", indent_str, wrapped)
-                        }
-                        TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._return = {};", indent_str, expanded_expr),
-                        TargetLanguage::Kotlin => format!("{}_context_stack[_context_stack.size - 1]._return = {}", indent_str, expanded_expr),
-                        TargetLanguage::Swift => format!("{}_context_stack[_context_stack.count - 1]._return = {}", indent_str, expanded_expr),
-                        TargetLanguage::CSharp => format!("{}_context_stack[_context_stack.Count - 1]._return = {};", indent_str, expanded_expr),
-                        TargetLanguage::Go => format!("{}s._context_stack[len(s._context_stack)-1]._return = {}", indent_str, expanded_expr),
-                        TargetLanguage::Php => format!("{}$this->_context_stack[count($this->_context_stack) - 1]->_return = {};", indent_str, expanded_expr),
-                        TargetLanguage::Ruby => format!("{}@_context_stack[@_context_stack.length - 1]._return = {}", indent_str, expanded_expr),
-                        TargetLanguage::Lua => format!("{}self._context_stack[#self._context_stack]._return = {}", indent_str, expanded_expr),
-                        TargetLanguage::Erlang => {
-                            let erl_expr = expanded_expr.replace("self.", "Data#data.");
-                            format!("{}__ReturnVal = {}", indent_str, erl_expr)
-                        }
-                        TargetLanguage::Graphviz => unreachable!(),
+                    TargetLanguage::Python3 | TargetLanguage::GDScript => format!(
+                        "{}self._context_stack[-1]._return = {}",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::TypeScript
+                    | TargetLanguage::Dart
+                    | TargetLanguage::JavaScript => format!(
+                        "{}this._context_stack[this._context_stack.length - 1]._return = {};",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::C => format!(
+                        "{}{}_CTX(self)->_return = (void*)(intptr_t)({});",
+                        indent_str, ctx.system_name, expanded_expr
+                    ),
+                    TargetLanguage::Rust => {
+                        // For Rust, evaluate expression first to avoid borrow conflicts.
+                        // Wrap string literals: "x" is &str but downcast expects String.
+                        let boxed_expr = if expanded_expr.trim().starts_with('"')
+                            && expanded_expr.trim().ends_with('"')
+                        {
+                            format!("String::from({})", expanded_expr.trim())
+                        } else {
+                            expanded_expr.clone()
+                        };
+                        format!("{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", indent_str, boxed_expr, indent_str)
+                    }
+                    TargetLanguage::Cpp => {
+                        let wrapped = cpp_wrap_string_literal(&expanded_expr);
+                        format!(
+                            "{}_context_stack.back()._return = std::any({});",
+                            indent_str, wrapped
+                        )
+                    }
+                    TargetLanguage::Java => format!(
+                        "{}_context_stack.get(_context_stack.size() - 1)._return = {};",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::Kotlin => format!(
+                        "{}_context_stack[_context_stack.size - 1]._return = {}",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::Swift => format!(
+                        "{}_context_stack[_context_stack.count - 1]._return = {}",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::CSharp => format!(
+                        "{}_context_stack[_context_stack.Count - 1]._return = {};",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::Go => format!(
+                        "{}s._context_stack[len(s._context_stack)-1]._return = {}",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::Php => format!(
+                        "{}$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::Ruby => format!(
+                        "{}@_context_stack[@_context_stack.length - 1]._return = {}",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::Lua => format!(
+                        "{}self._context_stack[#self._context_stack]._return = {}",
+                        indent_str, expanded_expr
+                    ),
+                    TargetLanguage::Erlang => {
+                        let erl_expr = expanded_expr.replace("self.", "Data#data.");
+                        format!("{}__ReturnVal = {}", indent_str, erl_expr)
+                    }
+                    TargetLanguage::Graphviz => unreachable!(),
                 }
             } else {
                 // Read: @@:return
-                    match lang {
-                        TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                            "self._context_stack[-1]._return".to_string()
-                        }
-                        TargetLanguage::TypeScript
-                        | TargetLanguage::Dart
-                        | TargetLanguage::JavaScript => {
-                            "this._context_stack[this._context_stack.length - 1]._return"
-                                .to_string()
-                        }
-                        TargetLanguage::C => format!("{}_RETURN(self)", ctx.system_name),
-                        TargetLanguage::Rust => {
-                            "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())"
-                                .to_string()
-                        }
-                        TargetLanguage::Cpp => {
-                            "std::any_cast<std::string>(_context_stack.back()._return)".to_string()
-                        }
-                        TargetLanguage::Java => {
-                            "_context_stack.get(_context_stack.size() - 1)._return".to_string()
-                        }
-                        TargetLanguage::Kotlin => {
-                            "_context_stack[_context_stack.size - 1]._return".to_string()
-                        }
-                        TargetLanguage::Swift => {
-                            "_context_stack[_context_stack.count - 1]._return".to_string()
-                        }
-                        TargetLanguage::CSharp => {
-                            "_context_stack[_context_stack.Count - 1]._return".to_string()
-                        }
-                        TargetLanguage::Go => {
-                            "s._context_stack[len(s._context_stack)-1]._return".to_string()
-                        }
-                        TargetLanguage::Php => {
-                            "$this->_context_stack[count($this->_context_stack) - 1]->_return"
-                                .to_string()
-                        }
-                        TargetLanguage::Ruby => {
-                            "@_context_stack[@_context_stack.length - 1]._return".to_string()
-                        }
-                        TargetLanguage::Lua => {
-                            "self._context_stack[#self._context_stack]._return".to_string()
-                        }
-                        TargetLanguage::Erlang => "__ReturnVal".to_string(),
-                        TargetLanguage::Graphviz => unreachable!(),
+                match lang {
+                    TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                        "self._context_stack[-1]._return".to_string()
+                    }
+                    TargetLanguage::TypeScript
+                    | TargetLanguage::Dart
+                    | TargetLanguage::JavaScript => {
+                        "this._context_stack[this._context_stack.length - 1]._return".to_string()
+                    }
+                    TargetLanguage::C => format!("{}_RETURN(self)", ctx.system_name),
+                    TargetLanguage::Rust => {
+                        "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())"
+                            .to_string()
+                    }
+                    TargetLanguage::Cpp => {
+                        "std::any_cast<std::string>(_context_stack.back()._return)".to_string()
+                    }
+                    TargetLanguage::Java => {
+                        "_context_stack.get(_context_stack.size() - 1)._return".to_string()
+                    }
+                    TargetLanguage::Kotlin => {
+                        "_context_stack[_context_stack.size - 1]._return".to_string()
+                    }
+                    TargetLanguage::Swift => {
+                        "_context_stack[_context_stack.count - 1]._return".to_string()
+                    }
+                    TargetLanguage::CSharp => {
+                        "_context_stack[_context_stack.Count - 1]._return".to_string()
+                    }
+                    TargetLanguage::Go => {
+                        "s._context_stack[len(s._context_stack)-1]._return".to_string()
+                    }
+                    TargetLanguage::Php => {
+                        "$this->_context_stack[count($this->_context_stack) - 1]->_return"
+                            .to_string()
+                    }
+                    TargetLanguage::Ruby => {
+                        "@_context_stack[@_context_stack.length - 1]._return".to_string()
+                    }
+                    TargetLanguage::Lua => {
+                        "self._context_stack[#self._context_stack]._return".to_string()
+                    }
+                    TargetLanguage::Erlang => "__ReturnVal".to_string(),
+                    TargetLanguage::Graphviz => unreachable!(),
                 }
             }
         }
@@ -2875,7 +2969,10 @@ pub(crate) fn generate_frame_expansion(
                     let tail = trimmed[close_pos + 1..].trim();
                     tail.starts_with("return")
                         && (tail.len() == 6
-                            || tail.as_bytes().get(6).map_or(true, |b| b.is_ascii_whitespace() || *b == b';'))
+                            || tail
+                                .as_bytes()
+                                .get(6)
+                                .map_or(true, |b| b.is_ascii_whitespace() || *b == b';'))
                 } else {
                     false
                 };
@@ -2893,7 +2990,9 @@ pub(crate) fn generate_frame_expansion(
                             b')' => depth -= 1,
                             _ => {}
                         }
-                        if depth > 0 { p += 1; }
+                        if depth > 0 {
+                            p += 1;
+                        }
                     }
                     let expr_str = trimmed[after_open..p].to_string();
                     let after_close = if p < bytes.len() { p + 1 } else { p };
@@ -3398,9 +3497,7 @@ pub(crate) fn generate_frame_expansion(
             // Bare @@:system — should have been caught by validator (E604)
             "/* ERROR: bare @@:system */".to_string()
         }
-        FrameSegmentKind::ContextSystemState => {
-            expand_system_state(lang)
-        }
+        FrameSegmentKind::ContextSystemState => expand_system_state(lang),
         FrameSegmentKind::ContextSelf => {
             // @@:self — bare system instance reference
             match lang {
@@ -3428,13 +3525,14 @@ pub(crate) fn generate_frame_expansion(
             // @@:self.method(args) — reentrant interface call with transition guard
             // Extract method name and args from segment text: @@:self.method(args)
             let trimmed = segment_text.trim();
-            let (method_name, args_with_parens) = if let SegmentMetadata::SelfCall { method, args } = metadata {
-                (method.as_str(), args.as_str())
-            } else {
-                let after_self = trimmed.strip_prefix("@@:self.").unwrap_or(trimmed);
-                let paren_pos = after_self.find('(').unwrap_or(after_self.len());
-                (&after_self[..paren_pos], &after_self[paren_pos..])
-            };
+            let (method_name, args_with_parens) =
+                if let SegmentMetadata::SelfCall { method, args } = metadata {
+                    (method.as_str(), args.as_str())
+                } else {
+                    let after_self = trimmed.strip_prefix("@@:self.").unwrap_or(trimmed);
+                    let paren_pos = after_self.find('(').unwrap_or(after_self.len());
+                    (&after_self[..paren_pos], &after_self[paren_pos..])
+                };
 
             // Generate the native self-call
             let call_expr = match lang {
@@ -3829,7 +3927,8 @@ pub(crate) fn expand_expression(expr: &str, lang: TargetLanguage, ctx: &HandlerC
             ..
         } = region
         {
-            let expansion = generate_frame_expansion(body_bytes, span, *kind, 0, lang, ctx, metadata);
+            let expansion =
+                generate_frame_expansion(body_bytes, span, *kind, 0, lang, ctx, metadata);
             expansions.push(expansion);
         }
     }
@@ -3903,7 +4002,11 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix));
                 }
                 TargetLanguage::C => {
-                    let c_type = ctx.state_var_types.get(&var_name).map(|s| s.as_str()).unwrap_or("int");
+                    let c_type = ctx
+                        .state_var_types
+                        .get(&var_name)
+                        .map(|s| s.as_str())
+                        .unwrap_or("int");
                     let cast = match c_type {
                         "char*" | "const char*" | "str" | "string" | "String" => "(const char*)",
                         _ => "(int)(intptr_t)",
@@ -3914,7 +4017,10 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                             cast, ctx.system_name, var_name
                         ))
                     } else {
-                        result.push_str(&format!("{}{}_FrameDict_get(self->__compartment->state_vars, \"{}\")", cast, ctx.system_name, var_name))
+                        result.push_str(&format!(
+                            "{}{}_FrameDict_get(self->__compartment->state_vars, \"{}\")",
+                            cast, ctx.system_name, var_name
+                        ))
                     }
                 }
                 TargetLanguage::Cpp => {
@@ -3987,9 +4093,15 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                             result.push_str(&format!("__compartment.state_vars[\"{}\"]", var_name))
                         }
                     } else if ctx.use_sv_comp {
-                        result.push_str(&format!("(__sv_comp.state_vars[\"{}\"] as! {})", var_name, sw_type))
+                        result.push_str(&format!(
+                            "(__sv_comp.state_vars[\"{}\"] as! {})",
+                            var_name, sw_type
+                        ))
                     } else {
-                        result.push_str(&format!("(__compartment.state_vars[\"{}\"] as! {})", var_name, sw_type))
+                        result.push_str(&format!(
+                            "(__compartment.state_vars[\"{}\"] as! {})",
+                            var_name, sw_type
+                        ))
                     }
                 }
                 TargetLanguage::CSharp => {
@@ -4163,7 +4275,9 @@ pub(crate) fn expand_system_state_in_code(code: &str, lang: TargetLanguage) -> S
                 b')' => depth -= 1,
                 _ => {}
             }
-            if depth > 0 { j += 1; }
+            if depth > 0 {
+                j += 1;
+            }
         }
         if depth == 0 {
             let expr = &result[after..j];
@@ -4171,9 +4285,13 @@ pub(crate) fn expand_system_state_in_code(code: &str, lang: TargetLanguage) -> S
                 // Erlang: last expression IS the return value
                 TargetLanguage::Erlang => expr.to_string(),
                 // No-semicolon languages
-                TargetLanguage::Python3 | TargetLanguage::GDScript | TargetLanguage::Ruby |
-                TargetLanguage::Kotlin | TargetLanguage::Swift | TargetLanguage::Lua |
-                TargetLanguage::Go => format!("return {}", expr),
+                TargetLanguage::Python3
+                | TargetLanguage::GDScript
+                | TargetLanguage::Ruby
+                | TargetLanguage::Kotlin
+                | TargetLanguage::Swift
+                | TargetLanguage::Lua
+                | TargetLanguage::Go => format!("return {}", expr),
                 // Semicolon languages
                 _ => format!("return {};", expr),
             };

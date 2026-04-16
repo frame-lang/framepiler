@@ -55,9 +55,7 @@
 
 use super::arcanum::Arcanum;
 use super::frame_ast::*;
-use super::native_region_scanner::{
-    FrameSegmentKind, Region, SegmentMetadata,
-};
+use super::native_region_scanner::{FrameSegmentKind, Region, SegmentMetadata};
 use crate::frame_c::compiler::codegen::frame_expansion::get_native_scanner;
 use std::collections::{HashMap, HashSet};
 
@@ -192,7 +190,12 @@ impl FrameValidator {
         }
     }
 
-    fn validate_system_self_calls(&mut self, system: &SystemAst, source: &[u8], target: crate::frame_c::visitors::TargetLanguage) {
+    fn validate_system_self_calls(
+        &mut self,
+        system: &SystemAst,
+        source: &[u8],
+        target: crate::frame_c::visitors::TargetLanguage,
+    ) {
         let interface_methods = self.build_interface_map(system);
 
         // Validate handler bodies using the scanner (handles comments, strings correctly)
@@ -205,7 +208,11 @@ impl FrameValidator {
                     }
                     let body = &source[span.start..span.end];
                     self.validate_frame_segments_in_body(
-                        body, &interface_methods, &state.name, &handler.event, target,
+                        body,
+                        &interface_methods,
+                        &state.name,
+                        &handler.event,
+                        target,
                     );
                 }
             }
@@ -219,7 +226,11 @@ impl FrameValidator {
             }
             let body = &source[span.start..span.end];
             self.validate_frame_segments_in_body(
-                body, &interface_methods, "(action)", &action.name, target,
+                body,
+                &interface_methods,
+                "(action)",
+                &action.name,
+                target,
             );
         }
     }
@@ -1228,7 +1239,11 @@ pub fn validate_frame_source(
 /// Count arguments in a parenthesized argument string like "(a, b, c)".
 /// Returns 0 for "()" or empty.
 fn count_args(args: &str) -> usize {
-    let inner = args.trim().trim_start_matches('(').trim_end_matches(')').trim();
+    let inner = args
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim();
     if inner.is_empty() {
         return 0;
     }
@@ -1256,10 +1271,7 @@ mod tests {
     /// Helper: parse + run BOTH the general validator and the
     /// target-specific validator. The pipeline runs them in this order
     /// for real compiles, so the tests should mirror that.
-    fn validate_for_target(
-        source: &str,
-        target: VTarget,
-    ) -> Result<(), Vec<ValidationError>> {
+    fn validate_for_target(source: &str, target: VTarget) -> Result<(), Vec<ValidationError>> {
         use crate::frame_c::compiler::arcanum::build_arcanum_from_frame_ast;
         use crate::frame_c::compiler::frame_parser::FrameParser;
 
@@ -1291,10 +1303,7 @@ mod tests {
             get() { }
         }
 }"#;
-        let result = validate_for_target(
-            source,
-            VTarget::GDScript,
-        );
+        let result = validate_for_target(source, VTarget::GDScript);
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -1320,10 +1329,7 @@ mod tests {
             call() { }
         }
 }"#;
-        let result = validate_for_target(
-            source,
-            VTarget::GDScript,
-        );
+        let result = validate_for_target(source, VTarget::GDScript);
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 2);
@@ -1347,10 +1353,7 @@ mod tests {
             do_something() { }
         }
 }"#;
-        let result = validate_for_target(
-            source,
-            VTarget::GDScript,
-        );
+        let result = validate_for_target(source, VTarget::GDScript);
         assert!(result.is_ok(), "safe names must pass: {:?}", result.err());
     }
 
@@ -1402,10 +1405,7 @@ mod tests {
             run() { }
         }
 }"#;
-        let (result, warnings) = validate_for_target_with_warnings(
-            source,
-            VTarget::TypeScript,
-        );
+        let (result, warnings) = validate_for_target_with_warnings(source, VTarget::TypeScript);
         assert!(
             result.is_ok(),
             "TS shadowing is a warning, not an error: {:?}",
@@ -1440,10 +1440,7 @@ mod tests {
             resolve() { }
         }
 }"#;
-        let (result, warnings) = validate_for_target_with_warnings(
-            source,
-            VTarget::TypeScript,
-        );
+        let (result, warnings) = validate_for_target_with_warnings(source, VTarget::TypeScript);
         assert!(result.is_ok());
         // Both system names should be flagged. The validator runs
         // per-system, so the helper here only sees the warnings from
@@ -1464,10 +1461,7 @@ mod tests {
             move() { }
         }
 }"#;
-        let (result, warnings) = validate_for_target_with_warnings(
-            source,
-            VTarget::TypeScript,
-        );
+        let (result, warnings) = validate_for_target_with_warnings(source, VTarget::TypeScript);
         assert!(result.is_ok());
         assert!(
             warnings.is_empty(),
@@ -1489,10 +1483,7 @@ mod tests {
             run() { }
         }
 }"#;
-        let (result, warnings) = validate_for_target_with_warnings(
-            source,
-            VTarget::Python3,
-        );
+        let (result, warnings) = validate_for_target_with_warnings(source, VTarget::Python3);
         assert!(result.is_ok());
         assert!(
             warnings.is_empty(),
@@ -1514,10 +1505,7 @@ mod tests {
             get() { }
         }
 }"#;
-        let result = validate_for_target(
-            source,
-            VTarget::Python3,
-        );
+        let result = validate_for_target(source, VTarget::Python3);
         assert!(
             result.is_ok(),
             "python should not flag GDScript-only collisions: {:?}",
