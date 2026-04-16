@@ -91,58 +91,16 @@ pub fn compile_module(source: &[u8], config: &PipelineConfig) -> Result<CompileR
     compile_ast_based(source, config)
 }
 
-/// Validation-only mode
+/// Validation-only mode: run the full V4 pipeline and discard the
+/// generated code. Same validator coverage as `framec compile`,
+/// without paying for the emit/assembly stages where it matters
+/// (the codegen still runs, but its output is never written out).
 fn validate_only(source: &[u8], config: &PipelineConfig) -> Result<CompileResult, RunError> {
-    use crate::frame_c::compiler::frame_ast::TargetLanguage as AstTarget;
-    use crate::frame_c::compiler::frame_parser::FrameParser;
-    use crate::frame_c::compiler::frame_validator::FrameValidator;
-
-    // Convert target language
-    let ast_target = match config.target {
-        TargetLanguage::Python3 => AstTarget::Python3,
-        TargetLanguage::TypeScript => AstTarget::TypeScript,
-        TargetLanguage::Rust => AstTarget::Rust,
-        TargetLanguage::CSharp => AstTarget::CSharp,
-        TargetLanguage::C => AstTarget::C,
-        TargetLanguage::Cpp => AstTarget::Cpp,
-        TargetLanguage::Java => AstTarget::Java,
-        TargetLanguage::Go => AstTarget::Java, // Go uses same AST target as Java (brace-based)
-        TargetLanguage::JavaScript => AstTarget::TypeScript, // JS uses same AST target as TS
-        TargetLanguage::Php => AstTarget::Java, // PHP uses brace-based like Java
-        TargetLanguage::Kotlin => AstTarget::Java, // Kotlin uses brace-based like Java
-        TargetLanguage::Swift => AstTarget::Java, // Swift uses brace-based like Java
-        TargetLanguage::Graphviz => AstTarget::Graphviz,
-        _ => AstTarget::Python3,
-    };
-
-    // Parse
-    let mut parser = FrameParser::new(source, ast_target);
-    let ast = match parser.parse_module() {
-        Ok(ast) => ast,
-        Err(e) => {
-            return Ok(CompileResult {
-                code: String::new(),
-                errors: vec![CompileError::new("E001", &format!("Parse error: {}", e))],
-                warnings: vec![],
-                source_map: None,
-            });
-        }
-    };
-
-    // Validate
-    let mut validator = FrameValidator::new();
-    let errors = match validator.validate(&ast) {
-        Ok(()) => vec![],
-        Err(errs) => errs
-            .iter()
-            .map(|e| CompileError::new(&e.code, &e.message))
-            .collect(),
-    };
-
+    let result = compile_ast_based(source, config)?;
     Ok(CompileResult {
         code: String::new(),
-        errors,
-        warnings: vec![],
+        errors: result.errors,
+        warnings: result.warnings,
         source_map: None,
     })
 }
