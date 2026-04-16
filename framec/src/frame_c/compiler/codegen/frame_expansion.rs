@@ -474,29 +474,28 @@ pub(crate) fn generate_frame_expansion(
                     TargetLanguage::Graphviz => unreachable!(),
                 }
             } else {
-                // Extract transition components from metadata (preferred)
-                // or fall back to text re-parsing
-                let (target, exit_args, enter_args, state_args) =
-                    if let SegmentMetadata::Transition {
+                // Transition metadata is always populated by the scanner
+                // for `Transition` kind segments — see
+                // `native_region_scanner/unified.rs` (build_metadata for
+                // `FrameSegmentKind::Transition | TransitionForward`).
+                let (target, exit_args, enter_args, state_args) = match metadata {
+                    SegmentMetadata::Transition {
                         target_state,
                         exit_args,
                         enter_args,
                         state_args,
                         ..
-                    } = metadata
-                    {
-                        (
-                            target_state.clone(),
-                            exit_args.clone(),
-                            enter_args.clone(),
-                            state_args.clone(),
-                        )
-                    } else {
-                        let t = extract_transition_target(&segment_text);
-                        let (ex, en) = extract_transition_args(&segment_text);
-                        let st = extract_state_args(&segment_text);
-                        (t, ex, en, st)
-                    };
+                    } => (
+                        target_state.clone(),
+                        exit_args.clone(),
+                        enter_args.clone(),
+                        state_args.clone(),
+                    ),
+                    _ => unreachable!(
+                        "Transition kind segment without Transition metadata: {:?}",
+                        metadata
+                    ),
+                };
 
                 // Expand state variable references in arguments
                 let exit_str = exit_args.map(|a| expand_expression(&a, lang, ctx));
@@ -1784,10 +1783,12 @@ pub(crate) fn generate_frame_expansion(
             // 1. Transition to the target state (exit current)
             // 2. Forward current event to new state (instead of sending $>)
             // 3. Return (event was handled by new state)
-            let target = if let SegmentMetadata::Transition { target_state, .. } = metadata {
-                target_state.clone()
-            } else {
-                extract_transition_target(&segment_text)
+            let target = match metadata {
+                SegmentMetadata::Transition { target_state, .. } => target_state.clone(),
+                _ => unreachable!(
+                    "TransitionForward kind segment without Transition metadata: {:?}",
+                    metadata
+                ),
             };
             match lang {
                 TargetLanguage::Python3 => {
@@ -3713,138 +3714,6 @@ pub(crate) fn extract_transition_target(text: &str) -> String {
     } else {
         "Unknown".to_string()
     }
-}
-
-/// Extract transition arguments (exit_args, enter_args) from transition text
-/// Syntax: (exit_args)? -> (enter_args)? $State(state_args)?
-pub(crate) fn extract_transition_args(text: &str) -> (Option<String>, Option<String>) {
-    let text = text.trim();
-    let bytes = text.as_bytes();
-    let n = bytes.len();
-    let mut i = 0;
-
-    // Skip leading whitespace
-    while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
-        i += 1;
-    }
-
-    // Check for (exit_args) before ->
-    let mut exit_args: Option<String> = None;
-    if i < n && bytes[i] == b'(' {
-        if let Some(close_idx) = find_balanced_paren(bytes, i, n) {
-            exit_args = Some(String::from_utf8_lossy(&bytes[i + 1..close_idx - 1]).to_string());
-            i = close_idx;
-            while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
-                i += 1;
-            }
-        }
-    }
-
-    // Skip ->
-    if i + 1 < n && bytes[i] == b'-' && bytes[i + 1] == b'>' {
-        i += 2;
-        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-    }
-
-    // Check for (enter_args) after ->
-    let mut enter_args: Option<String> = None;
-    if i < n && bytes[i] == b'(' {
-        if let Some(close_idx) = find_balanced_paren(bytes, i, n) {
-            enter_args = Some(String::from_utf8_lossy(&bytes[i + 1..close_idx - 1]).to_string());
-        }
-    }
-
-    (exit_args, enter_args)
-}
-
-/// Extract state_args from transition text: -> $State(state_args)?
-/// Returns the comma-separated args string inside the parens after $State
-pub(crate) fn extract_state_args(text: &str) -> Option<String> {
-    // Find $StateName( pattern
-    let bytes = text.as_bytes();
-    let n = bytes.len();
-
-    // Find $ after ->
-    let arrow_pos = text.find("->")?;
-    let after_arrow = &text[arrow_pos + 2..];
-
-    // Find $ for state name
-    let dollar_pos = after_arrow.find('$')?;
-    let state_start = dollar_pos + 1;
-
-    // Skip the state name (alphanumeric + underscore)
-    let mut i = state_start;
-    while i < after_arrow.len() {
-        let c = after_arrow.as_bytes()[i];
-        if c.is_ascii_alphanumeric() || c == b'_' {
-            i += 1;
-        } else {
-            break;
-        }
-    }
-
-    // Check if there's a ( immediately after state name
-    if i < after_arrow.len() && after_arrow.as_bytes()[i] == b'(' {
-        let paren_start = arrow_pos + 2 + i;
-        if let Some(close_idx) = find_balanced_paren(bytes, paren_start, n) {
-            // Return content between ( and )
-            return Some(
-                String::from_utf8_lossy(&bytes[paren_start + 1..close_idx - 1]).to_string(),
-            );
-        }
-    }
-
-    None
-}
-
-/// Find the closing paren for a balanced paren block, returns index after ')'.
-///
-/// Used for Frame-internal syntax (transition args, state args) where comments
-/// cannot appear. For native code paren matching, use `SyntaxSkipper::balanced_paren_end()`
-/// which handles language-specific comments, triple-quotes, raw strings, etc.
-pub(crate) fn find_balanced_paren(bytes: &[u8], mut i: usize, end: usize) -> Option<usize> {
-    if i >= end || bytes[i] != b'(' {
-        return None;
-    }
-    let mut depth = 0i32;
-    let mut in_str: Option<u8> = None;
-    while i < end {
-        let b = bytes[i];
-        if let Some(q) = in_str {
-            if b == b'\\' {
-                i += 2;
-                continue;
-            }
-            if b == q {
-                in_str = None;
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'\'' | b'"' => {
-                in_str = Some(b);
-                i += 1;
-            }
-            b'(' => {
-                depth += 1;
-                i += 1;
-            }
-            b')' => {
-                depth -= 1;
-                i += 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {
-                i += 1;
-            }
-        }
-    }
-    None
 }
 
 /// Extract state variable name from "$.varName"
