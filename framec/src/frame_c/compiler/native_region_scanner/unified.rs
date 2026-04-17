@@ -452,7 +452,7 @@ fn match_frame_statement<S: SyntaxSkipper>(
         if k + 1 < end && bytes[k] == b'=' && bytes[k + 1] == b'>' {
             k = skip_ws(bytes, k + 2, end);
             if k < end && bytes[k] == b'$' {
-                return Some((k, FrameSegmentKind::TransitionForward));
+                return Some((k, FrameSegmentKind::Transition));
             }
         }
 
@@ -1255,7 +1255,7 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         }
 
         // --- Transitions ---
-        FrameSegmentKind::Transition | FrameSegmentKind::TransitionForward => {
+        FrameSegmentKind::Transition => {
             // (exit)? -> (=>)? (enter)? $State(state_args)?
             // or -> pop$
             let trimmed = text.trim();
@@ -1385,7 +1385,17 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                 state_args,
                 label,
                 is_pop: false,
-                is_forward: matches!(kind, FrameSegmentKind::TransitionForward),
+                // Detect => between -> and the target state
+                is_forward: {
+                    if let Some(arrow_pos) = trimmed.find("->") {
+                        let after_arrow = &trimmed[arrow_pos + 2..];
+                        // Look for => before the $ target marker
+                        let target_pos = after_arrow.find('$').unwrap_or(after_arrow.len());
+                        after_arrow[..target_pos].contains("=>")
+                    } else {
+                        false
+                    }
+                },
             }
         }
 

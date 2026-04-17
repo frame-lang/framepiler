@@ -1,7 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameSegmentKind {
     Transition,
-    TransitionForward, // -> => $State - transition then forward event
     Forward,
     StackPush,
     StackPop,
@@ -196,17 +195,6 @@ pub fn regions_to_statements(
                             }));
                         } else {
                             // Fallback: store raw text
-                            stmts.push(Statement::NativeCode(raw()));
-                        }
-                    }
-                    FrameSegmentKind::TransitionForward => {
-                        if let SegmentMetadata::Transition { target_state, .. } = metadata {
-                            stmts.push(Statement::TransitionForward(TransitionForwardAst {
-                                target: target_state.clone(),
-                                span: seg_span,
-                                indent: *indent,
-                            }));
-                        } else {
                             stmts.push(Statement::NativeCode(raw()));
                         }
                     }

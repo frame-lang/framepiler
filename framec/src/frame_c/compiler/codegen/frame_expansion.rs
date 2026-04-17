@@ -393,6 +393,13 @@ pub(crate) fn generate_frame_expansion(
             // For Python/TypeScript: Create compartment and call __transition()
             // For Rust: Use simpler _transition() approach
 
+            // Check for forward-transition: -> => $State
+            let is_forward = if let SegmentMetadata::Transition { is_forward, .. } = metadata {
+                *is_forward
+            } else {
+                false
+            };
+
             // Check for pop-transition: -> pop$
             let is_pop = if let SegmentMetadata::Transition { is_pop, .. } = metadata {
                 *is_pop
@@ -473,11 +480,246 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Graphviz => unreachable!(),
                 }
+            } else if is_forward {
+                // Forward-transition: -> => $State
+                // Create compartment, set forward_event to current event,
+                // call __transition, return.
+                let target = match metadata {
+                    SegmentMetadata::Transition { target_state, .. } => target_state.clone(),
+                    _ => "Unknown".to_string(),
+                };
+                match lang {
+                    TargetLanguage::Python3 => {
+                        let mut code = String::new();
+                        code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment)\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}self.__transition(__compartment)\n", indent_str));
+                        code.push_str(&format!("{}return", indent_str));
+                        code
+                    }
+                    TargetLanguage::GDScript => {
+                        let mut code = String::new();
+                        code.push_str(&format!("{}var __compartment = {}Compartment.new(\"{}\", self.__compartment.copy())\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}self.__transition(__compartment)\n", indent_str));
+                        code.push_str(&format!("{}return", indent_str));
+                        code
+                    }
+                    TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
+                        let mut code = String::new();
+                        code.push_str(&format!("{}const __compartment = new {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}this.__transition(__compartment);\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}return;", indent_str));
+                        code
+                    }
+                    TargetLanguage::Dart => {
+                        let mut code = String::new();
+                        code.push_str(&format!("{}final __compartment = {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}this.__transition(__compartment);\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}return;", indent_str));
+                        code
+                    }
+                    TargetLanguage::Rust => super::rust_system::rust_expand_forward_transition(
+                        &indent_str,
+                        ctx,
+                        &target,
+                    ),
+                    TargetLanguage::C => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n",
+                            indent_str, ctx.system_name, ctx.system_name, target
+                        ));
+                        if ctx.parent_state.is_some() {
+                            code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_ref(self->__compartment);\n", indent_str, ctx.system_name));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment->forward_event = __e;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}{}_transition(self, __compartment);\n",
+                            indent_str, ctx.system_name
+                        ));
+                        code.push_str(&format!("{}return;", indent_str));
+                        code
+                    }
+                    TargetLanguage::Cpp => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__new_compartment->parent_compartment = __compartment;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}__new_compartment->forward_event = std::make_unique<{}FrameEvent>(__e);\n", indent_str, ctx.system_name));
+                        code.push_str(&format!(
+                            "{}__transition(std::move(__new_compartment));\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}return;", indent_str));
+                        code
+                    }
+                    TargetLanguage::Java => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}var __compartment = new {}Compartment(\"{}\");\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.parent_compartment = this.__compartment;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}__transition(__compartment);\n", indent_str));
+                        code.push_str(&format!("{}return;", indent_str));
+                        code
+                    }
+                    TargetLanguage::Kotlin => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}val __compartment = {}Compartment(\"{}\")\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.parent_compartment = this.__compartment\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
+                        code.push_str(&format!("{}return", indent_str));
+                        code
+                    }
+                    TargetLanguage::Swift => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}let __compartment = {}Compartment(state: \"{}\")\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.parent_compartment = self.__compartment\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
+                        code.push_str(&format!("{}return", indent_str));
+                        code
+                    }
+                    TargetLanguage::Php => {
+                        let mut code = String::new();
+                        code.push_str(&format!("{}$__compartment = new {}Compartment(\"{}\", $this->__compartment->copy());\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}$__compartment->forward_event = $__e;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}$this->__transition($__compartment);\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}return;", indent_str));
+                        code
+                    }
+                    TargetLanguage::CSharp => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}{{ var __new_compartment = new {}Compartment(\"{}\");\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__new_compartment.parent_compartment = __compartment;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}__new_compartment.forward_event = __e;\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!(
+                            "{}__transition(__new_compartment); }}\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}return;", indent_str));
+                        code
+                    }
+                    TargetLanguage::Go => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}__compartment := new{}Compartment(\"{}\")\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.parentCompartment = s.__compartment.copy()\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}__compartment.forwardEvent = __e\n", indent_str));
+                        code.push_str(&format!("{}s.__transition(__compartment)\n", indent_str));
+                        code.push_str(&format!("{}return", indent_str));
+                        code
+                    }
+                    TargetLanguage::Ruby => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
+                        code.push_str(&format!("{}return", indent_str));
+                        code
+                    }
+                    TargetLanguage::Lua => {
+                        let mut code = String::new();
+                        code.push_str(&format!(
+                            "{}local __compartment = {}Compartment.new(\"{}\")\n",
+                            indent_str, ctx.system_name, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment.forward_event = __e\n",
+                            indent_str
+                        ));
+                        code.push_str(&format!("{}self:__transition(__compartment)\n", indent_str));
+                        code.push_str(&format!("{}return", indent_str));
+                        code
+                    }
+                    TargetLanguage::Erlang => String::new(),
+                    TargetLanguage::Graphviz => unreachable!(),
+                }
             } else {
-                // Transition metadata is always populated by the scanner
-                // for `Transition` kind segments — see
-                // `native_region_scanner/unified.rs` (build_metadata for
-                // `FrameSegmentKind::Transition | TransitionForward`).
+                // Normal transition: -> $State with exit/enter/state args
+                // Transition metadata is always populated by the scanner.
                 let (target, exit_args, enter_args, state_args) = match metadata {
                     SegmentMetadata::Transition {
                         target_state,
@@ -1689,255 +1931,6 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Graphviz => unreachable!(),
                 }
-            }
-        }
-        FrameSegmentKind::TransitionForward => {
-            // Transition-Forward: -> => $State
-            // 1. Transition to the target state (exit current)
-            // 2. Forward current event to new state (instead of sending $>)
-            // 3. Return (event was handled by new state)
-            let target = match metadata {
-                SegmentMetadata::Transition { target_state, .. } => target_state.clone(),
-                _ => unreachable!(
-                    "TransitionForward kind segment without Transition metadata: {:?}",
-                    metadata
-                ),
-            };
-            match lang {
-                TargetLanguage::Python3 => {
-                    // Create compartment with forward_event set to current event
-                    let mut code = String::new();
-                    code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment)\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}self.__transition(__compartment)\n", indent_str));
-                    code.push_str(&format!("{}return", indent_str));
-                    code
-                }
-                TargetLanguage::GDScript => {
-                    // GDScript: .new() constructor, positional args
-                    let mut code = String::new();
-                    code.push_str(&format!("{}var __compartment = {}Compartment.new(\"{}\", self.__compartment.copy())\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}self.__transition(__compartment)\n", indent_str));
-                    code.push_str(&format!("{}return", indent_str));
-                    code
-                }
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-                    // Create compartment with forward_event set to current event
-                    let mut code = String::new();
-                    code.push_str(&format!("{}const __compartment = new {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}this.__transition(__compartment);\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}return;", indent_str));
-                    code
-                }
-                TargetLanguage::Dart => {
-                    // Create compartment with forward_event set to current event
-                    let mut code = String::new();
-                    code.push_str(&format!("{}final __compartment = {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}this.__transition(__compartment);\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}return;", indent_str));
-                    code
-                }
-                TargetLanguage::Rust => {
-                    super::rust_system::rust_expand_forward_transition(&indent_str, ctx, &target)
-                }
-                TargetLanguage::C => {
-                    // C: Create compartment with forward event and call transition
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n",
-                        indent_str, ctx.system_name, ctx.system_name, target
-                    ));
-                    if ctx.parent_state.is_some() {
-                        code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_ref(self->__compartment);\n", indent_str, ctx.system_name));
-                    }
-                    code.push_str(&format!(
-                        "{}__compartment->forward_event = __e;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}{}_transition(self, __compartment);\n",
-                        indent_str, ctx.system_name
-                    ));
-                    code.push_str(&format!("{}return;", indent_str));
-                    code
-                }
-                TargetLanguage::Cpp => {
-                    // C++: Create shared_ptr compartment with forward event
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__new_compartment->parent_compartment = __compartment;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}__new_compartment->forward_event = std::make_unique<{}FrameEvent>(__e);\n", indent_str, ctx.system_name));
-                    code.push_str(&format!(
-                        "{}__transition(std::move(__new_compartment));\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}return;", indent_str));
-                    code
-                }
-                TargetLanguage::Java => {
-                    // Java: Create compartment with forward event
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}var __compartment = new {}Compartment(\"{}\");\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.parent_compartment = this.__compartment;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}__transition(__compartment);\n", indent_str));
-                    code.push_str(&format!("{}return;", indent_str));
-                    code
-                }
-                TargetLanguage::Kotlin => {
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}val __compartment = {}Compartment(\"{}\")\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.parent_compartment = this.__compartment\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
-                    code.push_str(&format!("{}return", indent_str));
-                    code
-                }
-                TargetLanguage::Swift => {
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}let __compartment = {}Compartment(state: \"{}\")\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.parent_compartment = self.__compartment\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
-                    code.push_str(&format!("{}return", indent_str));
-                    code
-                }
-                TargetLanguage::Php => {
-                    let mut code = String::new();
-                    code.push_str(&format!("{}$__compartment = new {}Compartment(\"{}\", $this->__compartment->copy());\n", indent_str, ctx.system_name, target));
-                    code.push_str(&format!(
-                        "{}$__compartment->forward_event = $__e;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}$this->__transition($__compartment);\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}return;", indent_str));
-                    code
-                }
-                TargetLanguage::CSharp => {
-                    // C#: Create compartment with forward event — block scope
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}{{ var __new_compartment = new {}Compartment(\"{}\");\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__new_compartment.parent_compartment = __compartment;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}__new_compartment.forward_event = __e;\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}__transition(__new_compartment); }}\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}return;", indent_str));
-                    code
-                }
-                TargetLanguage::Go => {
-                    // Go: Create compartment with forward event
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}__compartment := new{}Compartment(\"{}\")\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.parentCompartment = s.__compartment.copy()\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}__compartment.forwardEvent = __e\n", indent_str));
-                    code.push_str(&format!("{}s.__transition(__compartment)\n", indent_str));
-                    code.push_str(&format!("{}return", indent_str));
-                    code
-                }
-                TargetLanguage::Ruby => {
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}__transition(__compartment)\n", indent_str));
-                    code.push_str(&format!("{}return", indent_str));
-                    code
-                }
-                TargetLanguage::Lua => {
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}local __compartment = {}Compartment.new(\"{}\")\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = __e\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}self:__transition(__compartment)\n", indent_str));
-                    code.push_str(&format!("{}return", indent_str));
-                    code
-                }
-                TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
-                TargetLanguage::Graphviz => unreachable!(),
             }
         }
         FrameSegmentKind::Forward => {

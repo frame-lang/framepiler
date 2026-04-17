@@ -40,7 +40,6 @@ impl FrameStatementParser {
         let text = &bytes[span.start..span.end];
         match kind {
             FrameSegmentKind::Transition => self.parse_transition(text, span),
-            FrameSegmentKind::TransitionForward => self.parse_transition_forward(text, span),
             FrameSegmentKind::Forward => self.parse_forward(text, span),
             FrameSegmentKind::StackPush => self.parse_stack(text, span, true),
             FrameSegmentKind::StackPop => self.parse_stack(text, span, false),
