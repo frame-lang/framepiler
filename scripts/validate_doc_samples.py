@@ -122,12 +122,16 @@ def run_sample(framec: str, sample: Sample, workdir: Path) -> tuple[bool, str]:
             f"dir contents: {[p.name for p in out_dir.iterdir()]}"
         )
 
-    # 2) Run
-    run_proc = subprocess.run(
-        [sys.executable, str(generated)],
-        capture_output=True,
-        text=True,
-    )
+    # 2) Run (with timeout to handle non-terminating samples)
+    try:
+        run_proc = subprocess.run(
+            [sys.executable, str(generated)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "RUN FAILED (timeout after 10s — sample may loop)"
     if run_proc.returncode != 0:
         return False, (
             f"RUN FAILED (exit {run_proc.returncode})\n"
