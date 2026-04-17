@@ -20,13 +20,85 @@ use crate::frame_c::visitors::TargetLanguage;
 /// Generate the complete Rust system from a Frame AST.
 ///
 /// Called from `system_codegen::generate_system` when target is Rust.
-/// Returns a CodegenNode containing the full Rust implementation.
+/// Returns a `CodegenNode::Class` tree that `backends/rust.rs` renders.
+///
+/// Owns the Rust pipeline: calls shared sub-functions where they still
+/// contain Rust match arms, and Rust-specific functions (machinery,
+/// dispatch, persistence) where they've been extracted.
 pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]) -> CodegenNode {
-    let lang = crate::frame_c::visitors::TargetLanguage::Rust;
+    let lang = TargetLanguage::Rust;
+    let backend = super::backend::get_backend(lang);
+    let syntax = backend.class_syntax();
 
-    // Phase 1: delegates to shared path for fields, constructor, interface,
-    // actions, operations. Machinery + dispatch already owned here.
-    super::system_codegen::generate_system_shared(system, arcanum, lang, source)
+    let needs_async = system.interface.iter().any(|m| m.is_async);
+    let has_state_vars = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().any(|s| !s.state_vars.is_empty()))
+        .unwrap_or(false);
+
+    // ── Fields ───────────────────────────────────────────────────
+    let fields = super::system_codegen::generate_fields(system, &syntax);
+
+    // ── Methods ──────────────────────────────────────────────────
+    let mut methods = Vec::new();
+
+    // Constructor
+    methods.push(super::system_codegen::generate_constructor(system, &syntax));
+
+    // Frame machinery (kernel, router, transition — owned here)
+    methods.extend(super::system_codegen::generate_frame_machinery(
+        system, &syntax, lang,
+    ));
+
+    // Interface wrappers (delegates to generate_rust_interface_body)
+    methods.extend(super::interface_gen::generate_interface_wrappers(
+        system, &syntax,
+    ));
+
+    // State handlers (dispatch + individual handler methods — owned here)
+    if let Some(ref machine) = system.machine {
+        methods.extend(super::state_dispatch::generate_state_handlers_via_arcanum(
+            &system.name,
+            machine,
+            arcanum,
+            source,
+            lang,
+            has_state_vars,
+        ));
+    }
+
+    // Actions + operations (shared — native passthrough)
+    for action in &system.actions {
+        methods.push(super::interface_gen::generate_action(
+            action, &syntax, source,
+        ));
+    }
+    for operation in &system.operations {
+        methods.push(super::interface_gen::generate_operation(
+            operation, &syntax, source,
+        ));
+    }
+
+    // Persistence (owned here)
+    if system.persist_attr.is_some() {
+        methods.extend(generate_rust_persistence_methods(system));
+    }
+
+    let mut class_node = CodegenNode::Class {
+        name: system.name.clone(),
+        fields,
+        methods,
+        base_classes: vec![],
+        is_abstract: false,
+        derives: vec![],
+    };
+
+    if needs_async {
+        super::system_codegen::make_system_async(&mut class_node, &system.name, lang);
+    }
+
+    class_node
 }
 
 // ─── Machinery ───────────────────────────────────────────────────────

@@ -252,7 +252,11 @@ pub fn generate_system_shared(
 /// Note: `await` on internal dispatch calls is handled by the backends
 /// recognizing Await nodes in the method bodies, or via NativeBlock code
 /// that already contains the dispatch calls.
-fn make_system_async(class_node: &mut CodegenNode, _system_name: &str, lang: TargetLanguage) {
+pub(crate) fn make_system_async(
+    class_node: &mut CodegenNode,
+    _system_name: &str,
+    lang: TargetLanguage,
+) {
     if let CodegenNode::Class {
         ref mut methods,
         ref name,
@@ -509,7 +513,10 @@ fn insert_rust_await(line: &str) -> String {
 }
 
 /// Generate class fields for the system
-fn generate_fields(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> Vec<Field> {
+pub(crate) fn generate_fields(
+    system: &SystemAst,
+    syntax: &super::backend::ClassSyntax,
+) -> Vec<Field> {
     let mut fields = Vec::new();
     let compartment_type = format!("{}Compartment", system.name);
 
@@ -832,7 +839,10 @@ fn format_field_assignment(lang: TargetLanguage, field_name: &str, init_value: &
 }
 
 /// Generate the constructor
-fn generate_constructor(system: &SystemAst, syntax: &super::backend::ClassSyntax) -> CodegenNode {
+pub(crate) fn generate_constructor(
+    system: &SystemAst,
+    syntax: &super::backend::ClassSyntax,
+) -> CodegenNode {
     let mut body = Vec::new();
     // C++ member initializer list entries: `field(value), field2(value2)`
     // Collected during domain init loop for const fields whose init was stripped.
@@ -2681,7 +2691,7 @@ self._context_stack.pop_back()"#,
 
 /// Generate Frame machinery methods (__kernel, __router, __transition)
 /// for all target languages.
-fn generate_frame_machinery(
+pub(crate) fn generate_frame_machinery(
     system: &SystemAst,
     syntax: &super::backend::ClassSyntax,
     lang: TargetLanguage,
