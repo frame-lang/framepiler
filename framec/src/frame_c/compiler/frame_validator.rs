@@ -35,6 +35,9 @@
 //! - E614: Duplicate domain field name
 //! - E615: Assignment to const domain field in handler body
 //!
+//! ## Pop Transition Errors (E6xx)
+//! - E607: State arguments on pop$ (popped compartment carries its own)
+//!
 //! ## Target-specific Errors (E5xx)
 //! - E501: Interface method name collides with reserved target-language method (GDScript)
 //!
@@ -1300,6 +1303,17 @@ impl FrameValidator {
         // E402: Check target state exists
         // Skip validation for pop-transition marker $$[-]
         if transition.target == "pop$" {
+            // E607: state_args on pop$ are not allowed — the popped
+            // compartment brings its own from the snapshot.
+            if transition.state_args.is_some() {
+                self.errors.push(
+                    ValidationError::new(
+                        "E607",
+                        "State arguments on pop$ are not allowed. The popped compartment carries its own state from the snapshot.".to_string(),
+                    )
+                    .with_span(transition.span.clone()),
+                );
+            }
             return; // Pop-transition: target comes from stack at runtime
         }
 
