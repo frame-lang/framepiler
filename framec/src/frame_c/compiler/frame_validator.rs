@@ -496,30 +496,34 @@ impl FrameValidator {
             }
         } else {
             // State exists, check transition argument arity against STATE PARAMS.
-            // V4's parser bundles transition args into a single
-            // `NativeExpr("(a, b, c)")` blob, so `args.len()` is always 0 or 1
-            // regardless of how many args were actually provided. Use
-            // `transition_arg_count` to count real args at depth 0 (handling
-            // nested calls like `getX(), b`), so E405 still fires for
-            // `-> $Target(1, 2, 3)` against a 1-param state.
-            let args_count = transition_arg_count(&trans.args);
-            if let Some(expected) = arcanum.get_state_param_count(system_name, &trans.target) {
-                if expected != args_count
-                    && !self
-                        .errors
-                        .iter()
-                        .any(|e| e.code == "E405" && e.span.as_ref() == Some(&trans.span))
-                {
-                    self.errors.push(
-                        ValidationError::new(
-                            "E405",
-                            format!(
-                                "State '{}' expects {} parameters but {} provided",
-                                trans.target, expected, args_count
-                            ),
-                        )
-                        .with_span(trans.span.clone()),
-                    );
+            // Skip when args are NativeExpr blobs — the V4 lexer conflates
+            // `-> (enter_args) $State` and `-> $State(state_args)` into the
+            // same token shape, so we can't distinguish them. Arity checking
+            // for these cases defers to the target language compiler.
+            let has_native_args = trans
+                .args
+                .iter()
+                .any(|a| matches!(a, Expression::NativeExpr(_)));
+            if !has_native_args {
+                let args_count = trans.args.len();
+                if let Some(expected) = arcanum.get_state_param_count(system_name, &trans.target) {
+                    if expected != args_count
+                        && !self
+                            .errors
+                            .iter()
+                            .any(|e| e.code == "E405" && e.span.as_ref() == Some(&trans.span))
+                    {
+                        self.errors.push(
+                            ValidationError::new(
+                                "E405",
+                                format!(
+                                    "State '{}' expects {} parameters but {} provided",
+                                    trans.target, expected, args_count
+                                ),
+                            )
+                            .with_span(trans.span.clone()),
+                        );
+                    }
                 }
             }
         }
@@ -1312,25 +1316,30 @@ impl FrameValidator {
                 .with_span(transition.span.clone()),
             );
         } else {
-            // E405: Check STATE PARAMETER arity. See `transition_arg_count`
-            // for why we can't just use `args.len()` under V4.
-            let Some(target_state) = state_map.get(&transition.target) else {
-                return;
-            };
-            let args_count = transition_arg_count(&transition.args);
-            if target_state.params.len() != args_count {
-                self.errors.push(
-                    ValidationError::new(
-                        "E405",
-                        format!(
-                            "State '{}' expects {} parameters but {} provided",
-                            transition.target,
-                            target_state.params.len(),
-                            args_count
-                        ),
-                    )
-                    .with_span(transition.span.clone()),
-                );
+            // E405: Check STATE PARAMETER arity. Skip for NativeExpr blobs
+            // (V4 lexer conflates enter_args and state_args).
+            let has_native_args = transition
+                .args
+                .iter()
+                .any(|a| matches!(a, Expression::NativeExpr(_)));
+            if !has_native_args {
+                let Some(target_state) = state_map.get(&transition.target) else {
+                    return;
+                };
+                if target_state.params.len() != transition.args.len() {
+                    self.errors.push(
+                        ValidationError::new(
+                            "E405",
+                            format!(
+                                "State '{}' expects {} parameters but {} provided",
+                                transition.target,
+                                target_state.params.len(),
+                                transition.args.len()
+                            ),
+                        )
+                        .with_span(transition.span.clone()),
+                    );
+                }
             }
         }
     }
@@ -1582,21 +1591,6 @@ fn count_args(args: &str) -> usize {
         }
     }
     count
-}
-
-/// Count actual transition arguments. The V4 pipeline parser bundles all
-/// transition args into a single `NativeExpr("(a, b, c)")` blob (because
-/// arg expressions aren't typed and may contain native code), so
-/// `args.len()` is always 0 or 1 regardless of the real count. This helper
-/// peeks inside the NativeExpr blob and counts depth-0 commas so E405
-/// arity validation still works.
-fn transition_arg_count(args: &[Expression]) -> usize {
-    if args.len() == 1 {
-        if let Expression::NativeExpr(s) = &args[0] {
-            return count_args(s);
-        }
-    }
-    args.len()
 }
 
 #[cfg(test)]
@@ -1930,9 +1924,10 @@ mod tests {
     }
 
     #[test]
-    fn test_e405_state_param_mismatch() {
-        // Transition args go to STATE PARAMS, not enter handler
-        // $Target(x: int) has 1 param, but we pass 3 args
+    fn test_e405_state_param_mismatch_deferred() {
+        // V4 lexer conflates enter_args and state_args into the same
+        // NativeExpr blob, so E405 arity checking is skipped for
+        // NativeExpr args. The target language compiler catches this.
         let source = r#"
 @@system Test {
     machine:
@@ -1943,21 +1938,16 @@ mod tests {
 }"#;
 
         let result = validate_frame_source(source, TargetLanguage::Python3);
-        assert!(result.is_err());
-
-        let errors = result.unwrap_err();
-        // State expects 1 param but 3 provided
+        // No E405 — deferred to target language compiler
         assert!(
-            errors
-                .iter()
-                .any(|e| e.code == "E405"
-                    && e.message.contains("expects 1 parameters but 3 provided"))
+            result.is_ok(),
+            "V4 defers NativeExpr arity to target compiler: {:?}",
+            result.err()
         );
     }
 
     #[test]
-    fn test_e405_state_no_params() {
-        // Transition passes args but state has no params
+    fn test_e405_state_no_params_deferred() {
         let source = r#"
 @@system Test {
     machine:
@@ -1968,15 +1958,10 @@ mod tests {
 }"#;
 
         let result = validate_frame_source(source, TargetLanguage::Python3);
-        assert!(result.is_err());
-
-        let errors = result.unwrap_err();
-        // State expects 0 params but 2 provided
         assert!(
-            errors
-                .iter()
-                .any(|e| e.code == "E405"
-                    && e.message.contains("expects 0 parameters but 2 provided"))
+            result.is_ok(),
+            "V4 defers NativeExpr arity to target compiler: {:?}",
+            result.err()
         );
     }
 

@@ -20,39 +20,6 @@ use crate::frame_c::compiler::validation::pass::{ValidationContext, ValidationPa
 use crate::frame_c::compiler::validation::types::ValidationIssue;
 use std::collections::{HashMap, HashSet};
 
-/// Count actual transition arguments. The V4 pipeline parser bundles all
-/// transition args into a single `NativeExpr("(a, b, c)")` blob so
-/// `args.len()` is always 0 or 1 regardless of the real count. This
-/// peeks inside the blob and counts depth-0 commas so E405 still fires
-/// for `-> $Target(1, 2, 3)` against a 1-param state. Mirrors the
-/// `transition_arg_count` helper in `frame_validator.rs`.
-fn transition_arg_count(args: &[Expression]) -> usize {
-    if args.len() == 1 {
-        if let Expression::NativeExpr(s) = &args[0] {
-            let inner = s
-                .trim()
-                .trim_start_matches('(')
-                .trim_end_matches(')')
-                .trim();
-            if inner.is_empty() {
-                return 0;
-            }
-            let mut count = 1;
-            let mut depth = 0;
-            for b in inner.bytes() {
-                match b {
-                    b'(' => depth += 1,
-                    b')' => depth -= 1,
-                    b',' if depth == 0 => count += 1,
-                    _ => {}
-                }
-            }
-            return count;
-        }
-    }
-    args.len()
-}
-
 /// Semantic validation pass
 ///
 /// Performs semantic validation using the Arcanum symbol table
@@ -393,13 +360,19 @@ impl SemanticPass {
                     )),
             );
         } else {
-            // E405: Check STATE PARAMETER arity. See `transition_arg_count`
-            // for why we can't just use `transition.args.len()` here.
+            // E405: Check STATE PARAMETER arity. Skip for NativeExpr blobs
+            // (V4 lexer conflates enter_args and state_args).
+            let has_native_args = transition
+                .args
+                .iter()
+                .any(|a| matches!(a, Expression::NativeExpr(_)));
+            if has_native_args {
+                return;
+            }
             let Some(target_state) = state_map.get(&transition.target) else {
                 return;
             };
-            let args_count = transition_arg_count(&transition.args);
-            if target_state.params.len() != args_count {
+            if target_state.params.len() != transition.args.len() {
                 issues.push(
                     ValidationIssue::error(
                         "E405",
@@ -407,7 +380,7 @@ impl SemanticPass {
                             "State '{}' expects {} parameters but {} provided",
                             transition.target,
                             target_state.params.len(),
-                            args_count
+                            transition.args.len()
                         ),
                     )
                     .with_span(transition.span.clone())
@@ -719,9 +692,9 @@ mod tests {
     }
 
     #[test]
-    fn test_e405_state_param_mismatch() {
-        // Test: transition args go to STATE PARAMS
-        // $Target(x: int) has 1 param, but we pass 3 args
+    fn test_e405_state_param_mismatch_deferred() {
+        // V4 lexer conflates enter_args and state_args into the same
+        // NativeExpr blob, so E405 is skipped for NativeExpr args.
         let source = r#"
 @@system Test {
     machine:
@@ -738,15 +711,16 @@ mod tests {
         let pass = SemanticPass;
         let issues = pass.run(&ast, &arcanum, &mut ctx);
 
-        // Should report state expects 1 param but 3 provided
-        assert!(issues
-            .iter()
-            .any(|i| i.code == "E405" && i.message.contains("expects 1")));
+        // No E405 — deferred to target language compiler
+        assert!(
+            !issues.iter().any(|i| i.code == "E405"),
+            "V4 defers NativeExpr arity; got unexpected E405: {:?}",
+            issues
+        );
     }
 
     #[test]
-    fn test_e405_state_no_params() {
-        // Test: transition passes args but state has no params
+    fn test_e405_state_no_params_deferred() {
         let source = r#"
 @@system Test {
     machine:
@@ -763,10 +737,11 @@ mod tests {
         let pass = SemanticPass;
         let issues = pass.run(&ast, &arcanum, &mut ctx);
 
-        // Should report state expects 0 params but 3 provided
-        assert!(issues
-            .iter()
-            .any(|i| i.code == "E405" && i.message.contains("expects 0")));
+        assert!(
+            !issues.iter().any(|i| i.code == "E405"),
+            "V4 defers NativeExpr arity; got unexpected E405: {:?}",
+            issues
+        );
     }
 
     #[test]
