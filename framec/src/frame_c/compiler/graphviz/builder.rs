@@ -151,9 +151,14 @@ fn extract_transitions_from_statements(
     for stmt in statements {
         match stmt {
             Statement::Transition(t) => {
+                let target = if t.is_pop {
+                    TransitionTarget::StackPop
+                } else {
+                    TransitionTarget::State(t.target.clone())
+                };
                 transitions.push(TransitionEdge {
                     source: source_state.to_string(),
-                    target: TransitionTarget::State(t.target.clone()),
+                    target,
                     event: event.to_string(),
                     label: t.label.clone(),
                     kind: TransitionKind::Transition,

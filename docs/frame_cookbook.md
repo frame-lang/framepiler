@@ -9,57 +9,59 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 **Fundamentals (1-8)**
 
 1. [Traffic Light](#1-traffic-light) — basic states and transitions
-1. [Toggle Switch](#2-toggle-switch) — two-state with return values
-1. [Turnstile](#3-turnstile) — event-driven guard logic
-1. [Login Flow](#4-login-flow) — multi-step form wizard
-1. [Connection Manager](#5-connection-manager) — lifecycle with enter/exit handlers
-1. [Retry with Backoff](#6-retry-with-backoff) — state variables as counters
-1. [Modal Dialog Stack](#7-modal-dialog-stack) — push/pop for navigation history
-1. [State Stack](#8-state-stack-pushpop) — state stack for history
+2. [Toggle Switch](#2-toggle-switch) — two-state with return values
+3. [Turnstile](#3-turnstile) — event-driven guard logic
+4. [Login Flow](#4-login-flow) — multi-step form wizard
+5. [Connection Manager](#5-connection-manager) — lifecycle with enter/exit handlers
+6. [Retry with Backoff](#6-retry-with-backoff) — state variables as counters
+7. [Modal Dialog Stack](#7-modal-dialog-stack) — push/pop for navigation history
+8. [State Stack](#8-state-stack-pushpop) — state stack for history
 
 **Patterns (9-17)**
 
-1. [Video Player](#9-video-player) — HSM with sub-states
-1. [Order Processor](#10-order-processor) — business process with branches
-1. [Approval Chain](#11-approval-chain) — multi-stage with forwarding
-1. [Character Controller](#12-character-controller) — game state machine
-1. [AI Agent](#13-ai-agent) — behavioral states with action logging
-1. [LED Blink Controller](#14-led-blink-controller) — timer-driven state cycling
-1. [Switch Debouncer](#15-switch-debouncer) — noise filtering
-1. [Mealy Machine](#16-mealy-machine) — output depends on state + input
-1. [Moore Machine](#17-moore-machine) — output depends on state only
+9. [Video Player](#9-video-player) — HSM with sub-states
+10. [Order Processor](#10-order-processor) — business process with branches
+11. [Approval Chain](#11-approval-chain) — multi-stage with forwarding
+12. [Character Controller](#12-character-controller) — game state machine
+13. [AI Agent](#13-ai-agent) — behavioral states with action logging
+14. [LED Blink Controller](#14-led-blink-controller) — timer-driven state cycling
+15. [Switch Debouncer](#15-switch-debouncer) — noise filtering
+16. [Mealy Machine](#16-mealy-machine) — output depends on state + input
+17. [Moore Machine](#17-moore-machine) — output depends on state only
 
 **Advanced Features (18-22)**
 
-1. [Session Persistence](#18-session-persistence) — save/restore with @@persist
-1. [Async HTTP Client](#19-async-http-client) — async interface with two-phase init
-1. [Multi-System Composition](#20-multi-system-composition) — two systems interacting
-1. [Configurable Worker Pool](#21-configurable-worker-pool-parameterized-systems) — parameterized systems
-1. [Self-Calibrating Sensor](#22-self-calibrating-sensor-self-interface-call) — `@@:self` reentrant dispatch
+18. [Session Persistence](#18-session-persistence) — save/restore with @@persist
+19. [Async HTTP Client](#19-async-http-client) — async interface with two-phase init
+20. [Multi-System Composition](#20-multi-system-composition) — two systems interacting
+21. [Configurable Worker Pool](#21-configurable-worker-pool-parameterized-systems) — parameterized systems
+22. [Self-Calibrating Sensor](#22-self-calibrating-sensor-self-interface-call) — `@@:self` reentrant dispatch
 
 **Operations and Coverage (23-27)**
 
-1. [Vending Machine](#23-vending-machine--operations-and-system-params) — operations and system params
-1. [Circuit Breaker](#24-circuit-breaker--state-variable-reset-on-reentry) — state variable reset on reentry
-1. [Rate Limiter](#25-rate-limiter--static-operations) — static operations
-1. [Thermostat](#26-thermostat--3-level-hsm) — 3-level HSM
-1. [Deployment Pipeline](#27-deployment-pipeline--push-and-enter-args) — push$ and enter args + decorated pop
+23. [Vending Machine](#23-vending-machine--operations-and-system-params) — operations and system params
+24. [Circuit Breaker](#24-circuit-breaker--state-variable-reset-on-reentry) — state variable reset on reentry
+25. [Rate Limiter](#25-rate-limiter--static-operations) — static operations
+26. [Thermostat](#26-thermostat--3-level-hsm) — 3-level HSM
+27. [Deployment Pipeline](#27-deployment-pipeline--push-and-enter-args) — push$ and enter args + decorated pop
 
 **System-Managed States (28-29)**
 
-1. [Auth Flow](#28-auth-flow--managed-loginsession) — managed login/session
-1. [Game Level Manager](#29-game-level-manager--polymorphic-delegation) — polymorphic delegation
+28. [Auth Flow](#28-auth-flow--managed-loginsession) — managed login/session
+29. [Game Level Manager](#29-game-level-manager--polymorphic-delegation) — polymorphic delegation
 
 **Advanced Patterns (30-33)**
 
-1. [Graceful Shutdown Service](#30-graceful-shutdown-service--hsm--enter-handler-chain) — HSM + enter-handler chain
-1. [Pipeline Processor](#31-pipeline-processor--kernel-loop-validation) — kernel loop validation
-1. [Test Harness](#32-test-harness--white-box-testing-with-operations) — white-box testing with operations
-1. [AI Coding Agent](#33-ai-coding-agent--capstone) — capstone
+30. [Graceful Shutdown Service](#30-graceful-shutdown-service--hsm--enter-handler-chain) — HSM + enter-handler chain
+31. [Pipeline Processor](#31-pipeline-processor--kernel-loop-validation) — kernel loop validation
+32. [Test Harness](#32-test-harness--white-box-testing-with-operations) — white-box testing with operations
+33. [AI Coding Agent](#33-ai-coding-agent--capstone) — capstone
 
 -----
 
 ## 1. Traffic Light
+
+![1 state diagram](images/cookbook/01.svg)
 
 **Problem:** Cycle through a fixed sequence of states on each event.
 
@@ -105,6 +107,8 @@ if __name__ == '__main__':
 
 ## 2. Toggle Switch
 
+![2 state diagram](images/cookbook/02.svg)
+
 **Problem:** A switch that alternates between on and off.
 
 ```frame
@@ -147,6 +151,8 @@ if __name__ == '__main__':
 
 ## 3. Turnstile
 
+![3 state diagram](images/cookbook/03.svg)
+
 **Problem:** A coin-operated turnstile that locks after each passage.
 
 ```frame
@@ -186,6 +192,8 @@ if __name__ == '__main__':
 -----
 
 ## 4. Login Flow
+
+![4 state diagram](images/cookbook/04.svg)
 
 **Problem:** A multi-step login: enter username, enter password, authenticate.
 
@@ -243,6 +251,8 @@ if __name__ == '__main__':
 
 ## 5. Connection Manager
 
+![5 state diagram](images/cookbook/05.svg)
+
 **Problem:** A network connection with proper setup/teardown lifecycle.
 
 ```frame
@@ -295,6 +305,8 @@ if __name__ == '__main__':
 -----
 
 ## 6. Retry with Backoff
+
+![6 state diagram](images/cookbook/06.svg)
 
 **Problem:** Retry an operation up to N times before failing.
 
@@ -357,6 +369,8 @@ if __name__ == '__main__':
 
 ## 7. Modal Dialog Stack
 
+![7 state diagram](images/cookbook/07.svg)
+
 **Problem:** Open nested modal dialogs and return to the previous one on close.
 
 ```frame
@@ -414,6 +428,8 @@ if __name__ == '__main__':
 
 ## 8. State Stack (Push/Pop)
 
+![8 state diagram](images/cookbook/08.svg)
+
 **Problem:** Track state history and allow stepping backward.
 
 ```frame
@@ -458,6 +474,8 @@ For true snapshot undo, use `push$` with a transition (`push$ -> $Editing`) to c
 -----
 
 ## 9. Video Player
+
+![9 state diagram](images/cookbook/09.svg)
 
 **Problem:** A media player with play/pause/stop, where playing and paused are sub-states of "active."
 
@@ -509,6 +527,8 @@ if __name__ == '__main__':
 -----
 
 ## 10. Order Processor
+
+![10 state diagram](images/cookbook/10.svg)
 
 **Problem:** Process an order through validation, processing, and completion — with cancellation support.
 
@@ -574,6 +594,8 @@ if __name__ == '__main__':
 
 ## 11. Approval Chain
 
+![11 state diagram](images/cookbook/11.svg)
+
 **Problem:** A document requires approval from two reviewers before it's published.
 
 ```frame
@@ -636,6 +658,8 @@ if __name__ == '__main__':
 
 ## 12. Character Controller
 
+![12 state diagram](images/cookbook/12.svg)
+
 **Problem:** A game character with idle, walking, running, and jumping states.
 
 ```frame
@@ -696,6 +720,8 @@ if __name__ == '__main__':
 
 ## 13. AI Agent
 
+![13 state diagram](images/cookbook/13.svg)
+
 **Problem:** An AI agent that explores, flees from threats, and tracks its actions.
 
 ```frame
@@ -752,6 +778,8 @@ if __name__ == '__main__':
 
 ## 14. LED Blink Controller
 
+![14 state diagram](images/cookbook/14.svg)
+
 **Problem:** An LED that blinks on a timer, with on/off control.
 
 ```frame
@@ -795,6 +823,8 @@ if __name__ == '__main__':
 -----
 
 ## 15. Switch Debouncer
+
+![15 state diagram](images/cookbook/15.svg)
 
 **Problem:** Filter noisy switch input — only register a press after the signal stabilizes.
 
@@ -853,6 +883,8 @@ if __name__ == '__main__':
 
 ## 16. Mealy Machine
 
+![16 state diagram](images/cookbook/16.svg)
+
 **Problem:** Output depends on both the current state AND the input (classic Mealy machine).
 
 ```frame
@@ -897,6 +929,8 @@ if __name__ == '__main__':
 
 ## 17. Moore Machine
 
+![17 state diagram](images/cookbook/17.svg)
+
 **Problem:** Output depends only on the current state (classic Moore machine).
 
 ```frame
@@ -938,6 +972,8 @@ if __name__ == '__main__':
 -----
 
 ## 18. Session Persistence
+
+![18 state diagram](images/cookbook/18.svg)
 
 **Problem:** Save a user session to disk and restore it later.
 
@@ -991,6 +1027,8 @@ if __name__ == '__main__':
 -----
 
 ## 19. Async HTTP Client
+
+![19 state diagram](images/cookbook/19.svg)
 
 **Problem:** An HTTP client with async connect/fetch/disconnect.
 
@@ -1051,6 +1089,8 @@ asyncio.run(main())
 
 ## 20. Multi-System Composition
 
+![20 state diagram](images/cookbook/20.svg)
+
 **Problem:** A logger and an app as separate systems, with the app using the logger.
 
 ```frame
@@ -1105,6 +1145,8 @@ if __name__ == '__main__':
 -----
 
 ## 21. Configurable Worker Pool (Parameterized Systems)
+
+![21 state diagram](images/cookbook/21.svg)
 
 A task executor whose pool size and retry policy are set at construction time. Domain, state, and enter parameters flow through the constructor to initialize the machine.
 
@@ -1167,6 +1209,8 @@ if __name__ == '__main__':
 -----
 
 ## 22. Self-Calibrating Sensor (@@:self Interface Call)
+
+![22 state diagram](images/cookbook/22.svg)
 
 **Problem:** A sensor that calibrates itself by reading its own value through the interface, then applying an offset.
 
@@ -1238,6 +1282,8 @@ if __name__ == '__main__':
 -----
 
 ## 23. Vending Machine — Operations and System Params
+
+![23 state diagram](images/cookbook/23.svg)
 
 **Problem:** A vending machine with admin operations that bypass the state machine.
 
@@ -1328,6 +1374,8 @@ if __name__ == '__main__':
 
 ## 24. Circuit Breaker — State Variable Reset on Reentry
 
+![24 state diagram](images/cookbook/24.svg)
+
 **Problem:** A circuit breaker where the failure counter resets each time we re-enter the closed state.
 
 ```frame
@@ -1402,6 +1450,8 @@ if __name__ == '__main__':
 
 ## 25. Rate Limiter — Static Operations
 
+![25 state diagram](images/cookbook/25.svg)
+
 **Problem:** A token bucket rate limiter with a static utility function.
 
 ```frame
@@ -1456,6 +1506,8 @@ if __name__ == '__main__':
 -----
 
 ## 26. Thermostat — 3-Level HSM
+
+![26 state diagram](images/cookbook/26.svg)
 
 **Problem:** A smart thermostat with three hierarchy levels.
 
@@ -1536,6 +1588,8 @@ if __name__ == '__main__':
 -----
 
 ## 27. Deployment Pipeline — push$ and Enter Args
+
+![27 state diagram](images/cookbook/27.svg)
 
 **Problem:** A deployment pipeline with rollback via push$/pop$, using decorated pop to signal rollback reason.
 
@@ -1624,6 +1678,8 @@ if __name__ == '__main__':
 -----
 
 ## 28. Auth Flow — Managed Login/Session
+
+![28 state diagram](images/cookbook/28.svg)
 
 **Problem:** `$LoggedOut` creates a LoginManager; `$LoggedIn` creates a SessionManager. Managers are state variables — their lifecycle matches the state.
 
@@ -1763,6 +1819,8 @@ if __name__ == '__main__':
 
 ## 29. Game Level Manager — Polymorphic Delegation
 
+![29 state diagram](images/cookbook/29.svg)
+
 **Problem:** Different level types created per config. Re-entering `$InLevel` automatically swaps managers.
 
 ```frame
@@ -1866,6 +1924,8 @@ if __name__ == '__main__':
 
 ## 30. Graceful Shutdown Service — HSM + Enter-Handler Chain
 
+![30 state diagram](images/cookbook/30.svg)
+
 **Problem:** A long-running service where the constructor never returns. HSM provides shared quit logic.
 
 ```frame
@@ -1929,6 +1989,8 @@ if __name__ == '__main__':
 -----
 
 ## 31. Pipeline Processor — Kernel Loop Validation
+
+![31 state diagram](images/cookbook/31.svg)
 
 **Problem:** Data flows through 5 stages via enter-handler transitions in a single interface call.
 
@@ -2015,6 +2077,8 @@ if __name__ == '__main__':
 
 ## 32. Test Harness — White-Box Testing with Operations
 
+![32 state diagram](images/cookbook/32.svg)
+
 **Problem:** A system with operations for test inspection. `@@:system.state` is a read-only accessor — allowed in operations because it doesn't mutate the state machine.
 
 ```frame
@@ -2100,6 +2164,8 @@ if __name__ == '__main__':
 -----
 
 ## 33. AI Coding Agent — Capstone
+
+![33 state diagram](images/cookbook/33.svg)
 
 **Problem:** An AI coding agent with planning, approval, tool execution, testing, and retry.
 
