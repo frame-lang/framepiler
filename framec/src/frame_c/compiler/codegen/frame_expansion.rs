@@ -1936,7 +1936,7 @@ pub(crate) fn generate_frame_expansion(
                     code.push_str(&format!("{}return", indent_str));
                     code
                 }
-                TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
+                TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
                 TargetLanguage::Graphviz => unreachable!(),
             }
         }

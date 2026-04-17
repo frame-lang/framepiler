@@ -338,7 +338,7 @@ self._context_stack.pop();"#,
             | TargetLanguage::GDScript => {
                 format!("// async init not yet implemented for {:?}", lang)
             }
-            TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
+            TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
             TargetLanguage::Graphviz => unreachable!(),
         };
         let init_body = vec![CodegenNode::NativeBlock {
@@ -2653,7 +2653,7 @@ self.__kernel(self._context_stack[self._context_stack.size() - 1].event)
 self._context_stack.pop_back()"#,
                     event_class, system.name
                 ),
-                TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
+                TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
                 TargetLanguage::Graphviz => unreachable!(),
             };
             body.push(CodegenNode::NativeBlock {

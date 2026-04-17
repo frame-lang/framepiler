@@ -114,7 +114,7 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
         | TargetLanguage::CSharp
         | TargetLanguage::Go => vec![],
         TargetLanguage::Rust => vec![], // Rust returns None earlier, but be explicit
-        TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
+        TargetLanguage::Erlang => vec![], // gen_statem: handled natively by erlang_system.rs
         TargetLanguage::Graphviz => unreachable!(),
     };
 
@@ -178,7 +178,7 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
         | TargetLanguage::CSharp
         | TargetLanguage::Go => vec![],
         TargetLanguage::Rust => vec![],
-        TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
+        TargetLanguage::Erlang => vec![], // gen_statem: handled natively by erlang_system.rs
         TargetLanguage::Graphviz => unreachable!(),
     };
 
@@ -291,7 +291,7 @@ pub fn generate_frame_context_class(
         | TargetLanguage::CSharp
         | TargetLanguage::Go => vec![],
         TargetLanguage::Rust => vec![],
-        TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
+        TargetLanguage::Erlang => vec![], // gen_statem: handled natively by erlang_system.rs
         TargetLanguage::Graphviz => unreachable!(),
     };
 
@@ -403,7 +403,7 @@ pub fn generate_frame_context_class(
         TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java | TargetLanguage::Kotlin
             | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go => vec![],
         TargetLanguage::Rust => vec![],
-        TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
+        TargetLanguage::Erlang => vec![], // gen_statem: handled natively by erlang_system.rs
         TargetLanguage::Graphviz => unreachable!(),
     };
 
@@ -540,7 +540,7 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
         | TargetLanguage::CSharp
         | TargetLanguage::Go => vec![Param::new("state").with_type("str")],
         TargetLanguage::Rust => vec![Param::new("state").with_type("str")],
-        TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
+        TargetLanguage::Erlang => vec![], // gen_statem: handled natively by erlang_system.rs
         TargetLanguage::Graphviz => unreachable!(),
     };
 
@@ -682,7 +682,7 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
         TargetLanguage::C | TargetLanguage::Cpp | TargetLanguage::Java | TargetLanguage::Kotlin
             | TargetLanguage::Swift | TargetLanguage::CSharp | TargetLanguage::Go => vec![],
         TargetLanguage::Rust => vec![],
-        TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
+        TargetLanguage::Erlang => vec![], // gen_statem: handled natively by erlang_system.rs
         TargetLanguage::Graphviz => unreachable!(),
     };
 
@@ -941,7 +941,7 @@ return c"#,
             )]
         }
         TargetLanguage::Rust => vec![],
-        TargetLanguage::Erlang => vec![], // TODO: Erlang gen_statem codegen
+        TargetLanguage::Erlang => vec![], // gen_statem: handled natively by erlang_system.rs
         TargetLanguage::Graphviz => unreachable!(),
     };
 
@@ -963,7 +963,7 @@ return c"#,
         | TargetLanguage::Cpp
         | TargetLanguage::Rust
         | TargetLanguage::Lua => class_name.to_string(),
-        TargetLanguage::Erlang => String::new(), // TODO: Erlang gen_statem codegen
+        TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
         TargetLanguage::Graphviz => unreachable!(),
     };
 
