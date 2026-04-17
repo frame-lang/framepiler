@@ -272,11 +272,20 @@ pub(crate) fn emit_handler_body_via_statements(
                         if !out.is_empty() && !out.ends_with('\n') && expansion.contains('\n') {
                             out.push('\n');
                         }
+                        // For self-calls: the expansion is a bare call
+                        // expression. If standalone (out ends with \n —
+                        // native ws was trimmed), prefix with indent_str.
+                        // If inline (out ends with native code like "= "),
+                        // emit bare.
+                        if *kind == FrameSegmentKind::ContextSelfCall
+                            && (out.is_empty() || out.ends_with('\n'))
+                        {
+                            out.push_str(&" ".repeat(*indent));
+                        }
                         out.push_str(&expansion);
 
-                        // Self-call expressions expand inline. The
-                        // transition guard is a separate statement emitted
-                        // after the containing native line completes.
+                        // Self-call transition guard — emitted after the
+                        // containing native line completes.
                         if *kind == FrameSegmentKind::ContextSelfCall {
                             // Find the end of the current native line (the
                             // next NativeCode statement that contains a newline,
@@ -2824,16 +2833,16 @@ pub(crate) fn generate_frame_expansion(
                 }
             };
             let expanded_expr = expand_expression(expr.trim(), lang, ctx);
-            // The assignment line uses an empty indent prefix because
-            // the splicer always copies the source's leading whitespace
-            // as native text immediately before the segment expansion.
-            // Adding indent_str here would double the indent. The
-            // appended return line (when has_native_return is true)
-            // does need indent because it's on a new line introduced by
-            // the expansion itself.
+            // Standalone @@ constructs include indent_str on all lines.
+            // The scanner trims trailing whitespace from preceding native
+            // text for standalone constructs (computed_indent > 0), so
+            // indent_str reconstructs the correct indentation.
             let assignment = match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                    format!("self._context_stack[-1]._return = {}", expanded_expr)
+                    format!(
+                        "{}self._context_stack[-1]._return = {}",
+                        indent_str, expanded_expr
+                    )
                 }
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
                     format!(
@@ -3213,14 +3222,13 @@ pub(crate) fn generate_frame_expansion(
             };
             let expanded_expr = expand_expression(expr, lang, ctx);
 
-            // Emit: set return slot + native return.
-            // The splicer provides the leading indent for the first line
-            // (from the native text before the @@ segment). We do NOT
-            // add indent_str to the first line. The return on the next
-            // line does need indent_str since it's a new line.
+            // Standalone @@ constructs include indent_str on all lines.
             let set_code = match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                    format!("self._context_stack[-1]._return = {}", expanded_expr)
+                    format!(
+                        "{}self._context_stack[-1]._return = {}",
+                        indent_str, expanded_expr
+                    )
                 }
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
                     format!(
@@ -3366,10 +3374,38 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Graphviz => unreachable!(),
             };
 
-            // @@:self.method() is an expression — return just the native
-            // call. The interface wrapper handles the context stack dance
-            // and returns the value. The transition guard is emitted
-            // separately by the orchestrator (emit_handler_body_via_statements).
+            // @@:self.method() — check if standalone (only whitespace before @@:
+            // in the source) or inline (preceded by native code like `x = `).
+            // The scanner trims trailing whitespace from native text for
+            // standalone constructs, so we must provide indent_str. For
+            // inline, native text provides the indent.
+            //
+            // We detect this from the segment_text position: if the segment
+            // starts at a position where the preceding byte is whitespace or
+            // newline, it's standalone. The scanner always sets indent > 0
+            // for self-calls (line's leading whitespace for the guard), so
+            // we can't use indent == 0 as the inline signal.
+            //
+            // Instead, check if the raw output ends with whitespace (inline
+            // context: native text like "baseline = " precedes us) or with
+            // a newline (standalone: previous line ended, we start fresh).
+            //
+            // Actually, the simplest correct approach: the expansion is
+            // always just the call expression. The orchestrator adds the
+            // guard. For standalone, the scanner trimmed the whitespace so
+            // indent_str fills the gap. For inline, the scanner kept the
+            // native text. In BOTH cases, indent_str is correct:
+            //   standalone: trimmed ws (16 sp) + indent_str (16 sp) call = 16 sp call ✓
+            //   inline: native "baseline = " + indent_str (16 sp) call = broken!
+            //
+            // So we DO need to distinguish. Use the preceding native text:
+            // if it was trimmed (standalone), the segment immediately follows
+            // a newline in the output. If not trimmed (inline), it follows
+            // non-newline content. But we don't have access to `out` here.
+            //
+            // Cleanest: just return call_expr. The standalone case needs
+            // indent_str, which the orchestrator can add based on indent > 0
+            // and whether the expansion doesn't already start with whitespace.
             call_expr
         }
         FrameSegmentKind::ReturnStatement => {

@@ -258,14 +258,9 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
             // System context syntax: @@ variants
             // Delegates to ContextParserFsm (hierarchical state manager pattern)
             b'@' if i + 1 < end && bytes[i + 1] == b'@' => {
-                if seg_start < i {
-                    regions.push(Region::NativeText {
-                        span: RegionSpan {
-                            start: seg_start,
-                            end: i,
-                        },
-                    });
-                }
+                // Defer native text emission until after computed_indent
+                // is known — standalone @@ constructs (indent > 0) trim
+                // trailing whitespace, inline ones (indent = 0) don't.
                 let ctx_start = i;
 
                 // For @@SystemName(), pre-compute balanced_paren_end via the
@@ -366,8 +361,10 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                             line_start -= 1;
                         }
                         if kind == FrameSegmentKind::ContextSelfCall {
-                            // For self-calls, compute the line's leading whitespace
-                            // (not the column of @@:) so the guard aligns with the statement
+                            // Always use line's leading whitespace — the guard
+                            // needs correct indent regardless of standalone vs inline.
+                            // The expansion uses indent > 0 to decide whether to
+                            // prefix indent_str on the call line.
                             let mut ws = 0;
                             let mut p = line_start;
                             while p < ctx_start && (bytes[p] == b' ' || bytes[p] == b'\t') {
@@ -382,9 +379,34 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         0
                     };
 
-                    // Extract structured metadata from the segment text.
-                    // This is the scanner's job — downstream stages consume
-                    // metadata instead of re-parsing raw segment text.
+                    // Emit deferred native text. For standalone @@
+                    // constructs (computed_indent > 0), trim trailing
+                    // whitespace — the expansion provides indent via
+                    // indent_str. For inline (indent = 0), preserve the
+                    // native text as-is so assignment targets, operators,
+                    // and other preceding code aren't lost.
+                    if seg_start < ctx_start {
+                        let native_end = if computed_indent > 0 {
+                            let mut ne = ctx_start;
+                            while ne > seg_start
+                                && (bytes[ne - 1] == b' ' || bytes[ne - 1] == b'\t')
+                            {
+                                ne -= 1;
+                            }
+                            ne
+                        } else {
+                            ctx_start
+                        };
+                        if seg_start < native_end {
+                            regions.push(Region::NativeText {
+                                span: RegionSpan {
+                                    start: seg_start,
+                                    end: native_end,
+                                },
+                            });
+                        }
+                    }
+
                     let segment_bytes = &bytes[ctx_start..seg_end];
                     let segment_text = String::from_utf8_lossy(segment_bytes);
                     let metadata = extract_segment_metadata(kind, &segment_text);
@@ -400,7 +422,15 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     });
                     i = seg_end;
                 } else {
-                    // No match — treat as native text
+                    // No match — emit deferred native text + this token
+                    if seg_start < ctx_start {
+                        regions.push(Region::NativeText {
+                            span: RegionSpan {
+                                start: seg_start,
+                                end: ctx_start,
+                            },
+                        });
+                    }
                     regions.push(Region::NativeText {
                         span: RegionSpan {
                             start: ctx_start,
