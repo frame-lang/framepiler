@@ -2378,13 +2378,13 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("    if c == nil { return nil }\n");
             save_body.push_str("    return map[string]interface{}{\n");
             save_body.push_str("        \"state\": c.state,\n");
-            save_body.push_str("        \"state_args\": c.state_args,\n");
-            save_body.push_str("        \"state_vars\": c.state_vars,\n");
-            save_body.push_str("        \"enter_args\": c.enter_args,\n");
-            save_body.push_str("        \"exit_args\": c.exit_args,\n");
-            save_body.push_str("        \"forward_event\": c.forward_event,\n");
+            save_body.push_str("        \"state_args\": c.stateArgs,\n");
+            save_body.push_str("        \"state_vars\": c.stateVars,\n");
+            save_body.push_str("        \"enter_args\": c.enterArgs,\n");
+            save_body.push_str("        \"exit_args\": c.exitArgs,\n");
+            save_body.push_str("        \"forward_event\": c.forwardEvent,\n");
             save_body
-                .push_str("        \"parent_compartment\": serializeComp(c.parent_compartment),\n");
+                .push_str("        \"parent_compartment\": serializeComp(c.parentCompartment),\n");
             save_body.push_str("    }\n");
             save_body.push_str("}\n");
             save_body.push_str("data := map[string]interface{}{\n");
@@ -2430,16 +2430,16 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    if d == nil { return nil }\n");
             restore_body.push_str("    m := d.(map[string]interface{})\n");
             restore_body.push_str(&format!(
-                "    comp := &{}{{state: m[\"state\"].(string)}}\n",
-                compartment_type
+                "    comp := new{}Compartment(m[\"state\"].(string))\n",
+                system.name
             ));
-            restore_body.push_str("    if sv, ok := m[\"state_vars\"].(map[string]interface{}); ok { for k, v := range sv { comp.state_vars[k] = v } }\n");
-            restore_body.push_str("    if sa, ok := m[\"state_args\"].(map[string]interface{}); ok { for k, v := range sa { comp.state_args[k] = v } }\n");
-            restore_body.push_str("    if ea, ok := m[\"enter_args\"].(map[string]interface{}); ok { for k, v := range ea { comp.enter_args[k] = v } }\n");
-            restore_body.push_str("    if xa, ok := m[\"exit_args\"].(map[string]interface{}); ok { for k, v := range xa { comp.exit_args[k] = v } }\n");
-            restore_body.push_str("    comp.forward_event = m[\"forward_event\"]\n");
+            restore_body.push_str("    if sv, ok := m[\"state_vars\"].(map[string]interface{}); ok { for k, v := range sv { comp.stateVars[k] = v } }\n");
+            restore_body.push_str("    if sa, ok := m[\"state_args\"].(map[string]interface{}); ok { for k, v := range sa { comp.stateArgs[k] = v } }\n");
+            restore_body.push_str("    if ea, ok := m[\"enter_args\"].(map[string]interface{}); ok { for k, v := range ea { comp.enterArgs[k] = v } }\n");
+            restore_body.push_str("    if xa, ok := m[\"exit_args\"].(map[string]interface{}); ok { for k, v := range xa { comp.exitArgs[k] = v } }\n");
+            restore_body.push_str("    // forward_event is typically nil in persisted state\n");
             restore_body.push_str(
-                "    comp.parent_compartment = deserializeComp(m[\"parent_compartment\"])\n",
+                "    comp.parentCompartment = deserializeComp(m[\"parent_compartment\"])\n",
             );
             restore_body.push_str("    return comp\n");
             restore_body.push_str("}\n");
@@ -2604,29 +2604,28 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("local json = require(\"cjson\")\n");
             save_body.push_str("local function serialize_comp(comp)\n");
             save_body.push_str("    if not comp then return nil end\n");
-            save_body.push_str("    return {\n");
-            save_body.push_str("        state = comp.state,\n");
-            save_body.push_str("        state_args = comp.state_args,\n");
-            save_body.push_str("        state_vars = comp.state_vars,\n");
-            save_body.push_str("        enter_args = comp.enter_args,\n");
-            save_body.push_str("        exit_args = comp.exit_args,\n");
-            save_body.push_str("        forward_event = comp.forward_event,\n");
-            save_body.push_str(
-                "        parent_compartment = serialize_comp(comp.parent_compartment),\n",
-            );
-            save_body.push_str("    }\n");
+            save_body.push_str("    local t = {}\n");
+            save_body.push_str("    t.state = comp.state\n");
+            save_body.push_str("    t.state_args = comp.state_args\n");
+            save_body.push_str("    t.state_vars = comp.state_vars\n");
+            save_body.push_str("    t.enter_args = comp.enter_args\n");
+            save_body.push_str("    t.exit_args = comp.exit_args\n");
+            save_body.push_str("    t.forward_event = comp.forward_event\n");
+            save_body
+                .push_str("    t.parent_compartment = serialize_comp(comp.parent_compartment)\n");
+            save_body.push_str("    return t\n");
             save_body.push_str("end\n");
             save_body.push_str("local stack = {}\n");
             save_body.push_str("for _, c in ipairs(self._state_stack) do\n");
             save_body.push_str("    stack[#stack + 1] = serialize_comp(c)\n");
             save_body.push_str("end\n");
-            save_body.push_str("return json.encode({\n");
-            save_body.push_str("    _compartment = serialize_comp(self.__compartment),\n");
-            save_body.push_str("    _state_stack = stack,\n");
+            save_body.push_str("local result = {}\n");
+            save_body.push_str("result._compartment = serialize_comp(self.__compartment)\n");
+            save_body.push_str("result._state_stack = stack\n");
             for var in &system.domain {
-                save_body.push_str(&format!("    {} = self.{},\n", var.name, var.name));
+                save_body.push_str(&format!("result.{} = self.{}\n", var.name, var.name));
             }
-            save_body.push_str("})");
+            save_body.push_str("return json.encode(result)");
 
             methods.push(CodegenNode::Method {
                 name: "save_state".to_string(),
