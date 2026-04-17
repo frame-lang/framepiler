@@ -371,6 +371,7 @@ mod tests {
                                 enter_args: None,
                                 state_args: None,
                                 is_pop: false,
+                                is_forward: false,
                             })],
                             span: span(),
                         },
@@ -491,6 +492,7 @@ mod tests {
                                     enter_args: None,
                                     state_args: None,
                                     is_pop: false,
+                                    is_forward: false,
                                 })),
                                 else_branch: Some(Box::new(Statement::Transition(TransitionAst {
                                     target: "Bad".to_string(),
@@ -502,6 +504,7 @@ mod tests {
                                     enter_args: None,
                                     state_args: None,
                                     is_pop: false,
+                                    is_forward: false,
                                 }))),
                                 span: span(),
                             })],

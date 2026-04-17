@@ -27,7 +27,7 @@ pub enum FrameSegmentKind {
 /// Eliminates the need for downstream stages to re-parse raw segment text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SegmentMetadata {
-    /// `-> $State`, `-> pop$`, `(exit) -> (enter) $State(state_args)`
+    /// `-> $State`, `-> pop$`, `-> => $State`, `(exit) -> (enter) $State(state_args)`
     Transition {
         target_state: String,
         exit_args: Option<String>,
@@ -35,6 +35,7 @@ pub enum SegmentMetadata {
         state_args: Option<String>,
         label: Option<String>,
         is_pop: bool,
+        is_forward: bool,
     },
     /// `$.varName` (read) or `$.varName = expr` (assign)
     StateVar { name: String },
@@ -178,6 +179,7 @@ pub fn regions_to_statements(
                             state_args,
                             label,
                             is_pop,
+                            is_forward,
                         } = metadata
                         {
                             stmts.push(Statement::Transition(TransitionAst {
@@ -190,6 +192,7 @@ pub fn regions_to_statements(
                                 enter_args: enter_args.clone(),
                                 state_args: state_args.clone(),
                                 is_pop: *is_pop,
+                                is_forward: *is_forward,
                             }));
                         } else {
                             // Fallback: store raw text

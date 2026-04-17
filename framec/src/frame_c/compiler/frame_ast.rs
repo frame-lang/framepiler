@@ -349,6 +349,9 @@ pub struct TransitionAst {
     /// Pop-transition flag (-> pop$)
     #[doc(hidden)]
     pub is_pop: bool,
+    /// Forward flag (-> => $State): dispatch current event to new state
+    #[doc(hidden)]
+    pub is_forward: bool,
 }
 
 /// Transition-forward statement (-> => $State)
@@ -771,6 +774,7 @@ mod tests {
             enter_args: None,
             state_args: None,
             is_pop: false,
+            is_forward: false,
         };
 
         assert_eq!(transition.target, "Green");

@@ -1267,6 +1267,7 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                     state_args: None,
                     label: None,
                     is_pop: true,
+                    is_forward: false,
                 };
             }
 
@@ -1384,6 +1385,7 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                 state_args,
                 label,
                 is_pop: false,
+                is_forward: matches!(kind, FrameSegmentKind::TransitionForward),
             }
         }
 

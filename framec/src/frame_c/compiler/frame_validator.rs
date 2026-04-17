@@ -2086,6 +2086,7 @@ mod tests {
                     enter_args: None,
                     state_args: None,
                     is_pop: false,
+                    is_forward: false,
                 }),
                 Statement::Transition(TransitionAst {
                     target: "Final".to_string(),
@@ -2097,6 +2098,7 @@ mod tests {
                     enter_args: None,
                     state_args: None,
                     is_pop: false,
+                    is_forward: false,
                 }),
             ],
             span: Span::new(0, 50),

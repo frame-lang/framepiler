@@ -689,6 +689,7 @@ impl<'a> Parser<'a> {
                                 enter_args: None,
                                 state_args: None,
                                 is_pop: false,
+                                is_forward: false,
                             }));
                         }
                         Token::StringLit(label_text) => {
@@ -705,6 +706,7 @@ impl<'a> Parser<'a> {
                                     enter_args: None,
                                     state_args: None,
                                     is_pop: false,
+                                    is_forward: false,
                                 }));
                             }
                         }
@@ -743,6 +745,7 @@ impl<'a> Parser<'a> {
                                         enter_args: None,
                                         state_args: None,
                                         is_pop: false,
+                                        is_forward: false,
                                     }));
                                 }
                                 Token::StringLit(label_text) => {
@@ -760,6 +763,7 @@ impl<'a> Parser<'a> {
                                             enter_args: None,
                                             state_args: None,
                                             is_pop: false,
+                                            is_forward: false,
                                         }));
                                     }
                                 }
