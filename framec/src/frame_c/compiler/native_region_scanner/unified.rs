@@ -1256,22 +1256,11 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
 
         // --- Transitions ---
         FrameSegmentKind::Transition => {
-            // (exit)? -> (=>)? (enter)? $State(state_args)?
-            // or -> pop$
+            // (exit)? -> (=>)? (enter)? ($State(state_args)? | pop$)
             let trimmed = text.trim();
-            if trimmed.contains("pop$") {
-                return SegmentMetadata::Transition {
-                    target_state: "pop$".to_string(),
-                    exit_args: None,
-                    enter_args: None,
-                    state_args: None,
-                    label: None,
-                    is_pop: true,
-                    is_forward: false,
-                };
-            }
+            let has_pop = trimmed.contains("pop$");
 
-            // Find target state: last $Uppercase identifier
+            // Find target state: last $Uppercase identifier (empty for pop$)
             let mut target = String::new();
             let bytes = trimmed.as_bytes();
             let mut last_state_start = 0;
@@ -1378,24 +1367,31 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                 rest.find('"').map(|q_end| rest[..q_end].to_string())
             });
 
+            // Detect => between -> and the target
+            let is_forward = if let Some(ap) = trimmed.find("->") {
+                let after = &trimmed[ap + 2..];
+                let tp = after
+                    .find('$')
+                    .or_else(|| {
+                        // For pop$, find "pop$" instead of "$"
+                        after.find("pop$")
+                    })
+                    .unwrap_or(after.len());
+                after[..tp].contains("=>")
+            } else {
+                false
+            };
+
             SegmentMetadata::Transition {
-                target_state: target,
+                target_state: if has_pop { "pop$".to_string() } else { target },
                 exit_args,
                 enter_args,
-                state_args,
+                // state_args are meaningless on pop$ — the popped
+                // compartment brings its own from the snapshot
+                state_args: if has_pop { None } else { state_args },
                 label,
-                is_pop: false,
-                // Detect => between -> and the target state
-                is_forward: {
-                    if let Some(arrow_pos) = trimmed.find("->") {
-                        let after_arrow = &trimmed[arrow_pos + 2..];
-                        // Look for => before the $ target marker
-                        let target_pos = after_arrow.find('$').unwrap_or(after_arrow.len());
-                        after_arrow[..target_pos].contains("=>")
-                    } else {
-                        false
-                    }
-                },
+                is_pop: has_pop,
+                is_forward,
             }
         }
 
