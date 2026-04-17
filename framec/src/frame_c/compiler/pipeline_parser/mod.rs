@@ -714,13 +714,18 @@ impl<'a> Parser<'a> {
                             // -> => $State (transition forward)
                             let target_tok = self.lexer.next_token().map_err(ParseError::from)?;
                             if let Token::StateRef(target) = target_tok.token {
-                                statements.push(Statement::TransitionForward(
-                                    TransitionForwardAst {
-                                        target,
-                                        span: Span::new(tok.span.start, target_tok.span.end),
-                                        indent: 0,
-                                    },
-                                ));
+                                statements.push(Statement::Transition(TransitionAst {
+                                    target,
+                                    args: vec![],
+                                    label: None,
+                                    span: Span::new(tok.span.start, target_tok.span.end),
+                                    indent: 0,
+                                    exit_args: None,
+                                    enter_args: None,
+                                    state_args: None,
+                                    is_pop: false,
+                                    is_forward: true,
+                                }));
                             }
                         }
                         Token::PopState => {
@@ -1681,16 +1686,6 @@ impl<'a> Parser<'a> {
                     return Err(ParseError {
                         message: format!(
                             "E401: Transition '-> ${}' is not allowed in {} '{}'. \
-                             Transitions are only allowed in event handlers.",
-                            t.target, context_kind, context_name
-                        ),
-                        span: t.span.clone(),
-                    });
-                }
-                Statement::TransitionForward(t) => {
-                    return Err(ParseError {
-                        message: format!(
-                            "E401: Transition with forwarding '-> => ${}' is not allowed in {} '{}'. \
                              Transitions are only allowed in event handlers.",
                             t.target, context_kind, context_name
                         ),

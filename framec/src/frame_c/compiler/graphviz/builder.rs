@@ -160,16 +160,6 @@ fn extract_transitions_from_statements(
                     guard: guard.map(|s| s.to_string()),
                 });
             }
-            Statement::TransitionForward(tf) => {
-                transitions.push(TransitionEdge {
-                    source: source_state.to_string(),
-                    target: TransitionTarget::State(tf.target.clone()),
-                    event: event.to_string(),
-                    label: None,
-                    kind: TransitionKind::Transition,
-                    guard: guard.map(|s| s.to_string()),
-                });
-            }
             Statement::Forward(_f) => {
                 transitions.push(TransitionEdge {
                     source: source_state.to_string(),
@@ -243,7 +233,6 @@ fn extract_transitions_from_statement(
     // A branch may be a single statement or wrapped — handle both
     match stmt {
         Statement::Transition(_)
-        | Statement::TransitionForward(_)
         | Statement::Forward(_)
         | Statement::StackPush(_)
         | Statement::StackPop(_)

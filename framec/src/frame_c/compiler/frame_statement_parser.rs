@@ -201,65 +201,6 @@ impl FrameStatementParser {
         })
     }
 
-    fn parse_transition_forward(
-        &self,
-        line: &[u8],
-        span: RegionSpan,
-    ) -> Result<MirItem, ParseError> {
-        // Expect: -> => $State
-        let n = line.len();
-        let mut i = 0usize;
-        while i < n && line[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        // Required '->'
-        if !(i + 2 <= n && line[i] == b'-' && line[i + 1] == b'>') {
-            return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing ->"));
-        }
-        i += 2;
-        while i < n && line[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        // Required '=>'
-        if !(i + 2 <= n && line[i] == b'=' && line[i + 1] == b'>') {
-            return Err(ParseError::err(ParseErrorKind::InvalidHead, "missing =>"));
-        }
-        i += 2;
-        while i < n && line[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        // '$' State
-        if i >= n || line[i] != b'$' {
-            return Err(ParseError::err(
-                ParseErrorKind::MissingState,
-                "expected $State after '-> =>'",
-            ));
-        }
-        i += 1;
-        let name_start = i;
-        if i >= n || !is_ident_start(line[i]) {
-            return Err(ParseError::err(
-                ParseErrorKind::MissingState,
-                "invalid state name start",
-            ));
-        }
-        i += 1;
-        while i < n && is_ident(line[i]) {
-            i += 1;
-        }
-        let target = String::from_utf8_lossy(&line[name_start..i]).to_string();
-        while i < n && line[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i < n {
-            return Err(ParseError::err(
-                ParseErrorKind::TrailingTokens,
-                "unexpected trailing tokens after Frame statement",
-            ));
-        }
-        Ok(MirItem::TransitionForward { target, span })
-    }
-
     fn parse_forward(&self, line: &[u8], span: RegionSpan) -> Result<MirItem, ParseError> {
         // Expect: => $^
         let mut i = 0usize;

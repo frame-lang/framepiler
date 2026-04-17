@@ -259,7 +259,6 @@ pub enum Statement {
     /// Frame transition statement (->)
     Transition(TransitionAst),
     /// Frame transition-forward (-> => $State)
-    TransitionForward(TransitionForwardAst),
     /// Frame forward to parent (=>)
     Forward(ForwardAst),
     /// Frame stack push (push$)
@@ -352,16 +351,6 @@ pub struct TransitionAst {
     /// Forward flag (-> => $State): dispatch current event to new state
     #[doc(hidden)]
     pub is_forward: bool,
-}
-
-/// Transition-forward statement (-> => $State)
-/// Transitions to state then dispatches current event to new state's handler
-#[derive(Debug, Clone)]
-pub struct TransitionForwardAst {
-    pub target: String,
-    pub span: Span,
-    /// Source indentation level (for proper code generation)
-    pub indent: usize,
 }
 
 /// Forward to parent (=> event)

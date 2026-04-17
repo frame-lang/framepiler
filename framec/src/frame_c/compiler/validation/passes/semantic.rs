@@ -293,7 +293,6 @@ impl SemanticPass {
                             | Statement::Forward(_)
                             | Statement::StackPush(_)
                             | Statement::StackPop(_)
-                            | Statement::TransitionForward(_)
                     )
                 });
                 if has_non_trivial_after {

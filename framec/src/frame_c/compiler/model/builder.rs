@@ -459,17 +459,12 @@ fn extract_transitions(
                     to: t.target.clone(),
                     event: event.to_string(),
                     label: t.label.clone(),
-                    kind: "transition".to_string(),
-                    guard: guard.map(|s| s.to_string()),
-                });
-            }
-            Statement::TransitionForward(tf) => {
-                out.push(TransitionModel {
-                    from: state_name.to_string(),
-                    to: tf.target.clone(),
-                    event: event.to_string(),
-                    label: None,
-                    kind: "transitionForward".to_string(),
+                    kind: if t.is_forward {
+                        "transitionForward"
+                    } else {
+                        "transition"
+                    }
+                    .to_string(),
                     guard: guard.map(|s| s.to_string()),
                 });
             }
