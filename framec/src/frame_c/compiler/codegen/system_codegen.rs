@@ -161,14 +161,18 @@ pub fn generate_system(
 }
 
 /// Shared system codegen for class-based languages (15 of 17).
-/// Called directly by generate_system for non-Rust/non-Erlang targets,
-/// and temporarily by rust_system.rs during incremental migration.
+/// Rust and Erlang have dedicated pipelines in `rust_system.rs` and
+/// `erlang_system.rs`; they never reach this function.
 pub fn generate_system_shared(
     system: &SystemAst,
     arcanum: &Arcanum,
     lang: TargetLanguage,
     source: &[u8],
 ) -> CodegenNode {
+    debug_assert!(
+        !matches!(lang, TargetLanguage::Rust | TargetLanguage::Erlang),
+        "Rust and Erlang have dedicated pipelines — should not reach generate_system_shared"
+    );
     let backend = get_backend(lang);
     let syntax = backend.class_syntax();
 
