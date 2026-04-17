@@ -3387,7 +3387,7 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Graphviz => unreachable!(),
             };
 
-            format!("{}{}{}", call_expr, terminator, guard)
+            format!("{}{}{}{}", indent_str, call_expr, terminator, guard)
         }
         FrameSegmentKind::ReturnStatement => {
             // Native return keyword detected in handler body.
