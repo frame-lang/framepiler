@@ -8,12 +8,13 @@
 //! `backends/rust.rs` handles the lower-level `CodegenNode → String`
 //! rendering and is not modified by this module.
 
-use super::ast::{CodegenNode, Param, Visibility};
+use super::ast::{CodegenNode, Field, Param, Visibility};
 use super::codegen_utils::type_to_string;
 use super::state_dispatch::generate_handler_from_arcanum;
+use super::system_codegen::{expand_tagged_in_domain, init_references_param};
 use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
 use crate::frame_c::compiler::frame_ast::{
-    InterfaceMethod, MachineAst, StateVarAst, SystemAst, Type,
+    InterfaceMethod, MachineAst, ParamKind, StateVarAst, SystemAst, Type,
 };
 use crate::frame_c::visitors::TargetLanguage;
 
@@ -37,14 +38,14 @@ pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]
         .map(|m| m.states.iter().any(|s| !s.state_vars.is_empty()))
         .unwrap_or(false);
 
-    // ── Fields ───────────────────────────────────────────────────
-    let fields = super::system_codegen::generate_fields(system, &syntax);
+    // ── Fields (Rust-specific) ──────────────────────────────────
+    let fields = generate_rust_fields(system);
 
     // ── Methods ──────────────────────────────────────────────────
     let mut methods = Vec::new();
 
-    // Constructor
-    methods.push(super::system_codegen::generate_constructor(system, &syntax));
+    // Constructor (Rust-specific)
+    methods.push(generate_rust_constructor(system));
 
     // Frame machinery (kernel, router, transition — owned here)
     methods.extend(super::system_codegen::generate_frame_machinery(
@@ -99,6 +100,273 @@ pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]
     }
 
     class_node
+}
+
+// ─── Fields ──────────────────────────────────────────────────────────
+
+/// Generate Rust struct fields: state stack, compartment, next compartment,
+/// context stack, domain variables, and synthetic `__sys_*` param fields.
+fn generate_rust_fields(system: &SystemAst) -> Vec<Field> {
+    let mut fields = Vec::new();
+    let compartment_type = format!("{}Compartment", system.name);
+
+    // State stack
+    fields.push(
+        Field::new("_state_stack")
+            .with_visibility(Visibility::Private)
+            .with_type(&format!("Vec<{}>", compartment_type)),
+    );
+
+    // Current compartment (owned, not Option)
+    fields.push(
+        Field::new("__compartment")
+            .with_visibility(Visibility::Private)
+            .with_type(&compartment_type),
+    );
+
+    // Next compartment (deferred transition target)
+    fields.push(
+        Field::new("__next_compartment")
+            .with_visibility(Visibility::Private)
+            .with_type(&format!("Option<{}>", compartment_type)),
+    );
+
+    // Context stack for reentrant dispatch
+    fields.push(
+        Field::new("_context_stack")
+            .with_visibility(Visibility::Private)
+            .with_type(&format!("Vec<{}FrameContext>", system.name)),
+    );
+
+    // Domain variables
+    let sys_param_names: Vec<String> = system.params.iter().map(|p| p.name.clone()).collect();
+    for domain_var in &system.domain {
+        let type_str_opt = match &domain_var.var_type {
+            Type::Custom(s) => Some(s.clone()),
+            Type::Unknown => None,
+        };
+
+        let mut field = Field::new(&domain_var.name).with_visibility(Visibility::Public);
+        if let Some(ref t) = type_str_opt {
+            field = field.with_type(t);
+        }
+        field.is_const = domain_var.is_const;
+
+        let init_text_str = domain_var.initializer_text.as_deref().unwrap_or("");
+        let strip_collision = init_references_param(init_text_str, &sys_param_names);
+        if !strip_collision {
+            if let Some(ref init_text) = &domain_var.initializer_text {
+                let expanded_init = expand_tagged_in_domain(init_text, TargetLanguage::Rust);
+                field = field.with_initializer(CodegenNode::Ident(expanded_init));
+            }
+        }
+
+        fields.push(field);
+    }
+
+    // Synthetic __sys_* fields for state/enter header params
+    for p in &system.params {
+        match p.kind {
+            ParamKind::StateArg | ParamKind::EnterArg => {
+                let ts = type_to_string(&p.param_type);
+                fields.push(
+                    Field::new(&format!("__sys_{}", p.name))
+                        .with_visibility(Visibility::Private)
+                        .with_type(&ts),
+                );
+            }
+            ParamKind::Domain => {}
+        }
+    }
+
+    fields
+}
+
+// ─── Constructor ─────────────────────────────────────────────────────
+
+/// Generate Rust constructor: domain var init (struct-literal folding),
+/// system param stashing, compartment creation with HSM parent chain.
+fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
+    let mut body = Vec::new();
+    let sys_param_names: Vec<String> = system.params.iter().map(|p| p.name.clone()).collect();
+
+    // Stack init — Rust uses Vec::new() for both
+    body.push(CodegenNode::assign(
+        CodegenNode::field(CodegenNode::self_ref(), "_state_stack"),
+        CodegenNode::Ident("Vec::new()".to_string()),
+    ));
+    body.push(CodegenNode::assign(
+        CodegenNode::field(CodegenNode::self_ref(), "_context_stack"),
+        CodegenNode::Ident("Vec::new()".to_string()),
+    ));
+
+    // Domain variable initialization
+    for domain_var in &system.domain {
+        let is_domain_param = system
+            .params
+            .iter()
+            .any(|p| p.name == domain_var.name && matches!(p.kind, ParamKind::Domain));
+
+        let init = match &domain_var.initializer_text {
+            None => {
+                if is_domain_param {
+                    domain_var.name.clone()
+                } else {
+                    "Default::default()".to_string()
+                }
+            }
+            Some(init_text) => {
+                if is_domain_param {
+                    domain_var.name.clone()
+                } else {
+                    expand_tagged_in_domain(init_text, TargetLanguage::Rust)
+                }
+            }
+        };
+
+        body.push(CodegenNode::assign(
+            CodegenNode::field(CodegenNode::self_ref(), &domain_var.name),
+            CodegenNode::Ident(init),
+        ));
+    }
+
+    // __sys_* fields for state/enter header params
+    for p in &system.params {
+        match p.kind {
+            ParamKind::StateArg | ParamKind::EnterArg => {
+                body.push(CodegenNode::assign(
+                    CodegenNode::field(CodegenNode::self_ref(), &format!("__sys_{}", p.name)),
+                    CodegenNode::Ident(p.name.clone()),
+                ));
+            }
+            ParamKind::Domain => {}
+        }
+    }
+
+    // Compartment creation for start state
+    if let Some(ref machine) = system.machine {
+        if let Some(first_state) = machine.states.first() {
+            let has_hsm_parent = first_state.parent.is_some();
+
+            if has_hsm_parent {
+                // Build ancestor chain from root to leaf
+                let mut ancestor_chain = Vec::new();
+                let mut current_parent = first_state.parent.as_ref();
+                while let Some(parent_name) = current_parent {
+                    if let Some(parent_state) =
+                        machine.states.iter().find(|s| &s.name == parent_name)
+                    {
+                        ancestor_chain.push(parent_state);
+                        current_parent = parent_state.parent.as_ref();
+                    } else {
+                        break;
+                    }
+                }
+                ancestor_chain.reverse();
+
+                // Block expression that creates parent chain and returns child
+                let mut block_expr = String::new();
+                block_expr.push_str("{\n");
+                let mut prev_comp_var = "None".to_string();
+                for (i, ancestor) in ancestor_chain.iter().enumerate() {
+                    let comp_var = format!("__parent_comp_{}", i);
+                    block_expr.push_str(&format!(
+                        "let mut {} = {}Compartment::new(\"{}\");\n",
+                        comp_var, system.name, ancestor.name
+                    ));
+                    block_expr.push_str(&format!(
+                        "{}.parent_compartment = {};\n",
+                        comp_var, prev_comp_var
+                    ));
+                    prev_comp_var = format!("Some(Box::new({}))", comp_var);
+                }
+                block_expr.push_str(&format!(
+                    "let mut __child = {}Compartment::new(\"{}\");\n",
+                    system.name, first_state.name
+                ));
+                block_expr.push_str(&format!(
+                    "__child.parent_compartment = {};\n",
+                    prev_comp_var
+                ));
+                block_expr.push_str("__child\n}");
+
+                body.push(CodegenNode::assign(
+                    CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
+                    CodegenNode::Ident(block_expr),
+                ));
+            } else {
+                body.push(CodegenNode::assign(
+                    CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
+                    CodegenNode::Ident(format!(
+                        "{}Compartment::new(\"{}\")",
+                        system.name, first_state.name
+                    )),
+                ));
+            }
+
+            body.push(CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
+                CodegenNode::Ident("None".to_string()),
+            ));
+
+            // Start state state_args from system header params
+            for p in &system.params {
+                if matches!(p.kind, ParamKind::StateArg) {
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!(
+                            "self.__compartment.state_args.insert(\"{}\".to_string(), {}.to_string());",
+                            p.name, p.name
+                        ),
+                        span: None,
+                    });
+                }
+            }
+
+            // Start state enter_args from system header params
+            for p in &system.params {
+                if matches!(p.kind, ParamKind::EnterArg) {
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!(
+                            "self.__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());",
+                            p.name, p.name
+                        ),
+                        span: None,
+                    });
+                }
+            }
+
+            // Fire $> event
+            let event_class = format!("{}FrameEvent", system.name);
+            let context_class = format!("{}FrameContext", system.name);
+            body.push(CodegenNode::NativeBlock {
+                code: format!(
+                    "let __frame_event = {}::new_with_params(\"$>\", &self.__compartment.enter_args);\n\
+                     let __ctx = {}::new(__frame_event, None);\n\
+                     self._context_stack.push(__ctx);\n\
+                     self.__kernel();\n\
+                     self._context_stack.pop();",
+                    event_class, context_class
+                ),
+                span: None,
+            });
+        }
+    }
+
+    // System params as constructor parameters
+    let params: Vec<Param> = system
+        .params
+        .iter()
+        .map(|p| {
+            let ts = type_to_string(&p.param_type);
+            Param::new(&p.name).with_type(&ts)
+        })
+        .collect();
+
+    CodegenNode::Constructor {
+        params,
+        body,
+        super_call: None,
+    }
 }
 
 // ─── Machinery ───────────────────────────────────────────────────────

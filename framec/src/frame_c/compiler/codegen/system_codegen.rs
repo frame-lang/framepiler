@@ -79,7 +79,7 @@ fn find_whole_words(
 /// True iff the init expression text contains any of the supplied param
 /// names as a whole word. Used to detect `balance: int = balance` where
 /// a domain field initializer references a constructor parameter.
-fn init_references_param(init_text: &str, params: &[String]) -> bool {
+pub(crate) fn init_references_param(init_text: &str, params: &[String]) -> bool {
     if params.is_empty() || init_text.is_empty() {
         return false;
     }
@@ -4143,7 +4143,7 @@ fn generate_c_router_dispatch(system: &SystemAst) -> String {
 /// Expand `@@SystemName(args)` in domain variable initializers to native constructors.
 /// This handles the same pattern as the assembler's tagged instantiation expansion,
 /// but for domain code that is emitted during codegen (before the assembler runs).
-fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> String {
+pub(crate) fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> String {
     let bytes = raw_code.as_bytes();
     let mut result = String::new();
     let mut i = 0;
