@@ -407,79 +407,21 @@ pub(crate) fn generate_frame_expansion(
                 segment_text.contains("pop$")
             };
             if is_pop {
-                // Pop-transition: pop state from stack and transition to it
-                // Includes return to exit handler (code after -> pop$ is unreachable)
-                match lang {
-                    TargetLanguage::Python3 => format!(
-                        "{}__saved = self._state_stack.pop()\n{}self.__transition(__saved)\n{}return",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::GDScript => format!(
-                        "{}var __saved = self._state_stack.pop_back()\n{}self.__transition(__saved)\n{}return",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::TypeScript => format!(
-                        "{}const __saved = this._state_stack.pop()!;\n{}this.__transition(__saved);\n{}return;",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Dart => format!(
-                        "{}final __saved = this._state_stack.removeLast();\n{}this.__transition(__saved);\n{}return;",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::JavaScript => format!(
-                        "{}const __saved = this._state_stack.pop();\n{}this.__transition(__saved);\n{}return;",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Rust => format!(
-                        "{}let __popped = self._state_stack.pop().unwrap();\n{}self.__transition(__popped);\n{}return;",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::C => format!(
-                        "{}{}_Compartment* __saved = ({}_Compartment*){}_FrameVec_pop(self->_state_stack);\n{}{}_transition(self, __saved);\n{}return;",
-                        indent_str, ctx.system_name, ctx.system_name, ctx.system_name, indent_str, ctx.system_name, indent_str
-                    ),
-                    TargetLanguage::Cpp => format!(
-                        "{}auto __saved = std::move(_state_stack.back()); _state_stack.pop_back();\n{}__transition(std::move(__saved));\n{}return;",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Java => format!(
-                        "{}var __saved = _state_stack.remove(_state_stack.size() - 1);\n{}__transition(__saved);\n{}return;",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Kotlin => format!(
-                        "{}val __saved = _state_stack.removeAt(_state_stack.size - 1)\n{}__transition(__saved)\n{}return",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Swift => format!(
-                        "{}let __saved = _state_stack.removeLast()\n{}__transition(__saved)\n{}return",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::CSharp => format!(
-                        "{}var __saved = _state_stack[_state_stack.Count - 1]; _state_stack.RemoveAt(_state_stack.Count - 1);\n{}__transition(__saved);\n{}return;",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Go => format!(
-                        "{}__saved := s._state_stack[len(s._state_stack)-1]\n{}s._state_stack = s._state_stack[:len(s._state_stack)-1]\n{}s.__transition(__saved)\n{}return",
-                        indent_str, indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Php => format!(
-                        "{}$__saved = array_pop($this->_state_stack);\n{}$this->__transition($__saved);\n{}return;",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Ruby => format!(
-                        "{}__saved = @_state_stack.pop\n{}__transition(__saved)\n{}return",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Lua => format!(
-                        "{}local __saved = table.remove(self._state_stack)\n{}self:__transition(__saved)\n{}return",
-                        indent_str, indent_str, indent_str
-                    ),
-                    TargetLanguage::Erlang => {
-                        format!("{}[__PoppedState | __RestStack] = Data#data.frame_stack,\n{}{{next_state, __PoppedState, Data#data{{frame_stack = __RestStack}}, [{{reply, From, ok}}]}}",
-                            indent_str, indent_str)
-                    }
-                    TargetLanguage::Graphviz => unreachable!(),
-                }
+                // Pop-transition with optional decorations (RFC-0008):
+                // 1. Write exit_args to current compartment (if present)
+                // 2. Pop from stack
+                // 3. If enter_args present: clear + write fresh values
+                // 4. If is_forward: set forward_event
+                // 5. __transition + return
+                let (exit_str, enter_str) = match metadata {
+                    SegmentMetadata::Transition {
+                        exit_args,
+                        enter_args,
+                        ..
+                    } => (exit_args.clone(), enter_args.clone()),
+                    _ => (None, None),
+                };
+                generate_pop_transition(&indent_str, ctx, lang, &exit_str, &enter_str, is_forward)
             } else if is_forward {
                 // Forward-transition: -> => $State
                 // Create compartment, set forward_event to current event,
@@ -3817,6 +3759,384 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
     }
 
     result
+}
+
+/// Generate a pop-transition with optional RFC-0008 decorations
+/// (exit_args, enter_args, is_forward). Each backend emits:
+///   1. exit_args writes on current compartment (if present)
+///   2. Pop from stack into __saved
+///   3. Clear + write enter_args on __saved (if present)
+///   4. Set forward_event on __saved (if is_forward)
+///   5. __transition(__saved) + return
+fn generate_pop_transition(
+    indent: &str,
+    ctx: &HandlerContext,
+    lang: TargetLanguage,
+    exit_args: &Option<String>,
+    enter_args: &Option<String>,
+    is_forward: bool,
+) -> String {
+    let mut code = String::new();
+
+    // Helper: emit exit_args writes on current compartment
+    if let Some(ref exit) = exit_args {
+        for (i, arg) in exit
+            .split(',')
+            .map(|x| x.trim())
+            .filter(|x| !x.is_empty())
+            .enumerate()
+        {
+            let (key, value) = if let Some(eq_pos) = arg.find('=') {
+                (
+                    arg[..eq_pos].trim().to_string(),
+                    arg[eq_pos + 1..].trim().to_string(),
+                )
+            } else {
+                (resolve_exit_arg_key(i, ctx), arg.to_string())
+            };
+            match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                    code.push_str(&format!(
+                        "{}self.__compartment.exit_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
+                    code.push_str(&format!(
+                        "{}this.__compartment.exit_args[\"{}\"] = {};\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Rust => {
+                    code.push_str(&format!("{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n", indent, key, value));
+                }
+                TargetLanguage::C => {
+                    code.push_str(&format!("{}{}_FrameDict_set(self->__compartment->exit_args, \"{}\", (void*)(intptr_t)({}));\n", indent, ctx.system_name, key, value));
+                }
+                TargetLanguage::Cpp => {
+                    code.push_str(&format!(
+                        "{}__compartment->exit_args[\"{}\"] = std::any({});\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Java => {
+                    code.push_str(&format!(
+                        "{}__compartment.exit_args.put(\"{}\", {});\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Kotlin => {
+                    code.push_str(&format!(
+                        "{}__compartment.exit_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Swift => {
+                    code.push_str(&format!(
+                        "{}__compartment.exit_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::CSharp => {
+                    code.push_str(&format!(
+                        "{}__compartment.exit_args[\"{}\"] = {};\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Go => {
+                    code.push_str(&format!(
+                        "{}s.__compartment.exitArgs[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Php => {
+                    code.push_str(&format!(
+                        "{}$this->__compartment->exit_args[\"{}\"] = {};\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Ruby => {
+                    code.push_str(&format!(
+                        "{}@__compartment.exit_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Lua => {
+                    code.push_str(&format!(
+                        "{}self.__compartment.exit_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Erlang | TargetLanguage::Graphviz => {}
+            }
+        }
+    }
+
+    // Pop from stack
+    match lang {
+        TargetLanguage::Python3 => code.push_str(&format!("{}__saved = self._state_stack.pop()\n", indent)),
+        TargetLanguage::GDScript => code.push_str(&format!("{}var __saved = self._state_stack.pop_back()\n", indent)),
+        TargetLanguage::TypeScript => code.push_str(&format!("{}const __saved = this._state_stack.pop()!;\n", indent)),
+        TargetLanguage::Dart => code.push_str(&format!("{}final __saved = this._state_stack.removeLast();\n", indent)),
+        TargetLanguage::JavaScript => code.push_str(&format!("{}const __saved = this._state_stack.pop();\n", indent)),
+        TargetLanguage::Rust => code.push_str(&format!("{}let mut __popped = self._state_stack.pop().unwrap();\n", indent)),
+        TargetLanguage::C => code.push_str(&format!("{}{}_Compartment* __saved = ({}_Compartment*){}_FrameVec_pop(self->_state_stack);\n", indent, ctx.system_name, ctx.system_name, ctx.system_name)),
+        TargetLanguage::Cpp => code.push_str(&format!("{}auto __saved = std::move(_state_stack.back()); _state_stack.pop_back();\n", indent)),
+        TargetLanguage::Java => code.push_str(&format!("{}var __saved = _state_stack.remove(_state_stack.size() - 1);\n", indent)),
+        TargetLanguage::Kotlin => code.push_str(&format!("{}val __saved = _state_stack.removeAt(_state_stack.size - 1)\n", indent)),
+        TargetLanguage::Swift => code.push_str(&format!("{}let __saved = _state_stack.removeLast()\n", indent)),
+        TargetLanguage::CSharp => code.push_str(&format!("{}var __saved = _state_stack[_state_stack.Count - 1]; _state_stack.RemoveAt(_state_stack.Count - 1);\n", indent)),
+        TargetLanguage::Go => {
+            code.push_str(&format!("{}__saved := s._state_stack[len(s._state_stack)-1]\n", indent));
+            code.push_str(&format!("{}s._state_stack = s._state_stack[:len(s._state_stack)-1]\n", indent));
+        }
+        TargetLanguage::Php => code.push_str(&format!("{}$__saved = array_pop($this->_state_stack);\n", indent)),
+        TargetLanguage::Ruby => code.push_str(&format!("{}__saved = @_state_stack.pop\n", indent)),
+        TargetLanguage::Lua => code.push_str(&format!("{}local __saved = table.remove(self._state_stack)\n", indent)),
+        TargetLanguage::Erlang => {
+            code.push_str(&format!("{}[__PoppedState | __RestStack] = Data#data.frame_stack,\n", indent));
+            // Erlang pop with decorations: handled via gen_statem pattern
+            code.push_str(&format!("{}{{next_state, __PoppedState, Data#data{{frame_stack = __RestStack}}, [{{reply, From, ok}}]}}", indent));
+            return code;
+        }
+        TargetLanguage::Graphviz => unreachable!(),
+    }
+
+    // Fresh enter_args: clear + write (RFC-0008 replace semantics)
+    if let Some(ref enter) = enter_args {
+        for (i, arg) in enter
+            .split(',')
+            .map(|x| x.trim())
+            .filter(|x| !x.is_empty())
+            .enumerate()
+        {
+            let (key, value) = if let Some(eq_pos) = arg.find('=') {
+                (
+                    arg[..eq_pos].trim().to_string(),
+                    arg[eq_pos + 1..].trim().to_string(),
+                )
+            } else {
+                (i.to_string(), arg.to_string())
+            };
+            match lang {
+                TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                    code.push_str(&format!(
+                        "{}__saved.enter_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
+                    code.push_str(&format!(
+                        "{}__saved.enter_args[\"{}\"] = {};\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Rust => {
+                    code.push_str(&format!(
+                        "{}__popped.enter_args.insert(\"{}\".to_string(), {}.to_string());\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::C => {
+                    code.push_str(&format!(
+                        "{}{}_FrameDict_set(__saved->enter_args, \"{}\", (void*)(intptr_t)({}));\n",
+                        indent, ctx.system_name, key, value
+                    ));
+                }
+                TargetLanguage::Cpp => {
+                    code.push_str(&format!(
+                        "{}__saved->enter_args[\"{}\"] = std::any({});\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Java => {
+                    code.push_str(&format!(
+                        "{}__saved.enter_args.put(\"{}\", {});\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Kotlin => {
+                    code.push_str(&format!(
+                        "{}__saved.enter_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Swift => {
+                    code.push_str(&format!(
+                        "{}__saved.enter_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::CSharp => {
+                    code.push_str(&format!(
+                        "{}__saved.enter_args[\"{}\"] = {};\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Go => {
+                    code.push_str(&format!(
+                        "{}__saved.enterArgs[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Php => {
+                    code.push_str(&format!(
+                        "{}$__saved->enter_args[\"{}\"] = {};\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Ruby => {
+                    code.push_str(&format!(
+                        "{}__saved.enter_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Lua => {
+                    code.push_str(&format!(
+                        "{}__saved.enter_args[\"{}\"] = {}\n",
+                        indent, key, value
+                    ));
+                }
+                TargetLanguage::Erlang | TargetLanguage::Graphviz => {}
+            }
+        }
+    }
+
+    // Forward event (RFC-0008: -> => pop$)
+    if is_forward {
+        match lang {
+            TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                code.push_str(&format!("{}__saved.forward_event = __e\n", indent));
+            }
+            TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
+                code.push_str(&format!("{}__saved.forward_event = __e;\n", indent));
+            }
+            TargetLanguage::Rust => {
+                code.push_str(&format!(
+                    "{}__popped.forward_event = Some(__e.clone());\n",
+                    indent
+                ));
+            }
+            TargetLanguage::C => {
+                code.push_str(&format!("{}__saved->forward_event = __e;\n", indent));
+            }
+            TargetLanguage::Cpp => {
+                code.push_str(&format!(
+                    "{}__saved->forward_event = std::make_unique<{}FrameEvent>(__e);\n",
+                    indent, ctx.system_name
+                ));
+            }
+            TargetLanguage::Java
+            | TargetLanguage::Kotlin
+            | TargetLanguage::Swift
+            | TargetLanguage::CSharp => {
+                code.push_str(&format!("{}__saved.forward_event = __e;\n", indent));
+            }
+            TargetLanguage::Go => {
+                code.push_str(&format!("{}__saved.forwardEvent = __e\n", indent));
+            }
+            TargetLanguage::Php => {
+                code.push_str(&format!("{}$__saved->forward_event = $__e;\n", indent));
+            }
+            TargetLanguage::Ruby => {
+                code.push_str(&format!("{}__saved.forward_event = __e\n", indent));
+            }
+            TargetLanguage::Lua => {
+                code.push_str(&format!("{}__saved.forward_event = __e\n", indent));
+            }
+            TargetLanguage::Erlang | TargetLanguage::Graphviz => {}
+        }
+    }
+
+    // Transition + return
+    let var = if matches!(lang, TargetLanguage::Rust) {
+        "__popped"
+    } else {
+        "__saved"
+    };
+    match lang {
+        TargetLanguage::Python3 | TargetLanguage::GDScript => {
+            code.push_str(&format!(
+                "{}self.__transition({})\n{}return",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
+            code.push_str(&format!(
+                "{}this.__transition({});\n{}return;",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Rust => {
+            code.push_str(&format!(
+                "{}self.__transition({});\n{}return;",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::C => {
+            code.push_str(&format!(
+                "{}{}_transition(self, {});\n{}return;",
+                indent, ctx.system_name, var, indent
+            ));
+        }
+        TargetLanguage::Cpp => {
+            code.push_str(&format!(
+                "{}__transition(std::move({}));\n{}return;",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Java => {
+            code.push_str(&format!(
+                "{}__transition({});\n{}return;",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Kotlin => {
+            code.push_str(&format!(
+                "{}__transition({})\n{}return",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Swift => {
+            code.push_str(&format!(
+                "{}__transition({})\n{}return",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::CSharp => {
+            code.push_str(&format!(
+                "{}__transition({});\n{}return;",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Go => {
+            code.push_str(&format!(
+                "{}s.__transition({})\n{}return",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Php => {
+            code.push_str(&format!(
+                "{}$this->__transition(${});\n{}return;",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Ruby => {
+            code.push_str(&format!(
+                "{}__transition({})\n{}return",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Lua => {
+            code.push_str(&format!(
+                "{}self:__transition({})\n{}return",
+                indent, var, indent
+            ));
+        }
+        TargetLanguage::Erlang | TargetLanguage::Graphviz => {}
+    }
+
+    code
 }
 
 /// Get the native region scanner for the target language
