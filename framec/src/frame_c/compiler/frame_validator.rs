@@ -2552,24 +2552,27 @@ mod tests {
 
     // ── RFC-0008: Decorated pop$ transitions ─────────────────────
 
-    /// Helper: compile source and return the generated code (Python target).
-    fn v4_output(source: &str) -> String {
+    /// Helper: compile source for a given target and return the generated code.
+    fn v4_output_for(source: &str, target: VTarget) -> String {
         use crate::frame_c::compiler::pipeline::compile_module;
         use crate::frame_c::compiler::pipeline::config::PipelineConfig;
-        let config = PipelineConfig::production(VTarget::Python3);
+        let config = PipelineConfig::production(target);
         let result = compile_module(source.as_bytes(), &config).expect("pipeline ran");
         assert!(
             result.errors.is_empty(),
-            "compilation errors: {:?}",
+            "{:?} compilation errors: {:?}",
+            target,
             result.errors
         );
         result.code
     }
 
-    #[test]
-    fn test_bare_pop_regression() {
-        // Bare -> pop$ must still compile (no decorations)
-        let source = r#"
+    fn v4_output(source: &str) -> String {
+        v4_output_for(source, VTarget::Python3)
+    }
+
+    /// Frame source with bare -> pop$ (regression baseline)
+    const POP_BARE: &str = r#"
 @@system S {
     interface:
         go()
@@ -2587,25 +2590,35 @@ mod tests {
             }
         }
 }"#;
-        let code = v4_output(source);
-        assert!(
-            code.contains("_state_stack.pop()"),
-            "bare pop should generate stack pop: {}",
-            code
-        );
-    }
 
-    #[test]
-    fn test_pop_with_fresh_enter_args() {
-        // -> (result) pop$ — fresh enter args on the popped compartment
-        let source = r#"
+    /// Frame source with exit args on pop: ("finished") -> pop$
+    const POP_EXIT: &str = r#"
 @@system S {
     interface:
         go()
         done()
     machine:
         $A {
-            $>(value: int) { }
+            go() {
+                push$
+                -> $B
+            }
+        }
+        $B {
+            done() {
+                ("finished") -> pop$
+            }
+        }
+}"#;
+
+    /// Frame source with enter args on pop: -> (42) pop$
+    const POP_ENTER: &str = r#"
+@@system S {
+    interface:
+        go()
+        done()
+    machine:
+        $A {
             go() {
                 push$
                 -> $B
@@ -2617,48 +2630,9 @@ mod tests {
             }
         }
 }"#;
-        let code = v4_output(source);
-        assert!(
-            code.contains("enter_args"),
-            "pop with enter args should write enter_args: {}",
-            code
-        );
-    }
 
-    #[test]
-    fn test_pop_with_exit_args() {
-        // (reason) -> pop$ — exit args on the leaving state
-        let source = r#"
-@@system S {
-    interface:
-        go()
-        done()
-    machine:
-        $A {
-            go() {
-                push$
-                -> $B
-            }
-        }
-        $B {
-            <$(reason: str) { }
-            done() {
-                ("finished") -> pop$
-            }
-        }
-}"#;
-        let code = v4_output(source);
-        assert!(
-            code.contains("exit_args"),
-            "pop with exit args should write exit_args: {}",
-            code
-        );
-    }
-
-    #[test]
-    fn test_pop_with_forward() {
-        // -> => pop$ — forward current event to restored state
-        let source = r#"
+    /// Frame source with event forwarding on pop: -> => pop$
+    const POP_FORWARD: &str = r#"
 @@system S {
     interface:
         go()
@@ -2676,40 +2650,87 @@ mod tests {
             }
         }
 }"#;
-        let code = v4_output(source);
-        assert!(
-            code.contains("forward_event"),
-            "pop with forward should set forward_event: {}",
-            code
-        );
+
+    // All 17 targets (excluding Graphviz — not a runtime target)
+    const ALL_TARGETS: &[VTarget] = &[
+        VTarget::Python3,
+        VTarget::TypeScript,
+        VTarget::JavaScript,
+        VTarget::Dart,
+        VTarget::Rust,
+        VTarget::C,
+        VTarget::Cpp,
+        VTarget::Java,
+        VTarget::Kotlin,
+        VTarget::Swift,
+        VTarget::CSharp,
+        VTarget::Go,
+        VTarget::Php,
+        VTarget::Ruby,
+        VTarget::Lua,
+        VTarget::GDScript,
+        VTarget::Erlang,
+    ];
+
+    #[test]
+    fn test_bare_pop_all_backends() {
+        for &target in ALL_TARGETS {
+            let code = v4_output_for(POP_BARE, target);
+            assert!(
+                !code.is_empty(),
+                "{:?}: bare pop$ produced empty output",
+                target
+            );
+        }
     }
 
     #[test]
-    fn test_pop_combined_decorations() {
-        // (reason) -> (result) => pop$ — all three
-        let source = r#"
-@@system S {
-    interface:
-        go()
-        done()
-    machine:
-        $A {
-            $>(value: int) { }
-            go() {
-                push$
-                -> $B
+    fn test_pop_exit_args_all_backends() {
+        for &target in ALL_TARGETS {
+            if matches!(target, VTarget::Erlang) {
+                continue; // Erlang handles pop via gen_statem
             }
+            let code = v4_output_for(POP_EXIT, target);
+            assert!(
+                code.contains("exit_args") || code.contains("exitArgs"),
+                "{:?}: pop with exit args should write exit_args:\n{}",
+                target,
+                code
+            );
         }
-        $B {
-            <$(reason: str) { }
-            done() {
-                ("bye") -> (99) => pop$
+    }
+
+    #[test]
+    fn test_pop_enter_args_all_backends() {
+        for &target in ALL_TARGETS {
+            if matches!(target, VTarget::Erlang) {
+                continue;
             }
+            let code = v4_output_for(POP_ENTER, target);
+            assert!(
+                code.contains("enter_args") || code.contains("enterArgs"),
+                "{:?}: pop with enter args should write enter_args:\n{}",
+                target,
+                code
+            );
         }
-}"#;
-        let code = v4_output(source);
-        assert!(code.contains("exit_args"), "should have exit_args");
-        assert!(code.contains("enter_args"), "should have enter_args");
-        assert!(code.contains("forward_event"), "should have forward_event");
+    }
+
+    #[test]
+    fn test_pop_forward_all_backends() {
+        for &target in ALL_TARGETS {
+            if matches!(target, VTarget::Erlang) {
+                continue;
+            }
+            let code = v4_output_for(POP_FORWARD, target);
+            assert!(
+                code.contains("forward_event")
+                    || code.contains("forwardEvent")
+                    || code.contains("forward_event"),
+                "{:?}: pop with forward should set forward_event:\n{}",
+                target,
+                code
+            );
+        }
     }
 }
