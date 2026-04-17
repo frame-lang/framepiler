@@ -2824,72 +2824,69 @@ pub(crate) fn generate_frame_expansion(
                 }
             };
             let expanded_expr = expand_expression(expr.trim(), lang, ctx);
-            // All standalone @@ expansions include indent_str. The
-            // scanner trims trailing whitespace from preceding native
-            // text (so there's no double-indent), and normalize_indentation
-            // reconciles the indent base across all lines.
+            // The assignment line uses an empty indent prefix because
+            // the splicer always copies the source's leading whitespace
+            // as native text immediately before the segment expansion.
+            // Adding indent_str here would double the indent. The
+            // appended return line (when has_native_return is true)
+            // does need indent because it's on a new line introduced by
+            // the expansion itself.
             let assignment = match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                    format!(
-                        "{}self._context_stack[-1]._return = {}",
-                        indent_str, expanded_expr
-                    )
+                    format!("self._context_stack[-1]._return = {}", expanded_expr)
                 }
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
                     format!(
-                        "{}this._context_stack[this._context_stack.length - 1]._return = {};",
-                        indent_str, expanded_expr
+                        "this._context_stack[this._context_stack.length - 1]._return = {};",
+                        expanded_expr
                     )
                 }
                 TargetLanguage::C => format!(
-                    "{}{}_CTX(self)->_return = (void*)(intptr_t)({});",
-                    indent_str, ctx.system_name, expanded_expr
+                    "{}_CTX(self)->_return = (void*)(intptr_t)({});",
+                    ctx.system_name, expanded_expr
                 ),
                 TargetLanguage::Rust => {
                     super::rust_system::rust_expand_box_return_bare(&indent_str, &expanded_expr)
                 }
                 TargetLanguage::Cpp => {
                     let wrapped = cpp_wrap_string_literal(&expanded_expr);
-                    format!(
-                        "{}_context_stack.back()._return = std::any({});",
-                        indent_str, wrapped
-                    )
+                    format!("_context_stack.back()._return = std::any({});", wrapped)
                 }
                 TargetLanguage::Java => format!(
-                    "{}_context_stack.get(_context_stack.size() - 1)._return = {};",
-                    indent_str, expanded_expr
+                    "_context_stack.get(_context_stack.size() - 1)._return = {};",
+                    expanded_expr
                 ),
                 TargetLanguage::Kotlin => format!(
-                    "{}_context_stack[_context_stack.size - 1]._return = {}",
-                    indent_str, expanded_expr
+                    "_context_stack[_context_stack.size - 1]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::Swift => format!(
-                    "{}_context_stack[_context_stack.count - 1]._return = {}",
-                    indent_str, expanded_expr
+                    "_context_stack[_context_stack.count - 1]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::CSharp => format!(
-                    "{}_context_stack[_context_stack.Count - 1]._return = {};",
-                    indent_str, expanded_expr
+                    "_context_stack[_context_stack.Count - 1]._return = {};",
+                    expanded_expr
                 ),
                 TargetLanguage::Go => format!(
-                    "{}s._context_stack[len(s._context_stack)-1]._return = {}",
-                    indent_str, expanded_expr
+                    "s._context_stack[len(s._context_stack)-1]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::Php => format!(
-                    "{}$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
-                    indent_str, expanded_expr
+                    "$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
+                    expanded_expr
                 ),
                 TargetLanguage::Ruby => format!(
-                    "{}@_context_stack[@_context_stack.length - 1]._return = {}",
-                    indent_str, expanded_expr
+                    "@_context_stack[@_context_stack.length - 1]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::Lua => format!(
-                    "{}self._context_stack[#self._context_stack]._return = {}",
-                    indent_str, expanded_expr
+                    "self._context_stack[#self._context_stack]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::Erlang => {
                     let erl_expr = expanded_expr.replace("self.", "Data#data.");
-                    format!("{}__ReturnVal = {}", indent_str, erl_expr)
+                    format!("__ReturnVal = {}", erl_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             };
@@ -3217,68 +3214,66 @@ pub(crate) fn generate_frame_expansion(
             let expanded_expr = expand_expression(expr, lang, ctx);
 
             // Emit: set return slot + native return.
+            // The splicer provides the leading indent for the first line
+            // (from the native text before the @@ segment). We do NOT
+            // add indent_str to the first line. The return on the next
+            // line does need indent_str since it's a new line.
             let set_code = match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                    format!(
-                        "{}self._context_stack[-1]._return = {}",
-                        indent_str, expanded_expr
-                    )
+                    format!("self._context_stack[-1]._return = {}", expanded_expr)
                 }
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
                     format!(
-                        "{}this._context_stack[this._context_stack.length - 1]._return = {};",
-                        indent_str, expanded_expr
+                        "this._context_stack[this._context_stack.length - 1]._return = {};",
+                        expanded_expr
                     )
                 }
                 TargetLanguage::C => format!(
-                    "{}{}_CTX(self)->_return = (void*)(intptr_t)({});",
-                    indent_str, ctx.system_name, expanded_expr
+                    "{}_CTX(self)->_return = (void*)(intptr_t)({});",
+                    ctx.system_name, expanded_expr
                 ),
                 TargetLanguage::Rust => {
                     super::rust_system::rust_expand_box_return_bare(&indent_str, &expanded_expr)
                 }
                 TargetLanguage::Cpp => {
                     let wrapped = cpp_wrap_string_literal(&expanded_expr);
-                    format!(
-                        "{}_context_stack.back()._return = std::any({});",
-                        indent_str, wrapped
-                    )
+                    format!("_context_stack.back()._return = std::any({});", wrapped)
                 }
                 TargetLanguage::Java => format!(
-                    "{}_context_stack.get(_context_stack.size() - 1)._return = {};",
-                    indent_str, expanded_expr
+                    "_context_stack.get(_context_stack.size() - 1)._return = {};",
+                    expanded_expr
                 ),
                 TargetLanguage::Kotlin => format!(
-                    "{}_context_stack[_context_stack.size - 1]._return = {}",
-                    indent_str, expanded_expr
+                    "_context_stack[_context_stack.size - 1]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::Swift => format!(
-                    "{}_context_stack[_context_stack.count - 1]._return = {}",
-                    indent_str, expanded_expr
+                    "_context_stack[_context_stack.count - 1]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::CSharp => format!(
-                    "{}_context_stack[_context_stack.Count - 1]._return = {};",
-                    indent_str, expanded_expr
+                    "_context_stack[_context_stack.Count - 1]._return = {};",
+                    expanded_expr
                 ),
                 TargetLanguage::Go => format!(
-                    "{}s._context_stack[len(s._context_stack)-1]._return = {}",
-                    indent_str, expanded_expr
+                    "s._context_stack[len(s._context_stack)-1]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::Php => format!(
-                    "{}$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
-                    indent_str, expanded_expr
+                    "$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
+                    expanded_expr
                 ),
                 TargetLanguage::Ruby => format!(
-                    "{}@_context_stack[@_context_stack.length - 1]._return = {}",
-                    indent_str, expanded_expr
+                    "@_context_stack[@_context_stack.length - 1]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::Lua => format!(
-                    "{}self._context_stack[#self._context_stack]._return = {}",
-                    indent_str, expanded_expr
+                    "self._context_stack[#self._context_stack]._return = {}",
+                    expanded_expr
                 ),
                 TargetLanguage::Erlang => {
                     let erl_expr = expanded_expr.replace("self.", "Data#data.");
-                    format!("{}__ReturnVal = {}", indent_str, erl_expr)
+                    format!("__ReturnVal = {}", erl_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             };

@@ -259,27 +259,12 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
             // Delegates to ContextParserFsm (hierarchical state manager pattern)
             b'@' if i + 1 < end && bytes[i + 1] == b'@' => {
                 if seg_start < i {
-                    // Trim trailing whitespace from native text when the
-                    // @@ token starts the line (only whitespace before it).
-                    // This mirrors the SOL path's trimming and lets the
-                    // expansion's indent_str control indentation, which
-                    // normalize_indentation then reconciles across all
-                    // lines. For inline @@ (e.g., `x = @@:self.method()`),
-                    // the non-whitespace native text is preserved.
-                    let mut native_end = i;
-                    while native_end > seg_start
-                        && (bytes[native_end - 1] == b' ' || bytes[native_end - 1] == b'\t')
-                    {
-                        native_end -= 1;
-                    }
-                    if seg_start < native_end {
-                        regions.push(Region::NativeText {
-                            span: RegionSpan {
-                                start: seg_start,
-                                end: native_end,
-                            },
-                        });
-                    }
+                    regions.push(Region::NativeText {
+                        span: RegionSpan {
+                            start: seg_start,
+                            end: i,
+                        },
+                    });
                 }
                 let ctx_start = i;
 
