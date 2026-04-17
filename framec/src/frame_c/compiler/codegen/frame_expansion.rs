@@ -1928,7 +1928,9 @@ pub(crate) fn generate_frame_expansion(
                         format!("{}this._state_{}(__e);", indent_str, parent)
                     }
                     // Rust: call parent state router (not specific handler) to dispatch via match
-                    TargetLanguage::Rust => format!("{}self._state_{}(__e);", indent_str, parent),
+                    TargetLanguage::Rust => {
+                        super::rust_system::rust_parent_forward(&indent_str, parent)
+                    }
                     // C: call System_state_Parent(self, __e) since C has no methods
                     TargetLanguage::C => format!(
                         "{}{}_state_{}(self, __e);",
@@ -2061,19 +2063,9 @@ pub(crate) fn generate_frame_expansion(
                 }
                 TargetLanguage::Rust => {
                     if !target.is_empty() {
-                        // Push-with-transition: mem::replace moves old to
-                        // stack, new becomes current. No copy needed.
-                        format!(
-                            "{}self.__push_transition({}Compartment::new(\"{}\"));\n{}return;",
-                            indent_str, ctx.system_name, target, indent_str
-                        )
+                        super::rust_system::rust_push_transition(&indent_str, ctx, &target)
                     } else {
-                        // Bare push$: Rust ownership requires clone (can't
-                        // have stack and current both own the same value).
-                        format!(
-                            "{}self._state_stack.push(self.__compartment.clone());",
-                            indent_str
-                        )
+                        super::rust_system::rust_bare_push(&indent_str)
                     }
                 }
                 TargetLanguage::C => {
@@ -2223,7 +2215,7 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::TypeScript => format!("{}this._state_stack.pop();", indent_str),
                 TargetLanguage::JavaScript => format!("{}this._state_stack.pop();", indent_str),
                 TargetLanguage::Dart => format!("{}this._state_stack.removeLast();", indent_str),
-                TargetLanguage::Rust => format!("{}self._state_stack.pop();", indent_str),
+                TargetLanguage::Rust => super::rust_system::rust_bare_pop(&indent_str),
                 TargetLanguage::C => format!(
                     "{}{}_FrameVec_pop(self->_state_stack);",
                     indent_str, ctx.system_name
@@ -2737,10 +2729,7 @@ pub(crate) fn generate_frame_expansion(
                         "this._context_stack[this._context_stack.length - 1]._return".to_string()
                     }
                     TargetLanguage::C => format!("{}_RETURN(self)", ctx.system_name),
-                    TargetLanguage::Rust => {
-                        "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())"
-                            .to_string()
-                    }
+                    TargetLanguage::Rust => super::rust_system::rust_context_return_read(),
                     TargetLanguage::Cpp => {
                         "std::any_cast<std::string>(_context_stack.back()._return)".to_string()
                     }
@@ -2934,7 +2923,7 @@ pub(crate) fn generate_frame_expansion(
                 }
                 TargetLanguage::C => format!("{}_CTX(self)->event->_message", ctx.system_name),
                 // Rust: handlers receive __e as parameter, use it directly to avoid borrow conflicts
-                TargetLanguage::Rust => "__e.message.clone()".to_string(),
+                TargetLanguage::Rust => super::rust_system::rust_event_message(),
                 TargetLanguage::Cpp => "_context_stack.back()._event._message".to_string(),
                 TargetLanguage::Java => {
                     "_context_stack.get(_context_stack.size() - 1)._event._message".to_string()
@@ -2986,9 +2975,7 @@ pub(crate) fn generate_frame_expansion(
                     )
                 }
                 TargetLanguage::C => format!("{}_DATA(self, \"{}\")", ctx.system_name, key),
-                TargetLanguage::Rust => {
-                    format!("self._context_stack.last().and_then(|ctx| ctx._data.get(\"{}\")).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default()", key)
-                }
+                TargetLanguage::Rust => super::rust_system::rust_context_data_get(&key),
                 TargetLanguage::Cpp => format!("_context_stack.back()._data[\"{}\"]", key),
                 TargetLanguage::Java => format!(
                     "_context_stack.get(_context_stack.size() - 1)._data.get(\"{}\")",
@@ -3070,7 +3057,7 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[\"{}\"]", key),
                 TargetLanguage::Dart => format!("this._context_stack[this._context_stack.length - 1].event._parameters![\"{}\"]", key),
                 TargetLanguage::C => key.to_string(),
-                TargetLanguage::Rust => key.to_string(),
+                TargetLanguage::Rust => super::rust_system::rust_context_param(&key),
                 TargetLanguage::Cpp => key.to_string(),
                 TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get(\"{}\")", key),
                 TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._event._parameters[\"{}\"]", key),
@@ -3109,8 +3096,7 @@ pub(crate) fn generate_frame_expansion(
                             tagged_system_name, tagged_system_name, ctx.defined_systems)
                     }
                     TargetLanguage::Rust => {
-                        format!("compile_error!(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\");",
-                            tagged_system_name, tagged_system_name)
+                        super::rust_system::rust_tagged_instantiation_error(tagged_system_name)
                     }
                     TargetLanguage::C => {
                         format!("#error \"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\"",
@@ -3321,7 +3307,7 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::C => "self".to_string(),
                 TargetLanguage::Go => "s".to_string(),
                 TargetLanguage::Php => "$this".to_string(),
-                TargetLanguage::Rust => "self".to_string(),
+                TargetLanguage::Rust => super::rust_system::rust_self_ref().to_string(),
                 TargetLanguage::Erlang => "self".to_string(),
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -3835,7 +3821,7 @@ fn generate_pop_transition(
                     ));
                 }
                 TargetLanguage::Rust => {
-                    code.push_str(&format!("{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n", indent, key, value));
+                    code.push_str(&super::rust_system::rust_pop_exit_arg(indent, &key, &value));
                 }
                 TargetLanguage::C => {
                     code.push_str(&format!("{}{}_FrameDict_set(self->__compartment->exit_args, \"{}\", (void*)(intptr_t)({}));\n", indent, ctx.system_name, key, value));
@@ -3906,7 +3892,7 @@ fn generate_pop_transition(
         TargetLanguage::TypeScript => code.push_str(&format!("{}const __saved = this._state_stack.pop()!;\n", indent)),
         TargetLanguage::Dart => code.push_str(&format!("{}final __saved = this._state_stack.removeLast();\n", indent)),
         TargetLanguage::JavaScript => code.push_str(&format!("{}const __saved = this._state_stack.pop();\n", indent)),
-        TargetLanguage::Rust => code.push_str(&format!("{}let mut __popped = self._state_stack.pop().unwrap();\n", indent)),
+        TargetLanguage::Rust => code.push_str(&super::rust_system::rust_pop_stack(indent)),
         TargetLanguage::C => code.push_str(&format!("{}{}_Compartment* __saved = ({}_Compartment*){}_FrameVec_pop(self->_state_stack);\n", indent, ctx.system_name, ctx.system_name, ctx.system_name)),
         TargetLanguage::Cpp => code.push_str(&format!("{}auto __saved = std::move(_state_stack.back()); _state_stack.pop_back();\n", indent)),
         TargetLanguage::Java => code.push_str(&format!("{}var __saved = _state_stack.remove(_state_stack.size() - 1);\n", indent)),
@@ -3959,9 +3945,8 @@ fn generate_pop_transition(
                     ));
                 }
                 TargetLanguage::Rust => {
-                    code.push_str(&format!(
-                        "{}__popped.enter_args.insert(\"{}\".to_string(), {}.to_string());\n",
-                        indent, key, value
+                    code.push_str(&super::rust_system::rust_pop_enter_arg(
+                        indent, &key, &value,
                     ));
                 }
                 TargetLanguage::C => {
@@ -4039,10 +4024,7 @@ fn generate_pop_transition(
                 code.push_str(&format!("{}__saved.forward_event = __e;\n", indent));
             }
             TargetLanguage::Rust => {
-                code.push_str(&format!(
-                    "{}__popped.forward_event = Some(__e.clone());\n",
-                    indent
-                ));
+                code.push_str(&super::rust_system::rust_pop_forward(indent));
             }
             TargetLanguage::C => {
                 code.push_str(&format!("{}__saved->forward_event = __e;\n", indent));
@@ -4077,7 +4059,7 @@ fn generate_pop_transition(
 
     // Transition + return
     let var = if matches!(lang, TargetLanguage::Rust) {
-        "__popped"
+        super::rust_system::rust_pop_var_name()
     } else {
         "__saved"
     };
@@ -4095,10 +4077,7 @@ fn generate_pop_transition(
             ));
         }
         TargetLanguage::Rust => {
-            code.push_str(&format!(
-                "{}self.__transition({});\n{}return;",
-                indent, var, indent
-            ));
+            code.push_str(&super::rust_system::rust_pop_transition(indent));
         }
         TargetLanguage::C => {
             code.push_str(&format!(
@@ -4272,7 +4251,7 @@ pub(crate) fn expand_system_state(lang: TargetLanguage) -> String {
         TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
             "this.__compartment.state".to_string()
         }
-        TargetLanguage::Rust => "self.__compartment.state.clone()".to_string(),
+        TargetLanguage::Rust => super::rust_system::rust_system_state(),
         TargetLanguage::C => "self->__compartment->state".to_string(),
         TargetLanguage::Cpp => "__compartment->state".to_string(),
         TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp => {

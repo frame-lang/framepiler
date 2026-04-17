@@ -1067,6 +1067,137 @@ fn rust_wrap_string_literal(expr: &str) -> String {
     }
 }
 
+// ─── Inline Expression Delegates ─────────────────────────────────────
+//
+// Small Rust-specific expressions used by frame_expansion.rs match arms.
+// Each returns a String (no indent — inline context).
+
+/// `@@:self` bare reference
+pub(crate) fn rust_self_ref() -> &'static str {
+    "self"
+}
+
+/// `@@:event` — event message access
+pub(crate) fn rust_event_message() -> String {
+    "__e.message.clone()".to_string()
+}
+
+/// `@@:params[key]` — context parameter access
+pub(crate) fn rust_context_param(key: &str) -> String {
+    key.to_string()
+}
+
+/// `@@:data[key]` read — context data access with downcast
+pub(crate) fn rust_context_data_get(key: &str) -> String {
+    format!(
+        "self._context_stack.last().and_then(|ctx| ctx._data.get(\"{}\"))\
+         .and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default()",
+        key
+    )
+}
+
+/// `@@:return` read — context return value access
+pub(crate) fn rust_context_return_read() -> String {
+    "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())".to_string()
+}
+
+/// `@@:system.state` — current state name
+pub(crate) fn rust_system_state() -> String {
+    "self.__compartment.state.clone()".to_string()
+}
+
+/// Tagged instantiation compile error (undefined system)
+pub(crate) fn rust_tagged_instantiation_error(system_name: &str) -> String {
+    format!(
+        "compile_error!(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\");",
+        system_name, system_name
+    )
+}
+
+// ─── Statement Delegates ────────────────────────────────────────────
+//
+// Rust-specific statements used by frame_expansion.rs match arms.
+// Each returns a String with indent_str prefix.
+
+/// HSM parent forward: `self._state_Parent(__e);`
+pub(crate) fn rust_parent_forward(indent_str: &str, parent: &str) -> String {
+    format!("{}self._state_{}(__e);", indent_str, parent)
+}
+
+/// Push-with-transition: `self.__push_transition(XyzCompartment::new("State"))`
+pub(crate) fn rust_push_transition(
+    indent_str: &str,
+    ctx: &super::codegen_utils::HandlerContext,
+    target: &str,
+) -> String {
+    format!(
+        "{}self.__push_transition({}Compartment::new(\"{}\"));\n{}return;",
+        indent_str, ctx.system_name, target, indent_str
+    )
+}
+
+/// Bare push: `self._state_stack.push(self.__compartment.clone())`
+pub(crate) fn rust_bare_push(indent_str: &str) -> String {
+    format!(
+        "{}self._state_stack.push(self.__compartment.clone());",
+        indent_str
+    )
+}
+
+/// Bare stack pop: `self._state_stack.pop();`
+pub(crate) fn rust_bare_pop(indent_str: &str) -> String {
+    format!("{}self._state_stack.pop();", indent_str)
+}
+
+/// Transition guard check after self-call
+pub(crate) fn rust_transition_guard(indent_str: &str) -> String {
+    format!(
+        "{}if self._context_stack.last().map_or(false, |ctx| ctx._transitioned) {{ return; }}",
+        indent_str
+    )
+}
+
+// ─── Pop Transition Delegates ───────────────────────────────────────
+
+/// Pop: exit_args write
+pub(crate) fn rust_pop_exit_arg(indent: &str, key: &str, value: &str) -> String {
+    format!(
+        "{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n",
+        indent, key, value
+    )
+}
+
+/// Pop: stack pop
+pub(crate) fn rust_pop_stack(indent: &str) -> String {
+    format!(
+        "{}let mut __popped = self._state_stack.pop().unwrap();\n",
+        indent
+    )
+}
+
+/// Pop: enter_args write
+pub(crate) fn rust_pop_enter_arg(indent: &str, key: &str, value: &str) -> String {
+    format!(
+        "{}__popped.enter_args.insert(\"{}\".to_string(), {}.to_string());\n",
+        indent, key, value
+    )
+}
+
+/// Pop: forward event
+pub(crate) fn rust_pop_forward(indent: &str) -> String {
+    format!("{}__popped.forward_event = Some(__e.clone());\n", indent)
+}
+
+/// Pop: variable name (Rust uses `__popped`, others use `__saved`)
+pub(crate) fn rust_pop_var_name() -> &'static str {
+    "__popped"
+}
+
+/// Pop: transition call
+pub(crate) fn rust_pop_transition(indent: &str) -> String {
+    format!("{}self.__transition(__popped);\n{}return;", indent, indent)
+}
+
 // ─── Persistence ─────────────────────────────────────────────────────
 
 /// Generate Rust `save_state` and `restore_state` methods using
