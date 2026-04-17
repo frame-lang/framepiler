@@ -762,6 +762,21 @@ impl<'a> Parser<'a> {
                                         is_forward: false,
                                     }));
                                 }
+                                Token::PopState => {
+                                    // -> (enter_args) pop$ — pop with fresh enter args
+                                    statements.push(Statement::Transition(TransitionAst {
+                                        target: "pop$".to_string(),
+                                        args: vec![],
+                                        label: None,
+                                        span: Span::new(tok.span.start, after_args.span.end),
+                                        indent: 0,
+                                        exit_args: None,
+                                        enter_args: Some(args),
+                                        state_args: None,
+                                        is_pop: true,
+                                        is_forward: false,
+                                    }));
+                                }
                                 Token::StringLit(label_text) => {
                                     // -> (args) "label" $State — enter args + label
                                     let target_tok =

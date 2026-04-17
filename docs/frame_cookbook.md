@@ -25,6 +25,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 17. [Async HTTP Client](#17-async-http-client) — async interface with two-phase init
 18. [Multi-System Composition](#18-multi-system-composition) — two systems interacting
 19. [Configurable Worker Pool](#19-configurable-worker-pool-parameterized-systems) — parameterized systems
+20. [Subroutine State Returning a Result](#20-subroutine-state-returning-a-result) — decorated pop with fresh enter args
 
 ---
 
@@ -1202,6 +1203,55 @@ pool = @@WorkerPool($(5), $>("v1.0"), 3)
 The framepiler substitutes Frame defaults for missing arguments and routes each to its compartment field. Transitions like `-> $Processing` create a new compartment with its own state_args, so state params are scoped per-state.
 
 **Features used:** system parameters (state, enter, domain), sigil-tagged call-site syntax, `@@:(expr)` context return, state transitions triggered by threshold
+
+---
+
+## 20. Subroutine State Returning a Result
+
+**Problem:** A modal dialog state needs to communicate a status (confirmed/cancelled) back to the state that pushed it.
+
+```frame
+@@target python_3
+
+@@system Workflow {
+    interface:
+        open_dialog()
+        confirm()
+        cancel()
+
+    machine:
+        $Working {
+            open_dialog() {
+                push$
+                -> $Dialog
+            }
+        }
+        $Dialog {
+            confirm() {
+                ("confirmed") -> pop$
+            }
+            cancel() {
+                ("cancelled") -> pop$
+            }
+        }
+}
+
+if __name__ == '__main__':
+    w = @@Workflow()
+    w.open_dialog()
+    w.confirm()
+    w.open_dialog()
+    w.cancel()
+```
+
+**How it works:** `$Working` pushes itself onto the state stack and transitions to `$Dialog`. When the user confirms or cancels, `("reason") -> pop$` writes exit args on the `$Dialog` compartment before popping. The `<$` handler on `$Dialog` (if present) receives the reason. The saved `$Working` compartment is restored with all its state variables intact.
+
+**Other decorated pop forms:**
+- `-> (enter_args) pop$` — replace the popped compartment's enter args (the restored state's `$>` handler receives fresh values instead of the snapshot)
+- `-> => pop$` — forward the current event to the restored state instead of sending `$>`
+- `(exit) -> (enter) => pop$` — all three combined
+
+**Features used:** state stack (`push$` / `pop$`), decorated pop with exit args
 
 ---
 

@@ -494,6 +494,16 @@ fn match_frame_statement<S: SyntaxSkipper>(
         if k < end && bytes[k] == b'$' {
             return Some((k, FrameSegmentKind::Transition));
         }
+
+        // -> (args) pop$ — enter args on pop transition
+        if k + 3 < end
+            && bytes[k] == b'p'
+            && bytes[k + 1] == b'o'
+            && bytes[k + 2] == b'p'
+            && bytes[k + 3] == b'$'
+        {
+            return Some((k + 4, FrameSegmentKind::Transition));
+        }
     }
 
     // Forward: => $^  (with any whitespace between => and $)
@@ -518,6 +528,15 @@ fn match_frame_statement<S: SyntaxSkipper>(
                 }
                 if k < end && bytes[k] == b'$' {
                     return Some((k, FrameSegmentKind::Transition));
+                }
+                // (exit) -> (enter)? pop$
+                if k + 3 < end
+                    && bytes[k] == b'p'
+                    && bytes[k + 1] == b'o'
+                    && bytes[k + 2] == b'p'
+                    && bytes[k + 3] == b'$'
+                {
+                    return Some((k + 4, FrameSegmentKind::Transition));
                 }
             }
         }

@@ -448,10 +448,15 @@ Frame recognizes exactly **7 constructs** within handler bodies. Everything else
 | `-> "label" $State` | With label (for diagrams) |
 | `-> => $State` | With event forwarding |
 | `-> pop$` | Transition to popped state |
+| `-> (enter_args) pop$` | Pop with fresh enter args |
+| `(exit_args) -> pop$` | Pop with exit args |
+| `-> => pop$` | Pop with event forwarding |
 
-**Event forwarding** (`-> =>`): The current event is stashed on the target compartment. After the enter handler fires, the forwarded event is dispatched to the target state.
+**Event forwarding** (`-> =>`): The current event is stashed on the target compartment. After the enter handler fires, the forwarded event is dispatched to the target state. Works on both `$State` and `pop$` targets.
 
 **Transition to popped state** (`-> pop$`): Pops a compartment from the state stack. Full lifecycle fires. State variables are **preserved** (not reinitialized).
+
+**Decorated pop transitions**: Pop transitions accept the same decorations as normal transitions. `-> (result) pop$` replaces the popped compartment's enter_args with fresh values (the caller's `$>` handler receives `result` instead of the original snapshot). `(reason) -> pop$` writes exit_args on the current compartment before leaving. `-> => pop$` forwards the current event to the restored state instead of sending `$>`. All decorations can be combined: `(exit) -> (enter) => pop$`. State args on pop$ are not allowed (E607) — the popped compartment carries its own.
 
 Every transition is implicitly followed by a `return` — code after a transition is unreachable.
 
@@ -967,6 +972,16 @@ Both `@@:self` and `@@:system` are syntactic prefixes. Bare forms are errors (E6
 | E603 | `bare-self-reference` | Bare `@@:self` — must be `@@:self.method(args)` |
 | E604 | `bare-system-reference` | Bare `@@:system` — must be `@@:system.state` (or other member) |
 
+### Domain & Pop Errors (E6xx)
+
+| Code | Name | Description |
+|------|------|-------------|
+| E605 | `static-field-no-type` | Static target requires explicit type on domain field |
+| E607 | `state-args-on-pop` | State arguments on `pop$` — popped compartment carries its own |
+| E613 | `field-shadows-param` | Domain field name shadows a system parameter |
+| E614 | `duplicate-field` | Duplicate domain field name |
+| E615 | `const-field-assign` | Assignment to `const` domain field in handler body |
+
 ### Warnings (W4xx, W6xx)
 
 | Code | Name | Description |
@@ -988,7 +1003,7 @@ import logging
 }
 
 @@persist
-@@system OrderProcessor ($(order_type: str), $>(initial_data: dict), max_retries: int) {
+@@system OrderProcessor (max_retries: int) {
 
     operations:
         static version(): str {
@@ -1063,6 +1078,6 @@ import logging
 }
 
 if __name__ == '__main__':
-    proc = @@OrderProcessor($("standard"), $>({"source": "web"}), 5)
+    proc = @@OrderProcessor(5)
     proc.submit({"item": "widget", "qty": 3})
 ```
