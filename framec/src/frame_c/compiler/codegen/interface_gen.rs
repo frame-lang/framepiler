@@ -2363,13 +2363,337 @@ pub(crate) fn generate_persistence_methods(
             });
         }
         TargetLanguage::Go => {
-            // Go persistence not yet implemented
+            let compartment_type = format!("{}Compartment", system.name);
+
+            // save_state — serialize to JSON via encoding/json
+            let mut save_body = String::new();
+            save_body.push_str(&format!(
+                "var serializeComp func(c *{}) interface{{}}\n",
+                compartment_type
+            ));
+            save_body.push_str(&format!(
+                "serializeComp = func(c *{}) interface{{}} {{\n",
+                compartment_type
+            ));
+            save_body.push_str("    if c == nil { return nil }\n");
+            save_body.push_str("    return map[string]interface{}{\n");
+            save_body.push_str("        \"state\": c.state,\n");
+            save_body.push_str("        \"state_args\": c.state_args,\n");
+            save_body.push_str("        \"state_vars\": c.state_vars,\n");
+            save_body.push_str("        \"enter_args\": c.enter_args,\n");
+            save_body.push_str("        \"exit_args\": c.exit_args,\n");
+            save_body.push_str("        \"forward_event\": c.forward_event,\n");
+            save_body
+                .push_str("        \"parent_compartment\": serializeComp(c.parent_compartment),\n");
+            save_body.push_str("    }\n");
+            save_body.push_str("}\n");
+            save_body.push_str("data := map[string]interface{}{\n");
+            save_body.push_str("    \"_compartment\": serializeComp(s.__compartment),\n");
+            save_body.push_str("    \"_state_stack\": func() []interface{} {\n");
+            save_body.push_str("        var arr []interface{}\n");
+            save_body.push_str("        for _, c := range s._state_stack { arr = append(arr, serializeComp(c)) }\n");
+            save_body.push_str("        return arr\n");
+            save_body.push_str("    }(),\n");
+            for var in &system.domain {
+                save_body.push_str(&format!("    \"{}\": s.{},\n", var.name, var.name));
+            }
+            save_body.push_str("}\n");
+            save_body.push_str("jsonBytes, _ := json.Marshal(data)\n");
+            save_body.push_str("return string(jsonBytes)");
+
+            methods.push(CodegenNode::Method {
+                name: "SaveState".to_string(),
+                params: vec![],
+                return_type: Some("string".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Public,
+                decorators: vec![],
+            });
+
+            // restore_state — static function
+            let mut restore_body = String::new();
+            restore_body.push_str("var data map[string]interface{}\n");
+            restore_body.push_str("json.Unmarshal([]byte(jsonStr), &data)\n");
+            restore_body.push_str(&format!(
+                "var deserializeComp func(d interface{{}}) *{}\n",
+                compartment_type
+            ));
+            restore_body.push_str(&format!(
+                "deserializeComp = func(d interface{{}}) *{} {{\n",
+                compartment_type
+            ));
+            restore_body.push_str("    if d == nil { return nil }\n");
+            restore_body.push_str("    m := d.(map[string]interface{})\n");
+            restore_body.push_str(&format!(
+                "    comp := &{}{{state: m[\"state\"].(string)}}\n",
+                compartment_type
+            ));
+            restore_body.push_str("    if sv, ok := m[\"state_vars\"].(map[string]interface{}); ok { for k, v := range sv { comp.state_vars[k] = v } }\n");
+            restore_body.push_str("    if sa, ok := m[\"state_args\"].(map[string]interface{}); ok { for k, v := range sa { comp.state_args[k] = v } }\n");
+            restore_body.push_str("    if ea, ok := m[\"enter_args\"].(map[string]interface{}); ok { for k, v := range ea { comp.enter_args[k] = v } }\n");
+            restore_body.push_str("    if xa, ok := m[\"exit_args\"].(map[string]interface{}); ok { for k, v := range xa { comp.exit_args[k] = v } }\n");
+            restore_body.push_str("    comp.forward_event = m[\"forward_event\"]\n");
+            restore_body.push_str(
+                "    comp.parent_compartment = deserializeComp(m[\"parent_compartment\"])\n",
+            );
+            restore_body.push_str("    return comp\n");
+            restore_body.push_str("}\n");
+            restore_body.push_str(&format!("instance := &{}{{}}\n", system.name));
+            restore_body
+                .push_str("instance.__compartment = deserializeComp(data[\"_compartment\"])\n");
+            restore_body.push_str("instance.__next_compartment = nil\n");
+            restore_body.push_str("if stack, ok := data[\"_state_stack\"].([]interface{}); ok {\n");
+            restore_body.push_str(&format!(
+                "    instance._state_stack = make([]*{}, 0, len(stack))\n",
+                compartment_type
+            ));
+            restore_body.push_str("    for _, c := range stack { instance._state_stack = append(instance._state_stack, deserializeComp(c)) }\n");
+            restore_body.push_str("}\n");
+            for var in &system.domain {
+                let go_extract = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(name) => {
+                        match name.to_lowercase().as_str() {
+                            "int" | "i32" | "i64" => {
+                                format!("int(data[\"{}\"].(float64))", var.name)
+                            }
+                            "float" | "f32" | "f64" => format!("data[\"{}\"].(float64)", var.name),
+                            "bool" => format!("data[\"{}\"].(bool)", var.name),
+                            "str" | "string" => format!("data[\"{}\"].(string)", var.name),
+                            _ => format!("data[\"{}\"]", var.name),
+                        }
+                    }
+                    _ => format!("data[\"{}\"]", var.name),
+                };
+                restore_body.push_str(&format!("instance.{} = {}\n", var.name, go_extract));
+            }
+            restore_body.push_str("return instance");
+
+            methods.push(CodegenNode::Method {
+                name: format!("Restore{}", system.name),
+                params: vec![Param::new("jsonStr").with_type("string")],
+                return_type: Some(format!("*{}", system.name)),
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Public,
+                decorators: vec![],
+            });
         }
         TargetLanguage::Erlang => {
-            // Erlang persistence not yet implemented
+            // Persistence handled in erlang_system.rs via gen_statem save_state/load_state
         }
-        TargetLanguage::Lua | TargetLanguage::Dart => {
-            // TODO: Lua/Dart persistence not yet implemented
+        TargetLanguage::Dart => {
+            let compartment_type = format!("{}Compartment", system.name);
+
+            // save_state — serialize to JSON via dart:convert
+            let mut save_body = String::new();
+            save_body.push_str(&format!(
+                "Map<String, dynamic> serializeComp({}? comp) {{\n",
+                compartment_type
+            ));
+            save_body.push_str("    if (comp == null) return {};\n");
+            save_body.push_str("    return {\n");
+            save_body.push_str("        'state': comp.state,\n");
+            save_body
+                .push_str("        'state_args': Map<String, dynamic>.from(comp.state_args),\n");
+            save_body
+                .push_str("        'state_vars': Map<String, dynamic>.from(comp.state_vars),\n");
+            save_body
+                .push_str("        'enter_args': Map<String, dynamic>.from(comp.enter_args),\n");
+            save_body.push_str("        'exit_args': Map<String, dynamic>.from(comp.exit_args),\n");
+            save_body.push_str("        'forward_event': comp.forward_event,\n");
+            save_body.push_str(
+                "        'parent_compartment': serializeComp(comp.parent_compartment),\n",
+            );
+            save_body.push_str("    };\n");
+            save_body.push_str("}\n");
+            save_body.push_str("return jsonEncode({\n");
+            save_body.push_str("    '_compartment': serializeComp(this.__compartment),\n");
+            save_body.push_str(
+                "    '_state_stack': this._state_stack.map((c) => serializeComp(c)).toList(),\n",
+            );
+            for var in &system.domain {
+                save_body.push_str(&format!("    '{}': this.{},\n", var.name, var.name));
+            }
+            save_body.push_str("});");
+
+            methods.push(CodegenNode::Method {
+                name: "saveState".to_string(),
+                params: vec![],
+                return_type: Some("String".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Public,
+                decorators: vec![],
+            });
+
+            // restore_state — static method
+            let mut restore_body = String::new();
+            restore_body.push_str(&format!(
+                "{}? deserializeComp(dynamic data) {{\n",
+                compartment_type
+            ));
+            restore_body.push_str("    if (data == null || data is! Map) return null;\n");
+            restore_body.push_str(&format!(
+                "    final comp = {}(data['state'] as String);\n",
+                compartment_type
+            ));
+            restore_body.push_str(
+                "    comp.state_args = Map<String, dynamic>.from(data['state_args'] ?? {});\n",
+            );
+            restore_body.push_str(
+                "    comp.state_vars = Map<String, dynamic>.from(data['state_vars'] ?? {});\n",
+            );
+            restore_body.push_str(
+                "    comp.enter_args = Map<String, dynamic>.from(data['enter_args'] ?? {});\n",
+            );
+            restore_body.push_str(
+                "    comp.exit_args = Map<String, dynamic>.from(data['exit_args'] ?? {});\n",
+            );
+            restore_body.push_str("    comp.forward_event = data['forward_event'];\n");
+            restore_body.push_str(
+                "    comp.parent_compartment = deserializeComp(data['parent_compartment']);\n",
+            );
+            restore_body.push_str("    return comp;\n");
+            restore_body.push_str("}\n");
+            restore_body.push_str("final data = jsonDecode(json) as Map<String, dynamic>;\n");
+            restore_body.push_str(&format!("final instance = {}._restore();\n", system.name));
+            restore_body
+                .push_str("instance.__compartment = deserializeComp(data['_compartment'])!;\n");
+            restore_body.push_str("instance.__next_compartment = null;\n");
+            restore_body.push_str(&format!(
+                "instance._state_stack = (data['_state_stack'] as List?)?.map((c) => deserializeComp(c)!).toList() ?? <{}>[];\n",
+                compartment_type
+            ));
+            for var in &system.domain {
+                restore_body.push_str(&format!("instance.{} = data['{}'];\n", var.name, var.name));
+            }
+            restore_body.push_str("return instance;");
+
+            methods.push(CodegenNode::Method {
+                name: "restoreState".to_string(),
+                params: vec![Param::new("json").with_type("String")],
+                return_type: Some(system.name.clone()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Public,
+                decorators: vec![],
+            });
+        }
+        TargetLanguage::Lua => {
+            let compartment_type = format!("{}Compartment", system.name);
+
+            // save_state — serialize to JSON via cjson
+            let mut save_body = String::new();
+            save_body.push_str("local json = require(\"cjson\")\n");
+            save_body.push_str("local function serialize_comp(comp)\n");
+            save_body.push_str("    if not comp then return nil end\n");
+            save_body.push_str("    return {\n");
+            save_body.push_str("        state = comp.state,\n");
+            save_body.push_str("        state_args = comp.state_args,\n");
+            save_body.push_str("        state_vars = comp.state_vars,\n");
+            save_body.push_str("        enter_args = comp.enter_args,\n");
+            save_body.push_str("        exit_args = comp.exit_args,\n");
+            save_body.push_str("        forward_event = comp.forward_event,\n");
+            save_body.push_str(
+                "        parent_compartment = serialize_comp(comp.parent_compartment),\n",
+            );
+            save_body.push_str("    }\n");
+            save_body.push_str("end\n");
+            save_body.push_str("local stack = {}\n");
+            save_body.push_str("for _, c in ipairs(self._state_stack) do\n");
+            save_body.push_str("    stack[#stack + 1] = serialize_comp(c)\n");
+            save_body.push_str("end\n");
+            save_body.push_str("return json.encode({\n");
+            save_body.push_str("    _compartment = serialize_comp(self.__compartment),\n");
+            save_body.push_str("    _state_stack = stack,\n");
+            for var in &system.domain {
+                save_body.push_str(&format!("    {} = self.{},\n", var.name, var.name));
+            }
+            save_body.push_str("})");
+
+            methods.push(CodegenNode::Method {
+                name: "save_state".to_string(),
+                params: vec![],
+                return_type: Some("string".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: save_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Public,
+                decorators: vec![],
+            });
+
+            // restore_state — module-level function
+            let mut restore_body = String::new();
+            restore_body.push_str("local json = require(\"cjson\")\n");
+            restore_body.push_str("local data = json.decode(json_str)\n");
+            restore_body.push_str("local function deserialize_comp(d)\n");
+            restore_body.push_str("    if not d then return nil end\n");
+            restore_body.push_str(&format!(
+                "    local comp = {}.new(d.state)\n",
+                compartment_type
+            ));
+            restore_body.push_str("    comp.state_args = d.state_args or {}\n");
+            restore_body.push_str("    comp.state_vars = d.state_vars or {}\n");
+            restore_body.push_str("    comp.enter_args = d.enter_args or {}\n");
+            restore_body.push_str("    comp.exit_args = d.exit_args or {}\n");
+            restore_body.push_str("    comp.forward_event = d.forward_event\n");
+            restore_body
+                .push_str("    comp.parent_compartment = deserialize_comp(d.parent_compartment)\n");
+            restore_body.push_str("    return comp\n");
+            restore_body.push_str("end\n");
+            restore_body.push_str(&format!("local instance = {{}}\n"));
+            restore_body.push_str(&format!(
+                "setmetatable(instance, {{__index = {}}})\n",
+                system.name
+            ));
+            restore_body.push_str("instance.__compartment = deserialize_comp(data._compartment)\n");
+            restore_body.push_str("instance.__next_compartment = nil\n");
+            restore_body.push_str("instance._state_stack = {}\n");
+            restore_body.push_str("if data._state_stack then\n");
+            restore_body.push_str("    for _, c in ipairs(data._state_stack) do\n");
+            restore_body.push_str(
+                "        instance._state_stack[#instance._state_stack + 1] = deserialize_comp(c)\n",
+            );
+            restore_body.push_str("    end\n");
+            restore_body.push_str("end\n");
+            for var in &system.domain {
+                restore_body.push_str(&format!("instance.{} = data.{}\n", var.name, var.name));
+            }
+            restore_body.push_str("return instance");
+
+            methods.push(CodegenNode::Method {
+                name: "restore_state".to_string(),
+                params: vec![Param::new("json_str").with_type("string")],
+                return_type: Some(system.name.clone()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: restore_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Public,
+                decorators: vec![],
+            });
         }
         TargetLanguage::GDScript => {
             // GDScript: JSON-based persistence using serialize_comp helper
