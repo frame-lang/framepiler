@@ -729,9 +729,18 @@ impl<'a> Parser<'a> {
                             }
                         }
                         Token::PopState => {
-                            statements.push(Statement::StackPop(StackPopAst {
+                            // -> pop$ is a transition, not a standalone stack pop
+                            statements.push(Statement::Transition(TransitionAst {
+                                target: "pop$".to_string(),
+                                args: vec![],
+                                label: None,
                                 span: Span::new(tok.span.start, next.span.end),
                                 indent: 0,
+                                exit_args: None,
+                                enter_args: None,
+                                state_args: None,
+                                is_pop: true,
+                                is_forward: false,
                             }));
                         }
                         Token::NativeCode(args) => {
@@ -2270,10 +2279,15 @@ mod tests {
         let has_push = stmts_a.iter().any(|s| matches!(s, Statement::StackPush(_)));
         assert!(has_push, "Should have push$");
 
-        // Second handler: -> pop$
+        // Second handler: -> pop$ is now Transition(is_pop: true)
         let stmts_b = &machine.states[1].handlers[0].body.statements;
-        let has_pop = stmts_b.iter().any(|s| matches!(s, Statement::StackPop(_)));
-        assert!(has_pop, "Should have pop$");
+        let has_pop_transition = stmts_b
+            .iter()
+            .any(|s| matches!(s, Statement::Transition(t) if t.is_pop));
+        assert!(
+            has_pop_transition,
+            "-> pop$ should produce Transition(is_pop: true)"
+        );
     }
 
     #[test]
