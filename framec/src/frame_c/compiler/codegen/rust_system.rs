@@ -309,25 +309,17 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
                 CodegenNode::Ident("None".to_string()),
             ));
 
-            // Start state state_args from system header params
-            for p in &system.params {
-                if matches!(p.kind, ParamKind::StateArg) {
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!(
-                            "self.__compartment.state_args.insert(\"{}\".to_string(), {}.to_string());",
-                            p.name, p.name
-                        ),
-                        span: None,
-                    });
-                }
-            }
-
             // Start state enter_args from system header params
+            // (state_args are NOT emitted for Rust — Rust uses the typed
+            // StateContext enum, initialised by Compartment::new(); the
+            // actual values live in __sys_* fields read by handlers.)
             for p in &system.params {
                 if matches!(p.kind, ParamKind::EnterArg) {
+                    // Reference the stored __sys_* field, not the raw param —
+                    // the param was moved into the field in the struct init above.
                     body.push(CodegenNode::NativeBlock {
                         code: format!(
-                            "self.__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());",
+                            "self.__compartment.enter_args.insert(\"{}\".to_string(), self.__sys_{}.to_string());",
                             p.name, p.name
                         ),
                         span: None,

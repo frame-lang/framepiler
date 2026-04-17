@@ -117,6 +117,9 @@ pub(crate) fn emit_handler_body_via_statements(
 
     // Track which statement indices to skip (consumed by lookahead)
     let mut skip_set = std::collections::HashSet::new();
+    // Deferred self-call transition guard — emitted after the native
+    // line containing the self-call completes (so `;` lands before guard).
+    let mut pending_guard: Option<String> = None;
 
     for (stmt_idx, stmt) in statements.iter().enumerate() {
         if skip_set.contains(&stmt_idx) {
@@ -129,7 +132,24 @@ pub(crate) fn emit_handler_body_via_statements(
         }
         match stmt {
             Statement::NativeCode(text) => {
-                out.push_str(text);
+                if let Some(guard) = pending_guard.take() {
+                    // Insert the guard after the first line break in this
+                    // native text (the break that ends the self-call line).
+                    if let Some(nl_pos) = text.find('\n') {
+                        out.push_str(&text[..=nl_pos]);
+                        out.push_str(&guard);
+                        out.push('\n'); // terminate the guard line
+                        out.push_str(&text[nl_pos + 1..]);
+                    } else {
+                        // No newline — emit native text, then guard
+                        out.push_str(text);
+                        out.push('\n');
+                        out.push_str(&guard);
+                        out.push('\n');
+                    }
+                } else {
+                    out.push_str(text);
+                }
             }
             _ => {
                 // Lookahead: if this is a Transition and a ContextReturnExpr follows
@@ -274,34 +294,33 @@ pub(crate) fn emit_handler_body_via_statements(
                         }
                         // For self-calls: the expansion is a bare call
                         // expression. If standalone (out ends with \n —
-                        // native ws was trimmed), prefix with indent_str.
+                        // native ws was trimmed), prefix with indent_str
+                        // and append statement terminator.
                         // If inline (out ends with native code like "= "),
-                        // emit bare.
-                        if *kind == FrameSegmentKind::ContextSelfCall
-                            && (out.is_empty() || out.ends_with('\n'))
-                        {
+                        // emit bare — the native text supplies the terminator.
+                        let is_standalone_self_call = *kind == FrameSegmentKind::ContextSelfCall
+                            && (out.is_empty() || out.ends_with('\n'));
+                        if is_standalone_self_call {
                             out.push_str(&" ".repeat(*indent));
                         }
                         out.push_str(&expansion);
+                        if is_standalone_self_call {
+                            // Standalone call needs a statement terminator
+                            match lang {
+                                TargetLanguage::Python3
+                                | TargetLanguage::GDScript
+                                | TargetLanguage::Ruby
+                                | TargetLanguage::Lua => {}
+                                _ => out.push(';'),
+                            }
+                        }
 
-                        // Self-call transition guard — emitted after the
-                        // containing native line completes.
+                        // Self-call transition guard — deferred until the
+                        // native line completes (so `;` lands before guard).
                         if *kind == FrameSegmentKind::ContextSelfCall {
-                            // Find the end of the current native line (the
-                            // next NativeCode statement that contains a newline,
-                            // or the end of statements). Emit the guard there.
-                            //
-                            // For now, emit immediately — the native text after
-                            // the self-call token (rest of line + newline) will
-                            // follow naturally, then the guard lands on its own line.
                             let guard = generate_self_call_guard(*indent, lang, &ctx.system_name);
                             if !guard.is_empty() {
-                                // The guard needs to go AFTER the current line ends.
-                                // Peek at the next statement — if it's native text
-                                // starting with a newline, the guard goes after that.
-                                // Otherwise inject a newline before the guard.
-                                out.push('\n');
-                                out.push_str(&guard);
+                                pending_guard = Some(guard);
                             }
                         }
                     }
@@ -309,6 +328,12 @@ pub(crate) fn emit_handler_body_via_statements(
                 }
             }
         }
+    }
+
+    // Flush any remaining deferred self-call guard
+    if let Some(guard) = pending_guard.take() {
+        out.push('\n');
+        out.push_str(&guard);
     }
 
     // Same post-processing as splice path
