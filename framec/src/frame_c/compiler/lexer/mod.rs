@@ -1057,7 +1057,7 @@ impl<'a> Lexer<'a> {
                     }
                 }
 
-                // State ref
+                // State ref or pop$
                 if self.cursor < end && self.source[self.cursor] == b'$' {
                     let sr_start = self.cursor;
                     self.cursor += 1;
@@ -1065,6 +1065,18 @@ impl<'a> Lexer<'a> {
                     tokens.push(Spanned {
                         token: Token::StateRef(name),
                         span: Span::new(sr_start, self.cursor),
+                    });
+                } else if self.cursor + 3 < end
+                    && self.source[self.cursor] == b'p'
+                    && self.source[self.cursor + 1] == b'o'
+                    && self.source[self.cursor + 2] == b'p'
+                    && self.source[self.cursor + 3] == b'$'
+                {
+                    let pop_start = self.cursor;
+                    self.cursor += 4;
+                    tokens.push(Spanned {
+                        token: Token::PopState,
+                        span: Span::new(pop_start, self.cursor),
                     });
                 }
 
