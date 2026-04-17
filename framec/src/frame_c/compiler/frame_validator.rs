@@ -2549,4 +2549,167 @@ mod tests {
             codes
         );
     }
+
+    // ── RFC-0008: Decorated pop$ transitions ─────────────────────
+
+    /// Helper: compile source and return the generated code (Python target).
+    fn v4_output(source: &str) -> String {
+        use crate::frame_c::compiler::pipeline::compile_module;
+        use crate::frame_c::compiler::pipeline::config::PipelineConfig;
+        let config = PipelineConfig::production(VTarget::Python3);
+        let result = compile_module(source.as_bytes(), &config).expect("pipeline ran");
+        assert!(
+            result.errors.is_empty(),
+            "compilation errors: {:?}",
+            result.errors
+        );
+        result.code
+    }
+
+    #[test]
+    fn test_bare_pop_regression() {
+        // Bare -> pop$ must still compile (no decorations)
+        let source = r#"
+@@system S {
+    interface:
+        go()
+        back()
+    machine:
+        $A {
+            go() {
+                push$
+                -> $B
+            }
+        }
+        $B {
+            back() {
+                -> pop$
+            }
+        }
+}"#;
+        let code = v4_output(source);
+        assert!(
+            code.contains("_state_stack.pop()"),
+            "bare pop should generate stack pop: {}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_pop_with_fresh_enter_args() {
+        // -> (result) pop$ — fresh enter args on the popped compartment
+        let source = r#"
+@@system S {
+    interface:
+        go()
+        done()
+    machine:
+        $A {
+            $>(value: int) { }
+            go() {
+                push$
+                -> $B
+            }
+        }
+        $B {
+            done() {
+                -> (42) pop$
+            }
+        }
+}"#;
+        let code = v4_output(source);
+        assert!(
+            code.contains("enter_args"),
+            "pop with enter args should write enter_args: {}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_pop_with_exit_args() {
+        // (reason) -> pop$ — exit args on the leaving state
+        let source = r#"
+@@system S {
+    interface:
+        go()
+        done()
+    machine:
+        $A {
+            go() {
+                push$
+                -> $B
+            }
+        }
+        $B {
+            <$(reason: str) { }
+            done() {
+                ("finished") -> pop$
+            }
+        }
+}"#;
+        let code = v4_output(source);
+        assert!(
+            code.contains("exit_args"),
+            "pop with exit args should write exit_args: {}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_pop_with_forward() {
+        // -> => pop$ — forward current event to restored state
+        let source = r#"
+@@system S {
+    interface:
+        go()
+        done()
+    machine:
+        $A {
+            go() {
+                push$
+                -> $B
+            }
+        }
+        $B {
+            done() {
+                -> => pop$
+            }
+        }
+}"#;
+        let code = v4_output(source);
+        assert!(
+            code.contains("forward_event"),
+            "pop with forward should set forward_event: {}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_pop_combined_decorations() {
+        // (reason) -> (result) => pop$ — all three
+        let source = r#"
+@@system S {
+    interface:
+        go()
+        done()
+    machine:
+        $A {
+            $>(value: int) { }
+            go() {
+                push$
+                -> $B
+            }
+        }
+        $B {
+            <$(reason: str) { }
+            done() {
+                ("bye") -> (99) => pop$
+            }
+        }
+}"#;
+        let code = v4_output(source);
+        assert!(code.contains("exit_args"), "should have exit_args");
+        assert!(code.contains("enter_args"), "should have enter_args");
+        assert!(code.contains("forward_event"), "should have forward_event");
+    }
 }
