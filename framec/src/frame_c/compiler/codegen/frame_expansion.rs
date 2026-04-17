@@ -273,6 +273,28 @@ pub(crate) fn emit_handler_body_via_statements(
                             out.push('\n');
                         }
                         out.push_str(&expansion);
+
+                        // Self-call expressions expand inline. The
+                        // transition guard is a separate statement emitted
+                        // after the containing native line completes.
+                        if *kind == FrameSegmentKind::ContextSelfCall {
+                            // Find the end of the current native line (the
+                            // next NativeCode statement that contains a newline,
+                            // or the end of statements). Emit the guard there.
+                            //
+                            // For now, emit immediately — the native text after
+                            // the self-call token (rest of line + newline) will
+                            // follow naturally, then the guard lands on its own line.
+                            let guard = generate_self_call_guard(*indent, lang, &ctx.system_name);
+                            if !guard.is_empty() {
+                                // The guard needs to go AFTER the current line ends.
+                                // Peek at the next statement — if it's native text
+                                // starting with a newline, the guard goes after that.
+                                // Otherwise inject a newline before the guard.
+                                out.push('\n');
+                                out.push_str(&guard);
+                            }
+                        }
                     }
                     frame_idx += 1;
                 }
@@ -3344,50 +3366,11 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Graphviz => unreachable!(),
             };
 
-            // Add statement terminator for languages that require it
-            let terminator = match lang {
-                TargetLanguage::Python3
-                | TargetLanguage::GDScript
-                | TargetLanguage::Ruby
-                | TargetLanguage::Lua => "",
-                _ => ";",
-            };
-
-            // Generate the transition guard check
-            let guard = match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript =>
-                    format!("\n{}if self._context_stack[-1]._transitioned:\n{}    return", indent_str, indent_str),
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript =>
-                    format!("\n{}if (this._context_stack[this._context_stack.length - 1]._transitioned) return;", indent_str),
-                TargetLanguage::Dart =>
-                    format!("\n{}if (this._context_stack[this._context_stack.length - 1]._transitioned) return;", indent_str),
-                TargetLanguage::Rust =>
-                    format!("\n{}if self._context_stack.last().map_or(false, |ctx| ctx._transitioned) {{ return; }}", indent_str),
-                TargetLanguage::C =>
-                    format!("\n{}if ({}_CTX(self)->_transitioned) return;", indent_str, ctx.system_name),
-                TargetLanguage::Cpp =>
-                    format!("\n{}if (_context_stack.back()._transitioned) return;", indent_str),
-                TargetLanguage::Java =>
-                    format!("\n{}if (_context_stack.get(_context_stack.size() - 1)._transitioned) return;", indent_str),
-                TargetLanguage::Kotlin =>
-                    format!("\n{}if (_context_stack[_context_stack.size - 1]._transitioned) return", indent_str),
-                TargetLanguage::Swift =>
-                    format!("\n{}if _context_stack[_context_stack.count - 1]._transitioned {{ return }}", indent_str),
-                TargetLanguage::CSharp =>
-                    format!("\n{}if (_context_stack[_context_stack.Count - 1]._transitioned) return;", indent_str),
-                TargetLanguage::Go =>
-                    format!("\n{}if s._context_stack[len(s._context_stack)-1]._transitioned {{ return }}", indent_str),
-                TargetLanguage::Php =>
-                    format!("\n{}if ($this->_context_stack[count($this->_context_stack) - 1]->_transitioned) return;", indent_str),
-                TargetLanguage::Ruby =>
-                    format!("\n{}return if @_context_stack[@_context_stack.length - 1]._transitioned", indent_str),
-                TargetLanguage::Lua =>
-                    format!("\n{}if self._context_stack[#self._context_stack]._transitioned then return end", indent_str),
-                TargetLanguage::Erlang => String::new(),
-                TargetLanguage::Graphviz => unreachable!(),
-            };
-
-            format!("{}{}{}{}", indent_str, call_expr, terminator, guard)
+            // @@:self.method() is an expression — return just the native
+            // call. The interface wrapper handles the context stack dance
+            // and returns the value. The transition guard is emitted
+            // separately by the orchestrator (emit_handler_body_via_statements).
+            call_expr
         }
         FrameSegmentKind::ReturnStatement => {
             // Native return keyword detected in handler body.
@@ -4148,6 +4131,73 @@ fn generate_pop_transition(
 }
 
 /// Get the native region scanner for the target language
+/// Generate the transition guard check for a self-call.
+/// Emitted by the orchestrator AFTER the line containing the self-call
+/// expression, on its own line at the given indentation.
+pub(crate) fn generate_self_call_guard(
+    indent: usize,
+    lang: TargetLanguage,
+    system_name: &str,
+) -> String {
+    let ind = " ".repeat(indent);
+    match lang {
+        TargetLanguage::Python3 | TargetLanguage::GDScript => format!(
+            "{}if self._context_stack[-1]._transitioned:\n{}    return",
+            ind, ind
+        ),
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!(
+            "{}if (this._context_stack[this._context_stack.length - 1]._transitioned) return;",
+            ind
+        ),
+        TargetLanguage::Dart => format!(
+            "{}if (this._context_stack[this._context_stack.length - 1]._transitioned) return;",
+            ind
+        ),
+        TargetLanguage::Rust => format!(
+            "{}if self._context_stack.last().map_or(false, |ctx| ctx._transitioned) {{ return; }}",
+            ind
+        ),
+        TargetLanguage::C => format!(
+            "{}if ({}_CTX(self)->_transitioned) return;",
+            ind, system_name
+        ),
+        TargetLanguage::Cpp => format!("{}if (_context_stack.back()._transitioned) return;", ind),
+        TargetLanguage::Java => format!(
+            "{}if (_context_stack.get(_context_stack.size() - 1)._transitioned) return;",
+            ind
+        ),
+        TargetLanguage::Kotlin => format!(
+            "{}if (_context_stack[_context_stack.size - 1]._transitioned) return",
+            ind
+        ),
+        TargetLanguage::Swift => format!(
+            "{}if _context_stack[_context_stack.count - 1]._transitioned {{ return }}",
+            ind
+        ),
+        TargetLanguage::CSharp => format!(
+            "{}if (_context_stack[_context_stack.Count - 1]._transitioned) return;",
+            ind
+        ),
+        TargetLanguage::Go => format!(
+            "{}if s._context_stack[len(s._context_stack)-1]._transitioned {{ return }}",
+            ind
+        ),
+        TargetLanguage::Php => format!(
+            "{}if ($this->_context_stack[count($this->_context_stack) - 1]->_transitioned) return;",
+            ind
+        ),
+        TargetLanguage::Ruby => format!(
+            "{}return if @_context_stack[@_context_stack.length - 1]._transitioned",
+            ind
+        ),
+        TargetLanguage::Lua => format!(
+            "{}if self._context_stack[#self._context_stack]._transitioned then return end",
+            ind
+        ),
+        TargetLanguage::Erlang | TargetLanguage::Graphviz => String::new(),
+    }
+}
+
 pub(crate) fn get_native_scanner(lang: TargetLanguage) -> Box<dyn NativeRegionScanner> {
     match lang {
         TargetLanguage::Python3 => Box::new(NativeRegionScannerPy),
