@@ -264,6 +264,14 @@ pub(crate) fn emit_handler_body_via_statements(
                         let expansion = generate_frame_expansion(
                             body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
                         );
+                        // If the preceding native text didn't end with a
+                        // newline (e.g., `if cond: -> $State` on one line),
+                        // insert a line break so the expansion starts on its
+                        // own line. The expansion already carries the correct
+                        // indentation from the scanner's indent calculation.
+                        if !out.is_empty() && !out.ends_with('\n') && expansion.contains('\n') {
+                            out.push('\n');
+                        }
                         out.push_str(&expansion);
                     }
                     frame_idx += 1;

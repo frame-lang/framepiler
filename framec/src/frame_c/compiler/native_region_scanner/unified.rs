@@ -131,12 +131,25 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
         // Closures are already skipped by skip_nested_scope() above.
         if matches!(b, b'-' | b'=' | b'(' | b'p' | b'r') {
             if let Some((_new_i, kind)) = match_frame_statement(skipper, bytes, i, end) {
-                // Calculate indent (count whitespace from start of current line)
+                // Calculate indent: count leading whitespace from start of
+                // current line. When the Frame statement follows native
+                // code on the same line (e.g., `if cond: -> $State`), use
+                // the line's leading whitespace + 4 (one indent level into
+                // the block) rather than the character position of `->`.
                 let mut line_start = i;
                 while line_start > open_brace_index + 1 && bytes[line_start - 1] != b'\n' {
                     line_start -= 1;
                 }
-                let indent = i - line_start;
+                let leading_ws = bytes[line_start..i]
+                    .iter()
+                    .take_while(|&&b| b == b' ' || b == b'\t')
+                    .count();
+                let frame_at_sol = leading_ws == (i - line_start);
+                let indent = if frame_at_sol {
+                    i - line_start // Frame token starts the line
+                } else {
+                    leading_ws + 4 // Frame token follows native code — indent one level deeper
+                };
 
                 // Emit any preceding native text
                 if seg_start < i {
