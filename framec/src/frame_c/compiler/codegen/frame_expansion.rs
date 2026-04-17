@@ -29,7 +29,7 @@ use crate::frame_c::visitors::TargetLanguage;
 /// Resolve the storage key for a positional state-arg in a transition.
 /// Returns the declared param name if the target state has one at this index,
 /// otherwise falls back to the integer index.
-fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> String {
+pub(crate) fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> String {
     ctx.state_param_names
         .get(target_state)
         .and_then(|names| names.get(i))
@@ -39,7 +39,7 @@ fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> 
 
 /// Resolve the storage key for a positional enter-arg in a transition.
 /// Returns the declared enter param name if available, otherwise the integer index.
-fn resolve_enter_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> String {
+pub(crate) fn resolve_enter_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> String {
     ctx.state_enter_param_names
         .get(target_state)
         .and_then(|names| names.get(i))
@@ -52,7 +52,7 @@ fn resolve_enter_arg_key(i: usize, target_state: &str, ctx: &HandlerContext) -> 
 /// Exit args belong to the SOURCE state of the transition (the state
 /// being exited), not the target. Look up the source state's exit
 /// handler param at index `i` and return its declared name.
-fn resolve_exit_arg_key(i: usize, ctx: &HandlerContext) -> String {
+pub(crate) fn resolve_exit_arg_key(i: usize, ctx: &HandlerContext) -> String {
     ctx.state_exit_param_names
         .get(&ctx.state_name)
         .and_then(|names| names.get(i))
@@ -879,100 +879,14 @@ pub(crate) fn generate_frame_expansion(
                         ));
                         code
                     }
-                    TargetLanguage::Rust => {
-                        // Rust uses compartment-based transition with enter/exit args
-                        let mut code = String::new();
-
-                        // Store exit_args in current compartment if present (named keys)
-                        if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit
-                                .split(',')
-                                .map(|x| x.trim())
-                                .filter(|x| !x.is_empty())
-                                .collect();
-                            for (i, arg) in args.iter().enumerate() {
-                                let (key, value) = if let Some(eq_pos) = arg.find('=') {
-                                    let name = arg[..eq_pos].trim().to_string();
-                                    let val = arg[eq_pos + 1..].trim().to_string();
-                                    (name, val)
-                                } else {
-                                    (resolve_exit_arg_key(i, ctx), (*arg).to_string())
-                                };
-                                code.push_str(&format!("{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, key, value));
-                            }
-                        }
-
-                        // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!(
-                            "{}let mut __compartment = {}Compartment::new(\"{}\");\n",
-                            indent_str, ctx.system_name, target
-                        ));
-                        code.push_str(&format!("{}__compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));\n", indent_str));
-
-                        // Set state args if present. Rust uses a typed
-                        // enum-of-structs StateContext, so we pattern-match
-                        // to get a mutable reference to the target state's
-                        // context struct and assign each declared field.
-                        // The args come positionally from the transition
-                        // (`-> $Counter(42)`), and ctx.state_param_names
-                        // gives us the param-name-by-index map for the
-                        // target state.
-                        if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state
-                                .split(',')
-                                .map(|x| x.trim())
-                                .filter(|x| !x.is_empty())
-                                .collect();
-                            if !args.is_empty() {
-                                code.push_str(&format!(
-                                    "{}if let {}StateContext::{}(ref mut ctx) = __compartment.state_context {{\n",
-                                    indent_str, ctx.system_name, target
-                                ));
-                                for (i, arg) in args.iter().enumerate() {
-                                    // Named-arg syntax `k=3` overrides the positional name.
-                                    // Mirrors the Python/JS/TS branches above.
-                                    let (key, value) = if let Some(eq_pos) = arg.find('=') {
-                                        let name = arg[..eq_pos].trim().to_string();
-                                        let val = arg[eq_pos + 1..].trim().to_string();
-                                        (name, val)
-                                    } else {
-                                        (resolve_state_arg_key(i, &target, ctx), (*arg).to_string())
-                                    };
-                                    code.push_str(&format!(
-                                        "{}    ctx.{} = {};\n",
-                                        indent_str, key, value
-                                    ));
-                                }
-                                code.push_str(&format!("{}}}\n", indent_str));
-                            }
-                        }
-
-                        // Set enter_args if present (named keys)
-                        if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter
-                                .split(',')
-                                .map(|x| x.trim())
-                                .filter(|x| !x.is_empty())
-                                .collect();
-                            for (i, arg) in args.iter().enumerate() {
-                                let (key, value) = if let Some(eq_pos) = arg.find('=') {
-                                    let name = arg[..eq_pos].trim().to_string();
-                                    let val = arg[eq_pos + 1..].trim().to_string();
-                                    (name, val)
-                                } else {
-                                    (resolve_enter_arg_key(i, &target, ctx), (*arg).to_string())
-                                };
-                                code.push_str(&format!("{}__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());\n", indent_str, key, value));
-                            }
-                        }
-
-                        // Call __transition and return to exit the handler
-                        code.push_str(&format!(
-                            "{}self.__transition(__compartment);\n{}return;",
-                            indent_str, indent_str
-                        ));
-                        code
-                    }
+                    TargetLanguage::Rust => super::rust_system::rust_expand_transition(
+                        &indent_str,
+                        ctx,
+                        &target,
+                        &exit_str,
+                        &state_str,
+                        &enter_str,
+                    ),
                     TargetLanguage::C => {
                         // C: Create compartment and call transition
                         let mut code = String::new();
@@ -1845,22 +1759,7 @@ pub(crate) fn generate_frame_expansion(
                     code
                 }
                 TargetLanguage::Rust => {
-                    // Rust uses compartment-based transition with forward event
-                    let mut code = String::new();
-                    code.push_str(&format!(
-                        "{}let mut __compartment = {}Compartment::new(\"{}\");\n",
-                        indent_str, ctx.system_name, target
-                    ));
-                    code.push_str(&format!(
-                        "{}__compartment.forward_event = Some(__e.clone());\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!(
-                        "{}self.__transition(__compartment);\n",
-                        indent_str
-                    ));
-                    code.push_str(&format!("{}return;", indent_str));
-                    code
+                    super::rust_system::rust_expand_forward_transition(&indent_str, ctx, &target)
                 }
                 TargetLanguage::C => {
                     // C: Create compartment with forward event and call transition
@@ -2423,34 +2322,7 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Rust => {
-                    // Access state var via compartment chain navigation + state_context matching.
-                    // Navigation handles HSM: walks parent_compartment chain to find correct state.
-                    // The match borrows via `&`, so non-Copy fields (String) need `.clone()`
-                    // to produce an owned value. Copy types (i64, bool) don't need it.
-                    let is_copy = ctx
-                        .state_var_types
-                        .get(var_name.as_str())
-                        .map(|t| {
-                            matches!(
-                                t.to_lowercase().as_str(),
-                                "i32"
-                                    | "i64"
-                                    | "u32"
-                                    | "u64"
-                                    | "isize"
-                                    | "usize"
-                                    | "f32"
-                                    | "f64"
-                                    | "bool"
-                                    | "int"
-                                    | "float"
-                                    | "number"
-                            )
-                        })
-                        .unwrap_or(false);
-                    let suffix = if is_copy { "" } else { ".clone()" };
-                    format!("{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}{}, _ => unreachable!() }} }}",
-                        ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix)
+                    super::rust_system::rust_expand_state_var_read(ctx, &var_name)
                 }
                 TargetLanguage::C => {
                     // For C, access via FrameDict_get with type-aware cast
@@ -2690,21 +2562,12 @@ pub(crate) fn generate_frame_expansion(
                         )
                     }
                 }
-                TargetLanguage::Rust => {
-                    // Evaluate RHS first (immutable borrow) to avoid borrow conflict with mutable write.
-                    // Navigation handles HSM: walks parent_compartment chain to find correct state.
-                    format!(concat!(
-                        "{}{{\n",
-                        "{0}    let __rhs = {};\n",
-                        "{0}    let mut __sv_comp: *mut {}Compartment = &mut self.__compartment;\n",
-                        "{0}    unsafe {{ while (*__sv_comp).state != \"{}\" {{ __sv_comp = (*__sv_comp).parent_compartment.as_mut().unwrap().as_mut(); }} }}\n",
-                        "{0}    unsafe {{ if let {}StateContext::{}(ref mut ctx) = (*__sv_comp).state_context {{ ctx.{} = __rhs; }} }}\n",
-                        "{0}}}"
-                    ),
-                        indent_str, expanded_expr,
-                        ctx.system_name, ctx.state_name,
-                        ctx.system_name, ctx.state_name, var_name)
-                }
+                TargetLanguage::Rust => super::rust_system::rust_expand_state_var_write(
+                    &indent_str,
+                    ctx,
+                    &var_name,
+                    &expanded_expr,
+                ),
                 TargetLanguage::C => {
                     if ctx.use_sv_comp {
                         format!("{}{}_FrameDict_set(__sv_comp->state_vars, \"{}\", (void*)(intptr_t)({}));",
@@ -2841,16 +2704,7 @@ pub(crate) fn generate_frame_expansion(
                         indent_str, ctx.system_name, expanded_expr
                     ),
                     TargetLanguage::Rust => {
-                        // For Rust, evaluate expression first to avoid borrow conflicts.
-                        // Wrap string literals: "x" is &str but downcast expects String.
-                        let boxed_expr = if expanded_expr.trim().starts_with('"')
-                            && expanded_expr.trim().ends_with('"')
-                        {
-                            format!("String::from({})", expanded_expr.trim())
-                        } else {
-                            expanded_expr.clone()
-                        };
-                        format!("{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", indent_str, boxed_expr, indent_str)
+                        super::rust_system::rust_expand_box_return(&indent_str, &expanded_expr)
                     }
                     TargetLanguage::Cpp => {
                         let wrapped = cpp_wrap_string_literal(&expanded_expr);
@@ -3027,14 +2881,7 @@ pub(crate) fn generate_frame_expansion(
                     ctx.system_name, expanded_expr
                 ),
                 TargetLanguage::Rust => {
-                    let boxed_expr = if expanded_expr.trim().starts_with('"')
-                        && expanded_expr.trim().ends_with('"')
-                    {
-                        format!("String::from({})", expanded_expr.trim())
-                    } else {
-                        expanded_expr.clone()
-                    };
-                    format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", boxed_expr, indent_str)
+                    super::rust_system::rust_expand_box_return_bare(&indent_str, &expanded_expr)
                 }
                 TargetLanguage::Cpp => {
                     let wrapped = cpp_wrap_string_literal(&expanded_expr);
@@ -3221,15 +3068,9 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Python3 | TargetLanguage::GDScript => format!("{}self._context_stack[-1]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._data[\"{}\"] = {};", indent_str, key, expanded_expr),
                 TargetLanguage::C => format!("{}{}_DATA_SET(self, \"{}\", {});", indent_str, ctx.system_name, key, expanded_expr),
-                TargetLanguage::Rust => {
-                    // Wrap string literals: "x" is &str but downcast expects String
-                    let boxed_expr = if expanded_expr.trim().starts_with('"') && expanded_expr.trim().ends_with('"') {
-                        format!("String::from({})", expanded_expr.trim())
-                    } else {
-                        expanded_expr.clone()
-                    };
-                    format!("{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._data.insert(\"{}\".to_string(), Box::new({}) as Box<dyn std::any::Any>); }}", indent_str, key, boxed_expr)
-                }
+                TargetLanguage::Rust => super::rust_system::rust_expand_context_data_write(
+                    &indent_str, &key, &expanded_expr,
+                ),
                 TargetLanguage::Cpp => format!("{}_context_stack.back()._data[\"{}\"] = {};", indent_str, key, expanded_expr),
                 TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._data.put(\"{}\", {});", indent_str, key, expanded_expr),
                 TargetLanguage::Kotlin => format!("{}_context_stack[_context_stack.size - 1]._data[\"{}\"] = {}", indent_str, key, expanded_expr),
@@ -3427,14 +3268,7 @@ pub(crate) fn generate_frame_expansion(
                     ctx.system_name, expanded_expr
                 ),
                 TargetLanguage::Rust => {
-                    let boxed_expr = if expanded_expr.trim().starts_with('"')
-                        && expanded_expr.trim().ends_with('"')
-                    {
-                        format!("String::from({})", expanded_expr.trim())
-                    } else {
-                        expanded_expr.clone()
-                    };
-                    format!("let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}", boxed_expr, indent_str)
+                    super::rust_system::rust_expand_box_return_bare(&indent_str, &expanded_expr)
                 }
                 TargetLanguage::Cpp => {
                     let wrapped = cpp_wrap_string_literal(&expanded_expr);
@@ -3794,31 +3628,9 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     }
                 }
                 TargetLanguage::Rust => {
-                    let is_copy = ctx
-                        .state_var_types
-                        .get(&var_name)
-                        .map(|t| {
-                            matches!(
-                                t.to_lowercase().as_str(),
-                                "i32"
-                                    | "i64"
-                                    | "u32"
-                                    | "u64"
-                                    | "isize"
-                                    | "usize"
-                                    | "f32"
-                                    | "f64"
-                                    | "bool"
-                                    | "int"
-                                    | "float"
-                                    | "number"
-                            )
-                        })
-                        .unwrap_or(false);
-                    let suffix = if is_copy { "" } else { ".clone()" };
-                    result.push_str(&format!(
-                        "{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}{}, _ => unreachable!() }} }}",
-                        ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix));
+                    result.push_str(&super::rust_system::rust_expand_state_var_read(
+                        ctx, &var_name,
+                    ));
                 }
                 TargetLanguage::C => {
                     let c_type = ctx

@@ -569,6 +569,236 @@ if let Some(ret) = __ctx._return {{
     CodegenNode::NativeBlock { code, span: None }
 }
 
+// ─── Frame Expansion Delegates ───────────────────────────────────────
+//
+// These functions are called from frame_expansion.rs Rust match arms,
+// consolidating Rust-specific ownership/borrow patterns here.
+
+use super::codegen_utils::HandlerContext;
+use super::frame_expansion::{resolve_enter_arg_key, resolve_exit_arg_key, resolve_state_arg_key};
+
+/// Rust transition expansion: compartment creation with exit/state/enter
+/// args, HSM parent chain, and typed StateContext enum assignment.
+pub(crate) fn rust_expand_transition(
+    indent_str: &str,
+    ctx: &HandlerContext,
+    target: &str,
+    exit_str: &Option<String>,
+    state_str: &Option<String>,
+    enter_str: &Option<String>,
+) -> String {
+    let mut code = String::new();
+
+    if let Some(ref exit) = exit_str {
+        for (i, arg) in exit
+            .split(',')
+            .map(|x| x.trim())
+            .filter(|x| !x.is_empty())
+            .enumerate()
+        {
+            let (key, value) = if let Some(eq_pos) = arg.find('=') {
+                (
+                    arg[..eq_pos].trim().to_string(),
+                    arg[eq_pos + 1..].trim().to_string(),
+                )
+            } else {
+                (resolve_exit_arg_key(i, ctx), arg.to_string())
+            };
+            code.push_str(&format!(
+                "{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n",
+                indent_str, key, value
+            ));
+        }
+    }
+
+    code.push_str(&format!(
+        "{}let mut __compartment = {}Compartment::new(\"{}\");\n",
+        indent_str, ctx.system_name, target
+    ));
+    code.push_str(&format!(
+        "{}__compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));\n",
+        indent_str
+    ));
+
+    if let Some(ref state) = state_str {
+        let args: Vec<&str> = state
+            .split(',')
+            .map(|x| x.trim())
+            .filter(|x| !x.is_empty())
+            .collect();
+        if !args.is_empty() {
+            code.push_str(&format!(
+                "{}if let {}StateContext::{}(ref mut ctx) = __compartment.state_context {{\n",
+                indent_str, ctx.system_name, target
+            ));
+            for (i, arg) in args.iter().enumerate() {
+                let (key, value) = if let Some(eq_pos) = arg.find('=') {
+                    (
+                        arg[..eq_pos].trim().to_string(),
+                        arg[eq_pos + 1..].trim().to_string(),
+                    )
+                } else {
+                    (resolve_state_arg_key(i, target, ctx), (*arg).to_string())
+                };
+                code.push_str(&format!("{}    ctx.{} = {};\n", indent_str, key, value));
+            }
+            code.push_str(&format!("{}}}\n", indent_str));
+        }
+    }
+
+    if let Some(ref enter) = enter_str {
+        for (i, arg) in enter
+            .split(',')
+            .map(|x| x.trim())
+            .filter(|x| !x.is_empty())
+            .enumerate()
+        {
+            let (key, value) = if let Some(eq_pos) = arg.find('=') {
+                (
+                    arg[..eq_pos].trim().to_string(),
+                    arg[eq_pos + 1..].trim().to_string(),
+                )
+            } else {
+                (resolve_enter_arg_key(i, target, ctx), arg.to_string())
+            };
+            code.push_str(&format!(
+                "{}__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());\n",
+                indent_str, key, value
+            ));
+        }
+    }
+
+    code.push_str(&format!(
+        "{}self.__transition(__compartment);\n{}return;",
+        indent_str, indent_str
+    ));
+    code
+}
+
+/// Rust transition-forward: create compartment with forwarded event.
+pub(crate) fn rust_expand_forward_transition(
+    indent_str: &str,
+    ctx: &HandlerContext,
+    target: &str,
+) -> String {
+    let mut code = String::new();
+    code.push_str(&format!(
+        "{}let mut __compartment = {}Compartment::new(\"{}\");\n",
+        indent_str, ctx.system_name, target
+    ));
+    code.push_str(&format!(
+        "{}__compartment.forward_event = Some(__e.clone());\n",
+        indent_str
+    ));
+    code.push_str(&format!(
+        "{}self.__transition(__compartment);\n",
+        indent_str
+    ));
+    code.push_str(&format!("{}return;", indent_str));
+    code
+}
+
+/// Rust state variable read — walks HSM parent_compartment chain,
+/// pattern-matches StateContext enum, conditionally clones non-Copy types.
+pub(crate) fn rust_expand_state_var_read(ctx: &HandlerContext, var_name: &str) -> String {
+    let is_copy = ctx
+        .state_var_types
+        .get(var_name)
+        .map(|t| {
+            matches!(
+                t.to_lowercase().as_str(),
+                "i32"
+                    | "i64"
+                    | "u32"
+                    | "u64"
+                    | "isize"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+                    | "bool"
+                    | "int"
+                    | "float"
+                    | "number"
+            )
+        })
+        .unwrap_or(false);
+    let suffix = if is_copy { "" } else { ".clone()" };
+    format!(
+        "{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" \
+         {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} \
+         match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}{}, _ => unreachable!() }} }}",
+        ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix
+    )
+}
+
+/// Rust state variable write — uses unsafe raw pointers to navigate the
+/// parent_compartment chain and mutate. RHS evaluated first to avoid
+/// borrow conflicts.
+pub(crate) fn rust_expand_state_var_write(
+    indent_str: &str,
+    ctx: &HandlerContext,
+    var_name: &str,
+    expanded_expr: &str,
+) -> String {
+    format!(
+        concat!(
+            "{}{{\n",
+            "{0}    let __rhs = {};\n",
+            "{0}    let mut __sv_comp: *mut {}Compartment = &mut self.__compartment;\n",
+            "{0}    unsafe {{ while (*__sv_comp).state != \"{}\" {{ __sv_comp = (*__sv_comp).parent_compartment.as_mut().unwrap().as_mut(); }} }}\n",
+            "{0}    unsafe {{ if let {}StateContext::{}(ref mut ctx) = (*__sv_comp).state_context {{ ctx.{} = __rhs; }} }}\n",
+            "{0}}}"
+        ),
+        indent_str, expanded_expr,
+        ctx.system_name, ctx.state_name,
+        ctx.system_name, ctx.state_name, var_name
+    )
+}
+
+/// Rust return-value boxing — wraps expression in Box<dyn Any>, handles
+/// string literal conversion (&str → String).
+pub(crate) fn rust_expand_box_return(indent_str: &str, expanded_expr: &str) -> String {
+    let boxed_expr = rust_wrap_string_literal(expanded_expr);
+    format!(
+        "{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n\
+         {}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}",
+        indent_str, boxed_expr, indent_str
+    )
+}
+
+/// Rust return-value boxing (no leading indent on first line — used in
+/// ReturnCall/ContextReturnExpr where the caller provides the indent).
+pub(crate) fn rust_expand_box_return_bare(indent_str: &str, expanded_expr: &str) -> String {
+    let boxed_expr = rust_wrap_string_literal(expanded_expr);
+    format!(
+        "let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n\
+         {}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}",
+        boxed_expr, indent_str
+    )
+}
+
+/// Rust context data write — wraps in Box<dyn Any>, handles string literals.
+pub(crate) fn rust_expand_context_data_write(
+    indent_str: &str,
+    key: &str,
+    expanded_expr: &str,
+) -> String {
+    let boxed_expr = rust_wrap_string_literal(expanded_expr);
+    format!(
+        "{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._data.insert(\"{}\".to_string(), Box::new({}) as Box<dyn std::any::Any>); }}",
+        indent_str, key, boxed_expr
+    )
+}
+
+/// Convert &str literal to String::from() for Box<dyn Any> downcasting.
+fn rust_wrap_string_literal(expr: &str) -> String {
+    if expr.trim().starts_with('"') && expr.trim().ends_with('"') {
+        format!("String::from({})", expr.trim())
+    } else {
+        expr.to_string()
+    }
+}
+
 // ─── Persistence ─────────────────────────────────────────────────────
 
 /// Generate Rust `save_state` and `restore_state` methods using
