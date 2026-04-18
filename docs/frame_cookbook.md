@@ -1,6 +1,6 @@
 # Frame Cookbook
 
-49 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
+52 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
 
 For language syntax details, see the [Frame Language Reference](frame_language.md). For a tutorial introduction, see [Getting Started](frame_getting_started.md).
 
@@ -78,6 +78,12 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 47. [FIX Sell-Side Manager](#47-fix-protocol--sell-side-order-manager) — broker-side with buy-side interaction
 48. [Launch Sequence Controller](#48-launch-sequence-controller--abort-from-any-phase) — 3-system flight computer with abort
 49. [Robot Arm Controller](#49-robot-arm-controller--safety-overlay-with-hsm) — 3-level HSM safety overlay
+
+**Deferred Event Processing (50-52)**
+
+50. [Print Spooler](#50-print-spooler--basic-work-queue) — basic work queue with FIFO dequeue
+51. [Manufacturing Cell](#51-manufacturing-cell--priority-queue-with-sub-phases) — priority queue with HSM sub-phases
+52. [Elevator](#52-elevator--directional-scan-algorithm) — SCAN algorithm with request accumulation
 
 -----
 
@@ -4781,33 +4787,469 @@ $SafetyCheck
 
 ---
 
+## Deferred Event Processing
+
+Recipes 50-52 demonstrate the **work queue pattern**: a system receives events it can't handle immediately, queues them, and processes them when it returns to an idle state. The enter handler on `$Idle` is the dequeue point — every transition back to idle checks for pending work. This is fundamentally different from "events ignored in wrong state." Here, events are *accepted* in every state but *deferred* until the system is ready.
+
+-----
+
+## 50. Print Spooler — Basic Work Queue
+
+![50 state diagram](images/cookbook/50.svg)
+
+**Problem:** A printer that accepts jobs while busy. Jobs are queued and printed in FIFO order. The printer processes one job at a time.
+
+```frame
+@@target python_3
+
+@@system PrintSpooler {
+    operations:
+        queue_depth(): int {
+            return len(self.queue)
+        }
+        peek_queue(): list {
+            return [j["name"] for j in self.queue]
+        }
+
+    interface:
+        submit(name: str, pages: int)
+        tick()
+        cancel_job(name: str): bool = False
+        status(): str = ""
+
+    machine:
+        $Idle {
+            $>() {
+                if len(self.queue) > 0:
+                    self.current_job = self.queue.pop(0)
+                    print(f"[PRINT] Starting: {self.current_job['name']} ({self.current_job['pages']} pages)")
+                    -> $Printing
+            }
+
+            submit(name: str, pages: int) {
+                self.current_job = {"name": name, "pages": pages, "printed": 0}
+                print(f"[PRINT] Starting: {name} ({pages} pages)")
+                -> $Printing
+            }
+            status(): str { @@:("idle") }
+        }
+
+        $Printing {
+            $.pages_done: int = 0
+
+            $>() {
+                $.pages_done = self.current_job.get("printed", 0)
+            }
+
+            submit(name: str, pages: int) {
+                self.queue.append({"name": name, "pages": pages, "printed": 0})
+                print(f"  [QUEUE] Added: {name} (queue depth: {len(self.queue)})")
+            }
+
+            tick() {
+                $.pages_done = $.pages_done + 1
+                total = self.current_job["pages"]
+                done = $.pages_done
+                print(f"  [PAGE] {done}/{total}: {self.current_job['name']}")
+                if $.pages_done >= total:
+                    self.jobs_completed = self.jobs_completed + 1
+                    print(f"  [DONE] {self.current_job['name']}")
+                    self.current_job = None
+                    -> $Idle
+            }
+
+            cancel_job(name: str): bool {
+                for i, job in enumerate(self.queue):
+                    if job["name"] == name:
+                        self.queue.pop(i)
+                        @@:(True)
+                        return
+                @@:(False)
+            }
+
+            status(): str {
+                total = self.current_job["pages"]
+                done = $.pages_done
+                @@:(f"printing {self.current_job['name']} ({done}/{total}), {len(self.queue)} queued")
+            }
+        }
+
+    domain:
+        queue: list = []
+        current_job = None
+        jobs_completed: int = 0
+}
+
+if __name__ == '__main__':
+    p = @@PrintSpooler()
+    p.submit("Report.pdf", 3)
+    p.submit("Invoice.pdf", 2)
+    p.submit("Photo.jpg", 1)
+    print(f"Queue: {p.peek_queue()}")
+
+    for _ in range(20):
+        p.tick()
+        if p.queue_depth() == 0 and p.status() == "idle":
+            break
+
+    print(f"Completed: {p.jobs_completed} jobs")
+```
+
+**How it works:** The dequeue point is `$Idle.$>()`. Every transition to `$Idle` triggers the enter handler, which checks `self.queue`. If there's a pending job, it pops the first one and immediately transitions to `$Printing`. The system never rests in `$Idle` while there's queued work.
+
+`submit()` behaves differently per state. In `$Idle`, it starts the job immediately. In `$Printing`, it appends to the queue. Same interface, different behavior — the core value of state machines.
+
+**Features used:** deferred event processing, enter handler as dequeue point, operations for queue inspection, same event with different per-state behavior, state variables for progress tracking
+
+-----
+
+## 51. Manufacturing Cell — Priority Queue with Sub-Phases
+
+![51 state diagram](images/cookbook/51.svg)
+
+**Problem:** A CNC machine tool that processes work orders through setup, machining, and teardown phases. New orders arrive at any time and are queued with priority. The machine processes the highest-priority job next.
+
+```frame
+@@target python_3
+
+@@system ManufacturingCell {
+    operations:
+        queue_depth(): int {
+            return len(self.queue)
+        }
+        parts_produced(): int {
+            return self.completed_count
+        }
+
+    interface:
+        work_order(order_id: str, part: str, program: str, priority: int)
+        tick()
+        emergency_stop()
+        reset()
+        status(): str = ""
+
+    machine:
+        $Idle {
+            $>() {
+                self.phase = "idle"
+                if len(self.queue) > 0:
+                    self.queue.sort(key=lambda x: -x["priority"])
+                    self.current_job = self.queue.pop(0)
+                    print(f"[CELL] Next job: {self.current_job['order_id']} (priority {self.current_job['priority']})")
+                    -> $Setup
+            }
+
+            work_order(order_id: str, part: str, program: str, priority: int) {
+                self.current_job = {
+                    "order_id": order_id, "part": part,
+                    "program": program, "priority": priority
+                }
+                print(f"[CELL] Starting: {order_id} ({part})")
+                -> $Setup
+            }
+            status(): str { @@:("idle") }
+        }
+
+        $Setup => $Active {
+            $.setup_ticks: int = 0
+            $>() { self.phase = "setup" }
+            tick() {
+                $.setup_ticks = $.setup_ticks + 1
+                if $.setup_ticks >= self.setup_time:
+                    -> $Machining
+            }
+            status(): str { @@:(f"setup ({$.setup_ticks}/{self.setup_time})") }
+            => $^
+        }
+
+        $Machining => $Active {
+            $.cycle_ticks: int = 0
+            $>() { self.phase = "machining" }
+            tick() {
+                $.cycle_ticks = $.cycle_ticks + 1
+                if $.cycle_ticks >= self.cycle_time:
+                    -> $Teardown
+            }
+            status(): str { @@:(f"machining ({$.cycle_ticks}/{self.cycle_time})") }
+            => $^
+        }
+
+        $Teardown => $Active {
+            $.teardown_ticks: int = 0
+            $>() { self.phase = "teardown" }
+            tick() {
+                $.teardown_ticks = $.teardown_ticks + 1
+                if $.teardown_ticks >= self.teardown_time:
+                    self.completed_count = self.completed_count + 1
+                    self.current_job = None
+                    -> $Idle
+            }
+            status(): str { @@:(f"teardown ({$.teardown_ticks}/{self.teardown_time})") }
+            => $^
+        }
+
+        $Active {
+            emergency_stop() {
+                print(f"  [E-STOP] During {self.phase}")
+                if self.current_job is not None:
+                    self.current_job["priority"] = 999
+                    self.queue.insert(0, self.current_job)
+                    self.current_job = None
+                -> $EStop
+            }
+            work_order(order_id: str, part: str, program: str, priority: int) {
+                self.queue.append({
+                    "order_id": order_id, "part": part,
+                    "program": program, "priority": priority
+                })
+            }
+        }
+
+        $EStop {
+            $>() { self.phase = "e-stop" }
+            reset() { -> $Idle }
+            work_order(order_id: str, part: str, program: str, priority: int) {
+                self.queue.append({
+                    "order_id": order_id, "part": part,
+                    "program": program, "priority": priority
+                })
+            }
+            status(): str { @@:(f"e-stop ({len(self.queue)} queued)") }
+        }
+
+    domain:
+        queue: list = []
+        current_job = None
+        completed_count: int = 0
+        phase: str = "idle"
+        setup_time: int = 2
+        cycle_time: int = 3
+        teardown_time: int = 1
+}
+
+if __name__ == '__main__':
+    cell = @@ManufacturingCell()
+    cell.work_order("WO-001", "Bracket-A", "prog_bracket.nc", 1)
+    cell.work_order("WO-002", "Shaft-B", "prog_shaft.nc", 2)
+    cell.work_order("WO-003", "Housing-C", "prog_housing.nc", 5)
+
+    for i in range(30):
+        cell.tick()
+        if cell.queue_depth() == 0 and cell.status() == "idle":
+            break
+
+    print(f"Parts produced: {cell.parts_produced()}")
+```
+
+**How it works:** Priority queue, not FIFO. `$Idle.$>()` sorts the queue by descending priority before popping. High-priority jobs jump the queue. Three sub-phases (`$Setup`, `$Machining`, `$Teardown`) are children of `$Active`, which handles `emergency_stop()` and `work_order()` for all of them. E-stop re-queues the interrupted job at priority 999 so it resumes first after reset.
+
+**Features used:** priority queue dequeue, HSM with shared e-stop, sub-phase progression, state variables as phase timers, events accepted in all states including e-stop
+
+-----
+
+## 52. Elevator — Directional Scan Algorithm
+
+![52 state diagram](images/cookbook/52.svg)
+
+**Problem:** An elevator services floor requests using the SCAN algorithm: continue in the current direction until all requests in that direction are served, then reverse. Requests arrive at any time and are accumulated, not ignored.
+
+```frame
+@@target python_3
+
+@@system Elevator {
+    operations:
+        current_floor(): int {
+            return self.floor
+        }
+        pending_requests(): list {
+            return sorted(self.requests)
+        }
+
+    interface:
+        request(floor: int)
+        tick()
+        close_doors()
+        status(): str = ""
+
+    machine:
+        $Idle {
+            $>() {
+                if len(self.requests) > 0:
+                    self.select_direction()
+                    -> $Moving
+            }
+
+            request(floor: int) {
+                if floor == self.floor:
+                    -> $DoorsOpen
+                else:
+                    self.requests.add(floor)
+                    self.select_direction()
+                    -> $Moving
+            }
+            status(): str { @@:(f"idle at floor {self.floor}") }
+        }
+
+        $Moving {
+            $>() {
+                target = self.next_stop()
+                if target is None:
+                    -> $Idle
+            }
+
+            request(floor: int) {
+                self.requests.add(floor)
+            }
+
+            tick() {
+                if self.dir == "up":
+                    self.floor = self.floor + 1
+                else:
+                    self.floor = self.floor - 1
+
+                if self.floor in self.requests:
+                    self.requests.discard(self.floor)
+                    self.stops_made = self.stops_made + 1
+                    -> $DoorsOpen
+                else:
+                    target = self.next_stop()
+                    if target is None:
+                        self.reverse_direction()
+                        target = self.next_stop()
+                        if target is None:
+                            -> $Idle
+            }
+
+            status(): str { @@:(f"moving {self.dir} at floor {self.floor}") }
+        }
+
+        $DoorsOpen {
+            $.dwell_ticks: int = 0
+
+            $>() {
+                print(f"  [DOORS] Open at floor {self.floor}")
+            }
+
+            request(floor: int) {
+                if floor == self.floor:
+                    $.dwell_ticks = 0
+                else:
+                    self.requests.add(floor)
+            }
+
+            tick() {
+                $.dwell_ticks = $.dwell_ticks + 1
+                if $.dwell_ticks >= self.dwell_time:
+                    -> $DoorsClosing
+            }
+
+            close_doors() {
+                -> $DoorsClosing
+            }
+
+            status(): str { @@:(f"doors open at floor {self.floor}") }
+        }
+
+        $DoorsClosing {
+            $>() {
+                if len(self.requests) > 0:
+                    self.select_direction()
+                    -> $Moving
+                else:
+                    -> $Idle
+            }
+        }
+
+    actions:
+        select_direction() {
+            up_requests = [f for f in self.requests if f > self.floor]
+            down_requests = [f for f in self.requests if f < self.floor]
+            if self.dir == "up":
+                if len(up_requests) > 0:
+                    self.dir = "up"
+                elif len(down_requests) > 0:
+                    self.dir = "down"
+            else:
+                if len(down_requests) > 0:
+                    self.dir = "down"
+                elif len(up_requests) > 0:
+                    self.dir = "up"
+        }
+
+        next_stop() {
+            if self.dir == "up":
+                ahead = sorted([f for f in self.requests if f > self.floor])
+                if len(ahead) > 0:
+                    return ahead[0]
+            else:
+                ahead = sorted([f for f in self.requests if f < self.floor], reverse=True)
+                if len(ahead) > 0:
+                    return ahead[0]
+            return None
+        }
+
+        reverse_direction() {
+            if self.dir == "up":
+                self.dir = "down"
+            else:
+                self.dir = "up"
+        }
+
+    domain:
+        floor: int = 1
+        dir: str = "up"
+        requests: set = set()
+        dwell_time: int = 2
+        stops_made: int = 0
+}
+
+if __name__ == '__main__':
+    elev = @@Elevator()
+    elev.request(5)
+    elev.request(3)
+    elev.request(8)
+
+    for _ in range(20):
+        elev.tick()
+
+    print(f"Stops made: {elev.stops_made}")
+    print(f"Final floor: {elev.current_floor()}")
+```
+
+**How it works:** The elevator continues in its current direction as long as there are requests ahead, then reverses. Requests are accepted in every state — `$Moving`, `$DoorsOpen`, and `$DoorsClosing` all handle `request()` by adding to `self.requests` (a set, so duplicates are ignored). `$DoorsClosing` is a transient state whose enter handler selects direction and transitions to `$Moving` or `$Idle`. `$Idle.$>()` is the dequeue point — the elevator never idles with pending requests.
+
+**Features used:** SCAN algorithm with directional logic, set as domain variable for deduplication, transient states, enter handler as dequeue and direction-select point, state variables for dwell timer, requests accepted in all states
+
 -----
 
 ## Feature Coverage
 
-|Feature                      |Recipes 1-22|Recipes 23-33   |EIP (34-45)         |Stress (46-49)       |
-|-----------------------------|------------|----------------|---------------------|---------------------|
-|`@@:(expr)` return           |yes         |yes all         |yes all              |yes all              |
-|`@@:return(expr)` exit sugar |yes #22     |yes #28         |no                   |no                   |
-|`@@:self.method()`           |yes #22     |yes #33         |no                   |yes #49              |
-|`@@:system.state`            |yes #22     |yes #32         |no                   |yes #46, #49         |
-|Operations                   |no          |yes #23, #25, #32|yes #41, #45        |yes #46 (7), #49 (3) |
-|`static` operations          |no          |yes #25         |no                   |yes #46              |
-|System params (domain)       |yes #21     |yes #23         |no                   |yes #46 (3)          |
-|HSM 3-level                  |no          |yes #26         |no                   |yes #49 (3-level)    |
-|`push$` / `-> pop$`          |yes #7, #8  |yes #27         |no                   |no                   |
-|Decorated pop (exit args)    |no          |yes #27         |no                   |no                   |
-|State var reset on reentry   |implicit    |yes #24 (explicit)|no                 |yes #48              |
-|Multi-system managed states  |yes #20     |yes #28, #29, #33|yes #43             |yes #47, #48 (3)     |
-|Service pattern              |no          |yes #30         |no                   |no                   |
-|Enter-handler chain          |no          |yes #30, #31    |yes #42             |yes #48 (11 phases)  |
-|Events ignored in wrong state|yes #3, #12 |yes #24, #32    |yes #39             |yes #46 (terminals)  |
-|`@@persist`                  |yes #18     |no              |yes #40, #44, #45   |no                   |
-|Self-transition (retry loop) |no          |no              |yes #40             |no                   |
-|HSM parent forwarding        |yes #9      |yes #26         |yes #41             |yes #46, #48, #49    |
-|Compensation chain           |no          |no              |yes #42             |no                   |
-|Transient states             |no          |yes #30         |yes #41, #42        |yes #47, #48         |
-|13+ state machine            |no          |no              |no                   |yes #46 (13), #48 (17)|
-|Domain arithmetic (VWAP)     |no          |no              |no                   |yes #46, #47         |
-|Conditional abort routing    |no          |no              |no                   |yes #48              |
-|Mode-based event rejection   |no          |no              |no                   |yes #49              |
+|Feature                      |Recipes 1-22|Recipes 23-33   |EIP (34-45)         |Stress (46-49)       |Deferred (50-52)     |
+|-----------------------------|------------|----------------|---------------------|---------------------|---------------------|
+|`@@:(expr)` return           |yes         |yes all         |yes all              |yes all              |yes all              |
+|`@@:return(expr)` exit sugar |yes #22     |yes #28         |no                   |no                   |no                   |
+|`@@:self.method()`           |yes #22     |yes #33         |no                   |yes #49              |no                   |
+|`@@:system.state`            |yes #22     |yes #32         |no                   |yes #46, #49         |no                   |
+|Operations                   |no          |yes #23, #25, #32|yes #41, #45        |yes #46 (7), #49 (3) |yes #50, #51         |
+|`static` operations          |no          |yes #25         |no                   |yes #46              |no                   |
+|System params (domain)       |yes #21     |yes #23         |no                   |yes #46 (3)          |no                   |
+|HSM 3-level                  |no          |yes #26         |no                   |yes #49 (3-level)    |no                   |
+|`push$` / `-> pop$`          |yes #7, #8  |yes #27         |no                   |no                   |no                   |
+|Decorated pop (exit args)    |no          |yes #27         |no                   |no                   |no                   |
+|State var reset on reentry   |implicit    |yes #24 (explicit)|no                 |yes #48              |yes #50, #51, #52    |
+|Multi-system managed states  |yes #20     |yes #28, #29, #33|yes #43             |yes #47, #48 (3)     |no                   |
+|Service pattern              |no          |yes #30         |no                   |no                   |yes #50 (dequeue)    |
+|Enter-handler chain          |no          |yes #30, #31    |yes #42             |yes #48 (11 phases)  |no                   |
+|Events ignored in wrong state|yes #3, #12 |yes #24, #32    |yes #39             |yes #46 (terminals)  |no                   |
+|`@@persist`                  |yes #18     |no              |yes #40, #44, #45   |no                   |no                   |
+|Self-transition (retry loop) |no          |no              |yes #40             |no                   |no                   |
+|HSM parent forwarding        |yes #9      |yes #26         |yes #41             |yes #46, #48, #49    |yes #51              |
+|Compensation chain           |no          |no              |yes #42             |no                   |no                   |
+|Transient states             |no          |yes #30         |yes #41, #42        |yes #47, #48         |yes #52              |
+|13+ state machine            |no          |no              |no                   |yes #46 (13), #48 (17)|no                  |
+|Domain arithmetic (VWAP)     |no          |no              |no                   |yes #46, #47         |no                   |
+|Conditional abort routing    |no          |no              |no                   |yes #48              |no                   |
+|Mode-based event rejection   |no          |no              |no                   |yes #49              |no                   |
+|Deferred event processing    |no          |no              |no                   |no                   |yes #50, #51, #52    |
+|Priority queue               |no          |no              |no                   |no                   |yes #51              |
+|Directional scheduling       |no          |no              |no                   |no                   |yes #52 (SCAN)       |
