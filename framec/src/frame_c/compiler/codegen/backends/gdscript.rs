@@ -129,8 +129,9 @@ impl LanguageBackend for GDScriptBackend {
                 let module_scope = !base_classes.is_empty() && ctx.indent == 0;
 
                 if module_scope {
-                    // Module-scope system: extends + fields + methods, no class wrapper
-                    result.push_str(&format!("extends {}\n\n", base_classes[0]));
+                    // Module-scope system: fields + methods, no class wrapper.
+                    // `extends Base` is emitted by the pipeline before runtime
+                    // types so it's the first line of the file (Godot requires this).
                     // Emit fields at module scope
                     for field in fields {
                         let init = if let Some(ref init_node) = field.initializer {

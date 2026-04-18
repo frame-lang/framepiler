@@ -455,6 +455,11 @@ pub fn compile_ast_based(
         } else if matches!(config.target, TargetLanguage::Erlang) {
             // Erlang gen_statem: no runtime classes needed — gen_statem provides everything
         } else {
+            // GDScript module-scope: emit `extends Base` before runtime
+            // types so it's the first line (Godot requires this).
+            if matches!(config.target, TargetLanguage::GDScript) && !system_ast.bases.is_empty() {
+                system_code.push_str(&format!("extends {}\n\n", system_ast.bases[0]));
+            }
             if let Some(event_node) = generate_frame_event_class(system_ast, config.target) {
                 system_code.push_str(&backend.emit(&event_node, &mut ctx));
                 system_code.push_str("\n\n");
