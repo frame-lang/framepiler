@@ -244,10 +244,10 @@ if __name__ == '__main__':
             submit(value: str): str {
                 if self.authenticate(self.username, value):
                     @@:("welcome")
-                    -> $LoggedIn
+                    -> "authenticated" $LoggedIn
                 else:
                     @@:("invalid - try again")
-                    -> $EnterUsername
+                    -> "bad credentials" $EnterUsername
             }
         }
         $LoggedIn {
@@ -302,7 +302,7 @@ if __name__ == '__main__':
         $Connecting {
             $>() {
                 print(f"Connecting to {self.host}...")
-                -> $Connected
+                -> "connected" $Connected
             }
         }
         $Connected {
@@ -357,12 +357,12 @@ if __name__ == '__main__':
             $>() {
                 self.attempts = self.attempts + 1
                 if self.try_operation():
-                    -> $Succeeded
+                    -> "success" $Succeeded
                 else:
                     if self.attempts >= self.max_retries:
-                        -> $Failed
+                        -> "exhausted" $Failed
                     else:
-                        -> $Trying
+                        -> "retry" $Trying
             }
             status(): str { @@:("trying") }
         }
@@ -580,9 +580,9 @@ if __name__ == '__main__':
         $Validating {
             $>() {
                 if self.validate(self.item):
-                    -> $Processing
+                    -> "valid" $Processing
                 else:
-                    -> $Rejected
+                    -> "invalid" $Rejected
             }
             status(): str { @@:("validating") }
         }
@@ -874,7 +874,7 @@ if __name__ == '__main__':
             raw_low() { $.stable_count = 0 }
             tick() {
                 if $.stable_count >= 3:
-                    -> $Pressed
+                    -> "stable high" $Pressed
             }
             is_pressed(): bool { @@:(False) }
         }
@@ -885,7 +885,7 @@ if __name__ == '__main__':
             raw_high() { $.stable_count = 0 }
             tick() {
                 if $.stable_count >= 3:
-                    -> $Released
+                    -> "stable low" $Released
             }
             is_pressed(): bool { @@:(True) }
         }
@@ -927,7 +927,7 @@ if __name__ == '__main__':
             input(bit: int): str {
                 if bit == 1:
                     @@:("0")
-                    -> $S1
+                    -> "bit=1" $S1
                 else:
                     @@:("0")
             }
@@ -936,7 +936,7 @@ if __name__ == '__main__':
             input(bit: int): str {
                 if bit == 0:
                     @@:("1")
-                    -> $S0
+                    -> "bit=0" $S0
                 else:
                     @@:("0")
             }
@@ -973,14 +973,14 @@ if __name__ == '__main__':
         $Even {
             input(bit: int) {
                 if bit == 1:
-                    -> $Odd
+                    -> "bit=1" $Odd
             }
             output(): str { @@:("even") }
         }
         $Odd {
             input(bit: int) {
                 if bit == 1:
-                    -> $Even
+                    -> "bit=1" $Even
             }
             output(): str { @@:("odd") }
         }
@@ -1197,7 +1197,7 @@ A task executor whose pool size and retry policy are set at construction time. D
             submit(task: str) {
                 self.pending.append(task)
                 if len(self.pending) >= self.pool_size:
-                    -> $Processing
+                    -> "batch full" $Processing
             }
 
             get_status(): str {
@@ -1363,13 +1363,13 @@ if __name__ == '__main__':
                     self.inventory[product] = self.inventory[product] - 1
                     self.balance = self.balance - price
                     @@:(f"dispensing {product}")
-                    -> $Dispensing
+                    -> "paid" $Dispensing
             }
             cancel(): int {
                 refund = self.balance
                 self.balance = 0
                 @@:(refund)
-                -> $Idle
+                -> "refund" $Idle
             }
         }
         $Dispensing {
@@ -1378,7 +1378,7 @@ if __name__ == '__main__':
                 self.balance = 0
                 if change > 0:
                     print(f"Change: {change}")
-                -> $Idle
+                -> "give change" $Idle
             }
         }
 
@@ -1434,7 +1434,7 @@ if __name__ == '__main__':
             failure() {
                 $.failures = $.failures + 1
                 if $.failures >= self.threshold:
-                    -> $Open
+                    -> "tripped" $Open
             }
             status(): str { @@:(f"closed ({$.failures} failures)") }
         }
@@ -1449,7 +1449,7 @@ if __name__ == '__main__':
             tick() {
                 $.cooldown_remaining = $.cooldown_remaining - 1
                 if $.cooldown_remaining <= 0:
-                    -> $HalfOpen
+                    -> "cooled down" $HalfOpen
             }
             status(): str { @@:(f"open ({$.cooldown_remaining} ticks left)") }
         }
@@ -1457,11 +1457,11 @@ if __name__ == '__main__':
             call(): str { @@:("testing") }
             success() {
                 print("Circuit recovered")
-                -> $Closed
+                -> "recovered" $Closed
             }
             failure() {
                 print("Still failing")
-                -> $Open
+                -> "relapse" $Open
             }
             status(): str { @@:("half-open") }
         }
@@ -1514,7 +1514,7 @@ if __name__ == '__main__':
                 self.tokens = self.tokens - 1
                 @@:("accepted")
                 if self.tokens <= 0:
-                    -> $Throttled
+                    -> "exhausted" $Throttled
             }
             tick() { self.tokens = min(self.tokens + 1, self.max_tokens) }
         }
@@ -1523,7 +1523,7 @@ if __name__ == '__main__':
             tick() {
                 self.tokens = self.tokens + 1
                 if self.tokens > 0:
-                    -> $Accepting
+                    -> "replenished" $Accepting
             }
         }
 
@@ -1564,7 +1564,7 @@ if __name__ == '__main__':
         $Off {
             set_temp(target: int) {
                 self.target = target
-                -> $LowHeat
+                -> "start" $LowHeat
             }
             status(): str { @@:("off") }
         }
@@ -1572,7 +1572,7 @@ if __name__ == '__main__':
             $>() { print("Low heat on") }
             tick() {
                 if self.target - self.current > 5:
-                    -> $HighHeat
+                    -> "gap large" $HighHeat
             }
             status(): str { @@:(f"low heat ({self.current} to {self.target})") }
             => $^
@@ -1581,7 +1581,7 @@ if __name__ == '__main__':
             $>() { print("High heat on") }
             tick() {
                 if self.target - self.current <= 3:
-                    -> $LowHeat
+                    -> "gap small" $LowHeat
             }
             status(): str { @@:(f"high heat ({self.current} to {self.target})") }
             => $^
@@ -1595,7 +1595,7 @@ if __name__ == '__main__':
         $On {
             tick() {
                 if self.current >= self.target:
-                    -> $Cooling
+                    -> "at target" $Cooling
             }
             set_temp(target: int) { self.target = target }
         }
@@ -1604,7 +1604,7 @@ if __name__ == '__main__':
             tick() {
                 self.current = self.current - 1
                 if self.current <= self.target:
-                    -> $Off
+                    -> "cooled down" $Off
             }
             status(): str { @@:(f"cooling ({self.current} to {self.target})") }
             => $^
@@ -1741,7 +1741,7 @@ if __name__ == '__main__':
                 if field == "username":
                     self.username = value
                     @@:("enter password")
-                    -> $EnterPassword
+                    -> "accepted" $EnterPassword
                 @@:("enter username")
             }
             cancel() { self.parent.auth_cancelled() }
@@ -1817,10 +1817,10 @@ if __name__ == '__main__':
             cancel() { $.login_mgr.cancel() }
             auth_succeeded(username: str) {
                 self.current_user = username
-                -> $LoggedIn
+                -> "login ok" $LoggedIn
             }
             auth_cancelled() { print("[App] Cancelled") }
-            auth_locked(username: str) { -> $Locked }
+            auth_locked(username: str) { -> "locked out" $Locked }
             status(): str { @@:("logged out") }
         }
         $LoggedIn {
@@ -1888,7 +1888,7 @@ import random
                 $.health = $.health - random.randint(0, 10)
                 if $.health <= 0:
                     self.final_score = $.score
-                    -> $Lost
+                    -> "died" $Lost
             }
             input(action: str): str {
                 if action == "attack":
@@ -1939,9 +1939,9 @@ import random
                 self.total_score = self.total_score + score
                 if won:
                     self.level_index = self.level_index + 1
-                    -> $InLevel
+                    -> "next level" $InLevel
                 else:
-                    -> $GameOver
+                    -> "game over" $GameOver
             }
         }
         $GameOver {
@@ -1987,23 +1987,23 @@ if __name__ == '__main__':
         $Init {
             $>() {
                 print("[Worker] Starting...")
-                -> $FetchData
+                -> "begin" $FetchData
             }
         }
         $FetchData => $Running {
             $>() {
                 if self.cycles >= self.max_cycles:
-                    -> $ShuttingDown
+                    -> "done" $ShuttingDown
                 print(f"[Worker] Fetch (cycle {self.cycles + 1})")
                 self.cycles = self.cycles + 1
-                -> $ProcessData
+                -> "process" $ProcessData
             }
             => $^
         }
         $ProcessData => $Running {
             $>() {
                 print(f"[Worker] Process (cycle {self.cycles})")
-                -> $FetchData
+                -> "fetch next" $FetchData
             }
             => $^
         }
@@ -2058,7 +2058,7 @@ if __name__ == '__main__':
             run(data: list) {
                 self.data = data
                 self.log = []
-                -> $Validate
+                -> "start" $Validate
             }
         }
         $Validate {
@@ -2066,16 +2066,16 @@ if __name__ == '__main__':
                 self.log.append("validate")
                 self.data = [x for x in self.data if x is not None and x != ""]
                 if len(self.data) == 0:
-                    -> $Error
+                    -> "empty" $Error
                 else:
-                    -> $Normalize
+                    -> "valid" $Normalize
             }
         }
         $Normalize {
             $>() {
                 self.log.append("normalize")
                 self.data = [str(x).lower().strip() for x in self.data]
-                -> $Deduplicate
+                -> "deduplicate" $Deduplicate
             }
         }
         $Deduplicate {
@@ -2088,14 +2088,14 @@ if __name__ == '__main__':
                         seen.add(item)
                         unique.append(item)
                 self.data = unique
-                -> $Sort
+                -> "sort" $Sort
             }
         }
         $Sort {
             $>() {
                 self.log.append("sort")
                 self.data = sorted(self.data)
-                -> $Complete
+                -> "finish" $Complete
             }
         }
         $Complete {
@@ -2158,7 +2158,7 @@ if __name__ == '__main__':
             $.ticks: int = 0
             next() {
                 $.ticks = $.ticks + 1
-                if $.ticks >= self.green_dur: -> $Yellow
+                if $.ticks >= self.green_dur: -> "expired" $Yellow
             }
             emergency() { -> $EmergencyRed }
         }
@@ -2166,7 +2166,7 @@ if __name__ == '__main__':
             $.ticks: int = 0
             next() {
                 $.ticks = $.ticks + 1
-                if $.ticks >= self.yellow_dur: -> $Red
+                if $.ticks >= self.yellow_dur: -> "expired" $Red
             }
             emergency() { -> $EmergencyRed }
         }
@@ -2174,7 +2174,7 @@ if __name__ == '__main__':
             $.ticks: int = 0
             next() {
                 $.ticks = $.ticks + 1
-                if $.ticks >= self.red_dur: -> $Green
+                if $.ticks >= self.red_dur: -> "expired" $Green
             }
             emergency() { -> $EmergencyRed }
         }
@@ -2300,16 +2300,16 @@ if __name__ == '__main__':
                 self.plan = steps
                 for i, s in enumerate(steps):
                     print(f"   {i+1}. {s}")
-                -> $AwaitingApproval
+                -> "review" $AwaitingApproval
             }
             => $^
         }
         $AwaitingApproval => $Active {
             approve() {
                 self.step = 0
-                -> $Coding
+                -> "begin" $Coding
             }
-            reject(feedback: str) { -> $Planning }
+            reject(feedback: str) { -> "revise" $Planning }
             => $^
         }
         $Coding => $Active {
@@ -2323,16 +2323,16 @@ if __name__ == '__main__':
                 self.tool_runner.parent = self
                 self.tool_runner.execute(tool["tool"], tool["params"])
             }
-            coding_done() { -> $Testing }
+            coding_done() { -> "run tests" $Testing }
             tool_completed(tool: str, success: bool, data: str) {
                 if success:
                     print(f"  ok {data}")
                     self.step = self.step + 1
-                    -> $Coding
+                    -> "next step" $Coding
                 else:
                     print(f"  err {data}")
                     self.last_error = data
-                    -> $ErrorRecovery
+                    -> "error" $ErrorRecovery
             }
             => $^
         }
@@ -2349,21 +2349,21 @@ if __name__ == '__main__':
                 else:
                     @@:self.tests_failed(data)
             }
-            tests_passed() { -> $Complete }
+            tests_passed() { -> "passed" $Complete }
             tests_failed(failures: str) {
                 self.retries = self.retries + 1
                 if self.retries >= 2:
-                    -> $Failed
+                    -> "give up" $Failed
                 else:
                     self.task_desc = f"Fix: {failures}"
-                    -> $Planning
+                    -> "retry" $Planning
             }
             => $^
         }
         $ErrorRecovery => $Active {
             $>() { print(f"  [warn] {self.last_error}") }
-            approve() { -> $Coding }
-            reject(feedback: str) { -> $Planning }
+            approve() { -> "retry" $Coding }
+            reject(feedback: str) { -> "replan" $Planning }
             => $^
         }
         $Active {
@@ -2377,7 +2377,7 @@ if __name__ == '__main__':
             task(description: str) {
                 self.reset()
                 self.task_desc = description
-                -> $Planning
+                -> "new task" $Planning
             }
             status(): str { @@:("complete") }
         }
@@ -2386,7 +2386,7 @@ if __name__ == '__main__':
             task(description: str) {
                 self.reset()
                 self.task_desc = description
-                -> $Planning
+                -> "new task" $Planning
             }
             status(): str { @@:("failed") }
         }
@@ -2738,7 +2738,7 @@ if __name__ == '__main__':
             record_failure() {
                 self.failures = self.failures + 1
                 if self.failures >= self.threshold:
-                    -> $Open
+                    -> "trip" $Open
             }
             record_success() {
                 self.failures = 0
@@ -2761,10 +2761,10 @@ if __name__ == '__main__':
                 @@:(self.invoke(payload))
             }
             record_success() {
-                -> $Closed
+                -> "recover" $Closed
             }
             record_failure() {
-                -> $Open
+                -> "re-trip" $Open
             }
             state_name(): str { @@:("half_open") }
         }
@@ -2835,14 +2835,14 @@ if __name__ == '__main__':
             process_tick(): str {
                 if self.try_process(self.payload):
                     @@:("ok")
-                    -> $Done
+                    -> "success" $Done
                 else:
                     if self.attempts >= self.max_attempts:
                         @@:("dead_lettered")
-                        -> $DeadLettered
+                        -> "exhausted" $DeadLettered
                     else:
                         @@:("retrying")
-                        -> $Processing
+                        -> "retry" $Processing
             }
         }
 
@@ -2924,11 +2924,11 @@ if __name__ == '__main__':
                 msg = self.poll_source()
                 if msg is None:
                     @@:("empty")
-                    -> $Idle
+                    -> "no work" $Idle
                 else:
                     self.current = msg
                     @@:("got_msg")
-                    -> $Handling
+                    -> "dispatch" $Handling
             }
             state_name(): str { @@:("polling") }
             => $^
@@ -2937,7 +2937,7 @@ if __name__ == '__main__':
         $Handling => $Active {
             $>() {
                 self.handle(self.current)
-                -> $Polling
+                -> "done" $Polling
             }
             state_name(): str { @@:("handling") }
             => $^
@@ -3023,7 +3023,7 @@ if __name__ == '__main__':
             reserved() { -> $Charging }
             reserve_failed(reason: str) {
                 self.failure = reason
-                -> $Failed
+                -> "abort" $Failed
             }
             status(): str { @@:("reserving") }
         }
@@ -3036,7 +3036,7 @@ if __name__ == '__main__':
             }
             charge_failed(reason: str) {
                 self.failure = reason
-                -> $CompensatingReservation
+                -> "compensate" $CompensatingReservation
             }
             status(): str { @@:("charging") }
         }
@@ -3049,7 +3049,7 @@ if __name__ == '__main__':
             }
             ship_failed(reason: str) {
                 self.failure = reason
-                -> $CompensatingCharge
+                -> "compensate" $CompensatingCharge
             }
             status(): str { @@:("shipping") }
         }
@@ -3057,7 +3057,7 @@ if __name__ == '__main__':
         $CompensatingCharge {
             $>() {
                 self.call_refund(self.tx_id)
-                -> $CompensatingReservation
+                -> "refunded" $CompensatingReservation
             }
             status(): str { @@:("compensating_charge") }
         }
@@ -3065,7 +3065,7 @@ if __name__ == '__main__':
         $CompensatingReservation {
             $>() {
                 self.call_release(self.order_id)
-                -> $Failed
+                -> "released" $Failed
             }
             status(): str { @@:("compensating_reservation") }
         }
@@ -3323,10 +3323,10 @@ import json
             server_validate() {
                 if "@" in self.email:
                     self.server_notes = "email syntax ok"
-                    -> $NeedsClientConfirm
+                    -> "valid" $NeedsClientConfirm
                 else:
                     self.server_notes = "email rejected"
-                    -> $Rejected
+                    -> "invalid" $Rejected
             }
             where_next(): str { @@:("server") }
         }
@@ -3334,9 +3334,9 @@ import json
         $NeedsClientConfirm {
             client_confirm(accept: bool) {
                 if accept:
-                    -> $NeedsServerProvision
+                    -> "accepted" $NeedsServerProvision
                 else:
-                    -> $Cancelled
+                    -> "declined" $Cancelled
             }
             where_next(): str { @@:("client") }
         }
@@ -3592,9 +3592,9 @@ Recipes 46-49 model real-world protocols and safety-critical systems at full fid
                 self.pending_cl_ord_id = ""
                 # Return to previous effective state
                 if self.cum_qty > 0:
-                    -> $PartiallyFilled
+                    -> "has fills" $PartiallyFilled
                 else:
-                    -> $New
+                    -> "no fills" $New
             }
             # Fills can arrive while cancel is pending
             exec_fill(exec_id: str, last_qty: float, last_px: float) {
@@ -3623,17 +3623,17 @@ Recipes 46-49 model real-world protocols and safety-critical systems at full fid
                 self.leaves_qty = new_qty - self.cum_qty
                 print(f"[BUY] Replaced: qty={new_qty} px={new_price}")
                 if self.cum_qty > 0:
-                    -> $PartiallyFilled
+                    -> "has fills" $PartiallyFilled
                 else:
-                    -> $New
+                    -> "no fills" $New
             }
             exec_replace_rejected(reason: str) {
                 print(f"[BUY] Replace REJECTED: {reason}")
                 self.pending_cl_ord_id = ""
                 if self.cum_qty > 0:
-                    -> $PartiallyFilled
+                    -> "has fills" $PartiallyFilled
                 else:
-                    -> $New
+                    -> "no fills" $New
             }
             # Fills during pending replace
             exec_fill(exec_id: str, last_qty: float, last_px: float) {
@@ -3672,9 +3672,9 @@ Recipes 46-49 model real-world protocols and safety-critical systems at full fid
 
             exec_restated(exec_id: str) {
                 if self.cum_qty > 0:
-                    -> $PartiallyFilled
+                    -> "has fills" $PartiallyFilled
                 else:
-                    -> $New
+                    -> "no fills" $New
             }
             exec_canceled(exec_id: str) { -> $Canceled }
             => $^
@@ -3833,9 +3833,9 @@ if __name__ == '__main__':
 
                 if not self.validate_order(symbol, qty, price):
                     self.send_exec_report("Rejected", "rejected", "Invalid order params")
-                    -> $Rejected
+                    -> "invalid" $Rejected
                 else:
-                    -> $Accepting
+                    -> "evaluate" $Accepting
             }
             status(): str { @@:("no order") }
         }
@@ -3848,30 +3848,30 @@ if __name__ == '__main__':
                     available = self.get_market_liquidity()
                     if self.tif == "FOK" and available < self.order_qty:
                         self.send_exec_report("Canceled", "canceled", "FOK not fillable")
-                        -> $Canceled
+                        -> "FOK unfillable" $Canceled
                     elif available > 0:
                         fill_qty = min(available, self.leaves_qty)
                         self.execute_fill(fill_qty, self.price)
                         if self.leaves_qty <= 0:
                             self.send_exec_report("Filled", "fill", "")
-                            -> $Filled
+                            -> "filled" $Filled
                         else:
                             if self.tif == "IOC":
                                 self.send_exec_report("Canceled", "canceled", "IOC partial cancel")
-                                -> $Canceled
+                                -> "IOC remainder" $Canceled
                             else:
                                 self.send_exec_report("PartiallyFilled", "partial_fill", "")
-                                -> $Working
+                                -> "partial" $Working
                     else:
                         if self.tif == "IOC" or self.tif == "FOK":
                             self.send_exec_report("Canceled", "canceled", f"{self.tif} no liquidity")
-                            -> $Canceled
+                            -> "no liquidity" $Canceled
                         else:
                             self.send_exec_report("New", "new", "")
-                            -> $Working
+                            -> "rest on book" $Working
                 else:
                     self.send_exec_report("New", "new", "")
-                    -> $Working
+                    -> "accepted" $Working
             }
         }
 
@@ -3883,7 +3883,7 @@ if __name__ == '__main__':
                 self.execute_fill(actual, fill_px)
                 if self.leaves_qty <= 0:
                     self.send_exec_report("Filled", "fill", "")
-                    -> $Filled
+                    -> "filled" $Filled
                 else:
                     self.send_exec_report("PartiallyFilled", "partial_fill", "")
             }
@@ -3914,7 +3914,7 @@ if __name__ == '__main__':
                 # Auto-accept cancel (in production: may queue or delay)
                 self.cl_ord_id = self.pending_action_id
                 self.send_exec_report("Canceled", "canceled", "")
-                -> $Canceled
+                -> "confirmed" $Canceled
             }
             # Fills can still arrive
             market_fill(fill_qty: float, fill_px: float) {
@@ -3923,7 +3923,7 @@ if __name__ == '__main__':
                 if self.leaves_qty <= 0:
                     # Filled supersedes cancel
                     self.send_exec_report("Filled", "fill", "")
-                    -> $Filled
+                    -> "fill supersedes" $Filled
             }
             => $^
         }
@@ -3937,9 +3937,9 @@ if __name__ == '__main__':
                 self.leaves_qty = self.pending_qty - self.cum_qty
                 self.send_exec_report("Replaced", "replaced", "")
                 if self.cum_qty > 0:
-                    -> $Working
+                    -> "resume" $Working
                 else:
-                    -> $Working
+                    -> "resume" $Working
             }
             => $^
         }
@@ -4081,7 +4081,7 @@ if __name__ == '__main__':
             $>() {
                 print(f"  Stage {self.active_stage} ignition sequence...")
                 self.thrust_pct = 0
-                -> $RampingUp
+                -> "ramp up" $RampingUp
             }
         }
         $RampingUp {
@@ -4108,7 +4108,7 @@ if __name__ == '__main__':
             $>() {
                 print(f"  Stage {self.active_stage} shutdown")
                 self.thrust_pct = 0
-                -> $Idle
+                -> "engines off" $Idle
             }
         }
 
@@ -4130,10 +4130,10 @@ if __name__ == '__main__':
                 if deviation_deg > 30:
                     print(f"  Range: ABORT COMMANDED ({deviation_deg} deg)")
                     self.parent.abort("range_safety")
-                    -> $AbortCommanded
+                    -> "abort" $AbortCommanded
                 elif deviation_deg > 10:
                     print(f"  Range: Trajectory deviation {deviation_deg} deg")
-                    -> $Caution
+                    -> "deviation" $Caution
             }
             status(): str { @@:("nominal") }
         }
@@ -4141,11 +4141,11 @@ if __name__ == '__main__':
             telemetry(altitude_km: float, velocity_ms: float, deviation_deg: float) {
                 if deviation_deg <= 5:
                     print(f"  Range: Trajectory nominal")
-                    -> $Nominal
+                    -> "recovered" $Nominal
                 elif deviation_deg > 30:
                     print(f"  Range: FLIGHT TERMINATION")
                     self.parent.abort("flight_termination")
-                    -> $AbortCommanded
+                    -> "terminate" $AbortCommanded
             }
             status(): str { @@:("caution") }
         }
@@ -4185,13 +4185,13 @@ if __name__ == '__main__':
                 print(f"  T-{$.t_minus}...")
                 $.t_minus = $.t_minus - 1
                 if $.t_minus <= 0:
-                    -> $EngineIgnition
+                    -> "T-zero" $EngineIgnition
             }
             telemetry_tick(altitude_km: float, velocity_ms: float, deviation_deg: float) {
                 $.t_minus = $.t_minus - 1
                 print(f"  T-{$.t_minus}...")
                 if $.t_minus <= 0:
-                    -> $EngineIgnition
+                    -> "T-zero" $EngineIgnition
             }
             => $^
         }
@@ -4269,7 +4269,7 @@ if __name__ == '__main__':
                 print("  MECO — Main Engine Cut-Off")
                 self.propulsion.shutdown()
                 self.phase = "meco"
-                -> $StageSeparation
+                -> "separate" $StageSeparation
             }
             => $^
         }
@@ -4279,7 +4279,7 @@ if __name__ == '__main__':
                 print("  Stage separation")
                 self.propulsion.separate_stage()
                 self.phase = "separation"
-                -> $Stage2Ignition
+                -> "ignite S2" $Stage2Ignition
             }
             => $^
         }
@@ -4317,7 +4317,7 @@ if __name__ == '__main__':
                 print("  SECO — Second Engine Cut-Off")
                 self.propulsion.shutdown()
                 self.phase = "seco"
-                -> $OrbitInsertion
+                -> "insert orbit" $OrbitInsertion
             }
             => $^
         }
@@ -4326,7 +4326,7 @@ if __name__ == '__main__':
             $>() {
                 print(f"\nORBIT INSERTION at {self.altitude:.0f} km, {self.velocity:.0f} m/s")
                 self.phase = "orbit"
-                -> $OnOrbit
+                -> "nominal" $OnOrbit
             }
             => $^
         }
@@ -4340,11 +4340,11 @@ if __name__ == '__main__':
                 print(f"\nABORT: {reason} at altitude {self.altitude:.1f} km")
                 self.propulsion.shutdown()
                 if self.altitude < 30:
-                    -> $AbortPadEscape
+                    -> "pad escape" $AbortPadEscape
                 elif self.altitude < 100:
-                    -> $AbortDownrange
+                    -> "downrange" $AbortDownrange
                 else:
-                    -> $AbortToOrbit
+                    -> "abort to orbit" $AbortToOrbit
             }
         }
 
@@ -4356,7 +4356,7 @@ if __name__ == '__main__':
                 print("  PAD ABORT — Launch escape system activated")
                 print("  Capsule separation, parachute deployment")
                 self.phase = "abort-pad"
-                -> $AbortComplete
+                -> "complete" $AbortComplete
             }
         }
         $AbortDownrange {
@@ -4364,7 +4364,7 @@ if __name__ == '__main__':
                 print("  DOWNRANGE ABORT — Capsule separation")
                 print(f"  Ballistic trajectory from {self.altitude:.0f} km")
                 self.phase = "abort-downrange"
-                -> $AbortComplete
+                -> "complete" $AbortComplete
             }
         }
         $AbortToOrbit {
@@ -4372,7 +4372,7 @@ if __name__ == '__main__':
                 print(f"  ABORT TO ORBIT — Inserting at {self.altitude:.0f} km")
                 print("  Degraded orbit achieved")
                 self.phase = "abort-to-orbit"
-                -> $AbortComplete
+                -> "complete" $AbortComplete
             }
         }
         $AbortComplete {
@@ -4535,10 +4535,10 @@ if __name__ == '__main__':
                     self.drives_enabled = True
                     self.e_stop_active = False
                     print("  Safety check passed — drives enabled")
-                    -> $ManualIdle
+                    -> "cleared" $ManualIdle
                 else:
                     print("  Safety check FAILED")
-                    -> $SafetyFault
+                    -> "failed" $SafetyFault
             }
         }
 
@@ -4595,7 +4595,7 @@ if __name__ == '__main__':
             $>() {
                 self.gripper_closed = True
                 print("  Gripper closed")
-                -> $ManualIdle
+                -> "done" $ManualIdle
             }
             => $^
         }
@@ -4604,7 +4604,7 @@ if __name__ == '__main__':
             $>() {
                 self.gripper_closed = False
                 print("  Gripper opened")
-                -> $ManualIdle
+                -> "done" $ManualIdle
             }
             => $^
         }
@@ -4634,7 +4634,7 @@ if __name__ == '__main__':
             $>() {
                 if self.program_step >= len(self.program):
                     print("  Program complete")
-                    -> $AutoIdle
+                    -> "complete" $AutoIdle
                     return
 
                 step = self.program[self.program_step]
@@ -4823,7 +4823,7 @@ Recipes 50-52 demonstrate the **work queue pattern**: a system receives events i
                 if len(self.queue) > 0:
                     self.current_job = self.queue.pop(0)
                     print(f"[PRINT] Starting: {self.current_job['name']} ({self.current_job['pages']} pages)")
-                    -> $Printing
+                    -> "dequeue" $Printing
             }
 
             submit(name: str, pages: int) {
@@ -4936,7 +4936,7 @@ if __name__ == '__main__':
                     self.queue.sort(key=lambda x: -x["priority"])
                     self.current_job = self.queue.pop(0)
                     print(f"[CELL] Next job: {self.current_job['order_id']} (priority {self.current_job['priority']})")
-                    -> $Setup
+                    -> "dequeue" $Setup
             }
 
             work_order(order_id: str, part: str, program: str, priority: int) {
@@ -5076,12 +5076,12 @@ if __name__ == '__main__':
             $>() {
                 if len(self.requests) > 0:
                     self.select_direction()
-                    -> $Moving
+                    -> "dequeue" $Moving
             }
 
             request(floor: int) {
                 if floor == self.floor:
-                    -> $DoorsOpen
+                    -> "at floor" $DoorsOpen
                 else:
                     self.requests.add(floor)
                     self.select_direction()
@@ -5094,7 +5094,7 @@ if __name__ == '__main__':
             $>() {
                 target = self.next_stop()
                 if target is None:
-                    -> $Idle
+                    -> "no target" $Idle
             }
 
             request(floor: int) {
@@ -5110,14 +5110,14 @@ if __name__ == '__main__':
                 if self.floor in self.requests:
                     self.requests.discard(self.floor)
                     self.stops_made = self.stops_made + 1
-                    -> $DoorsOpen
+                    -> "serve floor" $DoorsOpen
                 else:
                     target = self.next_stop()
                     if target is None:
                         self.reverse_direction()
                         target = self.next_stop()
                         if target is None:
-                            -> $Idle
+                            -> "all served" $Idle
             }
 
             status(): str { @@:(f"moving {self.dir} at floor {self.floor}") }
@@ -5154,9 +5154,9 @@ if __name__ == '__main__':
             $>() {
                 if len(self.requests) > 0:
                     self.select_direction()
-                    -> $Moving
+                    -> "resume" $Moving
                 else:
-                    -> $Idle
+                    -> "park" $Idle
             }
         }
 

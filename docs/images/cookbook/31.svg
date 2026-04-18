@@ -45,7 +45,7 @@
 <title>Idle&#45;&gt;Validate</title>
 <path fill="none" stroke="red" d="M84.5,-642.58C84.5,-629.74 84.5,-614.78 84.5,-601.02"/>
 <polygon fill="red" stroke="red" points="88,-601.33 84.5,-591.33 81,-601.33 88,-601.33"/>
-<text xml:space="preserve" text-anchor="middle" x="97.25" y="-611.2" font-family="Times,serif" font-size="14.00"> run </text>
+<text xml:space="preserve" text-anchor="middle" x="99.88" y="-611.2" font-family="Times,serif" font-size="14.00"> start </text>
 </g>
 <!-- Normalize -->
 <g id="node4" class="node">
@@ -60,9 +60,9 @@
 <!-- Validate&#45;&gt;Normalize -->
 <g id="edge4" class="edge">
 <title>Validate&#45;&gt;Normalize</title>
-<path fill="none" stroke="red" d="M73.9,-523.01C68.63,-506.85 62.19,-487.1 56.51,-469.7"/>
-<polygon fill="red" stroke="red" points="59.99,-469.09 53.56,-460.67 53.34,-471.26 59.99,-469.09"/>
-<text xml:space="preserve" text-anchor="middle" x="78.51" y="-491.7" font-family="Times,serif" font-size="14.00"> $&gt; </text>
+<path fill="none" stroke="red" d="M69.91,-523.17C67.45,-517.19 65.03,-510.95 63,-505 59.18,-493.84 55.67,-481.58 52.66,-470.14"/>
+<polygon fill="red" stroke="red" points="56.07,-469.34 50.21,-460.51 49.28,-471.07 56.07,-469.34"/>
+<text xml:space="preserve" text-anchor="middle" x="80.25" y="-491.7" font-family="Times,serif" font-size="14.00"> valid </text>
 </g>
 <!-- Error -->
 <g id="node8" class="node">
@@ -81,7 +81,7 @@
 <title>Validate&#45;&gt;Error</title>
 <path fill="none" stroke="red" d="M94.85,-523.01C98.89,-510.31 103.64,-495.39 108.18,-481.14"/>
 <polygon fill="red" stroke="red" points="111.44,-482.45 111.13,-471.86 104.77,-480.33 111.44,-482.45"/>
-<text xml:space="preserve" text-anchor="middle" x="116.25" y="-491.7" font-family="Times,serif" font-size="14.00"> $&gt; </text>
+<text xml:space="preserve" text-anchor="middle" x="126" y="-491.7" font-family="Times,serif" font-size="14.00"> empty </text>
 </g>
 <!-- Deduplicate -->
 <g id="node5" class="node">
@@ -98,7 +98,7 @@
 <title>Normalize&#45;&gt;Deduplicate</title>
 <path fill="none" stroke="red" d="M42.5,-392.26C42.5,-376.4 42.5,-357.09 42.5,-339.94"/>
 <polygon fill="red" stroke="red" points="46,-339.99 42.5,-329.99 39,-339.99 46,-339.99"/>
-<text xml:space="preserve" text-anchor="middle" x="53.75" y="-349.7" font-family="Times,serif" font-size="14.00"> $&gt; </text>
+<text xml:space="preserve" text-anchor="middle" x="77.38" y="-349.7" font-family="Times,serif" font-size="14.00"> deduplicate </text>
 </g>
 <!-- Sort -->
 <g id="node6" class="node">
@@ -115,7 +115,7 @@
 <title>Deduplicate&#45;&gt;Sort</title>
 <path fill="none" stroke="red" d="M42.5,-261.58C42.5,-248.74 42.5,-233.78 42.5,-220.02"/>
 <polygon fill="red" stroke="red" points="46,-220.33 42.5,-210.33 39,-220.33 46,-220.33"/>
-<text xml:space="preserve" text-anchor="middle" x="53.75" y="-230.2" font-family="Times,serif" font-size="14.00"> $&gt; </text>
+<text xml:space="preserve" text-anchor="middle" x="56.38" y="-230.2" font-family="Times,serif" font-size="14.00"> sort </text>
 </g>
 <!-- Complete -->
 <g id="node7" class="node">
@@ -134,7 +134,7 @@
 <title>Sort&#45;&gt;Complete</title>
 <path fill="none" stroke="red" d="M42.5,-142.01C42.5,-129.43 42.5,-114.68 42.5,-100.56"/>
 <polygon fill="red" stroke="red" points="46,-100.93 42.5,-90.93 39,-100.93 46,-100.93"/>
-<text xml:space="preserve" text-anchor="middle" x="53.75" y="-110.7" font-family="Times,serif" font-size="14.00"> $&gt; </text>
+<text xml:space="preserve" text-anchor="middle" x="61.62" y="-110.7" font-family="Times,serif" font-size="14.00"> finish </text>
 </g>
 </g>
 </svg>

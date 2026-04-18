@@ -49,7 +49,7 @@
 <title>Idle&#45;&gt;Processing</title>
 <path fill="none" stroke="red" d="M70.62,-142.22C70.62,-129.05 70.62,-114.42 70.62,-100.61"/>
 <polygon fill="red" stroke="red" points="74.13,-100.77 70.63,-90.77 67.13,-100.77 74.13,-100.77"/>
-<text xml:space="preserve" text-anchor="middle" x="93.12" y="-110.7" font-family="Times,serif" font-size="14.00"> submit </text>
+<text xml:space="preserve" text-anchor="middle" x="100.25" y="-110.7" font-family="Times,serif" font-size="14.00"> batch full </text>
 </g>
 </g>
 </svg>

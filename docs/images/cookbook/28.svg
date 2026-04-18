@@ -48,16 +48,16 @@
 <!-- EnterUsername&#45;&gt;EnterPassword -->
 <g id="edge2" class="edge">
 <title>EnterUsername&#45;&gt;EnterPassword</title>
-<path fill="none" stroke="red" d="M36.84,-163.82C33.93,-157.98 31.41,-151.86 29.75,-145.75 27.63,-137.96 27.53,-129.89 28.74,-121.93"/>
-<polygon fill="red" stroke="red" points="32.14,-122.8 30.94,-112.28 25.31,-121.25 32.14,-122.8"/>
-<text xml:space="preserve" text-anchor="middle" x="52.25" y="-132.45" font-family="Times,serif" font-size="14.00"> submit </text>
+<path fill="none" stroke="red" d="M32.96,-163.83C29.7,-158.04 26.88,-151.93 25,-145.75 22.63,-137.99 22.5,-129.99 23.84,-122.12"/>
+<polygon fill="red" stroke="red" points="27.2,-123.13 26.27,-112.57 20.42,-121.4 27.2,-123.13"/>
+<text xml:space="preserve" text-anchor="middle" x="52.38" y="-132.45" font-family="Times,serif" font-size="14.00"> accepted </text>
 </g>
 <!-- EnterPassword&#45;&gt;EnterUsername -->
 <g id="edge3" class="edge">
 <title>EnterPassword&#45;&gt;EnterUsername</title>
-<path fill="none" stroke="red" d="M74.27,-111.24C75.5,-122.63 75.93,-134.57 74.75,-145.75 74.5,-148.07 74.2,-150.44 73.86,-152.83"/>
-<polygon fill="red" stroke="red" points="70.44,-152.07 72.23,-162.52 77.34,-153.24 70.44,-152.07"/>
-<text xml:space="preserve" text-anchor="middle" x="96.44" y="-132.45" font-family="Times,serif" font-size="14.00"> cancel </text>
+<path fill="none" stroke="red" d="M79.05,-111.18C80.79,-122.57 81.41,-134.53 79.75,-145.75 79.41,-148.07 78.99,-150.43 78.51,-152.8"/>
+<polygon fill="red" stroke="red" points="75.13,-151.87 76.24,-162.4 81.94,-153.47 75.13,-151.87"/>
+<text xml:space="preserve" text-anchor="middle" x="101.72" y="-132.45" font-family="Times,serif" font-size="14.00"> cancel </text>
 </g>
 </g>
 </svg>
