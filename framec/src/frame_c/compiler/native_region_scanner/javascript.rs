@@ -78,6 +78,15 @@ impl SyntaxSkipper for JavaScriptSkipper {
             None
         }
     }
+
+    fn string_interp_regions(
+        &self,
+        bytes: &[u8],
+        i: usize,
+        end: usize,
+    ) -> Option<(usize, Vec<InterpRegion>)> {
+        scan_template_literal_regions(bytes, i, end)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerJs {

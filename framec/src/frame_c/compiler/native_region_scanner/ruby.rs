@@ -78,6 +78,15 @@ impl SyntaxSkipper for RubySkipper {
             None
         }
     }
+
+    fn string_interp_regions(
+        &self,
+        bytes: &[u8],
+        i: usize,
+        end: usize,
+    ) -> Option<(usize, Vec<InterpRegion>)> {
+        scan_hash_string_regions(bytes, i, end)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerRuby {

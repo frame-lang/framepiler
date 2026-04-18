@@ -78,6 +78,15 @@ impl SyntaxSkipper for CSharpSkipper {
             None
         }
     }
+
+    fn string_interp_regions(
+        &self,
+        bytes: &[u8],
+        i: usize,
+        end: usize,
+    ) -> Option<(usize, Vec<InterpRegion>)> {
+        scan_dollar_string_regions(bytes, i, end, b'$')
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerCs {

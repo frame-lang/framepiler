@@ -34,6 +34,15 @@ impl SyntaxSkipper for DartSkipper {
     fn balanced_paren_end(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
         TypeScriptSkipper.balanced_paren_end(bytes, i, end)
     }
+
+    fn string_interp_regions(
+        &self,
+        bytes: &[u8],
+        i: usize,
+        end: usize,
+    ) -> Option<(usize, Vec<InterpRegion>)> {
+        scan_dollar_string_regions(bytes, i, end, 0)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerDart {

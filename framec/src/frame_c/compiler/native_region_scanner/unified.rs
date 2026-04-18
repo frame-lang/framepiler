@@ -41,6 +41,18 @@ use _state_var_parser::StateVarParserFsm;
 use super::*;
 use crate::frame_c::compiler::body_closer::BodyCloser;
 
+/// A region inside a string interpolation expression that may contain
+/// Frame constructs (`$.varName`, `@@:`). The main scanner scans these
+/// regions for Frame constructs while skipping the surrounding string
+/// content.
+#[derive(Debug, Clone)]
+pub struct InterpRegion {
+    /// First byte of the expression (after `{`, `${`, `#{`, `\(`, etc.)
+    pub start: usize,
+    /// Position of the closing delimiter (`}`, `)`, etc.) — exclusive
+    pub end: usize,
+}
+
 /// Language-specific syntax skipper trait.
 /// Each language only needs to implement how to skip its comments and strings.
 pub trait SyntaxSkipper {
@@ -68,6 +80,20 @@ pub trait SyntaxSkipper {
     /// Used to detect closures that would trap Frame statement return values.
     /// Default: None (no nested scope detection).
     fn skip_nested_scope(&self, _bytes: &[u8], _i: usize, _end: usize) -> Option<usize> {
+        None
+    }
+
+    /// Try to scan an interpolated string starting at position i.
+    /// Returns Some((end_of_string, regions)) where regions mark
+    /// interpolation expressions that may contain Frame constructs.
+    /// Returns None if not positioned at an interpolated string.
+    /// Default: None (language has no string interpolation).
+    fn string_interp_regions(
+        &self,
+        _bytes: &[u8],
+        _i: usize,
+        _end: usize,
+    ) -> Option<(usize, Vec<InterpRegion>)> {
         None
     }
 }
@@ -206,7 +232,165 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 i = skipper.skip_comment(bytes, i, end).unwrap_or(i + 1);
             }
 
-            // Try language-specific string skip
+            // Try interpolation-aware string scan first (RFC-0010).
+            // If the string contains interpolation expressions, scan
+            // them for Frame constructs while skipping string content.
+            _ if skipper.string_interp_regions(bytes, i, end).is_some() => {
+                let (str_end, interp_regions) =
+                    skipper.string_interp_regions(bytes, i, end).unwrap();
+                if interp_regions.is_empty() {
+                    // No interpolation regions — skip entire string
+                    i = str_end;
+                } else {
+                    // Emit native text up to string start (already in seg_start..i)
+                    // Then process the string: string content is native text,
+                    // interpolation regions are scanned for Frame constructs.
+                    // The entire string (including interpolation) is emitted as
+                    // one NativeText region — the Frame constructs within
+                    // interpolation expressions are spliced in.
+                    //
+                    // Strategy: recurse the $./@@ detection only on the
+                    // interpolation regions. Everything else passes through.
+                    let mut has_frame_construct = false;
+                    for region in &interp_regions {
+                        for k in region.start..region.end {
+                            if k + 1 < region.end
+                                && bytes[k] == b'$'
+                                && bytes[k + 1] == b'.'
+                            {
+                                has_frame_construct = true;
+                                break;
+                            }
+                            if k + 1 < region.end
+                                && bytes[k] == b'@'
+                                && bytes[k + 1] == b'@'
+                            {
+                                has_frame_construct = true;
+                                break;
+                            }
+                        }
+                        if has_frame_construct {
+                            break;
+                        }
+                    }
+                    if !has_frame_construct {
+                        // Interpolation exists but no Frame constructs — skip
+                        i = str_end;
+                    } else {
+                        // Emit native text before each Frame construct region,
+                        // let the main loop's $./@@ detection handle the rest.
+                        // We do this by NOT skipping — emit the string content
+                        // up to the first interp region as native, then let
+                        // the main loop process from the interp region start.
+                        //
+                        // Emit native text before the interpolation region
+                        if seg_start < interp_regions[0].start {
+                            regions.push(Region::NativeText {
+                                span: RegionSpan {
+                                    start: seg_start,
+                                    end: interp_regions[0].start,
+                                },
+                            });
+                        }
+                        // Process each interpolation region — let the inner
+                        // content be scanned by a recursive call to the
+                        // $./@@ detection logic. Between regions, emit native.
+                        let mut prev_end = interp_regions[0].start;
+                        for region in &interp_regions {
+                            // Native text between previous region end and this region start
+                            if prev_end < region.start {
+                                regions.push(Region::NativeText {
+                                    span: RegionSpan {
+                                        start: prev_end,
+                                        end: region.start,
+                                    },
+                                });
+                            }
+                            // Scan the interpolation region for $./@@ constructs
+                            // by running the inner scanner on just these bytes
+                            let mut inner_pos = region.start;
+                            while inner_pos < region.end {
+                                if inner_pos + 1 < region.end
+                                    && bytes[inner_pos] == b'$'
+                                    && bytes[inner_pos + 1] == b'.'
+                                {
+                                    // Emit native text before $.
+                                    if prev_end < inner_pos {
+                                        regions.push(Region::NativeText {
+                                            span: RegionSpan {
+                                                start: prev_end,
+                                                end: inner_pos,
+                                            },
+                                        });
+                                    }
+                                    // Parse the state variable
+                                    let var_start = inner_pos;
+                                    let mut parser = StateVarParserFsm::new();
+                                    parser.bytes = bytes[..region.end].to_vec();
+                                    parser.pos = inner_pos;
+                                    parser.end = region.end;
+                                    parser.do_parse();
+
+                                    let kind = if parser.is_assignment {
+                                        FrameSegmentKind::StateVarAssign
+                                    } else {
+                                        FrameSegmentKind::StateVar
+                                    };
+                                    let sv_bytes = &bytes[var_start..parser.result_end];
+                                    let sv_text = String::from_utf8_lossy(sv_bytes);
+                                    let metadata = extract_segment_metadata(kind, &sv_text);
+
+                                    regions.push(Region::FrameSegment {
+                                        span: RegionSpan {
+                                            start: var_start,
+                                            end: parser.result_end,
+                                        },
+                                        kind,
+                                        indent: 0,
+                                        metadata,
+                                    });
+                                    inner_pos = parser.result_end;
+                                    prev_end = inner_pos;
+                                } else if inner_pos + 1 < region.end
+                                    && bytes[inner_pos] == b'@'
+                                    && bytes[inner_pos + 1] == b'@'
+                                {
+                                    // @@ construct inside interpolation — emit
+                                    // native text before it, then handle @@
+                                    if prev_end < inner_pos {
+                                        regions.push(Region::NativeText {
+                                            span: RegionSpan {
+                                                start: prev_end,
+                                                end: inner_pos,
+                                            },
+                                        });
+                                    }
+                                    // For now, emit @@ content as native text
+                                    // (full @@ parsing in interpolation is rare)
+                                    inner_pos += 2;
+                                    prev_end = inner_pos;
+                                } else {
+                                    inner_pos += 1;
+                                }
+                            }
+                            prev_end = region.end;
+                        }
+                        // Native text from last region end to string end
+                        if prev_end < str_end {
+                            regions.push(Region::NativeText {
+                                span: RegionSpan {
+                                    start: prev_end,
+                                    end: str_end,
+                                },
+                            });
+                        }
+                        i = str_end;
+                        seg_start = i;
+                    }
+                }
+            }
+
+            // Try language-specific string skip (non-interpolated strings)
             _ if skipper.skip_string(bytes, i, end).is_some() => {
                 // Safe: is_some() guard guarantees Some
                 i = skipper.skip_string(bytes, i, end).unwrap_or(i + 1);
@@ -1164,6 +1348,325 @@ pub fn skip_ruby_percent_literal(bytes: &[u8], i: usize, end: usize) -> Option<u
         }
         Some(end) // Unterminated
     }
+}
+
+// =========================================================================
+// Interpolation-aware string scanners (RFC-0010)
+//
+// Each function scans a string literal and returns the end position plus
+// a list of interpolation regions where Frame constructs may appear.
+// The main scanner loop scans these regions for $./@@ while skipping
+// the surrounding string content.
+// =========================================================================
+
+/// Scan a Python f-string: `f"...{expr}..."` or `f'...{expr}...'`.
+/// Handles `{{` escape (not interpolation) and nested braces in expressions.
+pub fn scan_fstring_regions(bytes: &[u8], i: usize, end: usize) -> Option<(usize, Vec<InterpRegion>)> {
+    // Must start with f" or f' (case-insensitive F also valid)
+    if i + 1 >= end {
+        return None;
+    }
+    let prefix = bytes[i];
+    if prefix != b'f' && prefix != b'F' {
+        return None;
+    }
+    let quote = bytes[i + 1];
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+
+    let mut regions = Vec::new();
+    let mut j = i + 2; // after f"
+
+    while j < end {
+        let b = bytes[j];
+        if b == b'\\' {
+            j += 2;
+            continue;
+        }
+        if b == quote {
+            return Some((j + 1, regions));
+        }
+        if b == b'{' {
+            // {{ is an escape, not interpolation
+            if j + 1 < end && bytes[j + 1] == b'{' {
+                j += 2;
+                continue;
+            }
+            // Interpolation expression — track brace depth
+            let interp_start = j + 1;
+            let mut depth = 1i32;
+            j += 1;
+            while j < end && depth > 0 {
+                if bytes[j] == b'{' {
+                    depth += 1;
+                } else if bytes[j] == b'}' {
+                    depth -= 1;
+                } else if bytes[j] == b'\\' {
+                    j += 1; // skip escaped char
+                }
+                if depth > 0 {
+                    j += 1;
+                }
+            }
+            // j is at the closing }
+            regions.push(InterpRegion {
+                start: interp_start,
+                end: j,
+            });
+            j += 1; // skip }
+            continue;
+        }
+        j += 1;
+    }
+    Some((end, regions)) // unterminated
+}
+
+/// Scan a JS/TS template literal: `` `...${expr}...` ``.
+/// Handles `\` escapes and nested braces in expressions.
+pub fn scan_template_literal_regions(
+    bytes: &[u8],
+    i: usize,
+    end: usize,
+) -> Option<(usize, Vec<InterpRegion>)> {
+    if i >= end || bytes[i] != b'`' {
+        return None;
+    }
+
+    let mut regions = Vec::new();
+    let mut j = i + 1; // after `
+
+    while j < end {
+        let b = bytes[j];
+        if b == b'\\' {
+            j += 2;
+            continue;
+        }
+        if b == b'`' {
+            return Some((j + 1, regions));
+        }
+        if b == b'$' && j + 1 < end && bytes[j + 1] == b'{' {
+            let interp_start = j + 2; // after ${
+            let mut depth = 1i32;
+            j += 2;
+            while j < end && depth > 0 {
+                if bytes[j] == b'{' {
+                    depth += 1;
+                } else if bytes[j] == b'}' {
+                    depth -= 1;
+                } else if bytes[j] == b'\\' {
+                    j += 1;
+                }
+                if depth > 0 {
+                    j += 1;
+                }
+            }
+            regions.push(InterpRegion {
+                start: interp_start,
+                end: j,
+            });
+            j += 1; // skip }
+            continue;
+        }
+        j += 1;
+    }
+    Some((end, regions)) // unterminated
+}
+
+/// Scan a `$"...{expr}..."` or `"...${expr}..."` string (Kotlin, Dart, C#).
+/// Handles both `${expr}` (Kotlin/Dart) and `{expr}` (C# with `$"` prefix).
+/// The `prefix_char` distinguishes: `$` for C#, `\0` for Kotlin/Dart (any `"`).
+pub fn scan_dollar_string_regions(
+    bytes: &[u8],
+    i: usize,
+    end: usize,
+    prefix_char: u8,
+) -> Option<(usize, Vec<InterpRegion>)> {
+    if i >= end {
+        return None;
+    }
+
+    let start_pos;
+    if prefix_char != 0 {
+        // C# style: $"..."
+        if bytes[i] != prefix_char || i + 1 >= end || bytes[i + 1] != b'"' {
+            return None;
+        }
+        start_pos = i + 2;
+    } else {
+        // Kotlin/Dart style: "..." with ${ inside
+        if bytes[i] != b'"' {
+            return None;
+        }
+        start_pos = i + 1;
+    }
+
+    let mut regions = Vec::new();
+    let mut j = start_pos;
+
+    while j < end {
+        let b = bytes[j];
+        if b == b'\\' {
+            j += 2;
+            continue;
+        }
+        if b == b'"' {
+            return Some((j + 1, regions));
+        }
+        if b == b'$' && j + 1 < end && bytes[j + 1] == b'{' {
+            let interp_start = j + 2;
+            let mut depth = 1i32;
+            j += 2;
+            while j < end && depth > 0 {
+                if bytes[j] == b'{' {
+                    depth += 1;
+                } else if bytes[j] == b'}' {
+                    depth -= 1;
+                } else if bytes[j] == b'\\' {
+                    j += 1;
+                }
+                if depth > 0 {
+                    j += 1;
+                }
+            }
+            regions.push(InterpRegion {
+                start: interp_start,
+                end: j,
+            });
+            j += 1;
+            continue;
+        }
+        // C# also allows {expr} without $
+        if prefix_char != 0 && b == b'{' {
+            if j + 1 < end && bytes[j + 1] == b'{' {
+                j += 2; // {{ escape
+                continue;
+            }
+            let interp_start = j + 1;
+            let mut depth = 1i32;
+            j += 1;
+            while j < end && depth > 0 {
+                if bytes[j] == b'{' {
+                    depth += 1;
+                } else if bytes[j] == b'}' {
+                    depth -= 1;
+                }
+                if depth > 0 {
+                    j += 1;
+                }
+            }
+            regions.push(InterpRegion {
+                start: interp_start,
+                end: j,
+            });
+            j += 1;
+            continue;
+        }
+        j += 1;
+    }
+    Some((end, regions))
+}
+
+/// Scan a Ruby interpolated string: `"...#{expr}..."`.
+pub fn scan_hash_string_regions(
+    bytes: &[u8],
+    i: usize,
+    end: usize,
+) -> Option<(usize, Vec<InterpRegion>)> {
+    if i >= end || bytes[i] != b'"' {
+        return None;
+    }
+
+    let mut regions = Vec::new();
+    let mut j = i + 1;
+
+    while j < end {
+        let b = bytes[j];
+        if b == b'\\' {
+            j += 2;
+            continue;
+        }
+        if b == b'"' {
+            return Some((j + 1, regions));
+        }
+        if b == b'#' && j + 1 < end && bytes[j + 1] == b'{' {
+            let interp_start = j + 2;
+            let mut depth = 1i32;
+            j += 2;
+            while j < end && depth > 0 {
+                if bytes[j] == b'{' {
+                    depth += 1;
+                } else if bytes[j] == b'}' {
+                    depth -= 1;
+                } else if bytes[j] == b'\\' {
+                    j += 1;
+                }
+                if depth > 0 {
+                    j += 1;
+                }
+            }
+            regions.push(InterpRegion {
+                start: interp_start,
+                end: j,
+            });
+            j += 1;
+            continue;
+        }
+        j += 1;
+    }
+    Some((end, regions))
+}
+
+/// Scan a Swift interpolated string: `"...\(expr)..."`.
+pub fn scan_paren_string_regions(
+    bytes: &[u8],
+    i: usize,
+    end: usize,
+) -> Option<(usize, Vec<InterpRegion>)> {
+    if i >= end || bytes[i] != b'"' {
+        return None;
+    }
+
+    let mut regions = Vec::new();
+    let mut j = i + 1;
+
+    while j < end {
+        let b = bytes[j];
+        if b == b'\\' {
+            if j + 1 < end && bytes[j + 1] == b'(' {
+                // \( starts interpolation
+                let interp_start = j + 2;
+                let mut depth = 1i32;
+                j += 2;
+                while j < end && depth > 0 {
+                    if bytes[j] == b'(' {
+                        depth += 1;
+                    } else if bytes[j] == b')' {
+                        depth -= 1;
+                    } else if bytes[j] == b'\\' {
+                        j += 1;
+                    }
+                    if depth > 0 {
+                        j += 1;
+                    }
+                }
+                regions.push(InterpRegion {
+                    start: interp_start,
+                    end: j,
+                });
+                j += 1;
+                continue;
+            }
+            // Regular escape
+            j += 2;
+            continue;
+        }
+        if b == b'"' {
+            return Some((j + 1, regions));
+        }
+        j += 1;
+    }
+    Some((end, regions))
 }
 
 /// Extract structured metadata from a Frame segment's raw text.

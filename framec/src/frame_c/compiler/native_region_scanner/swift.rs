@@ -77,6 +77,15 @@ impl SyntaxSkipper for SwiftSkipper {
             None
         }
     }
+
+    fn string_interp_regions(
+        &self,
+        bytes: &[u8],
+        i: usize,
+        end: usize,
+    ) -> Option<(usize, Vec<InterpRegion>)> {
+        scan_paren_string_regions(bytes, i, end)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerSwift {
