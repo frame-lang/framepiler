@@ -2227,41 +2227,49 @@ pub(crate) fn generate_frame_expansion(
             }
         }
         FrameSegmentKind::StateVar => {
-            // Extract variable name from "$.varName"
-            let var_name = if let SegmentMetadata::StateVar { name } = metadata {
-                name.clone()
-            } else {
-                extract_state_var_name(&segment_text) // fallback
+            // Extract variable name and optional interpolation quote context
+            let (var_name, interp_quote) =
+                if let SegmentMetadata::StateVar { name, interp_quote } = metadata {
+                    (name.clone(), *interp_quote)
+                } else {
+                    (extract_state_var_name(&segment_text), None)
+                };
+            // When inside a string interpolation, use the opposite quote
+            // for dict keys to avoid collisions (e.g., f"...{d['key']}...")
+            let q = match interp_quote {
+                Some(b'\'') => "\"",
+                Some(b'"') => "'",
+                _ => "\"", // default: double quotes (standalone code or backtick)
             };
             // State variables are stored in compartment.state_vars
             // For HSM: use __sv_comp if available (navigates to correct compartment for parent states)
             match lang {
                 TargetLanguage::Python3 => {
                     if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]", var_name)
+                        format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
-                        format!("self.__compartment.state_vars[\"{}\"]", var_name)
+                        format!("self.__compartment.state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
                     if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]", var_name)
+                        format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
-                        format!("this.__compartment.state_vars[\"{}\"]", var_name)
+                        format!("this.__compartment.state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::Php => {
                     if ctx.use_sv_comp {
-                        format!("$__sv_comp->state_vars[\"{}\"]", var_name)
+                        format!("$__sv_comp->state_vars[{}{}{}]", q, var_name, q)
                     } else {
-                        format!("$this->__compartment->state_vars[\"{}\"]", var_name)
+                        format!("$this->__compartment->state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::Ruby => {
                     if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]", var_name)
+                        format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
-                        format!("@__compartment.state_vars[\"{}\"]", var_name)
+                        format!("@__compartment.state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::Rust => {
@@ -2291,13 +2299,13 @@ pub(crate) fn generate_frame_expansion(
                         .unwrap_or_else(|| "int".to_string());
                     if ctx.use_sv_comp {
                         format!(
-                            "std::any_cast<{}>(__sv_comp->state_vars[\"{}\"])",
-                            cpp_type, var_name
+                            "std::any_cast<{}>(__sv_comp->state_vars[{}{}{}])",
+                            cpp_type, q, var_name, q
                         )
                     } else {
                         format!(
-                            "std::any_cast<{}>(__compartment->state_vars[\"{}\"])",
-                            cpp_type, var_name
+                            "std::any_cast<{}>(__compartment->state_vars[{}{}{}])",
+                            cpp_type, q, var_name, q
                         )
                     }
                 }
@@ -2330,9 +2338,9 @@ pub(crate) fn generate_frame_expansion(
                         format!(" as {}", kt_type)
                     };
                     if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast)
+                        format!("__sv_comp.state_vars[{}{}{}]{}", q, var_name, q, cast)
                     } else {
-                        format!("__compartment.state_vars[\"{}\"]{}", var_name, cast)
+                        format!("__compartment.state_vars[{}{}{}]{}", q, var_name, q, cast)
                     }
                 }
                 TargetLanguage::Swift => {
@@ -2346,16 +2354,16 @@ pub(crate) fn generate_frame_expansion(
                     // `as! Int <= 0` as `as! Int<...` generic syntax).
                     if sw_type == "Any" {
                         if ctx.use_sv_comp {
-                            format!("__sv_comp.state_vars[\"{}\"]", var_name)
+                            format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                         } else {
-                            format!("__compartment.state_vars[\"{}\"]", var_name)
+                            format!("__compartment.state_vars[{}{}{}]", q, var_name, q)
                         }
                     } else if ctx.use_sv_comp {
-                        format!("(__sv_comp.state_vars[\"{}\"] as! {})", var_name, sw_type)
+                        format!("(__sv_comp.state_vars[{}{}{}] as! {})", q, var_name, q, sw_type)
                     } else {
                         format!(
-                            "(__compartment.state_vars[\"{}\"] as! {})",
-                            var_name, sw_type
+                            "(__compartment.state_vars[{}{}{}] as! {})",
+                            q, var_name, q, sw_type
                         )
                     }
                 }
@@ -2371,9 +2379,9 @@ pub(crate) fn generate_frame_expansion(
                         format!(".({})", go_type)
                     };
                     if ctx.use_sv_comp {
-                        format!("__sv_comp.stateVars[\"{}\"]{}", var_name, assertion)
+                        format!("__sv_comp.stateVars[{}{}{}]{}", q, var_name, q, assertion)
                     } else {
-                        format!("s.__compartment.stateVars[\"{}\"]{}", var_name, assertion)
+                        format!("s.__compartment.stateVars[{}{}{}]{}", q, var_name, q, assertion)
                     }
                 }
                 TargetLanguage::CSharp => {
@@ -2388,30 +2396,30 @@ pub(crate) fn generate_frame_expansion(
                         format!("({}) ", cs_type)
                     };
                     if ctx.use_sv_comp {
-                        format!("{}__sv_comp.state_vars[\"{}\"]", cast, var_name)
+                        format!("{}__sv_comp.state_vars[{}{}{}]", cast, q, var_name, q)
                     } else {
-                        format!("{}__compartment.state_vars[\"{}\"]", cast, var_name)
+                        format!("{}__compartment.state_vars[{}{}{}]", cast, q, var_name, q)
                     }
                 }
                 TargetLanguage::Lua => {
                     if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]", var_name)
+                        format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
-                        format!("self.__compartment.state_vars[\"{}\"]", var_name)
+                        format!("self.__compartment.state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::Dart => {
                     if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]", var_name)
+                        format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
-                        format!("this.__compartment.state_vars[\"{}\"]", var_name)
+                        format!("this.__compartment.state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::GDScript => {
                     if ctx.use_sv_comp {
-                        format!("__sv_comp.state_vars[\"{}\"]", var_name)
+                        format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
-                        format!("self.__compartment.state_vars[\"{}\"]", var_name)
+                        format!("self.__compartment.state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::Erlang => {
@@ -2429,7 +2437,7 @@ pub(crate) fn generate_frame_expansion(
             let text = segment_text.trim();
             // Extract variable name: skip "$." and collect identifier
             let var_name_owned;
-            let var_name = if let SegmentMetadata::StateVar { name } = metadata {
+            let var_name = if let SegmentMetadata::StateVar { name, .. } = metadata {
                 var_name_owned = name.clone();
                 var_name_owned.as_str()
             } else if text.starts_with("$.") {

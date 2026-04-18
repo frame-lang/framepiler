@@ -37,7 +37,13 @@ pub enum SegmentMetadata {
         is_forward: bool,
     },
     /// `$.varName` (read) or `$.varName = expr` (assign)
-    StateVar { name: String },
+    /// `interp_quote`: when inside a string interpolation expression,
+    /// carries the string's delimiter so the expander can use the
+    /// opposite quote for dict keys (avoids `f"...{d["k"]}..."` breakage).
+    StateVar {
+        name: String,
+        interp_quote: Option<u8>,
+    },
     /// `@@:params.key`
     ContextParams { key: String },
     /// `@@:data.key` (read) or `@@:data.key = expr` (assign)
@@ -219,7 +225,7 @@ pub fn regions_to_statements(
                         }));
                     }
                     FrameSegmentKind::StateVar => {
-                        if let SegmentMetadata::StateVar { name } = metadata {
+                        if let SegmentMetadata::StateVar { name, .. } = metadata {
                             stmts.push(Statement::StateVarRead {
                                 name: name.clone(),
                                 span: seg_span,
@@ -229,7 +235,7 @@ pub fn regions_to_statements(
                         }
                     }
                     FrameSegmentKind::StateVarAssign => {
-                        if let SegmentMetadata::StateVar { name } = metadata {
+                        if let SegmentMetadata::StateVar { name, .. } = metadata {
                             // Extract assignment expression from raw text after "$.name = "
                             let text = raw();
                             let expr = text

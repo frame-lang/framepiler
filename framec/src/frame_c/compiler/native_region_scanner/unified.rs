@@ -51,6 +51,10 @@ pub struct InterpRegion {
     pub start: usize,
     /// Position of the closing delimiter (`}`, `)`, etc.) — exclusive
     pub end: usize,
+    /// The string delimiter character (`"`, `'`, or `` ` ``).
+    /// The expander uses the opposite quote for dict keys to avoid
+    /// quote collisions inside string interpolation.
+    pub quote: u8,
 }
 
 /// Language-specific syntax skipper trait.
@@ -338,7 +342,16 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                                     };
                                     let sv_bytes = &bytes[var_start..parser.result_end];
                                     let sv_text = String::from_utf8_lossy(sv_bytes);
-                                    let metadata = extract_segment_metadata(kind, &sv_text);
+                                    let mut metadata = extract_segment_metadata(kind, &sv_text);
+                                    // Carry the string delimiter so the expander
+                                    // uses the opposite quote for dict keys
+                                    if let SegmentMetadata::StateVar {
+                                        ref mut interp_quote,
+                                        ..
+                                    } = metadata
+                                    {
+                                        *interp_quote = Some(region.quote);
+                                    }
 
                                     regions.push(Region::FrameSegment {
                                         span: RegionSpan {
@@ -1413,6 +1426,7 @@ pub fn scan_fstring_regions(bytes: &[u8], i: usize, end: usize) -> Option<(usize
             regions.push(InterpRegion {
                 start: interp_start,
                 end: j,
+                quote,
             });
             j += 1; // skip }
             continue;
@@ -1464,6 +1478,7 @@ pub fn scan_template_literal_regions(
             regions.push(InterpRegion {
                 start: interp_start,
                 end: j,
+                quote: b'`',
             });
             j += 1; // skip }
             continue;
@@ -1532,6 +1547,7 @@ pub fn scan_dollar_string_regions(
             regions.push(InterpRegion {
                 start: interp_start,
                 end: j,
+                quote: b'"',
             });
             j += 1;
             continue;
@@ -1558,6 +1574,7 @@ pub fn scan_dollar_string_regions(
             regions.push(InterpRegion {
                 start: interp_start,
                 end: j,
+                quote: b'"',
             });
             j += 1;
             continue;
@@ -1608,6 +1625,7 @@ pub fn scan_hash_string_regions(
             regions.push(InterpRegion {
                 start: interp_start,
                 end: j,
+                quote: b'"',
             });
             j += 1;
             continue;
@@ -1653,6 +1671,7 @@ pub fn scan_paren_string_regions(
                 regions.push(InterpRegion {
                     start: interp_start,
                     end: j,
+                    quote: b'"',
                 });
                 j += 1;
                 continue;
@@ -1813,7 +1832,10 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
                     .chars()
                     .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                     .collect();
-                SegmentMetadata::StateVar { name }
+                SegmentMetadata::StateVar {
+                    name,
+                    interp_quote: None,
+                }
             } else {
                 SegmentMetadata::None
             }
