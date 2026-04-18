@@ -1,6 +1,6 @@
 # Frame Cookbook
 
-45 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
+49 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
 
 For language syntax details, see the [Frame Language Reference](frame_language.md). For a tutorial introduction, see [Getting Started](frame_getting_started.md).
 
@@ -71,6 +71,13 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 43. [Competing Consumers](#43-competing-consumers) — dispatcher + worker pool
 44. [Message Store](#44-message-store) — audit log persisted across restarts
 45. [Migrating Machine](#45-migrating-machine) — state machine as the message
+
+**Protocol & Systems Stress Tests (46-49)**
+
+46. [FIX Buy-Side Order](#46-fix-protocol--buy-side-order-lifecycle) — FIX OrdStatus state machine
+47. [FIX Sell-Side Manager](#47-fix-protocol--sell-side-order-manager) — broker-side with buy-side interaction
+48. [Launch Sequence Controller](#48-launch-sequence-controller--abort-from-any-phase) — 3-system flight computer with abort
+49. [Robot Arm Controller](#49-robot-arm-controller--safety-overlay-with-hsm) — 3-level HSM safety overlay
 
 -----
 
@@ -1163,6 +1170,8 @@ if __name__ == '__main__':
 
 ![21 state diagram](images/cookbook/21.svg)
 
+![21 state diagram](images/cookbook/21.svg)
+
 A task executor whose pool size and retry policy are set at construction time. Domain, state, and enter parameters flow through the constructor to initialize the machine.
 
 ```frame
@@ -1224,6 +1233,8 @@ if __name__ == '__main__':
 -----
 
 ## 22. Self-Calibrating Sensor (@@:self Interface Call)
+
+![22 state diagram](images/cookbook/22.svg)
 
 ![22 state diagram](images/cookbook/22.svg)
 
@@ -1297,6 +1308,8 @@ if __name__ == '__main__':
 -----
 
 ## 23. Vending Machine — Operations and System Params
+
+![23 state diagram](images/cookbook/23.svg)
 
 ![23 state diagram](images/cookbook/23.svg)
 
@@ -1391,6 +1404,8 @@ if __name__ == '__main__':
 
 ![24 state diagram](images/cookbook/24.svg)
 
+![24 state diagram](images/cookbook/24.svg)
+
 **Problem:** A circuit breaker where the failure counter resets each time we re-enter the closed state.
 
 ```frame
@@ -1467,6 +1482,8 @@ if __name__ == '__main__':
 
 ![25 state diagram](images/cookbook/25.svg)
 
+![25 state diagram](images/cookbook/25.svg)
+
 **Problem:** A token bucket rate limiter with a static utility function.
 
 ```frame
@@ -1521,6 +1538,8 @@ if __name__ == '__main__':
 -----
 
 ## 26. Thermostat — 3-Level HSM
+
+![26 state diagram](images/cookbook/26.svg)
 
 ![26 state diagram](images/cookbook/26.svg)
 
@@ -1603,6 +1622,8 @@ if __name__ == '__main__':
 -----
 
 ## 27. Deployment Pipeline — push$ and Enter Args
+
+![27 state diagram](images/cookbook/27.svg)
 
 ![27 state diagram](images/cookbook/27.svg)
 
@@ -1693,6 +1714,8 @@ if __name__ == '__main__':
 -----
 
 ## 28. Auth Flow — Managed Login/Session
+
+![28 state diagram](images/cookbook/28.svg)
 
 ![28 state diagram](images/cookbook/28.svg)
 
@@ -1836,6 +1859,8 @@ if __name__ == '__main__':
 
 ![29 state diagram](images/cookbook/29.svg)
 
+![29 state diagram](images/cookbook/29.svg)
+
 **Problem:** Different level types created per config. Re-entering `$InLevel` automatically swaps managers.
 
 ```frame
@@ -1941,6 +1966,8 @@ if __name__ == '__main__':
 
 ![30 state diagram](images/cookbook/30.svg)
 
+![30 state diagram](images/cookbook/30.svg)
+
 **Problem:** A long-running service where the constructor never returns. HSM provides shared quit logic.
 
 ```frame
@@ -2004,6 +2031,8 @@ if __name__ == '__main__':
 -----
 
 ## 31. Pipeline Processor — Kernel Loop Validation
+
+![31 state diagram](images/cookbook/31.svg)
 
 ![31 state diagram](images/cookbook/31.svg)
 
@@ -2094,6 +2123,8 @@ if __name__ == '__main__':
 
 ![32 state diagram](images/cookbook/32.svg)
 
+![32 state diagram](images/cookbook/32.svg)
+
 **Problem:** A system with operations for test inspection. `@@:system.state` is a read-only accessor — allowed in operations because it doesn't mutate the state machine.
 
 ```frame
@@ -2179,6 +2210,8 @@ if __name__ == '__main__':
 -----
 
 ## 33. AI Coding Agent — Capstone
+
+![33 state diagram](images/cookbook/33.svg)
 
 ![33 state diagram](images/cookbook/33.svg)
 
@@ -2403,6 +2436,8 @@ All recipes target Python 3 for readability; the patterns generate identically f
 
 ## 34. Idempotent Receiver
 
+![34 state diagram](images/cookbook/34.svg)
+
 **Problem:** A sender may redeliver the same message. The receiver must process each business message exactly once, even if it arrives multiple times.
 
 ```frame
@@ -2447,6 +2482,8 @@ if __name__ == '__main__':
 -----
 
 ## 35. Content-Based Router
+
+![35 state diagram](images/cookbook/35.svg)
 
 **Problem:** A single inbound stream contains messages of different kinds. Each kind should be routed to a different downstream destination.
 
@@ -2493,6 +2530,8 @@ if __name__ == '__main__':
 -----
 
 ## 36. Message Filter
+
+![36 state diagram](images/cookbook/36.svg)
 
 **Problem:** Drop messages that don't match a predicate. Count both accepted and rejected messages for observability.
 
@@ -2548,6 +2587,8 @@ if __name__ == '__main__':
 -----
 
 ## 37. Aggregator
+
+![37 state diagram](images/cookbook/37.svg)
 
 **Problem:** Correlated messages arrive separately. Wait until the full set has arrived, then emit a single combined message.
 
@@ -2606,6 +2647,8 @@ if __name__ == '__main__':
 
 ## 38. Resequencer
 
+![38 state diagram](images/cookbook/38.svg)
+
 **Problem:** Messages arrive out of order (each tagged with a sequence number). Release them downstream strictly in order, buffering anything premature.
 
 ```frame
@@ -2662,6 +2705,8 @@ if __name__ == '__main__':
 -----
 
 ## 39. Circuit Breaker
+
+![39 state diagram](images/cookbook/39.svg)
 
 **Problem:** A downstream dependency is failing. Stop hammering it; let it recover. Periodically probe; resume full traffic only after probes succeed.
 
@@ -2749,6 +2794,8 @@ if __name__ == '__main__':
 -----
 
 ## 40. Dead Letter Channel
+
+![40 state diagram](images/cookbook/40.svg)
 
 **Problem:** A message that can't be processed after N attempts must not block the pipeline. Move it to a dead-letter channel for inspection. The processor must survive restarts without losing retry state.
 
@@ -2839,6 +2886,8 @@ if __name__ == '__main__':
 -----
 
 ## 41. Polling Consumer
+
+![41 state diagram](images/cookbook/41.svg)
 
 **Problem:** No push transport available. Poll a source for messages, process them, pause on empty, and stop cleanly when asked.
 
@@ -2935,6 +2984,8 @@ if __name__ == '__main__':
 -----
 
 ## 42. Process Manager (Saga)
+
+![42 state diagram](images/cookbook/42.svg)
 
 **Problem:** Orchestrate a multi-step business transaction across services with no distributed transaction. If any step fails, compensate the prior steps in reverse order.
 
@@ -3061,6 +3112,8 @@ if __name__ == '__main__':
 
 ## 43. Competing Consumers
 
+![43 state diagram](images/cookbook/43.svg)
+
 **Problem:** One queue of work, multiple workers pulling from it. The dispatcher hands each message to exactly one worker; workers process in parallel.
 
 ```frame
@@ -3147,6 +3200,8 @@ if __name__ == '__main__':
 
 ## 44. Message Store
 
+![44 state diagram](images/cookbook/44.svg)
+
 **Problem:** Every message that flows through an integration should be persisted for audit, replay, and debugging. The store survives restarts.
 
 ```frame
@@ -3203,6 +3258,8 @@ if __name__ == '__main__':
 -----
 
 ## 45. Migrating Machine
+
+![45 state diagram](images/cookbook/45.svg)
 
 **Problem:** A state machine drives a workflow that spans a client and a server. Each side has work only it can do. The machine persists itself, travels across the wire, and resumes on the other side.
 
@@ -3337,27 +3394,1420 @@ if __name__ == '__main__':
 
 -----
 
+## Protocol & Systems Stress Tests
+
+Recipes 46-49 model real-world protocols and safety-critical systems at full fidelity. Each exercises multiple Frame features simultaneously at production scale.
+
+-----
+
+## 46. FIX Protocol — Buy-Side Order Lifecycle
+
+![46 state diagram](images/cookbook/46.svg)
+
+**Problem:** Model the complete FIX protocol OrdStatus state machine from the buy-side (order sender) perspective. All 10 active states, full quantity tracking, precedence rules.
+
+**Reference:** FIX Trading Community, Order State Change Matrices (FIX 4.4 / FIX Latest)
+
+```frame
+@@target python_3
+
+@@system FixBuySideOrder(symbol: str, side: str, order_qty: float) {
+    operations:
+        static ord_status_precedence(status: str): int {
+            # Higher number = higher precedence when order is in multiple states
+            prec = {
+                "PendingReplace": 10, "PendingCancel": 9, "PendingNew": 8,
+                "Stopped": 7, "New": 6, "PartiallyFilled": 5,
+                "Rejected": 4, "DoneForDay": 3, "Canceled": 2, "Filled": 1
+            }
+            return prec.get(status, 0)
+        }
+        get_order_qty(): float { return self.order_qty }
+        get_cum_qty(): float { return self.cum_qty }
+        get_leaves_qty(): float { return self.leaves_qty }
+        get_avg_px(): float { return self.avg_px }
+        get_cl_ord_id(): str { return self.cl_ord_id }
+        get_status(): str { return @@:system.state }
+        is_terminal(): bool {
+            return @@:system.state in ["Filled", "Canceled", "Rejected"]
+        }
+
+    interface:
+        # --- Outbound: buy-side sends to sell-side ---
+        send_new(cl_ord_id: str)
+        send_cancel(cancel_cl_ord_id: str)
+        send_replace(replace_cl_ord_id: str, new_qty: float, new_price: float)
+
+        # --- Inbound: execution reports from sell-side ---
+        exec_new(exec_id: str)
+        exec_rejected(exec_id: str, reason: str)
+        exec_fill(exec_id: str, last_qty: float, last_px: float)
+        exec_partial_fill(exec_id: str, last_qty: float, last_px: float)
+        exec_canceled(exec_id: str)
+        exec_replaced(exec_id: str, new_qty: float, new_price: float)
+        exec_cancel_rejected(reason: str)
+        exec_replace_rejected(reason: str)
+        exec_stopped(exec_id: str, stop_px: float)
+        exec_done_for_day(exec_id: str)
+        exec_expired(exec_id: str)
+        exec_suspended(exec_id: str)
+        exec_restated(exec_id: str)
+
+    machine:
+        # =============================================
+        #  IDLE — order not yet submitted
+        # =============================================
+        $Idle {
+            send_new(cl_ord_id: str) {
+                self.cl_ord_id = cl_ord_id
+                self.orig_cl_ord_id = cl_ord_id
+                print(f"[BUY] NewOrderSingle: {self.symbol} {self.side} {self.order_qty} clOrdId={cl_ord_id}")
+                -> $PendingNew
+            }
+        }
+
+        # =============================================
+        #  PENDING NEW — awaiting acknowledgment
+        # =============================================
+        $PendingNew => $Active {
+            $>() { print(f"[BUY] → PendingNew") }
+
+            exec_new(exec_id: str) {
+                print(f"[BUY] Order acknowledged: execId={exec_id}")
+                -> $New
+            }
+            exec_rejected(exec_id: str, reason: str) {
+                print(f"[BUY] Order REJECTED: {reason}")
+                self.reject_reason = reason
+                -> $Rejected
+            }
+            # IOC/FOK: immediate fill before New ack
+            exec_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                print(f"[BUY] Immediate fill: {last_qty}@{last_px}")
+                -> $Filled
+            }
+            exec_partial_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                print(f"[BUY] Immediate partial: {last_qty}@{last_px}")
+                -> $PartiallyFilled
+            }
+            # IOC not filled → canceled
+            exec_canceled(exec_id: str) {
+                print(f"[BUY] IOC/FOK canceled immediately")
+                -> $Canceled
+            }
+            => $^
+        }
+
+        # =============================================
+        #  NEW — order acknowledged, resting on book
+        # =============================================
+        $New => $Active {
+            $>() { print(f"[BUY] → New") }
+
+            exec_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                -> $Filled
+            }
+            exec_partial_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                -> $PartiallyFilled
+            }
+            send_cancel(cancel_cl_ord_id: str) {
+                self.pending_cl_ord_id = cancel_cl_ord_id
+                print(f"[BUY] CancelRequest: clOrdId={cancel_cl_ord_id}")
+                -> $PendingCancel
+            }
+            send_replace(replace_cl_ord_id: str, new_qty: float, new_price: float) {
+                self.pending_cl_ord_id = replace_cl_ord_id
+                self.pending_qty = new_qty
+                self.pending_price = new_price
+                print(f"[BUY] ReplaceRequest: clOrdId={replace_cl_ord_id} qty={new_qty} px={new_price}")
+                -> $PendingReplace
+            }
+            exec_stopped(exec_id: str, stop_px: float) {
+                self.stop_px = stop_px
+                -> $Stopped
+            }
+            exec_done_for_day(exec_id: str) { -> $DoneForDay }
+            exec_expired(exec_id: str) { -> $Canceled }
+            exec_suspended(exec_id: str) { -> $Suspended }
+            => $^
+        }
+
+        # =============================================
+        #  PARTIALLY FILLED — has executions, leaves > 0
+        # =============================================
+        $PartiallyFilled => $Active {
+            $>() {
+                print(f"[BUY] → PartiallyFilled: cum={self.cum_qty} leaves={self.leaves_qty} avgPx={self.avg_px:.2f}")
+            }
+
+            exec_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                -> $Filled
+            }
+            exec_partial_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                # Stay in PartiallyFilled — re-enter for updated quantities
+                -> $PartiallyFilled
+            }
+            send_cancel(cancel_cl_ord_id: str) {
+                self.pending_cl_ord_id = cancel_cl_ord_id
+                print(f"[BUY] CancelRequest (partial): clOrdId={cancel_cl_ord_id}")
+                -> $PendingCancel
+            }
+            send_replace(replace_cl_ord_id: str, new_qty: float, new_price: float) {
+                self.pending_cl_ord_id = replace_cl_ord_id
+                self.pending_qty = new_qty
+                self.pending_price = new_price
+                -> $PendingReplace
+            }
+            exec_done_for_day(exec_id: str) { -> $DoneForDay }
+            exec_expired(exec_id: str) { -> $Canceled }
+            => $^
+        }
+
+        # =============================================
+        #  PENDING CANCEL — cancel request sent, awaiting response
+        #  Can still receive fills while cancel is pending
+        # =============================================
+        $PendingCancel => $Active {
+            $>() { print(f"[BUY] → PendingCancel") }
+
+            exec_canceled(exec_id: str) {
+                self.cl_ord_id = self.pending_cl_ord_id
+                print(f"[BUY] Cancel confirmed. cum={self.cum_qty}")
+                -> $Canceled
+            }
+            exec_cancel_rejected(reason: str) {
+                print(f"[BUY] Cancel REJECTED: {reason}")
+                self.pending_cl_ord_id = ""
+                # Return to previous effective state
+                if self.cum_qty > 0:
+                    -> $PartiallyFilled
+                else:
+                    -> $New
+            }
+            # Fills can arrive while cancel is pending
+            exec_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                # Filled supersedes cancel
+                -> $Filled
+            }
+            exec_partial_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                # Stay in PendingCancel — cancel still outstanding
+                print(f"[BUY] Fill during PendingCancel: cum={self.cum_qty}")
+            }
+            => $^
+        }
+
+        # =============================================
+        #  PENDING REPLACE — replace request sent
+        # =============================================
+        $PendingReplace => $Active {
+            $>() { print(f"[BUY] → PendingReplace") }
+
+            exec_replaced(exec_id: str, new_qty: float, new_price: float) {
+                self.cl_ord_id = self.pending_cl_ord_id
+                self.order_qty = new_qty
+                self.price = new_price
+                self.leaves_qty = new_qty - self.cum_qty
+                print(f"[BUY] Replaced: qty={new_qty} px={new_price}")
+                if self.cum_qty > 0:
+                    -> $PartiallyFilled
+                else:
+                    -> $New
+            }
+            exec_replace_rejected(reason: str) {
+                print(f"[BUY] Replace REJECTED: {reason}")
+                self.pending_cl_ord_id = ""
+                if self.cum_qty > 0:
+                    -> $PartiallyFilled
+                else:
+                    -> $New
+            }
+            # Fills during pending replace
+            exec_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                -> $Filled
+            }
+            exec_partial_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                print(f"[BUY] Fill during PendingReplace: cum={self.cum_qty}")
+            }
+            => $^
+        }
+
+        # =============================================
+        #  STOPPED — guaranteed price by specialist/MM
+        # =============================================
+        $Stopped => $Active {
+            $>() { print(f"[BUY] → Stopped at {self.stop_px}") }
+
+            exec_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                -> $Filled
+            }
+            exec_partial_fill(exec_id: str, last_qty: float, last_px: float) {
+                self.apply_fill(last_qty, last_px)
+                -> $PartiallyFilled
+            }
+            => $^
+        }
+
+        # =============================================
+        #  SUSPENDED — order suspended by exchange
+        # =============================================
+        $Suspended => $Active {
+            $>() { print(f"[BUY] → Suspended") }
+
+            exec_restated(exec_id: str) {
+                if self.cum_qty > 0:
+                    -> $PartiallyFilled
+                else:
+                    -> $New
+            }
+            exec_canceled(exec_id: str) { -> $Canceled }
+            => $^
+        }
+
+        # =============================================
+        #  ACTIVE — parent for all non-terminal, non-idle states
+        #  Handles events common to all active order states
+        # =============================================
+        $Active {
+            # Unsolicited cancel by exchange
+            exec_canceled(exec_id: str) {
+                print(f"[BUY] Unsolicited cancel")
+                -> $Canceled
+            }
+        }
+
+        # =============================================
+        #  TERMINAL STATES — Filled, Canceled, Rejected, DoneForDay
+        # =============================================
+        $Filled {
+            $>() {
+                print(f"[BUY] FILLED: {self.cum_qty}@{self.avg_px:.2f}")
+            }
+            # Terminal — all events ignored
+        }
+        $Canceled {
+            $>() {
+                print(f"[BUY] CANCELED: filled={self.cum_qty}/{self.order_qty}")
+            }
+        }
+        $Rejected {
+            $>() {
+                print(f"[BUY] REJECTED: {self.reject_reason}")
+            }
+        }
+        $DoneForDay {
+            $>() {
+                print(f"[BUY] DONE FOR DAY: filled={self.cum_qty}/{self.order_qty}")
+            }
+        }
+
+    actions:
+        apply_fill(last_qty, last_px) {
+            # VWAP calculation
+            total_value = self.avg_px * self.cum_qty + last_px * last_qty
+            self.cum_qty = self.cum_qty + last_qty
+            self.leaves_qty = self.order_qty - self.cum_qty
+            if self.cum_qty > 0:
+                self.avg_px = total_value / self.cum_qty
+            self.fill_count = self.fill_count + 1
+        }
+
+    domain:
+        symbol: str = symbol
+        side: str = side
+        order_qty: float = order_qty
+        cum_qty: float = 0.0
+        leaves_qty: float = order_qty
+        avg_px: float = 0.0
+        price: float = 0.0
+        stop_px: float = 0.0
+        cl_ord_id: str = ""
+        orig_cl_ord_id: str = ""
+        pending_cl_ord_id: str = ""
+        pending_qty: float = 0.0
+        pending_price: float = 0.0
+        reject_reason: str = ""
+        fill_count: int = 0
+}
+
+if __name__ == '__main__':
+    # --- Scenario 1: Simple fill ---
+    order = @@FixBuySideOrder("AAPL", "Buy", 1000)
+    order.send_new("ORD-001")
+    order.exec_new("E1")
+    order.exec_partial_fill("E2", 400, 150.25)
+    order.exec_fill("E3", 600, 150.50)
+    print(f"AvgPx: {order.get_avg_px():.4f}")  # 150.40
+
+    # --- Scenario 2: Cancel after partial fill ---
+    order2 = @@FixBuySideOrder("GOOG", "Sell", 500)
+    order2.send_new("ORD-002")
+    order2.exec_new("E4")
+    order2.exec_partial_fill("E5", 200, 2800.00)
+    order2.send_cancel("CXL-002")
+    # Fill arrives while cancel is pending
+    order2.exec_partial_fill("E6", 100, 2801.00)
+    order2.exec_canceled("E7")
+    print(f"Filled: {order2.get_cum_qty()}/{order2.get_order_qty()}")
+
+    # --- Scenario 3: Replace ---
+    order3 = @@FixBuySideOrder("MSFT", "Buy", 1000)
+    order3.send_new("ORD-003")
+    order3.exec_new("E8")
+    order3.send_replace("RPL-003", 1500, 400.00)
+    order3.exec_replaced("E9", 1500, 400.00)
+    print(f"New qty: {order3.get_order_qty()}")  # 1500
+
+    # --- Scenario 4: Rejection ---
+    order4 = @@FixBuySideOrder("???", "Buy", -100)
+    order4.send_new("ORD-004")
+    order4.exec_rejected("E10", "Invalid quantity")
+    print(f"Terminal: {order4.is_terminal()}")  # True
+```
+
+**How it works:**
+
+**10 states matching FIX OrdStatus values.** `$PendingNew`, `$New`, `$PartiallyFilled`, `$PendingCancel`, `$PendingReplace`, `$Stopped`, `$Suspended`, `$Filled`, `$Canceled`, `$Rejected`, plus `$DoneForDay` and `$Idle`.
+
+**HSM with `$Active` parent.** All non-terminal, non-idle states are children of `$Active`. Unsolicited cancel (exchange removes order without request) is handled once in `$Active` and inherited by all children.
+
+**Fills during pending cancel/replace.** The FIX spec explicitly allows fills to arrive while a cancel or replace request is outstanding. `$PendingCancel` and `$PendingReplace` handle `exec_fill` and `exec_partial_fill` — a full fill supersedes the pending action, while a partial fill is recorded but the pending action stays outstanding.
+
+**VWAP calculation in `apply_fill()`.** The action computes volume-weighted average price across multiple partial fills — `(oldAvgPx * oldCumQty + lastPx * lastQty) / newCumQty`.
+
+**Operations for inspection.** `get_cum_qty()`, `get_leaves_qty()`, `get_avg_px()`, `is_terminal()` bypass the state machine for clean test access.
+
+**Features stressed:** 13-state machine, HSM, system params (3 domain overrides), operations with `@@:system.state`, domain arithmetic (VWAP), conditional transitions based on quantity, fills during pending states, terminal states ignoring all events, actions modifying domain vars
+
+---
+
+## 47. FIX Protocol — Sell-Side Order Manager
+
+![47 state diagram](images/cookbook/47.svg)
+
+**Problem:** The broker/exchange side of FIX. Receives orders from the buy-side, manages the book, and sends execution reports back. Interacts with the buy-side system.
+
+```frame
+@@target python_3
+
+@@system FixSellSide {
+    interface:
+        # Inbound from buy-side
+        new_order(cl_ord_id: str, symbol: str, side: str, qty: float, price: float, tif: str)
+        cancel_request(cancel_cl_ord_id: str, orig_cl_ord_id: str)
+        replace_request(replace_cl_ord_id: str, orig_cl_ord_id: str, new_qty: float, new_price: float)
+
+        # Market simulation
+        market_fill(fill_qty: float, fill_px: float)
+
+        # Inspection
+        status(): str = ""
+
+    machine:
+        $NoOrder {
+            new_order(cl_ord_id: str, symbol: str, side: str, qty: float, price: float, tif: str) {
+                self.cl_ord_id = cl_ord_id
+                self.symbol = symbol
+                self.side = side
+                self.order_qty = qty
+                self.leaves_qty = qty
+                self.price = price
+                self.tif = tif
+                self.exec_seq = 0
+
+                if not self.validate_order(symbol, qty, price):
+                    self.send_exec_report("Rejected", "rejected", "Invalid order params")
+                    -> $Rejected
+                else:
+                    -> $Accepting
+            }
+            status(): str { @@:("no order") }
+        }
+
+        $Accepting {
+            $>() {
+                # Check for immediate execution (IOC/FOK/marketable limit)
+                if self.tif == "IOC" or self.tif == "FOK":
+                    # Try immediate fill
+                    available = self.get_market_liquidity()
+                    if self.tif == "FOK" and available < self.order_qty:
+                        self.send_exec_report("Canceled", "canceled", "FOK not fillable")
+                        -> $Canceled
+                    elif available > 0:
+                        fill_qty = min(available, self.leaves_qty)
+                        self.execute_fill(fill_qty, self.price)
+                        if self.leaves_qty <= 0:
+                            self.send_exec_report("Filled", "fill", "")
+                            -> $Filled
+                        else:
+                            if self.tif == "IOC":
+                                self.send_exec_report("Canceled", "canceled", "IOC partial cancel")
+                                -> $Canceled
+                            else:
+                                self.send_exec_report("PartiallyFilled", "partial_fill", "")
+                                -> $Working
+                    else:
+                        if self.tif == "IOC" or self.tif == "FOK":
+                            self.send_exec_report("Canceled", "canceled", f"{self.tif} no liquidity")
+                            -> $Canceled
+                        else:
+                            self.send_exec_report("New", "new", "")
+                            -> $Working
+                else:
+                    self.send_exec_report("New", "new", "")
+                    -> $Working
+            }
+        }
+
+        $Working => $BookActive {
+            $>() { print(f"[SELL] Order working: {self.symbol} {self.side} leaves={self.leaves_qty}") }
+
+            market_fill(fill_qty: float, fill_px: float) {
+                actual = min(fill_qty, self.leaves_qty)
+                self.execute_fill(actual, fill_px)
+                if self.leaves_qty <= 0:
+                    self.send_exec_report("Filled", "fill", "")
+                    -> $Filled
+                else:
+                    self.send_exec_report("PartiallyFilled", "partial_fill", "")
+            }
+            cancel_request(cancel_cl_ord_id: str, orig_cl_ord_id: str) {
+                if orig_cl_ord_id != self.cl_ord_id:
+                    self.send_cancel_reject(cancel_cl_ord_id, "Unknown origClOrdId")
+                else:
+                    self.pending_action_id = cancel_cl_ord_id
+                    -> $PendingCancel
+            }
+            replace_request(replace_cl_ord_id: str, orig_cl_ord_id: str, new_qty: float, new_price: float) {
+                if orig_cl_ord_id != self.cl_ord_id:
+                    self.send_replace_reject(replace_cl_ord_id, "Unknown origClOrdId")
+                elif new_qty < self.cum_qty:
+                    self.send_replace_reject(replace_cl_ord_id, "New qty less than cumQty")
+                else:
+                    self.pending_action_id = replace_cl_ord_id
+                    self.pending_qty = new_qty
+                    self.pending_price = new_price
+                    -> $PendingReplace
+            }
+            => $^
+        }
+
+        $PendingCancel => $BookActive {
+            $>() {
+                print(f"[SELL] Processing cancel request")
+                # Auto-accept cancel (in production: may queue or delay)
+                self.cl_ord_id = self.pending_action_id
+                self.send_exec_report("Canceled", "canceled", "")
+                -> $Canceled
+            }
+            # Fills can still arrive
+            market_fill(fill_qty: float, fill_px: float) {
+                actual = min(fill_qty, self.leaves_qty)
+                self.execute_fill(actual, fill_px)
+                if self.leaves_qty <= 0:
+                    # Filled supersedes cancel
+                    self.send_exec_report("Filled", "fill", "")
+                    -> $Filled
+            }
+            => $^
+        }
+
+        $PendingReplace => $BookActive {
+            $>() {
+                # Process the replace
+                self.cl_ord_id = self.pending_action_id
+                self.order_qty = self.pending_qty
+                self.price = self.pending_price
+                self.leaves_qty = self.pending_qty - self.cum_qty
+                self.send_exec_report("Replaced", "replaced", "")
+                if self.cum_qty > 0:
+                    -> $Working
+                else:
+                    -> $Working
+            }
+            => $^
+        }
+
+        $BookActive {
+            # Common handling for all orders on the book
+        }
+
+        # --- Terminal States ---
+        $Filled {
+            $>() { print(f"[SELL] FILLED: {self.cum_qty}@{self.avg_px:.2f}") }
+            status(): str { @@:(f"filled {self.cum_qty}@{self.avg_px:.2f}") }
+        }
+        $Canceled {
+            $>() { print(f"[SELL] CANCELED: filled={self.cum_qty}/{self.order_qty}") }
+            status(): str { @@:(f"canceled cum={self.cum_qty}") }
+        }
+        $Rejected {
+            $>() { print(f"[SELL] REJECTED") }
+            status(): str { @@:("rejected") }
+        }
+
+    actions:
+        validate_order(symbol, qty, price) {
+            return qty > 0 and price >= 0 and len(symbol) > 0
+        }
+        execute_fill(qty, px) {
+            total_value = self.avg_px * self.cum_qty + px * qty
+            self.cum_qty = self.cum_qty + qty
+            self.leaves_qty = self.order_qty - self.cum_qty
+            if self.cum_qty > 0:
+                self.avg_px = total_value / self.cum_qty
+        }
+        get_market_liquidity() {
+            # Simulated: return available liquidity at limit price
+            return 500
+        }
+        send_exec_report(ord_status, exec_type, text) {
+            self.exec_seq = self.exec_seq + 1
+            exec_id = f"EX-{self.exec_seq}"
+            print(f"  [SELL→BUY] ExecReport: status={ord_status} type={exec_type} cum={self.cum_qty} leaves={self.leaves_qty}")
+            if self.buy_side is not None:
+                if exec_type == "new":
+                    self.buy_side.exec_new(exec_id)
+                elif exec_type == "fill":
+                    self.buy_side.exec_fill(exec_id, self.cum_qty, self.avg_px)
+                elif exec_type == "partial_fill":
+                    last_qty = self.cum_qty  # simplified
+                    self.buy_side.exec_partial_fill(exec_id, last_qty, self.avg_px)
+                elif exec_type == "canceled":
+                    self.buy_side.exec_canceled(exec_id)
+                elif exec_type == "rejected":
+                    self.buy_side.exec_rejected(exec_id, text)
+                elif exec_type == "replaced":
+                    self.buy_side.exec_replaced(exec_id, self.order_qty, self.price)
+        }
+        send_cancel_reject(cl_ord_id, reason) {
+            print(f"  [SELL→BUY] CancelReject: {reason}")
+            if self.buy_side is not None:
+                self.buy_side.exec_cancel_rejected(reason)
+        }
+        send_replace_reject(cl_ord_id, reason) {
+            print(f"  [SELL→BUY] ReplaceReject: {reason}")
+            if self.buy_side is not None:
+                self.buy_side.exec_replace_rejected(reason)
+        }
+
+    domain:
+        buy_side = None
+        cl_ord_id: str = ""
+        symbol: str = ""
+        side: str = ""
+        order_qty: float = 0.0
+        cum_qty: float = 0.0
+        leaves_qty: float = 0.0
+        avg_px: float = 0.0
+        price: float = 0.0
+        tif: str = "Day"
+        exec_seq: int = 0
+        pending_action_id: str = ""
+        pending_qty: float = 0.0
+        pending_price: float = 0.0
+}
+
+if __name__ == '__main__':
+    sell = @@FixSellSide()
+
+    # Submit a Day order — accepted, resting on book
+    sell.new_order("ORD-001", "AAPL", "Buy", 1000, 150.00, "Day")
+
+    # Partial fill from market
+    sell.market_fill(400, 150.25)
+    sell.market_fill(600, 150.50)
+
+    print(f"Sell side: {sell.status()}")
+```
+
+**How it works:**
+
+**Two systems interacting.** `FixSellSide.send_exec_report()` calls methods on `self.buy_side` when wired up — a reference to a `FixBuySideOrder` instance (Recipe 46). This is the managed-state callback pattern applied to protocol simulation. The test above exercises the sell-side standalone; wire `sell.buy_side = buy` to drive both sides together.
+
+**`$Accepting` is a transient state.** Its enter handler evaluates TIF (Time In Force) rules: IOC orders get immediate partial fill then cancel of remainder; FOK orders are all-or-nothing; Day orders rest on the book. Each path leads to a different state.
+
+**HSM with `$BookActive`.** `$Working`, `$PendingCancel`, and `$PendingReplace` are children. Shared cancel logic could go in the parent.
+
+**Features stressed:** multi-system interaction (buy-side ↔ sell-side), transient state with complex branching, domain arithmetic, actions calling interface on other system, HSM, system params
+
+---
+
+## 48. Launch Sequence Controller — Abort from Any Phase
+
+![48 state diagram](images/cookbook/48.svg)
+
+**Problem:** A two-stage rocket launch with abort capability from every flight phase. Different abort modes depending on altitude. Enter-handler chain for the flight sequence. Three coordinating systems: FlightComputer, PropulsionController, RangeOfficer.
+
+**Reference:** Apollo/Shuttle abort modes, SpaceX Falcon 9 flight profile
+
+```frame
+@@target python_3
+
+# --- Propulsion Controller ---
+@@system PropulsionController {
+    interface:
+        ignite_stage(stage: int)
+        throttle(percent: int)
+        shutdown()
+        separate_stage()
+        engine_status(): str = ""
+
+    machine:
+        $Idle {
+            ignite_stage(stage: int) {
+                self.active_stage = stage
+                -> $Igniting
+            }
+            engine_status(): str { @@:("idle") }
+        }
+        $Igniting {
+            $>() {
+                print(f"  Stage {self.active_stage} ignition sequence...")
+                self.thrust_pct = 0
+                -> $RampingUp
+            }
+        }
+        $RampingUp {
+            $>() {
+                self.thrust_pct = 100
+                print(f"  Stage {self.active_stage} full thrust ({self.thrust_pct}%)")
+                self.parent.engine_ready(self.active_stage)
+            }
+            throttle(percent: int) {
+                self.thrust_pct = percent
+                print(f"  Throttle: {percent}%")
+            }
+            shutdown() {
+                -> $ShuttingDown
+            }
+            separate_stage() {
+                print(f"  Stage {self.active_stage} separated")
+                self.active_stage = self.active_stage + 1
+                -> $Idle
+            }
+            engine_status(): str { @@:(f"stage {self.active_stage} at {self.thrust_pct}%") }
+        }
+        $ShuttingDown {
+            $>() {
+                print(f"  Stage {self.active_stage} shutdown")
+                self.thrust_pct = 0
+                -> $Idle
+            }
+        }
+
+    domain:
+        parent = None
+        active_stage: int = 0
+        thrust_pct: int = 0
+}
+
+# --- Range Safety Officer ---
+@@system RangeOfficer {
+    interface:
+        telemetry(altitude_km: float, velocity_ms: float, deviation_deg: float)
+        status(): str = ""
+
+    machine:
+        $Nominal {
+            telemetry(altitude_km: float, velocity_ms: float, deviation_deg: float) {
+                if deviation_deg > 30:
+                    print(f"  Range: ABORT COMMANDED ({deviation_deg} deg)")
+                    self.parent.abort("range_safety")
+                    -> $AbortCommanded
+                elif deviation_deg > 10:
+                    print(f"  Range: Trajectory deviation {deviation_deg} deg")
+                    -> $Caution
+            }
+            status(): str { @@:("nominal") }
+        }
+        $Caution {
+            telemetry(altitude_km: float, velocity_ms: float, deviation_deg: float) {
+                if deviation_deg <= 5:
+                    print(f"  Range: Trajectory nominal")
+                    -> $Nominal
+                elif deviation_deg > 30:
+                    print(f"  Range: FLIGHT TERMINATION")
+                    self.parent.abort("flight_termination")
+                    -> $AbortCommanded
+            }
+            status(): str { @@:("caution") }
+        }
+        $AbortCommanded {
+            status(): str { @@:("abort commanded") }
+        }
+
+    domain:
+        parent = None
+}
+
+# --- Flight Computer (main controller) ---
+@@system FlightComputer {
+    interface:
+        start_countdown()
+        engine_ready(stage: int)
+        telemetry_tick(altitude_km: float, velocity_ms: float, deviation_deg: float)
+        abort(reason: str)
+        status(): str = ""
+
+    machine:
+        # =============================================
+        #  PRE-FLIGHT
+        # =============================================
+        $PreFlight {
+            start_countdown() {
+                print("\n=== LAUNCH SEQUENCE INITIATED ===")
+                -> $Countdown
+            }
+            status(): str { @@:("pre-flight") }
+        }
+
+        $Countdown => $InFlight {
+            $.t_minus: int = 10
+
+            $>() {
+                print(f"  T-{$.t_minus}...")
+                $.t_minus = $.t_minus - 1
+                if $.t_minus <= 0:
+                    -> $EngineIgnition
+            }
+            telemetry_tick(altitude_km: float, velocity_ms: float, deviation_deg: float) {
+                $.t_minus = $.t_minus - 1
+                print(f"  T-{$.t_minus}...")
+                if $.t_minus <= 0:
+                    -> $EngineIgnition
+            }
+            => $^
+        }
+
+        $EngineIgnition => $InFlight {
+            $>() {
+                print("  Engine ignition command")
+                self.propulsion = @@PropulsionController()
+                self.propulsion.parent = self
+                self.range_officer = @@RangeOfficer()
+                self.range_officer.parent = self
+                self.propulsion.ignite_stage(1)
+            }
+            engine_ready(stage: int) {
+                print("  All engines nominal")
+                -> $Liftoff
+            }
+            => $^
+        }
+
+        # =============================================
+        #  ASCENT PHASES — enter-handler chain
+        # =============================================
+        $Liftoff => $InFlight {
+            $>() {
+                self.altitude = 0
+                print("\nLIFTOFF!")
+                self.phase = "liftoff"
+            }
+            telemetry_tick(altitude_km: float, velocity_ms: float, deviation_deg: float) {
+                self.altitude = altitude_km
+                self.velocity = velocity_ms
+                self.range_officer.telemetry(altitude_km, velocity_ms, deviation_deg)
+                if altitude_km >= 11:
+                    -> $MaxQ
+            }
+            => $^
+        }
+
+        $MaxQ => $InFlight {
+            $>() {
+                print("  MAX-Q — throttle down")
+                self.propulsion.throttle(70)
+                self.phase = "max-q"
+            }
+            telemetry_tick(altitude_km: float, velocity_ms: float, deviation_deg: float) {
+                self.altitude = altitude_km
+                self.velocity = velocity_ms
+                self.range_officer.telemetry(altitude_km, velocity_ms, deviation_deg)
+                if altitude_km >= 15:
+                    self.propulsion.throttle(100)
+                    print("  Throttle up")
+                    -> $Stage1Ascent
+            }
+            => $^
+        }
+
+        $Stage1Ascent => $InFlight {
+            $>() {
+                self.phase = "stage1-ascent"
+                print("  Stage 1 ascent")
+            }
+            telemetry_tick(altitude_km: float, velocity_ms: float, deviation_deg: float) {
+                self.altitude = altitude_km
+                self.velocity = velocity_ms
+                self.range_officer.telemetry(altitude_km, velocity_ms, deviation_deg)
+                if altitude_km >= 80:
+                    -> $MECO
+            }
+            => $^
+        }
+
+        $MECO => $InFlight {
+            $>() {
+                print("  MECO — Main Engine Cut-Off")
+                self.propulsion.shutdown()
+                self.phase = "meco"
+                -> $StageSeparation
+            }
+            => $^
+        }
+
+        $StageSeparation => $InFlight {
+            $>() {
+                print("  Stage separation")
+                self.propulsion.separate_stage()
+                self.phase = "separation"
+                -> $Stage2Ignition
+            }
+            => $^
+        }
+
+        $Stage2Ignition => $InFlight {
+            $>() {
+                print("  Stage 2 ignition")
+                self.propulsion.ignite_stage(2)
+                self.phase = "stage2-ignition"
+            }
+            engine_ready(stage: int) {
+                print("  Stage 2 nominal")
+                -> $Stage2Ascent
+            }
+            => $^
+        }
+
+        $Stage2Ascent => $InFlight {
+            $>() {
+                self.phase = "stage2-ascent"
+                print("  Stage 2 ascent to orbit")
+            }
+            telemetry_tick(altitude_km: float, velocity_ms: float, deviation_deg: float) {
+                self.altitude = altitude_km
+                self.velocity = velocity_ms
+                self.range_officer.telemetry(altitude_km, velocity_ms, deviation_deg)
+                if altitude_km >= 200 and velocity_ms >= 7800:
+                    -> $SECO
+            }
+            => $^
+        }
+
+        $SECO => $InFlight {
+            $>() {
+                print("  SECO — Second Engine Cut-Off")
+                self.propulsion.shutdown()
+                self.phase = "seco"
+                -> $OrbitInsertion
+            }
+            => $^
+        }
+
+        $OrbitInsertion => $InFlight {
+            $>() {
+                print(f"\nORBIT INSERTION at {self.altitude:.0f} km, {self.velocity:.0f} m/s")
+                self.phase = "orbit"
+                -> $OnOrbit
+            }
+            => $^
+        }
+
+        # =============================================
+        #  IN-FLIGHT parent — handles abort for ALL phases
+        # =============================================
+        $InFlight {
+            abort(reason: str) {
+                self.abort_reason = reason
+                print(f"\nABORT: {reason} at altitude {self.altitude:.1f} km")
+                self.propulsion.shutdown()
+                if self.altitude < 30:
+                    -> $AbortPadEscape
+                elif self.altitude < 100:
+                    -> $AbortDownrange
+                else:
+                    -> $AbortToOrbit
+            }
+        }
+
+        # =============================================
+        #  ABORT MODES
+        # =============================================
+        $AbortPadEscape {
+            $>() {
+                print("  PAD ABORT — Launch escape system activated")
+                print("  Capsule separation, parachute deployment")
+                self.phase = "abort-pad"
+                -> $AbortComplete
+            }
+        }
+        $AbortDownrange {
+            $>() {
+                print("  DOWNRANGE ABORT — Capsule separation")
+                print(f"  Ballistic trajectory from {self.altitude:.0f} km")
+                self.phase = "abort-downrange"
+                -> $AbortComplete
+            }
+        }
+        $AbortToOrbit {
+            $>() {
+                print(f"  ABORT TO ORBIT — Inserting at {self.altitude:.0f} km")
+                print("  Degraded orbit achieved")
+                self.phase = "abort-to-orbit"
+                -> $AbortComplete
+            }
+        }
+        $AbortComplete {
+            $>() {
+                print(f"\nAbort sequence complete. Reason: {self.abort_reason}")
+            }
+            status(): str { @@:(f"aborted: {self.abort_reason}") }
+        }
+
+        # =============================================
+        #  ON ORBIT — mission continues
+        # =============================================
+        $OnOrbit {
+            $>() {
+                print("  On orbit — mission nominal")
+            }
+            status(): str { @@:(f"on orbit at {self.altitude:.0f} km") }
+        }
+
+    domain:
+        propulsion = None
+        range_officer = None
+        altitude: float = 0.0
+        velocity: float = 0.0
+        phase: str = "pre-flight"
+        abort_reason: str = ""
+}
+
+if __name__ == '__main__':
+    fc = @@FlightComputer()
+    fc.start_countdown()
+
+    # Countdown
+    for t in range(10):
+        fc.telemetry_tick(0, 0, 0)
+
+    # Ascent
+    profiles = [
+        (5, 300, 0.5), (8, 500, 0.3), (11, 700, 0.2),     # liftoff → max-q
+        (13, 800, 0.1), (15, 1000, 0.4),                    # max-q → stage1
+        (30, 2000, 0.2), (50, 3500, 0.1), (80, 5000, 0.3),  # stage1 → MECO
+        # MECO, separation, stage2 ignition happen in enter handlers
+        (120, 6000, 0.2), (160, 7000, 0.1),                  # stage2 ascent
+        (200, 7800, 0.05),                                     # orbit insertion
+    ]
+    for alt, vel, dev in profiles:
+        fc.telemetry_tick(alt, vel, dev)
+
+    print(f"\nFinal: {fc.status()}")
+```
+
+**How it works:**
+
+**11 flight phases chain through enter handlers.** `$Countdown → $EngineIgnition → $Liftoff → $MaxQ → $Stage1Ascent → $MECO → $StageSeparation → $Stage2Ignition → $Stage2Ascent → $SECO → $OrbitInsertion → $OnOrbit`. Some transitions are driven by telemetry (altitude thresholds); others are immediate enter-handler chains (`$MECO → $StageSeparation → $Stage2Ignition`). The kernel loop handles all of them.
+
+**HSM: abort from any phase.** All flight phases are children of `$InFlight`. `abort()` is handled once in `$InFlight` and inherited by every phase via `=> $^`. The abort handler selects the abort mode based on altitude: pad escape (<30km), downrange (30–100km), or abort-to-orbit (>100km). This matches real abort mode logic from Apollo and Shuttle.
+
+**Three coordinating systems.** `FlightComputer` creates `PropulsionController` and `RangeOfficer` as managed children in `$EngineIgnition`. The propulsion controller manages engine states independently. The range officer monitors telemetry and can trigger abort via `self.parent.abort("range_safety")`.
+
+**Features stressed:** 15+ states, deep HSM, 3-system composition, enter-handler chains (kernel loop at scale), conditional abort routing, managed children, domain variables for telemetry accumulation
+
+---
+
+## 49. Robot Arm Controller — Safety Overlay with HSM
+
+![49 state diagram](images/cookbook/49.svg)
+
+**Problem:** An industrial robot arm with three concerns layered via HSM: safety (emergency stop), operational mode (manual/auto), and motion states (idle/moving/gripping). Safety overrides everything.
+
+**Reference:** IEC 61800-5-2 safe stop categories, ISO 10218 robot safety
+
+```frame
+@@target python_3
+
+@@system RobotArm {
+    operations:
+        get_position(): dict {
+            return {"x": self.pos_x, "y": self.pos_y, "z": self.pos_z}
+        }
+        get_velocity(): float {
+            return self.current_velocity
+        }
+        get_state(): str {
+            return @@:system.state
+        }
+
+    interface:
+        # Mode control
+        set_auto()
+        set_manual()
+
+        # Motion commands
+        move_to(x: float, y: float, z: float)
+        grip()
+        release()
+        stop_motion()
+
+        # Program execution (auto mode only)
+        run_program(program: list)
+        program_step_done()
+
+        # Safety
+        e_stop()
+        reset_e_stop()
+        safety_fault(fault_code: str)
+
+        # Telemetry
+        tick()
+        status(): str = ""
+
+    machine:
+        # =============================================
+        #  SAFETY LAYER — top of HSM hierarchy
+        #  E-stop overrides EVERYTHING
+        # =============================================
+        $Operational => $Safety {
+            e_stop() {
+                print("E-STOP ACTIVATED")
+                self.e_stop_active = True
+                self.current_velocity = 0
+                -> $EStopCategory0
+            }
+            safety_fault(fault_code: str) {
+                print(f"Safety fault: {fault_code}")
+                self.current_velocity = 0
+                -> $SafetyFault
+            }
+            => $^
+        }
+
+        $EStopCategory0 {
+            $>() {
+                print("  CAT-0: Immediate power removal")
+                print("  Brakes engaged, drives disabled")
+                self.drives_enabled = False
+            }
+            reset_e_stop() {
+                print("  E-stop reset — performing safety check")
+                -> $SafetyCheck
+            }
+            status(): str { @@:("E-STOP") }
+        }
+
+        $SafetyFault {
+            $>() {
+                print("  Safety fault active — motion disabled")
+                self.drives_enabled = False
+            }
+            reset_e_stop() {
+                -> $SafetyCheck
+            }
+            status(): str { @@:("safety fault") }
+        }
+
+        $SafetyCheck {
+            $>() {
+                print("  Running safety checks...")
+                # In production: verify encoder positions, brake status, etc.
+                if self.validate_safety():
+                    self.drives_enabled = True
+                    self.e_stop_active = False
+                    print("  Safety check passed — drives enabled")
+                    -> $ManualIdle
+                else:
+                    print("  Safety check FAILED")
+                    -> $SafetyFault
+            }
+        }
+
+        $Safety {
+            # Top-level parent — nothing here by default
+        }
+
+        # =============================================
+        #  MANUAL MODE — jogging, teach pendant
+        # =============================================
+        $ManualIdle => $Manual {
+            move_to(x: float, y: float, z: float) {
+                self.target_x = x
+                self.target_y = y
+                self.target_z = z
+                -> $ManualMoving
+            }
+            grip() { -> $ManualGripping }
+            release() { -> $ManualReleasing }
+            set_auto() { -> $AutoIdle }
+            status(): str { @@:("manual idle") }
+            => $^
+        }
+
+        $ManualMoving => $Manual {
+            $>() {
+                self.current_velocity = self.manual_speed_limit
+                print(f"  Moving to ({self.target_x},{self.target_y},{self.target_z}) at {self.current_velocity} mm/s")
+            }
+            <$() { self.current_velocity = 0 }
+
+            tick() {
+                # Simulate motion
+                self.pos_x = self.pos_x + (self.target_x - self.pos_x) * 0.3
+                self.pos_y = self.pos_y + (self.target_y - self.pos_y) * 0.3
+                self.pos_z = self.pos_z + (self.target_z - self.pos_z) * 0.3
+                dist = ((self.target_x - self.pos_x)**2 + (self.target_y - self.pos_y)**2 + (self.target_z - self.pos_z)**2) ** 0.5
+                if dist < 0.1:
+                    self.pos_x = self.target_x
+                    self.pos_y = self.target_y
+                    self.pos_z = self.target_z
+                    print(f"  Arrived at ({self.pos_x},{self.pos_y},{self.pos_z})")
+                    -> $ManualIdle
+            }
+            stop_motion() {
+                print("  Motion stopped")
+                -> $ManualIdle
+            }
+            status(): str { @@:("manual moving") }
+            => $^
+        }
+
+        $ManualGripping => $Manual {
+            $>() {
+                self.gripper_closed = True
+                print("  Gripper closed")
+                -> $ManualIdle
+            }
+            => $^
+        }
+
+        $ManualReleasing => $Manual {
+            $>() {
+                self.gripper_closed = False
+                print("  Gripper opened")
+                -> $ManualIdle
+            }
+            => $^
+        }
+
+        $Manual => $Operational {
+            # Shared for all manual states
+            set_auto() { -> $AutoIdle }
+            => $^
+        }
+
+        # =============================================
+        #  AUTO MODE — program execution
+        # =============================================
+        $AutoIdle => $Auto {
+            run_program(program: list) {
+                self.program = program
+                self.program_step = 0
+                print(f"  Auto: running program ({len(program)} steps)")
+                -> $AutoExecuting
+            }
+            set_manual() { -> $ManualIdle }
+            status(): str { @@:("auto idle") }
+            => $^
+        }
+
+        $AutoExecuting => $Auto {
+            $>() {
+                if self.program_step >= len(self.program):
+                    print("  Program complete")
+                    -> $AutoIdle
+                    return
+
+                step = self.program[self.program_step]
+                cmd = step["cmd"]
+                print(f"  Step {self.program_step + 1}: {cmd}")
+                self.current_velocity = self.auto_speed_limit
+
+                if cmd == "move":
+                    self.target_x = step["x"]
+                    self.target_y = step["y"]
+                    self.target_z = step["z"]
+                elif cmd == "grip":
+                    self.gripper_closed = True
+                    self.program_step = self.program_step + 1
+                    @@:self.program_step_done()
+                elif cmd == "release":
+                    self.gripper_closed = False
+                    self.program_step = self.program_step + 1
+                    @@:self.program_step_done()
+            }
+
+            tick() {
+                # Simulate auto motion
+                self.pos_x = self.pos_x + (self.target_x - self.pos_x) * 0.5
+                self.pos_y = self.pos_y + (self.target_y - self.pos_y) * 0.5
+                self.pos_z = self.pos_z + (self.target_z - self.pos_z) * 0.5
+                dist = ((self.target_x - self.pos_x)**2 + (self.target_y - self.pos_y)**2 + (self.target_z - self.pos_z)**2) ** 0.5
+                if dist < 0.1:
+                    self.pos_x = self.target_x
+                    self.pos_y = self.target_y
+                    self.pos_z = self.target_z
+                    self.program_step = self.program_step + 1
+                    @@:self.program_step_done()
+            }
+
+            program_step_done() {
+                -> $AutoExecuting
+            }
+
+            stop_motion() {
+                print("  Auto motion stopped")
+                self.current_velocity = 0
+                -> $AutoIdle
+            }
+            status(): str { @@:(f"auto executing step {self.program_step + 1}/{len(self.program)}") }
+            => $^
+        }
+
+        $Auto => $Operational {
+            # Shared for all auto states
+            set_manual() { -> $ManualIdle }
+            # Reject motion commands in auto mode
+            move_to(x: float, y: float, z: float) {
+                print("  Manual move rejected — in auto mode")
+            }
+            => $^
+        }
+
+    actions:
+        validate_safety() {
+            # In production: check encoders, brakes, limits
+            return True
+        }
+
+    domain:
+        # Position
+        pos_x: float = 0.0
+        pos_y: float = 0.0
+        pos_z: float = 0.0
+        target_x: float = 0.0
+        target_y: float = 0.0
+        target_z: float = 0.0
+        current_velocity: float = 0.0
+
+        # Gripper
+        gripper_closed: bool = False
+
+        # Mode limits (mm/s)
+        manual_speed_limit: float = 250.0
+        auto_speed_limit: float = 1000.0
+
+        # Safety
+        drives_enabled: bool = True
+        e_stop_active: bool = False
+
+        # Program
+        program: list = []
+        program_step: int = 0
+}
+
+if __name__ == '__main__':
+    arm = @@RobotArm()
+
+    # --- Manual operation ---
+    arm.move_to(100, 50, 200)
+    for _ in range(10): arm.tick()
+    print(f"Position: {arm.get_position()}")
+
+    arm.grip()
+    print(f"State: {arm.get_state()}")
+
+    # --- Switch to auto ---
+    arm.set_auto()
+    program = [
+        {"cmd": "move", "x": 200, "y": 100, "z": 50},
+        {"cmd": "grip"},
+        {"cmd": "move", "x": 0, "y": 0, "z": 200},
+        {"cmd": "release"},
+    ]
+    arm.run_program(program)
+    for _ in range(20): arm.tick()
+
+    # --- E-stop during operation ---
+    arm2 = @@RobotArm()
+    arm2.move_to(500, 500, 500)
+    arm2.tick()
+    arm2.e_stop()
+    print(f"After e-stop: {arm2.get_state()}")
+    arm2.reset_e_stop()
+    print(f"After reset: {arm2.get_state()}")
+```
+
+**How it works:**
+
+**3-level HSM: Safety → Mode → Motion.**
+
+```
+$Safety
+  └── $Operational
+        ├── $Manual
+        │     ├── $ManualIdle
+        │     ├── $ManualMoving
+        │     ├── $ManualGripping
+        │     └── $ManualReleasing
+        └── $Auto
+              ├── $AutoIdle
+              └── $AutoExecuting
+$EStopCategory0
+$SafetyFault
+$SafetyCheck
+```
+
+`$Operational` handles `e_stop()` and `safety_fault()` — inherited by ALL operational states. E-stop works from `$ManualMoving`, `$AutoExecuting`, or any other operational state. This is the ISO 10218 safety overlay: the safety controller can override any operational state.
+
+**Mode rejection.** `$Auto` rejects `move_to()` with a message — you can't jog in auto mode. `$Manual` doesn't handle `run_program()` — it's silently ignored. The state machine enforces mode-dependent command availability.
+
+**Auto program execution.** `$AutoExecuting` reads the program step list, dispatches each command, and uses `@@:self.program_step_done()` to re-enter itself for the next step. This is the enter-handler chain pattern applied to program execution.
+
+**Features stressed:** 14 states, 3-level HSM (deepest in the cookbook), operations with `@@:system.state`, mode-based event rejection, `@@:self.method()` for program stepping, transient states, enter/exit handlers for velocity management, domain variables for 3D position
+
+---
+
+-----
+
 ## Feature Coverage
 
-|Feature                      |Recipes 1-22|Recipes 23-33   |EIP (34-45)         |
-|-----------------------------|------------|----------------|---------------------|
-|`@@:(expr)` return           |yes         |yes all         |yes all              |
-|`@@:return(expr)` exit sugar |yes #22     |yes #28         |no                   |
-|`@@:self.method()`           |yes #22     |yes #33         |no                   |
-|`@@:system.state`            |yes #22     |yes #32         |no                   |
-|Operations                   |no          |yes #23, #25, #32|yes #41, #45        |
-|`static` operations          |no          |yes #25         |no                   |
-|System params (domain)       |yes #21     |yes #23         |no                   |
-|HSM 3-level                  |no          |yes #26         |no                   |
-|`push$` / `-> pop$`          |yes #7, #8  |yes #27         |no                   |
-|Decorated pop (exit args)    |no          |yes #27         |no                   |
-|State var reset on reentry   |implicit    |yes #24 (explicit)|no                 |
-|Multi-system managed states  |yes #20     |yes #28, #29, #33|yes #43             |
-|Service pattern              |no          |yes #30         |no                   |
-|Enter-handler chain          |no          |yes #30, #31    |yes #42             |
-|Events ignored in wrong state|yes #3, #12 |yes #24, #32    |yes #39             |
-|`@@persist`                  |yes #18     |no              |yes #40, #44, #45   |
-|Self-transition (retry loop) |no          |no              |yes #40             |
-|HSM parent forwarding        |yes #9      |yes #26         |yes #41             |
-|Compensation chain           |no          |no              |yes #42             |
-|Transient states             |no          |yes #30         |yes #41, #42        |
+|Feature                      |Recipes 1-22|Recipes 23-33   |EIP (34-45)         |Stress (46-49)       |
+|-----------------------------|------------|----------------|---------------------|---------------------|
+|`@@:(expr)` return           |yes         |yes all         |yes all              |yes all              |
+|`@@:return(expr)` exit sugar |yes #22     |yes #28         |no                   |no                   |
+|`@@:self.method()`           |yes #22     |yes #33         |no                   |yes #49              |
+|`@@:system.state`            |yes #22     |yes #32         |no                   |yes #46, #49         |
+|Operations                   |no          |yes #23, #25, #32|yes #41, #45        |yes #46 (7), #49 (3) |
+|`static` operations          |no          |yes #25         |no                   |yes #46              |
+|System params (domain)       |yes #21     |yes #23         |no                   |yes #46 (3)          |
+|HSM 3-level                  |no          |yes #26         |no                   |yes #49 (3-level)    |
+|`push$` / `-> pop$`          |yes #7, #8  |yes #27         |no                   |no                   |
+|Decorated pop (exit args)    |no          |yes #27         |no                   |no                   |
+|State var reset on reentry   |implicit    |yes #24 (explicit)|no                 |yes #48              |
+|Multi-system managed states  |yes #20     |yes #28, #29, #33|yes #43             |yes #47, #48 (3)     |
+|Service pattern              |no          |yes #30         |no                   |no                   |
+|Enter-handler chain          |no          |yes #30, #31    |yes #42             |yes #48 (11 phases)  |
+|Events ignored in wrong state|yes #3, #12 |yes #24, #32    |yes #39             |yes #46 (terminals)  |
+|`@@persist`                  |yes #18     |no              |yes #40, #44, #45   |no                   |
+|Self-transition (retry loop) |no          |no              |yes #40             |no                   |
+|HSM parent forwarding        |yes #9      |yes #26         |yes #41             |yes #46, #48, #49    |
+|Compensation chain           |no          |no              |yes #42             |no                   |
+|Transient states             |no          |yes #30         |yes #41, #42        |yes #47, #48         |
+|13+ state machine            |no          |no              |no                   |yes #46 (13), #48 (17)|
+|Domain arithmetic (VWAP)     |no          |no              |no                   |yes #46, #47         |
+|Conditional abort routing    |no          |no              |no                   |yes #48              |
+|Mode-based event rejection   |no          |no              |no                   |yes #49              |
