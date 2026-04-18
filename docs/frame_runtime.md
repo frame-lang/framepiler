@@ -514,6 +514,24 @@ All other languages use built-in or standard library JSON support — no externa
 
 ---
 
+## String Interpolation Support
+
+Frame constructs (`$.varName`, `@@:`) work inside string interpolation expressions for 8 languages. The scanner detects interpolation regions within string literals and scans them for Frame constructs while skipping the surrounding string content.
+
+| Language | Interpolation syntax | Supported |
+|----------|---------------------|-----------|
+| Python | `f"...{expr}..."` | yes |
+| TypeScript/JS | `` `...${expr}...` `` | yes |
+| Kotlin/Dart | `"...${expr}..."` | yes |
+| C# | `$"...{expr}..."` | yes |
+| Ruby | `"...#{expr}..."` | yes |
+| Swift | `"...\(expr)..."` | yes |
+| C, C++, Java, Go, Lua, Erlang, PHP | n/a | no interpolation syntax |
+
+**Quote-aware expansion:** When `$.varName` appears inside an interpolated string, the generated dict key uses the **opposite** quote from the string delimiter. Inside `f"text {$.count}"`, the expansion uses single quotes: `state_vars['count']`. Inside `f'text {$.count}'`, it uses double quotes: `state_vars["count"]`. This prevents quote collisions that would break the string.
+
+---
+
 ## Runtime Edge Cases
 
 ### Stack Underflow

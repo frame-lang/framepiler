@@ -99,7 +99,7 @@ Generates `save_state()` and `restore_state()` methods. See [Persistence](#persi
 ## System Declaration
 
 ```
-@@system <Name> ( <system_params> )? {
+@@system <Name> ( <system_params> )? ( : <Base1>, <Base2>, ... )? {
     ( operations: <operations_block> )?
     ( interface: <interface_block> )?
     ( machine: <machine_block> )?
@@ -109,6 +109,31 @@ Generates `save_state()` and `restore_state()` methods. See [Persistence](#persi
 ```
 
 Sections are optional but **must appear in the order shown**: operations → interface → machine → actions → domain.
+
+### Base Classes
+
+A system can declare base classes or interfaces using `:` after the name (and optional parameters):
+
+```
+@@system Pong : RefCounted { ... }
+@@system NetworkPlayer : Node, Serializable { ... }
+@@system Robot($(x: int)) : Controller { ... }
+```
+
+Frame passes base class names through **verbatim** to the target language. It does not validate inheritance rules — the target compiler does. Each backend renders the base list per its language's convention:
+
+| Target | `@@system Foo : A, B` |
+|--------|----------------------|
+| Python | `class Foo(A, B):` |
+| GDScript | `extends A` (module scope) |
+| TypeScript | `class Foo extends A implements B` |
+| Java | `class Foo extends A implements B` |
+| C# | `class Foo : A, B` |
+| C++ | `class Foo : public A, public B` |
+| Kotlin | `class Foo : A(), B` |
+| Swift | `class Foo: A, B` |
+
+Systems without `:` generate standalone classes with no base (the default).
 
 ### System Parameters
 
@@ -494,6 +519,8 @@ Pops and discards the top compartment. To transition to the popped state, use `-
 $.counter               // read
 $.counter = <expr>      // write
 ```
+
+`$.varName` works inside string interpolation expressions for languages that support them (Python f-strings, TypeScript template literals, Kotlin `${}`, Ruby `#{}`, Swift `\()`, C# `$"{}"`). The expansion uses the opposite quote from the string delimiter to avoid collisions — e.g., inside `f"text {$.count}"`, the generated code uses single quotes for the dict key: `state_vars['count']`.
 
 ### System Context — `@@`
 
