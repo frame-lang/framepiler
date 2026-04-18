@@ -159,6 +159,7 @@ pub fn compile_ast_based(
             name,
             body_span,
             header_params_span,
+            bases,
             ..
         } = segment
         {
@@ -205,6 +206,9 @@ pub fn compile_ast_based(
                     }
                 }
             }
+
+            // Attach base classes from `: Base1, Base2` syntax
+            system_ast.bases = bases.clone();
 
             if has_persist {
                 system_ast.persist_attr = Some(crate::frame_c::compiler::frame_ast::PersistAttr {

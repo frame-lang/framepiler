@@ -232,7 +232,7 @@ pub fn generate_system_shared(
         name: system.name.clone(),
         fields,
         methods,
-        base_classes: vec![],
+        base_classes: system.bases.clone(),
         is_abstract: false,
         derives: vec![], // Derives not used - we manually build JSON
     };

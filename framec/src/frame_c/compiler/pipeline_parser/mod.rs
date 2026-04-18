@@ -219,14 +219,19 @@ impl<'a> Parser<'a> {
             let src = self.lexer.source();
             let init_start = self.lexer.cursor();
             let mut pos = init_start;
-            while pos < src.len() && src[pos] != b'\n' {
+            while pos < src.len() && src[pos] != b'\n' && src[pos] != b'#' {
                 pos += 1;
             }
             let init_text = std::str::from_utf8(&src[init_start..pos])
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            // Advance lexer cursor past this expression
+            // Advance lexer cursor past this expression (skip comment if present)
+            if pos < src.len() && src[pos] == b'#' {
+                while pos < src.len() && src[pos] != b'\n' {
+                    pos += 1;
+                }
+            }
             self.lexer.set_cursor(pos);
             if init_text.is_empty() {
                 None
@@ -1486,6 +1491,8 @@ impl<'a> Parser<'a> {
                 // Stop at delimiters (only when not inside <> or [])
                 b'\n' | b'{' if angle_depth == 0 && bracket_depth == 0 => break,
                 b'=' | b')' | b',' if angle_depth == 0 && bracket_depth == 0 => break,
+                // Stop at comment start — # begins a line comment in most languages
+                b'#' if angle_depth == 0 && bracket_depth == 0 => break,
                 // Type-valid characters: letters, digits, _, &, *, |, space, :, .
                 _ => pos += 1,
             }

@@ -80,6 +80,8 @@ pub enum Segment {
         header_params_span: Option<Span>,
         /// System name extracted during segmentation
         name: String,
+        /// Base classes/interfaces from `: Base1, Base2` syntax
+        bases: Vec<String>,
     },
 }
 
@@ -359,8 +361,65 @@ pub fn segment<S: SyntaxSkipper>(skipper: &S, source: &[u8]) -> Result<SourceMap
                             None
                         };
 
+                        // Parse optional base classes: `: Base1, Base2`
+                        let mut bases = Vec::new();
+                        let mut after_bases = after_name;
+                        // Skip whitespace
+                        while after_bases < n
+                            && (source[after_bases] == b' ' || source[after_bases] == b'\t')
+                        {
+                            after_bases += 1;
+                        }
+                        if after_bases < n && source[after_bases] == b':' {
+                            after_bases += 1; // skip :
+                            // Parse comma-separated identifiers until {
+                            loop {
+                                // Skip whitespace
+                                while after_bases < n
+                                    && (source[after_bases] == b' '
+                                        || source[after_bases] == b'\t')
+                                {
+                                    after_bases += 1;
+                                }
+                                if after_bases >= n
+                                    || source[after_bases] == b'{'
+                                    || source[after_bases] == b'\n'
+                                {
+                                    break;
+                                }
+                                // Collect identifier (alphanumeric + _ + . for namespaced types)
+                                let id_start = after_bases;
+                                while after_bases < n
+                                    && (source[after_bases].is_ascii_alphanumeric()
+                                        || source[after_bases] == b'_'
+                                        || source[after_bases] == b'.')
+                                {
+                                    after_bases += 1;
+                                }
+                                if after_bases > id_start {
+                                    let base_name =
+                                        String::from_utf8_lossy(&source[id_start..after_bases])
+                                            .to_string();
+                                    bases.push(base_name);
+                                }
+                                // Skip whitespace after identifier
+                                while after_bases < n
+                                    && (source[after_bases] == b' '
+                                        || source[after_bases] == b'\t')
+                                {
+                                    after_bases += 1;
+                                }
+                                // Check for comma (more bases) or stop
+                                if after_bases < n && source[after_bases] == b',' {
+                                    after_bases += 1; // skip comma
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+
                         // Find the opening brace
-                        let mut brace_pos = after_name;
+                        let mut brace_pos = after_bases;
                         while brace_pos < n
                             && source[brace_pos] != b'{'
                             && source[brace_pos] != b'\n'
@@ -408,6 +467,7 @@ pub fn segment<S: SyntaxSkipper>(skipper: &S, source: &[u8]) -> Result<SourceMap
                             },
                             header_params_span,
                             name: system_name,
+                            bases,
                         });
 
                         i = outer_end;

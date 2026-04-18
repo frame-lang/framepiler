@@ -99,6 +99,9 @@ pub struct Import {
 pub struct SystemAst {
     pub name: String,
     pub params: Vec<SystemParam>,
+    /// Base classes/interfaces: `@@system Foo : Base1, Base2 { }`
+    /// Passed through verbatim to the target language's inheritance syntax.
+    pub bases: Vec<String>,
     pub interface: Vec<InterfaceMethod>,
     pub machine: Option<MachineAst>,
     pub actions: Vec<ActionAst>,
@@ -603,6 +606,7 @@ impl SystemAst {
         Self {
             name,
             params: vec![],
+            bases: vec![],
             interface: vec![],
             machine: None,
             actions: vec![],

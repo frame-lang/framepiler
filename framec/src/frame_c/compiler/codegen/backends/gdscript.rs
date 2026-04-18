@@ -23,6 +23,22 @@ impl LanguageBackend for GDScriptBackend {
             CodegenNode::Module { imports, items } => {
                 let mut result = String::new();
 
+                // Check if the system class declares base classes.
+                // If so, emit `extends Base` at file top and promote the
+                // system to module scope (GDScript one-class-per-file convention).
+                let system_bases: Option<&Vec<String>> = items.iter().rev().find_map(|item| {
+                    if let CodegenNode::Class { base_classes, .. } = item {
+                        if !base_classes.is_empty() {
+                            return Some(base_classes);
+                        }
+                    }
+                    None
+                });
+                let module_scope = system_bases.is_some();
+                if let Some(bases) = system_bases {
+                    result.push_str(&format!("extends {}\n\n", bases[0]));
+                }
+
                 // Emit imports
                 for import in imports {
                     result.push_str(&self.emit(import, ctx));
@@ -33,10 +49,44 @@ impl LanguageBackend for GDScriptBackend {
                     result.push('\n');
                 }
 
-                // Emit items
+                // Emit items. When module_scope is true, the system class
+                // (identified by having base_classes) is emitted at module
+                // scope — no `class Name:` wrapper. Helper classes (FrameEvent,
+                // FrameContext, Compartment) remain as inner classes.
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 {
                         result.push_str("\n\n");
+                    }
+                    if module_scope {
+                        if let CodegenNode::Class {
+                            base_classes,
+                            fields,
+                            methods,
+                            ..
+                        } = item
+                        {
+                            if !base_classes.is_empty() {
+                                // System class — emit at module scope
+                                for field in fields {
+                                    let init = if let Some(ref init_node) = field.initializer {
+                                        format!(" = {}", self.emit(init_node, ctx))
+                                    } else {
+                                        String::new()
+                                    };
+                                    result.push_str(&format!("var {}{}\n", field.name, init));
+                                }
+                                if !fields.is_empty() && !methods.is_empty() {
+                                    result.push('\n');
+                                }
+                                for (j, method) in methods.iter().enumerate() {
+                                    if j > 0 {
+                                        result.push('\n');
+                                    }
+                                    result.push_str(&self.emit(method, ctx));
+                                }
+                                continue;
+                            }
+                        }
                     }
                     result.push_str(&self.emit(item, ctx));
                 }
@@ -71,47 +121,81 @@ impl LanguageBackend for GDScriptBackend {
             } => {
                 let mut result = String::new();
 
-                // Class declaration
-                let bases = if base_classes.is_empty() {
-                    String::new()
-                } else {
-                    format!(" extends {}", base_classes[0])
-                };
+                // When a system declares base classes (@@system Foo : Base)
+                // AND we're at module scope (indent 0), emit the system
+                // at module scope with `extends Base` — GDScript's
+                // one-class-per-file convention. Helper classes (indent 0
+                // but no bases) stay as inner classes.
+                let module_scope = !base_classes.is_empty() && ctx.indent == 0;
 
-                result.push_str(&format!("{}class {}{}:\n", ctx.get_indent(), name, bases));
-
-                ctx.push_indent();
-
-                if methods.is_empty() && fields.is_empty() {
-                    result.push_str(&format!("{}pass\n", ctx.get_indent()));
-                } else {
-                    // Emit field declarations (GDScript inner classes need explicit var declarations)
+                if module_scope {
+                    // Module-scope system: extends + fields + methods, no class wrapper
+                    result.push_str(&format!("extends {}\n\n", base_classes[0]));
+                    // Emit fields at module scope
                     for field in fields {
                         let init = if let Some(ref init_node) = field.initializer {
                             format!(" = {}", self.emit(init_node, ctx))
                         } else {
                             String::new()
                         };
-                        result.push_str(&format!(
-                            "{}var {}{}\n",
-                            ctx.get_indent(),
-                            field.name,
-                            init
-                        ));
+                        result.push_str(&format!("var {}{}\n", field.name, init));
                     }
                     if !fields.is_empty() && !methods.is_empty() {
                         result.push('\n');
                     }
-                    // Emit methods
+                    // Emit methods at module scope
                     for (i, method) in methods.iter().enumerate() {
                         if i > 0 {
                             result.push('\n');
                         }
                         result.push_str(&self.emit(method, ctx));
                     }
-                }
+                } else {
+                    // Inner class or no-base class: emit with class wrapper
+                    let bases = if base_classes.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" extends {}", base_classes[0])
+                    };
 
-                ctx.pop_indent();
+                    result.push_str(&format!(
+                        "{}class {}{}:\n",
+                        ctx.get_indent(),
+                        name,
+                        bases
+                    ));
+
+                    ctx.push_indent();
+
+                    if methods.is_empty() && fields.is_empty() {
+                        result.push_str(&format!("{}pass\n", ctx.get_indent()));
+                    } else {
+                        for field in fields {
+                            let init = if let Some(ref init_node) = field.initializer {
+                                format!(" = {}", self.emit(init_node, ctx))
+                            } else {
+                                String::new()
+                            };
+                            result.push_str(&format!(
+                                "{}var {}{}\n",
+                                ctx.get_indent(),
+                                field.name,
+                                init
+                            ));
+                        }
+                        if !fields.is_empty() && !methods.is_empty() {
+                            result.push('\n');
+                        }
+                        for (i, method) in methods.iter().enumerate() {
+                            if i > 0 {
+                                result.push('\n');
+                            }
+                            result.push_str(&self.emit(method, ctx));
+                        }
+                    }
+
+                    ctx.pop_indent();
+                }
                 result
             }
 
