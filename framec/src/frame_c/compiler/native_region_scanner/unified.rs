@@ -302,6 +302,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         let mut prev_end = interp_regions[0].start;
                         for region in &interp_regions {
                             // Native text between previous region end and this region start
+                            // (includes interpolation delimiters: }...{)
                             if prev_end < region.start {
                                 regions.push(Region::NativeText {
                                     span: RegionSpan {
@@ -310,6 +311,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                                     },
                                 });
                             }
+                            prev_end = region.start;
                             // Scan the interpolation region for $./@@ constructs
                             // by running the inner scanner on just these bytes
                             let mut inner_pos = region.start;
@@ -385,6 +387,17 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                                 } else {
                                     inner_pos += 1;
                                 }
+                            }
+                            // Emit remaining region content not consumed
+                            // by Frame construct detection (handles regions
+                            // like {total} that contain no $./@@ at all)
+                            if prev_end < region.end {
+                                regions.push(Region::NativeText {
+                                    span: RegionSpan {
+                                        start: prev_end,
+                                        end: region.end,
+                                    },
+                                });
                             }
                             prev_end = region.end;
                         }
