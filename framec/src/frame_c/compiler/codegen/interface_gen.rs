@@ -159,7 +159,7 @@ self._context_stack.pop()"#,
                 let context_class = format!("{}FrameContext", system.name);
                 // Parameters are passed as a dict with parameter names as keys for @@ syntax access
                 let params_code = if method.params.is_empty() {
-                    "null".to_string()
+                    "{}".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
                         .map(|p| format!("\"{}\": {}", p.name, p.name))
@@ -696,7 +696,7 @@ return __result;"#,
                 // Dart: similar to TypeScript
                 let context_class = format!("{}FrameContext", system.name);
                 let params_code = if method.params.is_empty() {
-                    "null".to_string()
+                    "{}".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
                         .map(|p| format!("\"{}\": {}", p.name, p.name))
@@ -2537,6 +2537,18 @@ pub(crate) fn generate_persistence_methods(
                 is_static: false,
                 visibility: Visibility::Public,
                 decorators: vec![],
+            });
+
+            // _restore — private named constructor for deserialization.
+            // Creates an uninitialized instance (skips the normal
+            // constructor's $> enter event and compartment setup).
+            // restoreState() populates fields from JSON after construction.
+            methods.push(CodegenNode::NativeBlock {
+                code: format!(
+                    "{}._restore() : __compartment = {}(\"\"), __next_compartment = null;",
+                    system.name, compartment_type
+                ),
+                span: None,
             });
 
             // restore_state — static method

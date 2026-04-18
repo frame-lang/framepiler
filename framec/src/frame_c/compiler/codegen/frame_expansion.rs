@@ -152,126 +152,6 @@ pub(crate) fn emit_handler_body_via_statements(
                 }
             }
             _ => {
-                // Lookahead: if this is a Transition and a ContextReturnExpr follows
-                // (with only whitespace-only NativeCode between), the transition's
-                // `return;` would make the return-value unreachable. Fix: strip the
-                // `return`/`return;` from the transition expansion, emit the return-expr
-                // assignment, then re-add the return.
-                if matches!(stmt, Statement::Transition(_)) {
-                    // Find the next return-value statement after this transition.
-                    // Only reorder if the return-expr is at the same or deeper indent
-                    // as the transition (same block scope). If at shallower indent,
-                    // it's in a different scope and unrelated to this transition.
-                    let transition_indent = if frame_idx < frame_regions.len() {
-                        if let Region::FrameSegment { indent, .. } = frame_regions[frame_idx] {
-                            *indent
-                        } else {
-                            0
-                        }
-                    } else {
-                        0
-                    };
-
-                    let mut return_stmt_idx = None;
-                    for j in (stmt_idx + 1)..statements.len() {
-                        match &statements[j] {
-                            Statement::NativeCode(text) if text.trim().is_empty() => {
-                                // Check if the whitespace after the last \n has
-                                // enough indent to be in the same block
-                                if let Some(last_nl) = text.rfind('\n') {
-                                    let after_nl = &text[last_nl + 1..];
-                                    let ws_indent = after_nl.len();
-                                    if ws_indent < transition_indent {
-                                        break; // Shallower indent — different scope
-                                    }
-                                }
-                                continue;
-                            }
-                            Statement::ContextReturnExpr { .. } | Statement::ReturnCall { .. } => {
-                                return_stmt_idx = Some(j);
-                            }
-                            _ => {}
-                        }
-                        break;
-                    }
-                    if let Some(ret_idx) = return_stmt_idx {
-                        // Generate the transition expansion to check if it ends with return
-                        if frame_idx < frame_regions.len() {
-                            if let Region::FrameSegment {
-                                span: seg_span,
-                                kind,
-                                indent,
-                                metadata,
-                            } = frame_regions[frame_idx]
-                            {
-                                let expansion = generate_frame_expansion(
-                                    body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
-                                );
-                                let trimmed = expansion.trim_end();
-                                let has_return =
-                                    trimmed.ends_with("return;") || trimmed.ends_with("return");
-
-                                if has_return {
-                                    // Strip trailing return, emit return-expr before it
-                                    let stripped = if trimmed.ends_with("return;") {
-                                        &trimmed[..trimmed.len() - 7]
-                                    } else {
-                                        &trimmed[..trimmed.len() - 6]
-                                    };
-                                    out.push_str(stripped);
-                                    out.push('\n');
-                                    frame_idx += 1;
-
-                                    // Emit the return-expr
-                                    let mut fj = frame_idx;
-                                    for k in (stmt_idx + 1)..=ret_idx {
-                                        if !matches!(&statements[k], Statement::NativeCode(_)) {
-                                            if k == ret_idx && fj < frame_regions.len() {
-                                                if let Region::FrameSegment {
-                                                    span: seg_span,
-                                                    kind,
-                                                    indent,
-                                                    metadata,
-                                                } = frame_regions[fj]
-                                                {
-                                                    let exp = generate_frame_expansion(
-                                                        body_bytes, seg_span, *kind, *indent, lang,
-                                                        ctx, metadata,
-                                                    );
-                                                    out.push_str(&exp);
-                                                    out.push('\n');
-                                                }
-                                            }
-                                            fj += 1;
-                                        }
-                                    }
-                                    skip_set.insert(ret_idx);
-                                    // Re-add the return with matching indent
-                                    let return_keyword = if matches!(
-                                        lang,
-                                        TargetLanguage::Python3
-                                            | TargetLanguage::GDScript
-                                            | TargetLanguage::Ruby
-                                            | TargetLanguage::Lua
-                                            | TargetLanguage::Kotlin
-                                            | TargetLanguage::Swift
-                                            | TargetLanguage::Go
-                                    ) {
-                                        "return"
-                                    } else {
-                                        "return;"
-                                    };
-                                    let ret_indent = " ".repeat(*indent);
-                                    out.push_str(&ret_indent);
-                                    out.push_str(return_keyword);
-                                    continue; // Skip the normal frame expansion below
-                                }
-                                // No return in expansion — fall through to normal emit
-                            }
-                        }
-                    }
-                }
-
                 // Look up the corresponding original Region for expansion parameters
                 if frame_idx < frame_regions.len() {
                     if let Region::FrameSegment {
@@ -284,43 +164,115 @@ pub(crate) fn emit_handler_body_via_statements(
                         let expansion = generate_frame_expansion(
                             body_bytes, seg_span, *kind, *indent, lang, ctx, metadata,
                         );
-                        // If the preceding native text didn't end with a
-                        // newline (e.g., `if cond: -> $State` on one line),
-                        // insert a line break so the expansion starts on its
-                        // own line. The expansion already carries the correct
-                        // indentation from the scanner's indent calculation.
-                        if !out.is_empty() && !out.ends_with('\n') && expansion.contains('\n') {
-                            out.push('\n');
-                        }
-                        // For self-calls: the expansion is a bare call
-                        // expression. If standalone (out ends with \n —
-                        // native ws was trimmed), prefix with indent_str
-                        // and append statement terminator.
-                        // If inline (out ends with native code like "= "),
-                        // emit bare — the native text supplies the terminator.
-                        let is_standalone_self_call = *kind == FrameSegmentKind::ContextSelfCall
-                            && (out.is_empty() || out.ends_with('\n'));
-                        if is_standalone_self_call {
-                            out.push_str(&" ".repeat(*indent));
-                        }
-                        out.push_str(&expansion);
-                        if is_standalone_self_call {
-                            // Standalone call needs a statement terminator
-                            match lang {
-                                TargetLanguage::Python3
-                                | TargetLanguage::GDScript
-                                | TargetLanguage::Ruby
-                                | TargetLanguage::Lua => {}
-                                _ => out.push(';'),
-                            }
-                        }
 
-                        // Self-call transition guard — deferred until the
-                        // native line completes (so `;` lands before guard).
-                        if *kind == FrameSegmentKind::ContextSelfCall {
-                            let guard = generate_self_call_guard(*indent, lang, &ctx.system_name);
-                            if !guard.is_empty() {
-                                pending_guard = Some(guard);
+                        // ── Transition control flow ──────────────────────
+                        // Transition expansions end with `return` to exit the
+                        // handler after the state change. But if a return-expr
+                        // (`@@:(expr)`) follows the transition in the same
+                        // scope, the return makes it unreachable.
+                        //
+                        // Fix: separate the expansion body from the trailing
+                        // `return`. Emit body, consume any same-scope
+                        // return-expr, then emit `return`. This is a clean
+                        // separation of transition semantics (the expansion)
+                        // from handler control flow (the orchestrator).
+                        let is_transition = matches!(
+                            kind,
+                            FrameSegmentKind::Transition | FrameSegmentKind::StackPop
+                        );
+                        if is_transition {
+                            let (body, return_kw) = split_transition_return(&expansion);
+                            // Multi-line expansion on same line as native code
+                            // needs a line break first
+                            if !out.is_empty() && !out.ends_with('\n') && body.contains('\n') {
+                                out.push('\n');
+                            }
+                            out.push_str(body);
+
+                            if !return_kw.is_empty() {
+                                // Scan forward for a return-expr that directly
+                                // follows this transition in the same block.
+                                //
+                                // Two conditions must BOTH hold:
+                                // 1. Only whitespace NativeCode between them
+                                //    (content like `else:` or `}` = different block)
+                                // 2. The return-expr has the same scanner-computed
+                                //    indent as the transition (catches Python's
+                                //    indent-based scoping where dedent is whitespace)
+                                //
+                                // Together these handle both brace languages
+                                // (content stops the scan) and indent languages
+                                // (indent mismatch stops the consume).
+                                let next_frame_idx = frame_idx + 1;
+                                for j in (stmt_idx + 1)..statements.len() {
+                                    match &statements[j] {
+                                        Statement::NativeCode(text)
+                                            if text.trim().is_empty() =>
+                                        {
+                                            continue
+                                        }
+                                        Statement::ContextReturnExpr { .. }
+                                        | Statement::ReturnCall { .. } => {
+                                            if next_frame_idx < frame_regions.len() {
+                                                if let Region::FrameSegment {
+                                                    span: ret_span,
+                                                    kind: ret_kind,
+                                                    indent: ret_indent,
+                                                    metadata: ret_meta,
+                                                } = frame_regions[next_frame_idx]
+                                                {
+                                                    if *ret_indent == *indent {
+                                                        let ret_exp = generate_frame_expansion(
+                                                            body_bytes, ret_span, *ret_kind,
+                                                            *ret_indent, lang, ctx, ret_meta,
+                                                        );
+                                                        out.push('\n');
+                                                        out.push_str(&ret_exp);
+                                                        skip_set.insert(j);
+                                                    }
+                                                }
+                                            }
+                                            break;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                // Emit return on its own line at the transition's indent
+                                out.push('\n');
+                                out.push_str(&" ".repeat(*indent));
+                                out.push_str(return_kw);
+                            }
+                        } else {
+                            // ── Non-transition expansion ─────────────────
+                            if !out.is_empty() && !out.ends_with('\n') && expansion.contains('\n') {
+                                out.push('\n');
+                            }
+                            // Self-call: bare call expression needs indent
+                            // prefix (standalone) or statement terminator.
+                            let is_standalone_self_call =
+                                *kind == FrameSegmentKind::ContextSelfCall
+                                    && (out.is_empty() || out.ends_with('\n'));
+                            if is_standalone_self_call {
+                                out.push_str(&" ".repeat(*indent));
+                            }
+                            out.push_str(&expansion);
+                            if is_standalone_self_call {
+                                match lang {
+                                    TargetLanguage::Python3
+                                    | TargetLanguage::GDScript
+                                    | TargetLanguage::Ruby
+                                    | TargetLanguage::Lua => {}
+                                    _ => out.push(';'),
+                                }
+                            }
+
+                            // Self-call guard — deferred until native line ends
+                            if *kind == FrameSegmentKind::ContextSelfCall {
+                                let guard =
+                                    generate_self_call_guard(*indent, lang, &ctx.system_name);
+                                if !guard.is_empty() {
+                                    pending_guard = Some(guard);
+                                }
                             }
                         }
                     }
@@ -4171,6 +4123,26 @@ fn generate_pop_transition(
 }
 
 /// Get the native region scanner for the target language
+/// Split a transition expansion into the body (compartment setup +
+/// `__transition()` call) and the trailing `return` keyword.
+///
+/// Transition expansions always end with `return` or `return;` to exit
+/// the handler after the state change. The orchestrator needs these
+/// separated so it can insert a return-expr between the body and the
+/// return when `-> $State` is followed by `@@:(expr)` in the same scope.
+fn split_transition_return(expansion: &str) -> (&str, &str) {
+    let trimmed = expansion.trim_end();
+    if trimmed.ends_with("return;") {
+        (trimmed[..trimmed.len() - 7].trim_end(), "return;")
+    } else if trimmed.ends_with("return") {
+        (trimmed[..trimmed.len() - 6].trim_end(), "return")
+    } else {
+        // Expansion doesn't end with return (e.g., Rust uses different
+        // control flow, or Graphviz). Emit as-is.
+        (trimmed, "")
+    }
+}
+
 /// Generate the transition guard check for a self-call.
 /// Emitted by the orchestrator AFTER the line containing the self-call
 /// expression, on its own line at the given indentation.

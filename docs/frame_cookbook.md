@@ -1,6 +1,6 @@
 # Frame Cookbook
 
-33 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
+45 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
 
 For language syntax details, see the [Frame Language Reference](frame_language.md). For a tutorial introduction, see [Getting Started](frame_getting_started.md).
 
@@ -56,6 +56,21 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 31. [Pipeline Processor](#31-pipeline-processor--kernel-loop-validation) — kernel loop validation
 32. [Test Harness](#32-test-harness--white-box-testing-with-operations) — white-box testing with operations
 33. [AI Coding Agent](#33-ai-coding-agent--capstone) — capstone
+
+**Enterprise Integration Patterns (34-45)**
+
+34. [Idempotent Receiver](#34-idempotent-receiver) — dedupe by message ID
+35. [Content-Based Router](#35-content-based-router) — route by message content
+36. [Message Filter](#36-message-filter) — accept or drop by predicate
+37. [Aggregator](#37-aggregator) — collect a correlation set, emit one message
+38. [Resequencer](#38-resequencer) — buffer out-of-order messages, release in order
+39. [Circuit Breaker](#39-circuit-breaker) — closed/open/half-open fault isolation
+40. [Dead Letter Channel](#40-dead-letter-channel) — bounded retry with persistence
+41. [Polling Consumer](#41-polling-consumer) — pull-driven message loop
+42. [Process Manager (Saga)](#42-process-manager-saga) — multi-step orchestration with compensation
+43. [Competing Consumers](#43-competing-consumers) — dispatcher + worker pool
+44. [Message Store](#44-message-store) — audit log persisted across restarts
+45. [Migrating Machine](#45-migrating-machine) — state machine as the message
 
 -----
 
@@ -2378,22 +2393,971 @@ if __name__ == '__main__':
 
 -----
 
+## Enterprise Integration Patterns
+
+Recipes 34-45 implement patterns from *Enterprise Integration Patterns* (Hohpe & Woolf, 2003) as Frame state machines. Each maps a named EIP pattern onto the same shape as the recipes above. These are single-node implementations of the pattern's *logic* — the part a message broker, integration framework, or service would host. The transport is your host code; the state machine is what you hand to the host.
+
+All recipes target Python 3 for readability; the patterns generate identically for all 17 Frame targets. For the canonical pattern catalog, see [enterpriseintegrationpatterns.com](https://www.enterpriseintegrationpatterns.com/patterns/messaging/).
+
+-----
+
+## 34. Idempotent Receiver
+
+**Problem:** A sender may redeliver the same message. The receiver must process each business message exactly once, even if it arrives multiple times.
+
+```frame
+@@target python_3
+
+@@system IdempotentReceiver {
+    interface:
+        deliver(msg_id: str, payload: str): str
+
+    machine:
+        $Ready {
+            deliver(msg_id: str, payload: str): str {
+                if msg_id in self.seen:
+                    @@:("duplicate")
+                else:
+                    self.seen.add(msg_id)
+                    self.process(payload)
+                    @@:("accepted")
+            }
+        }
+
+    actions:
+        process(payload) {
+            print(f"processing: {payload}")
+        }
+
+    domain:
+        seen: set = set()
+}
+
+if __name__ == '__main__':
+    r = @@IdempotentReceiver()
+    print(r.deliver("m1", "hello"))    # accepted
+    print(r.deliver("m1", "hello"))    # duplicate
+    print(r.deliver("m2", "world"))    # accepted
+```
+
+**How it works:** The `seen` set in the domain is the idempotency key store. On redelivery, the handler branches on set membership before doing any work. A single `$Ready` state is enough because the dedupe decision is data-driven, not state-driven.
+
+**Features used:** domain variables as a dedupe store, data-driven branching, actions
+
+-----
+
+## 35. Content-Based Router
+
+**Problem:** A single inbound stream contains messages of different kinds. Each kind should be routed to a different downstream destination.
+
+```frame
+@@target python_3
+
+@@system ContentBasedRouter {
+    interface:
+        route(kind: str, payload: str): str
+
+    machine:
+        $Routing {
+            route(kind: str, payload: str): str {
+                if kind == "order":
+                    self.to_orders(payload)
+                    @@:("orders")
+                else:
+                    if kind == "refund":
+                        self.to_refunds(payload)
+                        @@:("refunds")
+                    else:
+                        self.to_dlq(payload)
+                        @@:("dlq")
+            }
+        }
+
+    actions:
+        to_orders(p)  { print(f"-> orders:  {p}") }
+        to_refunds(p) { print(f"-> refunds: {p}") }
+        to_dlq(p)     { print(f"-> dlq:     {p}") }
+}
+
+if __name__ == '__main__':
+    r = @@ContentBasedRouter()
+    r.route("order",   "SKU-1")
+    r.route("refund",  "INV-7")
+    r.route("unknown", "???")
+```
+
+**How it works:** The routing decision is a pure function of the message, so one state suffices. The router's contract (`route()`) and its decision table sit next to each other in one block, generating a class your host code can instantiate and call. Routers that learn downstream health graduate to multi-state — see [Circuit Breaker](#39-circuit-breaker).
+
+**Features used:** single-state dispatcher, actions as routing sinks, content-driven branching
+
+-----
+
+## 36. Message Filter
+
+**Problem:** Drop messages that don't match a predicate. Count both accepted and rejected messages for observability.
+
+```frame
+@@target python_3
+
+@@system MessageFilter {
+    interface:
+        consider(payload: str): str
+        stats(): str
+
+    machine:
+        $Accepting {
+            consider(payload: str): str {
+                if self.matches(payload):
+                    self.passed = self.passed + 1
+                    self.forward(payload)
+                    @@:("passed")
+                else:
+                    self.dropped = self.dropped + 1
+                    @@:("dropped")
+            }
+            stats(): str {
+                @@:(f"passed={self.passed} dropped={self.dropped}")
+            }
+        }
+
+    actions:
+        matches(payload) {
+            return "urgent" in payload
+        }
+        forward(payload) {
+            print(f"-> {payload}")
+        }
+
+    domain:
+        passed: int = 0
+        dropped: int = 0
+}
+
+if __name__ == '__main__':
+    f = @@MessageFilter()
+    f.consider("urgent: reboot")
+    f.consider("weekly digest")
+    f.consider("urgent: patch")
+    print(f.stats())        # passed=2 dropped=1
+```
+
+**How it works:** Structurally identical to the router but with a boolean predicate instead of an N-way branch. The filter's policy (`matches`) is a named action, making it easy to swap or test in isolation.
+
+**Features used:** predicate action, domain counters, observability via a second interface method
+
+-----
+
+## 37. Aggregator
+
+**Problem:** Correlated messages arrive separately. Wait until the full set has arrived, then emit a single combined message.
+
+```frame
+@@target python_3
+
+@@system Aggregator {
+    interface:
+        receive(correlation_id: str, part: str): str
+        status(): str
+
+    machine:
+        $Collecting {
+            receive(correlation_id: str, part: str): str {
+                if correlation_id not in self.groups:
+                    self.groups[correlation_id] = []
+                self.groups[correlation_id].append(part)
+
+                if len(self.groups[correlation_id]) >= self.expected_parts:
+                    combined = ",".join(self.groups[correlation_id])
+                    del self.groups[correlation_id]
+                    self.emit(correlation_id, combined)
+                    @@:("complete")
+                else:
+                    @@:("collecting")
+            }
+            status(): str {
+                @@:(f"in_flight={len(self.groups)}")
+            }
+        }
+
+    actions:
+        emit(cid, combined) {
+            print(f"[{cid}] -> {combined}")
+        }
+
+    domain:
+        groups: dict = {}
+        expected_parts: int = 3
+}
+
+if __name__ == '__main__':
+    a = @@Aggregator()
+    print(a.receive("A", "p1"))   # collecting
+    print(a.receive("B", "p1"))   # collecting
+    print(a.receive("A", "p2"))   # collecting
+    print(a.receive("A", "p3"))   # complete  -> emits "p1,p2,p3"
+    print(a.status())             # in_flight=1   (B still open)
+```
+
+**How it works:** `groups` is a correlation map from ID to parts-so-far. When a group reaches `expected_parts`, the aggregator emits the combined payload and removes the entry. One state is correct because the branching is driven by the correlation ID, not by where the aggregator "is."
+
+**Features used:** correlation-keyed domain state, completeness check, emit-and-cleanup
+
+-----
+
+## 38. Resequencer
+
+**Problem:** Messages arrive out of order (each tagged with a sequence number). Release them downstream strictly in order, buffering anything premature.
+
+```frame
+@@target python_3
+
+@@system Resequencer {
+    interface:
+        arrive(seq: int, payload: str): str
+        status(): str
+
+    machine:
+        $Buffering {
+            arrive(seq: int, payload: str): str {
+                self.buffer[seq] = payload
+                released = 0
+                while self.next_seq in self.buffer:
+                    p = self.buffer[self.next_seq]
+                    del self.buffer[self.next_seq]
+                    self.release(self.next_seq, p)
+                    self.next_seq = self.next_seq + 1
+                    released = released + 1
+                if released > 0:
+                    @@:(f"released {released}")
+                else:
+                    @@:("buffered")
+            }
+            status(): str {
+                @@:(f"next={self.next_seq} buffered={len(self.buffer)}")
+            }
+        }
+
+    actions:
+        release(seq, payload) {
+            print(f"  out #{seq}: {payload}")
+        }
+
+    domain:
+        buffer: dict = {}
+        next_seq: int = 1
+}
+
+if __name__ == '__main__':
+    rs = @@Resequencer()
+    print(rs.arrive(3, "c"))    # buffered  (waiting for 1)
+    print(rs.arrive(1, "a"))    # released 1
+    print(rs.arrive(2, "b"))    # released 2  (drains 2 and 3)
+    print(rs.status())          # next=4 buffered=0
+```
+
+**How it works:** `next_seq` is the watermark. Every `arrive()` call adds to the buffer, then drains every contiguous run that's ready. The drain loop is native Python; Frame owns the buffer, the watermark, and the handler contract.
+
+**Features used:** native loop in a handler, contiguous-range release, watermark progression
+
+-----
+
+## 39. Circuit Breaker
+
+**Problem:** A downstream dependency is failing. Stop hammering it; let it recover. Periodically probe; resume full traffic only after probes succeed.
+
+```frame
+@@target python_3
+
+@@system CircuitBreaker {
+    interface:
+        call(payload: str): str
+        record_failure()
+        record_success()
+        probe()
+        state_name(): str
+
+    machine:
+        $Closed {
+            $>() {
+                self.failures = 0
+            }
+            call(payload: str): str {
+                @@:(self.invoke(payload))
+            }
+            record_failure() {
+                self.failures = self.failures + 1
+                if self.failures >= self.threshold:
+                    -> $Open
+            }
+            record_success() {
+                self.failures = 0
+            }
+            state_name(): str { @@:("closed") }
+        }
+
+        $Open {
+            call(payload: str): str {
+                @@:("rejected: circuit open")
+            }
+            probe() {
+                -> $HalfOpen
+            }
+            state_name(): str { @@:("open") }
+        }
+
+        $HalfOpen {
+            call(payload: str): str {
+                @@:(self.invoke(payload))
+            }
+            record_success() {
+                -> $Closed
+            }
+            record_failure() {
+                -> $Open
+            }
+            state_name(): str { @@:("half_open") }
+        }
+
+    actions:
+        invoke(payload) {
+            return f"ok:{payload}"
+        }
+
+    domain:
+        failures: int = 0
+        threshold: int = 3
+}
+
+if __name__ == '__main__':
+    cb = @@CircuitBreaker()
+    for _ in range(3):
+        cb.call("x")
+        cb.record_failure()
+    print(cb.state_name())         # open
+    print(cb.call("x"))            # rejected: circuit open
+    cb.probe()
+    print(cb.state_name())         # half_open
+    cb.call("x")
+    cb.record_success()
+    print(cb.state_name())         # closed
+```
+
+**How it works:** The three canonical breaker states map directly. `call()` means different things in each: full pass-through in `$Closed`, immediate rejection in `$Open`, guarded pass-through in `$HalfOpen`. Failure and success arrive as separate interface methods because the breaker doesn't know whether a call succeeded — the host does. `$Closed`'s enter handler resets `failures` on every close, including after half-open recovery.
+
+**Features used:** three-state lifecycle, enter handler as reset point, external observability signals
+
+-----
+
+## 40. Dead Letter Channel
+
+**Problem:** A message that can't be processed after N attempts must not block the pipeline. Move it to a dead-letter channel for inspection. The processor must survive restarts without losing retry state.
+
+```frame
+@@target python_3
+
+@@persist
+
+@@system DeadLetterProcessor {
+    interface:
+        accept(msg_id: str, payload: str): str
+        process_tick(): str
+        reset()
+
+    machine:
+        $Idle {
+            accept(msg_id: str, payload: str): str {
+                self.msg_id = msg_id
+                self.payload = payload
+                self.attempts = 0
+                @@:("accepted")
+                -> $Processing
+            }
+            process_tick(): str { @@:("idle") }
+        }
+
+        $Processing {
+            $>() {
+                self.attempts = self.attempts + 1
+            }
+            process_tick(): str {
+                if self.try_process(self.payload):
+                    @@:("ok")
+                    -> $Done
+                else:
+                    if self.attempts >= self.max_attempts:
+                        @@:("dead_lettered")
+                        -> $DeadLettered
+                    else:
+                        @@:("retrying")
+                        -> $Processing
+            }
+        }
+
+        $Done {
+            process_tick(): str { @@:("done") }
+            reset() { -> $Idle }
+        }
+
+        $DeadLettered {
+            $>() {
+                self.to_dlq(self.msg_id, self.payload)
+            }
+            process_tick(): str { @@:("dead_lettered") }
+            reset() { -> $Idle }
+        }
+
+    actions:
+        try_process(payload) {
+            return False
+        }
+        to_dlq(msg_id, payload) {
+            print(f"DLQ <- {msg_id}: {payload}")
+        }
+
+    domain:
+        msg_id: str = ""
+        payload: str = ""
+        attempts: int = 0
+        max_attempts: int = 3
+}
+
+if __name__ == '__main__':
+    p = @@DeadLetterProcessor()
+    p.accept("m-42", "flaky work")
+    p.process_tick()        # retrying
+    p.process_tick()        # retrying
+
+    snapshot = p.save_state()
+    p2 = DeadLetterProcessor.restore_state(snapshot)
+    p2.process_tick()        # dead_lettered
+```
+
+**How it works:** `@@persist` makes the whole machine serializable — including `attempts`, the current payload, and which state it's in. Crashing halfway through a retry sequence doesn't reset the counter. `$Processing`'s enter handler increments `attempts` and the handler re-enters itself on failure (`-> $Processing`) — the enter handler fires each time because a self-transition fully exits and re-enters.
+
+**Features used:** `@@persist` for crash-safe retry state, self-transition for retry loop, enter handler as side effect
+
+-----
+
+## 41. Polling Consumer
+
+**Problem:** No push transport available. Poll a source for messages, process them, pause on empty, and stop cleanly when asked.
+
+```frame
+@@target python_3
+
+@@system PollingConsumer {
+    operations:
+        supply(msg: str) {
+            self.pending.append(msg)
+        }
+
+    interface:
+        start()
+        stop()
+        tick(): str
+        state_name(): str
+
+    machine:
+        $Stopped {
+            start() { -> $Polling }
+            tick(): str { @@:("stopped") }
+            state_name(): str { @@:("stopped") }
+        }
+
+        $Polling => $Active {
+            tick(): str {
+                msg = self.poll_source()
+                if msg is None:
+                    @@:("empty")
+                    -> $Idle
+                else:
+                    self.current = msg
+                    @@:("got_msg")
+                    -> $Handling
+            }
+            state_name(): str { @@:("polling") }
+            => $^
+        }
+
+        $Handling => $Active {
+            $>() {
+                self.handle(self.current)
+                -> $Polling
+            }
+            state_name(): str { @@:("handling") }
+            => $^
+        }
+
+        $Idle => $Active {
+            tick(): str {
+                @@:("woke")
+                -> $Polling
+            }
+            state_name(): str { @@:("idle") }
+            => $^
+        }
+
+        $Active {
+            stop() { -> $Stopped }
+        }
+
+    actions:
+        poll_source() {
+            if self.pending:
+                return self.pending.pop(0)
+            return None
+        }
+        handle(msg) {
+            print(f"handled: {msg}")
+        }
+
+    domain:
+        pending: list = []
+        current: str = ""
+}
+
+if __name__ == '__main__':
+    c = @@PollingConsumer()
+    c.supply("a"); c.supply("b")
+    c.start()
+    print(c.tick())         # got_msg -> handles "a"
+    print(c.tick())         # got_msg -> handles "b"
+    print(c.tick())         # empty -> idle
+    print(c.tick())         # woke  -> polling
+    c.stop()
+    print(c.state_name())   # stopped
+```
+
+**How it works:** Four states: `$Stopped`, `$Polling`, `$Handling`, `$Idle`. All three active states are children of `$Active`, which owns `stop()` — so any `stop()` from any active state reaches `$Stopped` without duplication. `$Handling`'s enter handler does the work and transitions back immediately (the transient state pattern). `supply()` is an operation — infrastructure plumbing that bypasses the state machine.
+
+**Features used:** HSM for shared `stop()`, transient processing state, operations for non-dispatched utility
+
+-----
+
+## 42. Process Manager (Saga)
+
+**Problem:** Orchestrate a multi-step business transaction across services with no distributed transaction. If any step fails, compensate the prior steps in reverse order.
+
+```frame
+@@target python_3
+
+@@system OrderSaga {
+    interface:
+        start(order_id: str)
+        reserved()
+        reserve_failed(reason: str)
+        charged(tx_id: str)
+        charge_failed(reason: str)
+        shipped(tracking: str)
+        ship_failed(reason: str)
+        status(): str
+
+    machine:
+        $New {
+            start(order_id: str) {
+                self.order_id = order_id
+                -> $Reserving
+            }
+            status(): str { @@:("new") }
+        }
+
+        $Reserving {
+            $>() { self.call_reserve(self.order_id) }
+            reserved() { -> $Charging }
+            reserve_failed(reason: str) {
+                self.failure = reason
+                -> $Failed
+            }
+            status(): str { @@:("reserving") }
+        }
+
+        $Charging {
+            $>() { self.call_charge(self.order_id) }
+            charged(tx_id: str) {
+                self.tx_id = tx_id
+                -> $Shipping
+            }
+            charge_failed(reason: str) {
+                self.failure = reason
+                -> $CompensatingReservation
+            }
+            status(): str { @@:("charging") }
+        }
+
+        $Shipping {
+            $>() { self.call_ship(self.order_id) }
+            shipped(tracking: str) {
+                self.tracking = tracking
+                -> $Completed
+            }
+            ship_failed(reason: str) {
+                self.failure = reason
+                -> $CompensatingCharge
+            }
+            status(): str { @@:("shipping") }
+        }
+
+        $CompensatingCharge {
+            $>() {
+                self.call_refund(self.tx_id)
+                -> $CompensatingReservation
+            }
+            status(): str { @@:("compensating_charge") }
+        }
+
+        $CompensatingReservation {
+            $>() {
+                self.call_release(self.order_id)
+                -> $Failed
+            }
+            status(): str { @@:("compensating_reservation") }
+        }
+
+        $Completed {
+            status(): str { @@:("completed") }
+        }
+
+        $Failed {
+            status(): str { @@:(f"failed: {self.failure}") }
+        }
+
+    actions:
+        call_reserve(oid)  { print(f"reserve {oid}") }
+        call_charge(oid)   { print(f"charge {oid}") }
+        call_ship(oid)     { print(f"ship {oid}") }
+        call_refund(tx)    { print(f"refund {tx}") }
+        call_release(oid)  { print(f"release reservation for {oid}") }
+
+    domain:
+        order_id: str = ""
+        tx_id: str = ""
+        tracking: str = ""
+        failure: str = ""
+}
+
+if __name__ == '__main__':
+    # Happy path
+    s = @@OrderSaga()
+    s.start("O-1")
+    s.reserved()
+    s.charged("T-9")
+    s.shipped("UPS-42")
+    print(s.status())   # completed
+
+    # Compensating path: charge succeeds, ship fails
+    s2 = @@OrderSaga()
+    s2.start("O-2")
+    s2.reserved()
+    s2.charged("T-10")
+    s2.ship_failed("carrier down")
+    print(s2.status())  # failed: carrier down
+```
+
+**How it works:** Each forward step is a state with an enter handler that calls the external service. Success and failure events are separate interface methods so the host can call back exactly one. Compensation states do their undo work in the enter handler and transition to the next compensation. A failure at `$Shipping` cascades through `$CompensatingCharge` (refunds the charge) then `$CompensatingReservation` (releases inventory) then `$Failed`. A failure at `$Charging` skips straight to `$CompensatingReservation` because there's no charge to refund yet.
+
+**Features used:** transient compensation states with enter-handler work, separate success/failure events per step, explicit rollback topology
+
+-----
+
+## 43. Competing Consumers
+
+**Problem:** One queue of work, multiple workers pulling from it. The dispatcher hands each message to exactly one worker; workers process in parallel.
+
+```frame
+@@target python_3
+
+@@system Worker {
+    interface:
+        assign(msg: str)
+        finish()
+        busy(): bool
+
+    machine:
+        $Idle {
+            assign(msg: str) {
+                self.current = msg
+                -> $Working
+            }
+            busy(): bool { @@:(False) }
+        }
+        $Working {
+            $>() { print(f"worker[{self.name}] start: {self.current}") }
+            finish() {
+                print(f"worker[{self.name}] done")
+                self.current = ""
+                -> $Idle
+            }
+            busy(): bool { @@:(True) }
+        }
+
+    domain:
+        name: str = ""
+        current: str = ""
+}
+
+@@system Dispatcher {
+    interface:
+        submit(msg: str): str
+        worker_free(idx: int)
+
+    machine:
+        $Running {
+            submit(msg: str): str {
+                i = 0
+                while i < len(self.workers):
+                    if not self.workers[i].busy():
+                        self.workers[i].assign(msg)
+                        @@:(f"dispatched to {i}")
+                        return
+                    i = i + 1
+                self.backlog.append(msg)
+                @@:("queued")
+            }
+            worker_free(idx: int) {
+                if self.backlog:
+                    msg = self.backlog.pop(0)
+                    self.workers[idx].assign(msg)
+            }
+        }
+
+    domain:
+        workers: list = []
+        backlog: list = []
+}
+
+if __name__ == '__main__':
+    d = @@Dispatcher()
+    w0 = @@Worker(); w0.name = "A"
+    w1 = @@Worker(); w1.name = "B"
+    d.workers = [w0, w1]
+
+    print(d.submit("job-1"))   # dispatched to 0
+    print(d.submit("job-2"))   # dispatched to 1
+    print(d.submit("job-3"))   # queued
+    w0.finish(); d.worker_free(0)
+    w1.finish()
+    w0.finish()
+```
+
+**How it works:** Two systems composed — the dispatcher holds a list of workers in its domain. Each worker is a two-state machine (`$Idle` / `$Working`) exposing `busy()` so the dispatcher can pick one. The host tells the dispatcher when a worker frees up (`worker_free(idx)`); the dispatcher has no threading model. Frame systems are passive — the competing-consumers topology lives in whatever runtime the host chooses.
+
+**Features used:** multi-system composition, list-of-systems in domain, read-only interface method for decision-making
+
+-----
+
+## 44. Message Store
+
+**Problem:** Every message that flows through an integration should be persisted for audit, replay, and debugging. The store survives restarts.
+
+```frame
+@@target python_3
+
+@@persist
+
+@@system MessageStore {
+    interface:
+        record(topic: str, payload: str)
+        count_for(topic: str): int
+        total(): int
+
+    machine:
+        $Recording {
+            record(topic: str, payload: str) {
+                entry = {"topic": topic, "payload": payload, "seq": self.next_seq}
+                self.log.append(entry)
+                self.next_seq = self.next_seq + 1
+            }
+            count_for(topic: str): int {
+                c = 0
+                for e in self.log:
+                    if e["topic"] == topic:
+                        c = c + 1
+                @@:(c)
+            }
+            total(): int { @@:(len(self.log)) }
+        }
+
+    domain:
+        log: list = []
+        next_seq: int = 1
+}
+
+if __name__ == '__main__':
+    s = @@MessageStore()
+    s.record("orders", "O-1")
+    s.record("orders", "O-2")
+    s.record("refunds", "R-1")
+
+    snap = s.save_state()
+    s2 = MessageStore.restore_state(snap)
+    print(s2.total())             # 3
+    print(s2.count_for("orders")) # 2
+    s2.record("orders", "O-3")
+    print(s2.total())             # 4
+```
+
+**How it works:** The entire audit log is a domain variable. `@@persist` serializes it along with `next_seq` so the store's identity survives restarts. A one-state machine is sufficient because storage is always open. A production store would write-through to durable storage per record, but the snapshot approach demonstrates that Frame's persistence covers the full domain payload, not just the current state.
+
+**Features used:** `@@persist` across a large domain payload, list-of-dicts as log, single-state store
+
+-----
+
+## 45. Migrating Machine
+
+**Problem:** A state machine drives a workflow that spans a client and a server. Each side has work only it can do. The machine persists itself, travels across the wire, and resumes on the other side.
+
+```frame
+@@target python_3
+
+import json
+
+@@persist
+
+@@system WizardMachine {
+    operations:
+        next_event(): str {
+            s = self.__compartment.state
+            if s == "NeedsServerValidate":   return "server_validate"
+            if s == "NeedsServerProvision":  return "server_provision"
+            if s == "NeedsClientCollect":    return "client_collect"
+            if s == "NeedsClientConfirm":    return "client_confirm"
+            return ""
+        }
+
+        summary(): str {
+            return (
+                f"user={self.user} email={self.email} "
+                f"notes={self.server_notes} acct={self.account_id}"
+            )
+        }
+
+    interface:
+        start(user: str)
+        client_collect(email: str)
+        server_validate()
+        client_confirm(accept: bool)
+        server_provision()
+        where_next(): str
+
+    machine:
+        $Start {
+            start(user: str) {
+                self.user = user
+                -> $NeedsClientCollect
+            }
+            where_next(): str { @@:("start") }
+        }
+
+        $NeedsClientCollect {
+            client_collect(email: str) {
+                self.email = email
+                -> $NeedsServerValidate
+            }
+            where_next(): str { @@:("client") }
+        }
+
+        $NeedsServerValidate {
+            server_validate() {
+                if "@" in self.email:
+                    self.server_notes = "email syntax ok"
+                    -> $NeedsClientConfirm
+                else:
+                    self.server_notes = "email rejected"
+                    -> $Rejected
+            }
+            where_next(): str { @@:("server") }
+        }
+
+        $NeedsClientConfirm {
+            client_confirm(accept: bool) {
+                if accept:
+                    -> $NeedsServerProvision
+                else:
+                    -> $Cancelled
+            }
+            where_next(): str { @@:("client") }
+        }
+
+        $NeedsServerProvision {
+            server_provision() {
+                self.account_id = f"acct-{self.user}"
+                -> $Done
+            }
+            where_next(): str { @@:("server") }
+        }
+
+        $Done      { where_next(): str { @@:("done") } }
+        $Cancelled { where_next(): str { @@:("done") } }
+        $Rejected  { where_next(): str { @@:("done") } }
+
+    domain:
+        user: str = ""
+        email: str = ""
+        server_notes: str = ""
+        account_id: str = ""
+}
+
+
+def handle_on_server(blob: bytes) -> bytes:
+    m = WizardMachine.restore_state(blob)
+    while m.where_next() == "server":
+        evt = m.next_event()
+        if evt == "server_validate":
+            m.server_validate()
+        elif evt == "server_provision":
+            m.server_provision()
+        else:
+            break
+    return m.save_state()
+
+
+if __name__ == '__main__':
+    m = @@WizardMachine()
+    m.start("alice")
+    m.client_collect("alice@example.com")
+
+    blob = handle_on_server(m.save_state())
+    m = WizardMachine.restore_state(blob)
+    print(m.where_next())           # client
+
+    m.client_confirm(True)
+
+    blob = handle_on_server(m.save_state())
+    m = WizardMachine.restore_state(blob)
+
+    print(m.where_next())           # done
+    print(m.summary())
+```
+
+**How it works:** Each state is tagged via `where_next()` with which side of the wire drives the next step. The client calls `save_state()`, ships the bytes, and the server calls `restore_state()`, drives its steps, and ships back. The state machine *is* the message — correlation IDs, per-request context, and partial-progress tracking all collapse into "the state of the machine."
+
+`next_event()` is an operation that reads `self.__compartment.state` directly. Operations bypass the state machine dispatch, making them suitable for read-only introspection. The host asks the machine what it wants next without knowing the machine's internals.
+
+**Features used:** `@@persist` as a transport payload, operations for introspection, side-tagged states, symmetric client/server code generation
+
+-----
+
 ## Feature Coverage
 
-|Feature                      |Recipes 1-22|Recipes 23-33   |
-|-----------------------------|------------|----------------|
-|`@@:(expr)` return           |yes         |yes all         |
-|`@@:return(expr)` exit sugar |yes #22     |yes #28         |
-|`@@:self.method()`           |yes #22     |yes #33         |
-|`@@:system.state`            |yes #22     |yes #32         |
-|Operations                   |no          |yes #23, #25, #32|
-|`static` operations          |no          |yes #25         |
-|System params (domain)       |yes #21     |yes #23         |
-|HSM 3-level                  |no          |yes #26         |
-|`push$` / `-> pop$`          |yes #7, #8  |yes #27         |
-|Decorated pop (exit args)    |no          |yes #27         |
-|State var reset on reentry   |implicit    |yes #24 (explicit)|
-|Multi-system managed states  |yes #20     |yes #28, #29, #33|
-|Service pattern              |no          |yes #30         |
-|Enter-handler chain          |no          |yes #30, #31    |
-|Events ignored in wrong state|yes #3, #12 |yes #24, #32    |
+|Feature                      |Recipes 1-22|Recipes 23-33   |EIP (34-45)         |
+|-----------------------------|------------|----------------|---------------------|
+|`@@:(expr)` return           |yes         |yes all         |yes all              |
+|`@@:return(expr)` exit sugar |yes #22     |yes #28         |no                   |
+|`@@:self.method()`           |yes #22     |yes #33         |no                   |
+|`@@:system.state`            |yes #22     |yes #32         |no                   |
+|Operations                   |no          |yes #23, #25, #32|yes #41, #45        |
+|`static` operations          |no          |yes #25         |no                   |
+|System params (domain)       |yes #21     |yes #23         |no                   |
+|HSM 3-level                  |no          |yes #26         |no                   |
+|`push$` / `-> pop$`          |yes #7, #8  |yes #27         |no                   |
+|Decorated pop (exit args)    |no          |yes #27         |no                   |
+|State var reset on reentry   |implicit    |yes #24 (explicit)|no                 |
+|Multi-system managed states  |yes #20     |yes #28, #29, #33|yes #43             |
+|Service pattern              |no          |yes #30         |no                   |
+|Enter-handler chain          |no          |yes #30, #31    |yes #42             |
+|Events ignored in wrong state|yes #3, #12 |yes #24, #32    |yes #39             |
+|`@@persist`                  |yes #18     |no              |yes #40, #44, #45   |
+|Self-transition (retry loop) |no          |no              |yes #40             |
+|HSM parent forwarding        |yes #9      |yes #26         |yes #41             |
+|Compensation chain           |no          |no              |yes #42             |
+|Transient states             |no          |yes #30         |yes #41, #42        |

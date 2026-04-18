@@ -485,14 +485,32 @@ Restore does NOT invoke `$>`. The state is being *restored*, not *entered*.
 
 ### Per-Language Serialization
 
-| Language | Strategy | Format |
-|----------|----------|--------|
-| Python | `pickle` | Binary |
-| TypeScript | `JSON.stringify`/`JSON.parse` | JSON |
-| Rust | `serde_json` | JSON |
-| C | cJSON library | JSON |
+| Language | Strategy | Format | External dependency |
+|----------|----------|--------|-------------------|
+| Python | `pickle` | Binary | none (stdlib) |
+| GDScript | `JSON` | JSON | none (built-in) |
+| TypeScript | `JSON.stringify`/`JSON.parse` | JSON | none (built-in) |
+| JavaScript | `JSON.stringify`/`JSON.parse` | JSON | none (built-in) |
+| Rust | `serde_json` | JSON | `serde_json = "1.0"` in Cargo.toml |
+| C | cJSON | JSON | `#include <cjson/cJSON.h>`, link `-lcjson` |
+| C++ | `nlohmann/json` | JSON | `#include <nlohmann/json.hpp>` |
+| Java | manual JSON construction | JSON | none (stdlib `StringBuilder`) |
+| Kotlin | manual JSON construction | JSON | none (stdlib) |
+| Swift | `JSONSerialization` | JSON | none (Foundation) |
+| C# | `System.Text.Json` | JSON | none (.NET built-in) |
+| Go | `encoding/json` | JSON | none (stdlib) |
+| Dart | `dart:convert` | JSON | none (SDK built-in) |
+| PHP | `json_encode`/`json_decode` | JSON | none (built-in) |
+| Ruby | `JSON` | JSON | none (stdlib) |
+| Lua | manual JSON construction | JSON | none |
+| Erlang | `jsx` or manual | JSON | `jsx` (optional) |
 
-Languages not shown follow the TypeScript/JSON pattern. See the [Language Reference](frame_language.md#persistence) for full coverage.
+**Dependencies that require installation:**
+- **Rust:** Add `serde_json = "1.0"` to `Cargo.toml`
+- **C:** Install cJSON (`apt install libcjson-dev` on Debian/Ubuntu, `brew install cjson` on macOS) and add `#include <cjson/cJSON.h>` to your prolog. Link with `-lcjson`.
+- **C++:** Install nlohmann/json and add `#include <nlohmann/json.hpp>` to your prolog.
+
+All other languages use built-in or standard library JSON support — no external dependencies.
 
 ---
 
@@ -514,38 +532,184 @@ If native code throws an exception inside a handler, the pending transition (if 
 
 ## Per-Language Patterns
 
+This section documents how Frame's runtime concepts map to each target language. Use it when writing Frame specs for a specific target — the native code inside handlers, actions, and epilog must follow the target language's patterns.
+
+### Instantiation
+
+`@@SystemName()` expands to the target language's construction pattern:
+
+| Language | Declaration + instantiation | Cleanup |
+|----------|---------------------------|---------|
+| Python | `s = @@System()` | garbage collected |
+| TypeScript | `const s = @@System()` | garbage collected |
+| JavaScript | `const s = @@System()` | garbage collected |
+| Rust | `let mut s = @@System()` | ownership / drop |
+| C | `System* s = @@System()` | `System_destroy(s)` |
+| C++ | `auto s = @@System()` | destructor / RAII |
+| Java | `var s = @@System()` | garbage collected |
+| Kotlin | `val s = @@System()` | garbage collected |
+| Swift | `let s = @@System()` | ARC |
+| C# | `var s = @@System()` | garbage collected |
+| Go | `s := @@System()` | garbage collected |
+| Dart | `final s = @@System()` | garbage collected |
+| PHP | `$s = @@System()` | reference counted |
+| Ruby | `s = @@System()` | garbage collected |
+| Lua | `local s = @@System()` | garbage collected |
+| GDScript | `var s = @@System()` | reference counted |
+| Erlang | `{ok, Pid} = System:start_link()` | gen_statem process |
+
+C is the only backend that requires explicit cleanup via `System_destroy(s)`. Rust uses ownership semantics — no explicit destroy needed.
+
+### Interface Method Calls
+
+Interface methods are called in the target language's native method syntax:
+
+| Language | Call syntax |
+|----------|------------|
+| Python | `s.method(args)` |
+| TypeScript/JS | `s.method(args)` |
+| Rust | `s.method(args)` |
+| C | `System_method(s, args)` |
+| C++ | `s->method(args)` or `s.method(args)` |
+| Java/Kotlin/C#/Dart | `s.method(args)` |
+| Swift | `s.method(args)` |
+| Go | `s.Method(args)` (exported, capitalized) |
+| PHP | `$s->method(args)` |
+| Ruby | `s.method(args)` |
+| Lua | `s:method(args)` |
+| GDScript | `s.method(args)` |
+| Erlang | `gen_statem:call(Pid, {method, Args})` |
+
+### Action Calls (inside handlers)
+
+Actions are native methods on the system. Inside handler bodies, call them using the target's self-reference:
+
+| Language | Call syntax inside handler |
+|----------|--------------------------|
+| Python | `self.action(args)` |
+| TypeScript/JS | `this.action(args)` |
+| Rust | `self.action(args)` |
+| C | `System_action(self, args)` |
+| C++ | `this->action(args)` |
+| Java/Kotlin/C#/Dart | `this.action(args)` |
+| Swift | `self.action(args)` |
+| Go | `s.action(args)` |
+| PHP | `$this->action(args)` |
+| Ruby | `self.action(args)` |
+| Lua | `self:action(args)` |
+| GDScript | `self.action(args)` |
+
+**Note:** C actions are generated as free functions prefixed with the system name. All other languages generate them as methods.
+
+### Operation Calls (inside handlers)
+
+Operations follow the same call pattern as actions. The difference is that operations bypass the state machine dispatch — they're direct method calls:
+
+| Language | Call syntax inside handler |
+|----------|--------------------------|
+| Python | `self.operation(args)` |
+| TypeScript/JS | `this.operation(args)` |
+| Rust | `self.operation(args)` |
+| C | `System_operation(self, args)` |
+| C++ | `this->operation(args)` |
+| Go | `s.Operation(args)` (capitalized) |
+| Others | same as action call syntax |
+
+Operations can declare return types using the target language's native syntax in the operation body. Since the body is native code, `return value;` works as expected.
+
+### Domain Field Declarations
+
+Domain fields are declared as `name: type` or `name: type = init`. The type and initializer are passed through verbatim to the target language:
+
+| Language | Example |
+|----------|---------|
+| Python | `count: int = 0` |
+| TypeScript | `count: number = 0` |
+| Rust | `count: i64 = 0` |
+| C | `count: int = 0` (generates `int count;`) |
+| C++ | `count: int = 0` |
+| Java | `count: int = 0` (generates `int count = 0;`) |
+| Kotlin | `count: Int = 0` |
+| Go | `count: int = 0` |
+
+**C arrays:** Declare as `name: type` where type includes the array size. Example: `buffer: char[64]` generates `char buffer[64];`. Do **not** use `char[64]` as the type with a separate name — Frame treats the entire type string as opaque and places the identifier after it.
+
+**Rust:** Domain fields become struct fields. Use Rust types directly: `items: Vec<String> = Vec::new()`, `map: HashMap<i64, String> = HashMap::new()`.
+
+**Init is optional** for static targets that zero-initialize (C, C++, Go). Required for dynamic targets (Python, JS, Ruby, etc.) where uninitialized fields would be undefined.
+
 ### Compartment Implementation
 
 | Language | State Vars | State Stack | Self |
 |----------|-----------|-------------|------|
 | Python | `dict` | `list` | `self` |
-| TypeScript | `Record<string, any>` | `Array` | `this` |
-| Rust | `HashMap` or typed `StateContext` enum | `Vec` | `self` |
-| C | `FrameDict*` | `FrameVec*` | `self->` |
+| TypeScript/JS | `Record<string, any>` | `Array` | `this` |
+| Rust | typed `StateContext` enum | `Vec` | `self` |
+| C | `FrameDict*` | linked list | `self->` |
 | C++ | `std::unordered_map<string, any>` | `std::vector` | `this->` |
 | Java | `HashMap<String, Object>` | `ArrayList` | `this` |
+| Kotlin | `MutableMap<String, Any?>` | `MutableList` | `this` |
 | Go | `map[string]interface{}` | `[]Compartment` | `s.` |
+| Swift | `[String: Any]` | `[Compartment]` | `self` |
+| C# | `Dictionary<string, object>` | `List` | `this` |
+| Dart | `Map<String, dynamic>` | `List` | `this` |
+| PHP | `array` | `array` | `$this->` |
+| Ruby | `Hash` | `Array` | `@` (instance vars) |
+| Lua | `table` | `table` | `self.` |
+| GDScript | `Dictionary` | `Array` | `self.` |
+| Erlang | gen_statem state data | list in data | n/a (functional) |
 
 ### Router Dispatch
 
 | Language | Pattern |
 |----------|---------|
 | Python | `if/elif` chain |
-| TypeScript | `switch` statement |
+| GDScript | `if/elif` chain |
+| TypeScript/JS | `if/else if` chain |
 | Rust | `match` expression |
 | C | `if/else if` with `strcmp` |
 | C++ | `if/else if` with `==` |
-| Java | `switch` statement |
+| Java | `if/else if` with `.equals()` |
+| Kotlin | `if/else if` with `==` |
+| Swift | `if/else if` chain |
+| C# | `if/else if` chain |
 | Go | `switch` statement |
+| PHP | `if/elseif` chain |
+| Ruby | `if/elsif` chain |
+| Lua | `if/elseif` chain |
+| Dart | `if/else if` chain |
+| Erlang | function clause matching |
 
 ### Self Interface Call Expansion
 
-| Language | `@@:self.method(args)` |
-|----------|------------------------|
+| Language | `@@:self.method(args)` expands to |
+|----------|----------------------------------|
 | Python | `self.method(args)` |
-| TypeScript | `this.method(args)` |
+| GDScript | `self.method(args)` |
+| TypeScript/JS | `this.method(args)` |
 | Rust | `self.method(args)` |
-| C | `SystemName_method(self, args)` |
+| C | `System_method(self, args)` |
 | C++ | `this->method(args)` |
-| Java | `this.method(args)` |
+| Java/Kotlin/C#/Dart | `this.method(args)` |
+| Swift | `self.method(args)` |
+| Go | `s.Method(args)` |
+| PHP | `$this->method(args)` |
+| Ruby | `self.method(args)` |
+| Lua | `self:method(args)` |
+
+### String Comparison in Native Code
+
+When comparing strings in handler native code, use the target language's string comparison:
+
+| Language | Equality check |
+|----------|---------------|
+| Python | `s == "value"` |
+| TypeScript/JS | `s === "value"` |
+| Rust | `s == "value"` |
+| C | `strcmp(s, "value") == 0` |
+| C++ | `s == "value"` |
+| Java | `s.equals("value")` |
+| Kotlin | `s == "value"` |
+| Go | `s == "value"` |
+| Others | `s == "value"` |
 | Go | `s.Method(args)` |

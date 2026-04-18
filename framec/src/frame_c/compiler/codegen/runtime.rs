@@ -90,11 +90,11 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
         ],
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => vec![
             Param::new("message").with_type("string"),
-            Param::new("parameters").with_type("Record<string, any> | null"),
+            Param::new("parameters").with_type("Record<string, any>"),
         ],
         TargetLanguage::Dart => vec![
             Param::new("message").with_type("String"),
-            Param::new("parameters").with_type("Map<String, dynamic>?"),
+            Param::new("parameters").with_type("Map<String, dynamic>"),
         ],
         TargetLanguage::Php => vec![
             Param::new("message"),
@@ -193,7 +193,7 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
                 .with_type("string")
                 .with_visibility(Visibility::Public),
             Field::new("_parameters")
-                .with_type("Record<string, any> | null")
+                .with_type("Record<string, any>")
                 .with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Dart) {
@@ -202,7 +202,7 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
                 .with_type("String")
                 .with_visibility(Visibility::Public),
             Field::new("_parameters")
-                .with_type("Map<String, dynamic>?")
+                .with_type("Map<String, dynamic>")
                 .with_visibility(Visibility::Public),
         ]
     } else if matches!(
@@ -1289,7 +1289,7 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     code.push_str("    HashMap<String, Object> _parameters;\n");
     code.push_str(&format!("\n    {sys}FrameEvent(String message) {{\n"));
     code.push_str("        this._message = message;\n");
-    code.push_str("        this._parameters = null;\n");
+    code.push_str("        this._parameters = new HashMap<>();\n");
     code.push_str("    }\n\n");
     code.push_str(&format!(
         "    {sys}FrameEvent(String message, HashMap<String, Object> parameters) {{\n"
@@ -1461,12 +1461,12 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     // FrameEvent class
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("    public string _message;\n");
-    code.push_str("    public Dictionary<string, object>? _parameters;\n");
+    code.push_str("    public Dictionary<string, object> _parameters;\n");
     code.push_str(&format!(
         "\n    public {sys}FrameEvent(string message) {{\n"
     ));
     code.push_str("        this._message = message;\n");
-    code.push_str("        this._parameters = null;\n");
+    code.push_str("        this._parameters = new Dictionary<string, object>();\n");
     code.push_str("    }\n\n");
     code.push_str(&format!(
         "    public {sys}FrameEvent(string message, Dictionary<string, object> parameters) {{\n"
