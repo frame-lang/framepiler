@@ -1,5 +1,7 @@
 # Frame Runtime Architecture
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 How Frame's language features are implemented in generated code. For the language itself, see [Frame Language Reference](frame_language.md). For framepiler internals, see [Framepiler Design](framepiler_design.md).
 
 ## Table of Contents

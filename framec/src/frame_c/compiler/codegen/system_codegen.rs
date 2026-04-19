@@ -1329,14 +1329,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "self.__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "self.__compartment.state_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "self.__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "self.__compartment.enter_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1390,14 +1390,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.state_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "\nthis.__compartment.state_args.push({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.enter_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "\nthis.__compartment.enter_args.push({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1428,14 +1428,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "this.__compartment.state_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "this.__compartment.state_args.push({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "this.__compartment.enter_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "this.__compartment.enter_args.push({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1486,14 +1486,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\n$this->__compartment->state_args[\"{}\"] = ${};",
-                                        p.name, p.name
+                                        "\n$this->__compartment->state_args[] = ${};",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\n$this->__compartment->enter_args[\"{}\"] = ${};",
-                                        p.name, p.name
+                                        "\n$this->__compartment->enter_args[] = ${};",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1523,14 +1523,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "$this->__compartment->state_args[\"{}\"] = ${};",
-                                        p.name, p.name
+                                        "$this->__compartment->state_args[] = ${};",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "$this->__compartment->enter_args[\"{}\"] = ${};",
-                                        p.name, p.name
+                                        "$this->__compartment->enter_args[] = ${};",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1581,14 +1581,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\n@__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\n@__compartment.state_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\n@__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\n@__compartment.enter_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1618,14 +1618,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "@__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "@__compartment.state_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "@__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "@__compartment.enter_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1683,11 +1683,8 @@ pub(crate) fn generate_constructor(
                             prev_comp_expr
                         ));
 
-                        // System state and enter params: bind into the start
-                        // state's state_args / enter_args dicts. Mirrors the
-                        // Python and C constructor populations — every
-                        // ParamKind::StateArg lands in `state_args[name]`,
-                        // every ParamKind::EnterArg in `enter_args[name]`.
+                        // System state and enter params: positional append into
+                        // the start state's state_args / enter_args vectors.
                         // Values are wrapped in std::any so the dispatch
                         // reader (which uses std::any_cast<Type>) round-trips
                         // them correctly. cpp_wrap_any_arg promotes string
@@ -1698,15 +1695,15 @@ pub(crate) fn generate_constructor(
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     let wrapped = cpp_wrap_any_arg(&p.name);
                                     hsm_init_code.push_str(&format!(
-                                        "__compartment->state_args[\"{}\"] = std::any({});\n",
-                                        p.name, wrapped
+                                        "__compartment->state_args.push_back(std::any({}));\n",
+                                        wrapped
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     let wrapped = cpp_wrap_any_arg(&p.name);
                                     hsm_init_code.push_str(&format!(
-                                        "__compartment->enter_args[\"{}\"] = std::any({});\n",
-                                        p.name, wrapped
+                                        "__compartment->enter_args.push_back(std::any({}));\n",
+                                        wrapped
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1733,15 +1730,15 @@ pub(crate) fn generate_constructor(
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     let wrapped = cpp_wrap_any_arg(&p.name);
                                     compartment_inits.push(format!(
-                                        "__compartment->state_args[\"{}\"] = std::any({});",
-                                        p.name, wrapped
+                                        "__compartment->state_args.push_back(std::any({}));",
+                                        wrapped
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     let wrapped = cpp_wrap_any_arg(&p.name);
                                     compartment_inits.push(format!(
-                                        "__compartment->enter_args[\"{}\"] = std::any({});",
-                                        p.name, wrapped
+                                        "__compartment->enter_args.push_back(std::any({}));",
+                                        wrapped
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1804,14 +1801,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.state_args.put(\"{}\", {});",
-                                        p.name, p.name
+                                        "\nthis.__compartment.state_args.add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.enter_args.put(\"{}\", {});",
-                                        p.name, p.name
+                                        "\nthis.__compartment.enter_args.add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1838,14 +1835,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "__compartment.state_args.put(\"{}\", {});",
-                                        p.name, p.name
+                                        "__compartment.state_args.add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "__compartment.enter_args.put(\"{}\", {});",
-                                        p.name, p.name
+                                        "__compartment.enter_args.add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1908,14 +1905,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\nthis.__compartment.state_args.add({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\nthis.__compartment.enter_args.add({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1941,14 +1938,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "__compartment.state_args.add({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "__compartment.enter_args.add({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2009,14 +2006,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nself.__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\nself.__compartment.state_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nself.__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\nself.__compartment.enter_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2042,14 +2039,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "__compartment.state_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "__compartment.enter_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2112,14 +2109,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.state_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "\nthis.__compartment.state_args.Add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.enter_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "\nthis.__compartment.enter_args.Add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2146,14 +2143,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "__compartment.state_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "__compartment.state_args.Add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "__compartment.enter_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "__compartment.enter_args.Add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2213,14 +2210,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\ns.__compartment.stateArgs[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\ns.__compartment.stateArgs = append(s.__compartment.stateArgs, {})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\ns.__compartment.enterArgs[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\ns.__compartment.enterArgs = append(s.__compartment.enterArgs, {})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2247,14 +2244,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "s.__compartment.stateArgs[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "s.__compartment.stateArgs = append(s.__compartment.stateArgs, {})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "s.__compartment.enterArgs[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "s.__compartment.enterArgs = append(s.__compartment.enterArgs, {})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2307,14 +2304,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.state_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "\nthis.__compartment.state_args.add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nthis.__compartment.enter_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "\nthis.__compartment.enter_args.add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2345,14 +2342,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "this.__compartment.state_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "this.__compartment.state_args.add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "this.__compartment.enter_args[\"{}\"] = {};",
-                                        p.name, p.name
+                                        "this.__compartment.enter_args.add({});",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2404,14 +2401,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nself.__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\nself.__compartment.state_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\nself.__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "\nself.__compartment.enter_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2441,14 +2438,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "self.__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "self.__compartment.state_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "self.__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "self.__compartment.enter_args.append({})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -2496,14 +2493,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "self.__compartment.state_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "table.insert(self.__compartment.state_args, {})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "self.__compartment.enter_args[\"{}\"] = {}",
-                                        p.name, p.name
+                                        "table.insert(self.__compartment.enter_args, {})",
+                                        p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}

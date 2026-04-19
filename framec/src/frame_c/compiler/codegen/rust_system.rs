@@ -768,27 +768,15 @@ pub(crate) fn generate_rust_interface_body(
 ) -> CodegenNode {
     let context_class = format!("{}FrameContext", system_name);
 
-    let params_code = if method.params.is_empty() {
-        String::new()
+    let mut code = if method.params.is_empty() {
+        format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name)
     } else {
-        method
-            .params
-            .iter()
-            .map(|p| {
-                format!(
-                    "__e.parameters.insert(\"{}\".to_string(), Box::new({}.clone()) as Box<dyn std::any::Any>);",
-                    p.name, p.name
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let param_items: Vec<String> = method.params.iter()
+            .map(|p| format!("Box::new({}.clone()) as Box<dyn std::any::Any>", p.name))
+            .collect();
+        format!("let mut __e = {}::new_with_params(\"{}\", vec![{}]);\n",
+            event_class, method.name, param_items.join(", "))
     };
-
-    let mut code = format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name);
-    if !params_code.is_empty() {
-        code.push_str(&params_code);
-        code.push('\n');
-    }
 
     code.push_str(&format!(
         "let mut __ctx = {}::new(__e, None);\n",
@@ -840,7 +828,7 @@ if let Some(ret) = __ctx._return {{
 // consolidating Rust-specific ownership/borrow patterns here.
 
 use super::codegen_utils::HandlerContext;
-use super::frame_expansion::{resolve_enter_arg_key, resolve_exit_arg_key, resolve_state_arg_key};
+use super::frame_expansion::resolve_state_arg_key;
 
 /// Rust transition expansion: compartment creation with exit/state/enter
 /// args, HSM parent chain, and typed StateContext enum assignment.
@@ -854,24 +842,17 @@ pub(crate) fn rust_expand_transition(
 ) -> String {
     let mut code = String::new();
 
+    // Store exit_args (positional push)
     if let Some(ref exit) = exit_str {
-        for (i, arg) in exit
-            .split(',')
-            .map(|x| x.trim())
-            .filter(|x| !x.is_empty())
-            .enumerate()
-        {
-            let (key, value) = if let Some(eq_pos) = arg.find('=') {
-                (
-                    arg[..eq_pos].trim().to_string(),
-                    arg[eq_pos + 1..].trim().to_string(),
-                )
+        for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+            let value = if let Some(eq_pos) = arg.find('=') {
+                arg[eq_pos + 1..].trim()
             } else {
-                (resolve_exit_arg_key(i, ctx), arg.to_string())
+                arg
             };
             code.push_str(&format!(
-                "{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n",
-                indent_str, key, value
+                "{}self.__compartment.exit_args.push({}.to_string());\n",
+                indent_str, value
             ));
         }
     }
@@ -885,6 +866,7 @@ pub(crate) fn rust_expand_transition(
         indent_str
     ));
 
+    // State args use typed StateContext struct -- still needs named field keys
     if let Some(ref state) = state_str {
         let args: Vec<&str> = state
             .split(',')
@@ -911,24 +893,17 @@ pub(crate) fn rust_expand_transition(
         }
     }
 
+    // Store enter_args (positional push)
     if let Some(ref enter) = enter_str {
-        for (i, arg) in enter
-            .split(',')
-            .map(|x| x.trim())
-            .filter(|x| !x.is_empty())
-            .enumerate()
-        {
-            let (key, value) = if let Some(eq_pos) = arg.find('=') {
-                (
-                    arg[..eq_pos].trim().to_string(),
-                    arg[eq_pos + 1..].trim().to_string(),
-                )
+        for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+            let value = if let Some(eq_pos) = arg.find('=') {
+                arg[eq_pos + 1..].trim()
             } else {
-                (resolve_enter_arg_key(i, target, ctx), arg.to_string())
+                arg
             };
             code.push_str(&format!(
-                "{}__compartment.enter_args.insert(\"{}\".to_string(), {}.to_string());\n",
-                indent_str, key, value
+                "{}__compartment.enter_args.push({}.to_string());\n",
+                indent_str, value
             ));
         }
     }
@@ -1156,11 +1131,11 @@ pub(crate) fn rust_transition_guard(indent_str: &str) -> String {
 
 // ─── Pop Transition Delegates ───────────────────────────────────────
 
-/// Pop: exit_args write
-pub(crate) fn rust_pop_exit_arg(indent: &str, key: &str, value: &str) -> String {
+/// Pop: exit_args write (positional push)
+pub(crate) fn rust_pop_exit_arg(indent: &str, value: &str) -> String {
     format!(
-        "{}self.__compartment.exit_args.insert(\"{}\".to_string(), {}.to_string());\n",
-        indent, key, value
+        "{}self.__compartment.exit_args.push({}.to_string());\n",
+        indent, value
     )
 }
 
@@ -1172,11 +1147,11 @@ pub(crate) fn rust_pop_stack(indent: &str) -> String {
     )
 }
 
-/// Pop: enter_args write
-pub(crate) fn rust_pop_enter_arg(indent: &str, key: &str, value: &str) -> String {
+/// Pop: enter_args write (positional push)
+pub(crate) fn rust_pop_enter_arg(indent: &str, value: &str) -> String {
     format!(
-        "{}__popped.enter_args.insert(\"{}\".to_string(), {}.to_string());\n",
-        indent, key, value
+        "{}__popped.enter_args.push({}.to_string());\n",
+        indent, value
     )
 }
 

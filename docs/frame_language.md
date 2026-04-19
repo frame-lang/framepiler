@@ -1,5 +1,7 @@
 # Frame Language Reference
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 Complete reference for the Frame language. For a tutorial introduction, see [Getting Started](frame_getting_started.md).
 
 ## Table of Contents

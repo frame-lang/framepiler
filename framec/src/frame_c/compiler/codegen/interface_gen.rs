@@ -110,15 +110,15 @@ pub(crate) fn generate_interface_wrappers(
             }
             TargetLanguage::Python3 => {
                 // Python: Create FrameEvent + FrameContext, push context, call __kernel, pop and return
-                // Parameters are passed as a dict with parameter names as keys for @@ syntax access
+                // Parameters are packed positionally into a list
                 let context_class = format!("{}FrameContext", system.name);
                 let params_code = if method.params.is_empty() {
-                    "None".to_string()
+                    "[]".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
-                        .map(|p| format!("\"{}\": {}", p.name, p.name))
+                        .map(|p| p.name.clone())
                         .collect();
-                    format!("{{{}}}", param_items.join(", "))
+                    format!("[{}]", param_items.join(", "))
                 };
 
                 let default_init = if let Some(ref init_expr) = method.return_init {
@@ -157,14 +157,13 @@ self._context_stack.pop()"#,
             TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
                 // TypeScript/JavaScript: Create FrameEvent + FrameContext, push context, call __kernel, pop and return
                 let context_class = format!("{}FrameContext", system.name);
-                // Parameters are passed as a dict with parameter names as keys for @@ syntax access
                 let params_code = if method.params.is_empty() {
-                    "{}".to_string()
+                    "[]".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
-                        .map(|p| format!("\"{}\": {}", p.name, p.name))
+                        .map(|p| p.name.clone())
                         .collect();
-                    format!("{{{}}}", param_items.join(", "))
+                    format!("[{}]", param_items.join(", "))
                 };
 
                 let default_init = if let Some(ref init_expr) = method.return_init {
@@ -198,10 +197,10 @@ self._context_stack.pop()"#,
                 // PHP: Create FrameEvent + FrameContext, push context, call __kernel, pop and return
                 let context_class = format!("{}FrameContext", system.name);
                 let params_code = if method.params.is_empty() {
-                    "null".to_string()
+                    "[]".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
-                        .map(|p| format!("\"{}\" => ${}", p.name, p.name))
+                        .map(|p| format!("${}", p.name))
                         .collect();
                     format!("[{}]", param_items.join(", "))
                 };
@@ -234,12 +233,12 @@ self._context_stack.pop()"#,
                 // Ruby: Create FrameEvent + FrameContext, push context, call __kernel, pop and return
                 let context_class = format!("{}FrameContext", system.name);
                 let params_code = if method.params.is_empty() {
-                    "{}".to_string()
+                    "[]".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
-                        .map(|p| format!("\"{}\" => {}", p.name, p.name))
+                        .map(|p| p.name.clone())
                         .collect();
-                    format!("{{{}}}", param_items.join(", "))
+                    format!("[{}]", param_items.join(", "))
                 };
 
                 let default_init = if let Some(ref init_expr) = method.return_init {
@@ -365,13 +364,13 @@ return __result;"#,
 
                 let mut code = String::new();
 
-                // Build params map
+                // Build params list
                 if !method.params.is_empty() {
-                    code.push_str("std::unordered_map<std::string, std::any> __params;\n");
-                    for param in &method.params {
-                        code.push_str(&format!("__params[\"{}\"] = {};\n", param.name, param.name));
-                    }
-                    code.push_str(&format!("{} __e(\"{}\", std::move(__params));\n", event_class, method.name));
+                    let param_items: Vec<String> = method.params.iter()
+                        .map(|p| p.name.clone())
+                        .collect();
+                    code.push_str(&format!("{} __e(\"{}\", std::vector<std::any>{{{}}});\n",
+                        event_class, method.name, param_items.join(", ")));
                 } else {
                     code.push_str(&format!("{} __e(\"{}\");\n", event_class, method.name));
                 }
@@ -413,15 +412,15 @@ return __result;"#,
 
                 let mut code = String::new();
 
-                // Build params map
+                // Build params list
                 if !method.params.is_empty() {
-                    code.push_str("HashMap<String, Object> __params = new HashMap<>();\n");
-                    for param in &method.params {
-                        code.push_str(&format!("__params.put(\"{}\", {});\n", param.name, param.name));
-                    }
-                    code.push_str(&format!("{} __e = new {}(\"{}\", __params);\n", event_class, event_class, method.name));
+                    let param_items: Vec<String> = method.params.iter()
+                        .map(|p| p.name.clone())
+                        .collect();
+                    code.push_str(&format!("{} __e = new {}(\"{}\", new ArrayList<>(Arrays.asList({})));\n",
+                        event_class, event_class, method.name, param_items.join(", ")));
                 } else {
-                    code.push_str(&format!("{} __e = new {}(\"{}\");\n", event_class, event_class, method.name));
+                    code.push_str(&format!("{} __e = new {}(\"{}\", new ArrayList<>());\n", event_class, event_class, method.name));
                 }
 
                 // Create context with default return
@@ -456,17 +455,15 @@ return __result;"#,
 
                 let mut code = String::new();
 
-                // Build params map — Kotlin: no new, no semicolons, mutableMapOf
+                // Build params list — Kotlin: no new, no semicolons, mutableListOf
                 if !method.params.is_empty() {
-                    code.push_str("val __params = mutableMapOf<String, Any?>(");
-                    let entries: Vec<String> = method.params.iter()
-                        .map(|p| format!("\"{}\" to {}", p.name, p.name))
+                    let param_items: Vec<String> = method.params.iter()
+                        .map(|p| p.name.clone())
                         .collect();
-                    code.push_str(&entries.join(", "));
-                    code.push_str(")\n");
-                    code.push_str(&format!("val __e = {}(\"{}\", __params)\n", event_class, method.name));
+                    code.push_str(&format!("val __e = {}(\"{}\", mutableListOf({}))\n",
+                        event_class, method.name, param_items.join(", ")));
                 } else {
-                    code.push_str(&format!("val __e = {}(\"{}\")\n", event_class, method.name));
+                    code.push_str(&format!("val __e = {}(\"{}\", mutableListOf())\n", event_class, method.name));
                 }
 
                 // Create context with type-appropriate default return.
@@ -511,17 +508,15 @@ return __result;"#,
 
                 let mut code = String::new();
 
-                // Build params map — Swift: [String: Any] dictionary literal
+                // Build params list — Swift: [Any] array literal
                 if !method.params.is_empty() {
-                    code.push_str("let __params: [String: Any] = [");
-                    let entries: Vec<String> = method.params.iter()
-                        .map(|p| format!("\"{}\": {}", p.name, p.name))
+                    let param_items: Vec<String> = method.params.iter()
+                        .map(|p| p.name.clone())
                         .collect();
-                    code.push_str(&entries.join(", "));
-                    code.push_str("]\n");
-                    code.push_str(&format!("let __e = {}(message: \"{}\", parameters: __params)\n", event_class, method.name));
+                    code.push_str(&format!("let __e = {}(message: \"{}\", parameters: [{}])\n",
+                        event_class, method.name, param_items.join(", ")));
                 } else {
-                    code.push_str(&format!("let __e = {}(message: \"{}\")\n", event_class, method.name));
+                    code.push_str(&format!("let __e = {}(message: \"{}\", parameters: [])\n", event_class, method.name));
                 }
 
                 // Create context with type-appropriate default return
@@ -568,15 +563,15 @@ return __result;"#,
 
                 let mut code = String::new();
 
-                // Build params map
+                // Build params list
                 if !method.params.is_empty() {
-                    code.push_str("Dictionary<string, object> __params = new Dictionary<string, object>();\n");
-                    for param in &method.params {
-                        code.push_str(&format!("__params[\"{}\"] = {};\n", param.name, param.name));
-                    }
-                    code.push_str(&format!("{} __e = new {}(\"{}\", __params);\n", event_class, event_class, method.name));
+                    let param_items: Vec<String> = method.params.iter()
+                        .map(|p| p.name.clone())
+                        .collect();
+                    code.push_str(&format!("{} __e = new {}(\"{}\", new List<object> {{ {} }});\n",
+                        event_class, event_class, method.name, param_items.join(", ")));
                 } else {
-                    code.push_str(&format!("{} __e = new {}(\"{}\");\n", event_class, event_class, method.name));
+                    code.push_str(&format!("{} __e = new {}(\"{}\", new List<object>());\n", event_class, event_class, method.name));
                 }
 
                 // Create context with default return
@@ -610,16 +605,15 @@ return __result;"#,
 
                 let mut code = String::new();
 
-                // Build params map
+                // Build params list
                 if !method.params.is_empty() {
-                    code.push_str("__params := map[string]any{\n");
-                    for param in &method.params {
-                        code.push_str(&format!("    \"{}\": {},\n", param.name, param.name));
-                    }
-                    code.push_str("}\n");
-                    code.push_str(&format!("__e := {}FrameEvent{{_message: \"{}\", _parameters: __params}}\n", system.name, method.name));
+                    let param_items: Vec<String> = method.params.iter()
+                        .map(|p| p.name.clone())
+                        .collect();
+                    code.push_str(&format!("__e := {}FrameEvent{{_message: \"{}\", _parameters: []any{{{}}}}}\n",
+                        system.name, method.name, param_items.join(", ")));
                 } else {
-                    code.push_str(&format!("__e := {}FrameEvent{{_message: \"{}\"}}\n", system.name, method.name));
+                    code.push_str(&format!("__e := {}FrameEvent{{_message: \"{}\", _parameters: []any{{}}}}\n", system.name, method.name));
                 }
 
                 // Create context with default return
@@ -652,10 +646,10 @@ return __result;"#,
             TargetLanguage::Lua => {
                 let context_class = format!("{}FrameContext", system.name);
                 let params_code = if method.params.is_empty() {
-                    "nil".to_string()
+                    "{}".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
-                        .map(|p| format!("[\"{}\"] = {}", p.name, p.name))
+                        .map(|p| p.name.clone())
                         .collect();
                     format!("{{{}}}", param_items.join(", "))
                 };
@@ -696,12 +690,12 @@ return __result;"#,
                 // Dart: similar to TypeScript
                 let context_class = format!("{}FrameContext", system.name);
                 let params_code = if method.params.is_empty() {
-                    "{}".to_string()
+                    "[]".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
-                        .map(|p| format!("\"{}\": {}", p.name, p.name))
+                        .map(|p| p.name.clone())
                         .collect();
-                    format!("{{{}}}", param_items.join(", "))
+                    format!("[{}]", param_items.join(", "))
                 };
 
                 let default_init = if let Some(ref init_expr) = method.return_init {
@@ -740,12 +734,12 @@ return __result;"#,
                 // GDScript: similar to Python
                 let context_class = format!("{}FrameContext", system.name);
                 let params_code = if method.params.is_empty() {
-                    "null".to_string()
+                    "[]".to_string()
                 } else {
                     let param_items: Vec<String> = method.params.iter()
-                        .map(|p| format!("\"{}\": {}", p.name, p.name))
+                        .map(|p| p.name.clone())
                         .collect();
-                    format!("{{{}}}", param_items.join(", "))
+                    format!("[{}]", param_items.join(", "))
                 };
 
                 let default_init = if let Some(ref init_expr) = method.return_init {

@@ -90,11 +90,11 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
         ],
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => vec![
             Param::new("message").with_type("string"),
-            Param::new("parameters").with_type("Record<string, any>"),
+            Param::new("parameters").with_type("any[]"),
         ],
         TargetLanguage::Dart => vec![
             Param::new("message").with_type("String"),
-            Param::new("parameters").with_type("Map<String, dynamic>"),
+            Param::new("parameters").with_type("List<dynamic>"),
         ],
         TargetLanguage::Php => vec![
             Param::new("message"),
@@ -102,7 +102,7 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
         ],
         TargetLanguage::Ruby => vec![
             Param::new("message"),
-            Param::new("parameters").with_default(CodegenNode::Dict(vec![])),
+            Param::new("parameters").with_default(CodegenNode::Array(vec![])),
         ],
         TargetLanguage::Lua => vec![Param::new("message"), Param::new("parameters")],
         // Static-typed languages generate FrameEvent as NativeBlock in generate_*_compartment_types()
@@ -193,7 +193,7 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
                 .with_type("string")
                 .with_visibility(Visibility::Public),
             Field::new("_parameters")
-                .with_type("Record<string, any>")
+                .with_type("any[]")
                 .with_visibility(Visibility::Public),
         ]
     } else if matches!(lang, TargetLanguage::Dart) {
@@ -202,7 +202,7 @@ pub fn generate_frame_event_class(system: &SystemAst, lang: TargetLanguage) -> O
                 .with_type("String")
                 .with_visibility(Visibility::Public),
             Field::new("_parameters")
-                .with_type("Map<String, dynamic>")
+                .with_type("List<dynamic>")
                 .with_visibility(Visibility::Public),
         ]
     } else if matches!(
@@ -555,7 +555,7 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "state_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "state_vars"),
@@ -563,11 +563,11 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "enter_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "exit_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "forward_event"),
@@ -585,7 +585,7 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "state_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "state_vars"),
@@ -593,11 +593,11 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "enter_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "exit_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "forward_event"),
@@ -615,7 +615,7 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "state_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "state_vars"),
@@ -623,11 +623,11 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "enter_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "exit_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "forward_event"),
@@ -651,7 +651,7 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "state_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "state_vars"),
@@ -659,11 +659,11 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "enter_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "exit_args"),
-                CodegenNode::Dict(vec![]),
+                CodegenNode::Array(vec![]),
             ),
             CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "forward_event"),
@@ -782,16 +782,16 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
                 .with_type("string")
                 .with_visibility(Visibility::Public),
             Field::new("state_args")
-                .with_type("Dictionary<string, object>")
+                .with_type("List<object>")
                 .with_visibility(Visibility::Public),
             Field::new("state_vars")
                 .with_type("Dictionary<string, object>")
                 .with_visibility(Visibility::Public),
             Field::new("enter_args")
-                .with_type("Dictionary<string, object>")
+                .with_type("List<object>")
                 .with_visibility(Visibility::Public),
             Field::new("exit_args")
-                .with_type("Dictionary<string, object>")
+                .with_type("List<object>")
                 .with_visibility(Visibility::Public),
             Field::new("forward_event")
                 .with_type(&format!("{}FrameEvent?", system.name))
@@ -997,7 +997,7 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("#[allow(dead_code)]\n");
     code.push_str(&format!("struct {}FrameEvent {{\n", system_name));
     code.push_str("    message: String,\n");
-    code.push_str("    parameters: std::collections::HashMap<String, Box<dyn std::any::Any>>,\n");
+    code.push_str("    parameters: Vec<Box<dyn std::any::Any>>,\n");
     code.push_str("}\n\n");
 
     // Generate Clone impl manually since Box<dyn Any> doesn't implement Clone
@@ -1006,7 +1006,7 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("    fn clone(&self) -> Self {\n");
     code.push_str("        Self {\n");
     code.push_str("            message: self.message.clone(),\n");
-    code.push_str("            parameters: std::collections::HashMap::new(),\n");
+    code.push_str("            parameters: Vec::new(),\n");
     code.push_str("        }\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
@@ -1016,13 +1016,13 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("    fn new(message: &str) -> Self {\n");
     code.push_str("        Self {\n");
     code.push_str("            message: message.to_string(),\n");
-    code.push_str("            parameters: std::collections::HashMap::new(),\n");
+    code.push_str("            parameters: Vec::new(),\n");
     code.push_str("        }\n");
     code.push_str("    }\n");
-    code.push_str("    fn new_with_params(message: &str, params: &std::collections::HashMap<String, String>) -> Self {\n");
+    code.push_str("    fn new_with_params(message: &str, params: &Vec<String>) -> Self {\n");
     code.push_str("        Self {\n");
     code.push_str("            message: message.to_string(),\n");
-    code.push_str("            parameters: params.iter().map(|(k, v)| (k.clone(), Box::new(v.clone()) as Box<dyn std::any::Any>)).collect(),\n");
+    code.push_str("            parameters: params.iter().map(|v| Box::new(v.clone()) as Box<dyn std::any::Any>).collect(),\n");
     code.push_str("        }\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
@@ -1162,8 +1162,8 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
         "    state_context: {}StateContext,\n",
         system_name
     ));
-    code.push_str("    enter_args: std::collections::HashMap<String, String>,\n");
-    code.push_str("    exit_args: std::collections::HashMap<String, String>,\n");
+    code.push_str("    enter_args: Vec<String>,\n");
+    code.push_str("    exit_args: Vec<String>,\n");
     code.push_str(&format!(
         "    forward_event: Option<{}FrameEvent>,\n",
         system_name
@@ -1204,8 +1204,8 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("        Self {\n");
     code.push_str("            state: state.to_string(),\n");
     code.push_str("            state_context,\n");
-    code.push_str("            enter_args: std::collections::HashMap::new(),\n");
-    code.push_str("            exit_args: std::collections::HashMap::new(),\n");
+    code.push_str("            enter_args: Vec::new(),\n");
+    code.push_str("            exit_args: Vec::new(),\n");
     code.push_str("            forward_event: None,\n");
     code.push_str("            parent_compartment: None,\n");
     code.push_str("        }\n");
@@ -1237,10 +1237,8 @@ pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("public:\n");
     code.push_str("    std::string _message;\n");
-    code.push_str(&format!(
-        "    std::unordered_map<std::string, std::any> _parameters;\n"
-    ));
-    code.push_str(&format!("\n    {sys}FrameEvent(const std::string& message, std::unordered_map<std::string, std::any> params = {{}})\n"));
+    code.push_str("    std::vector<std::any> _parameters;\n");
+    code.push_str(&format!("\n    {sys}FrameEvent(const std::string& message, std::vector<std::any> params = {{}})\n"));
     code.push_str("        : _message(message), _parameters(std::move(params)) {}\n");
     code.push_str("};\n\n");
 
@@ -1261,10 +1259,10 @@ pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("class {sys}Compartment {{\n"));
     code.push_str("public:\n");
     code.push_str("    std::string state;\n");
-    code.push_str("    std::unordered_map<std::string, std::any> state_args;\n");
+    code.push_str("    std::vector<std::any> state_args;\n");
     code.push_str("    std::unordered_map<std::string, std::any> state_vars;\n");
-    code.push_str("    std::unordered_map<std::string, std::any> enter_args;\n");
-    code.push_str("    std::unordered_map<std::string, std::any> exit_args;\n");
+    code.push_str("    std::vector<std::any> enter_args;\n");
+    code.push_str("    std::vector<std::any> exit_args;\n");
     code.push_str(&format!(
         "    std::unique_ptr<{sys}FrameEvent> forward_event;\n"
     ));
@@ -1289,13 +1287,13 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     // FrameEvent class
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("    String _message;\n");
-    code.push_str("    HashMap<String, Object> _parameters;\n");
+    code.push_str("    ArrayList<Object> _parameters;\n");
     code.push_str(&format!("\n    {sys}FrameEvent(String message) {{\n"));
     code.push_str("        this._message = message;\n");
-    code.push_str("        this._parameters = new HashMap<>();\n");
+    code.push_str("        this._parameters = new ArrayList<>();\n");
     code.push_str("    }\n\n");
     code.push_str(&format!(
-        "    {sys}FrameEvent(String message, HashMap<String, Object> parameters) {{\n"
+        "    {sys}FrameEvent(String message, ArrayList<Object> parameters) {{\n"
     ));
     code.push_str("        this._message = message;\n");
     code.push_str("        this._parameters = parameters;\n");
@@ -1321,18 +1319,18 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     // Compartment class
     code.push_str(&format!("class {sys}Compartment {{\n"));
     code.push_str("    String state;\n");
-    code.push_str("    HashMap<String, Object> state_args;\n");
+    code.push_str("    ArrayList<Object> state_args;\n");
     code.push_str("    HashMap<String, Object> state_vars;\n");
-    code.push_str("    HashMap<String, Object> enter_args;\n");
-    code.push_str("    HashMap<String, Object> exit_args;\n");
+    code.push_str("    ArrayList<Object> enter_args;\n");
+    code.push_str("    ArrayList<Object> exit_args;\n");
     code.push_str(&format!("    {sys}FrameEvent forward_event;\n"));
     code.push_str(&format!("    {sys}Compartment parent_compartment;\n"));
     code.push_str(&format!("\n    {sys}Compartment(String state) {{\n"));
     code.push_str("        this.state = state;\n");
-    code.push_str("        this.state_args = new HashMap<>();\n");
+    code.push_str("        this.state_args = new ArrayList<>();\n");
     code.push_str("        this.state_vars = new HashMap<>();\n");
-    code.push_str("        this.enter_args = new HashMap<>();\n");
-    code.push_str("        this.exit_args = new HashMap<>();\n");
+    code.push_str("        this.enter_args = new ArrayList<>();\n");
+    code.push_str("        this.exit_args = new ArrayList<>();\n");
     code.push_str("        this.forward_event = null;\n");
     code.push_str("        this.parent_compartment = null;\n");
     code.push_str("    }\n\n");
@@ -1340,10 +1338,10 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!(
         "        {sys}Compartment c = new {sys}Compartment(this.state);\n"
     ));
-    code.push_str("        c.state_args = new HashMap<>(this.state_args);\n");
+    code.push_str("        c.state_args = new ArrayList<>(this.state_args);\n");
     code.push_str("        c.state_vars = new HashMap<>(this.state_vars);\n");
-    code.push_str("        c.enter_args = new HashMap<>(this.enter_args);\n");
-    code.push_str("        c.exit_args = new HashMap<>(this.exit_args);\n");
+    code.push_str("        c.enter_args = new ArrayList<>(this.enter_args);\n");
+    code.push_str("        c.exit_args = new ArrayList<>(this.exit_args);\n");
     code.push_str("        c.forward_event = this.forward_event;\n");
     code.push_str("        c.parent_compartment = this.parent_compartment;\n");
     code.push_str("        return c;\n");
@@ -1359,7 +1357,7 @@ pub fn generate_kotlin_compartment_types(system: &SystemAst) -> String {
     let mut code = String::new();
 
     // FrameEvent class — Kotlin: no semicolons, no `new`, `fun` keyword
-    code.push_str(&format!("class {sys}FrameEvent(val _message: String, val _parameters: MutableMap<String, Any?> = mutableMapOf())\n\n"));
+    code.push_str(&format!("class {sys}FrameEvent(val _message: String, val _parameters: MutableList<Any?> = mutableListOf())\n\n"));
 
     // FrameContext class
     code.push_str(&format!(
@@ -1371,10 +1369,10 @@ pub fn generate_kotlin_compartment_types(system: &SystemAst) -> String {
 
     // Compartment class
     code.push_str(&format!("class {sys}Compartment(val state: String) {{\n"));
-    code.push_str("    val state_args: MutableMap<String, Any?> = mutableMapOf()\n");
+    code.push_str("    val state_args: MutableList<Any?> = mutableListOf()\n");
     code.push_str("    val state_vars: MutableMap<String, Any?> = mutableMapOf()\n");
-    code.push_str("    val enter_args: MutableMap<String, Any?> = mutableMapOf()\n");
-    code.push_str("    val exit_args: MutableMap<String, Any?> = mutableMapOf()\n");
+    code.push_str("    val enter_args: MutableList<Any?> = mutableListOf()\n");
+    code.push_str("    val exit_args: MutableList<Any?> = mutableListOf()\n");
     code.push_str(&format!("    var forward_event: {sys}FrameEvent? = null\n"));
     code.push_str(&format!(
         "    var parent_compartment: {sys}Compartment? = null\n"
@@ -1402,9 +1400,9 @@ pub fn generate_swift_compartment_types(system: &SystemAst) -> String {
     // FrameEvent class — Swift: no semicolons, no `new`, `func` keyword
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("    var _message: String\n");
-    code.push_str("    var _parameters: [String: Any]\n\n");
+    code.push_str("    var _parameters: [Any]\n\n");
     code.push_str(&format!(
-        "    init(message: String, parameters: [String: Any] = [:]) {{\n"
+        "    init(message: String, parameters: [Any] = []) {{\n"
     ));
     code.push_str("        self._message = message\n");
     code.push_str("        self._parameters = parameters\n");
@@ -1428,10 +1426,10 @@ pub fn generate_swift_compartment_types(system: &SystemAst) -> String {
     // Compartment class
     code.push_str(&format!("class {sys}Compartment {{\n"));
     code.push_str("    var state: String\n");
-    code.push_str("    var state_args: [String: Any] = [:]\n");
+    code.push_str("    var state_args: [Any] = []\n");
     code.push_str("    var state_vars: [String: Any] = [:]\n");
-    code.push_str("    var enter_args: [String: Any] = [:]\n");
-    code.push_str("    var exit_args: [String: Any] = [:]\n");
+    code.push_str("    var enter_args: [Any] = []\n");
+    code.push_str("    var exit_args: [Any] = []\n");
     code.push_str(&format!("    var forward_event: {sys}FrameEvent?\n"));
     code.push_str(&format!(
         "    var parent_compartment: {sys}Compartment?\n\n"
@@ -1464,15 +1462,15 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     // FrameEvent class
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("    public string _message;\n");
-    code.push_str("    public Dictionary<string, object> _parameters;\n");
+    code.push_str("    public List<object> _parameters;\n");
     code.push_str(&format!(
         "\n    public {sys}FrameEvent(string message) {{\n"
     ));
     code.push_str("        this._message = message;\n");
-    code.push_str("        this._parameters = new Dictionary<string, object>();\n");
+    code.push_str("        this._parameters = new List<object>();\n");
     code.push_str("    }\n\n");
     code.push_str(&format!(
-        "    public {sys}FrameEvent(string message, Dictionary<string, object> parameters) {{\n"
+        "    public {sys}FrameEvent(string message, List<object> parameters) {{\n"
     ));
     code.push_str("        this._message = message;\n");
     code.push_str("        this._parameters = parameters;\n");
@@ -1498,20 +1496,20 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     // Compartment class
     code.push_str(&format!("class {sys}Compartment {{\n"));
     code.push_str("    public string state;\n");
-    code.push_str("    public Dictionary<string, object> state_args;\n");
+    code.push_str("    public List<object> state_args;\n");
     code.push_str("    public Dictionary<string, object> state_vars;\n");
-    code.push_str("    public Dictionary<string, object> enter_args;\n");
-    code.push_str("    public Dictionary<string, object> exit_args;\n");
+    code.push_str("    public List<object> enter_args;\n");
+    code.push_str("    public List<object> exit_args;\n");
     code.push_str(&format!("    public {sys}FrameEvent? forward_event;\n"));
     code.push_str(&format!(
         "    public {sys}Compartment? parent_compartment;\n"
     ));
     code.push_str(&format!("\n    public {sys}Compartment(string state) {{\n"));
     code.push_str("        this.state = state;\n");
-    code.push_str("        this.state_args = new Dictionary<string, object>();\n");
+    code.push_str("        this.state_args = new List<object>();\n");
     code.push_str("        this.state_vars = new Dictionary<string, object>();\n");
-    code.push_str("        this.enter_args = new Dictionary<string, object>();\n");
-    code.push_str("        this.exit_args = new Dictionary<string, object>();\n");
+    code.push_str("        this.enter_args = new List<object>();\n");
+    code.push_str("        this.exit_args = new List<object>();\n");
     code.push_str("        this.forward_event = null;\n");
     code.push_str("        this.parent_compartment = null;\n");
     code.push_str("    }\n\n");
@@ -1519,10 +1517,10 @@ pub fn generate_csharp_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!(
         "        {sys}Compartment c = new {sys}Compartment(this.state);\n"
     ));
-    code.push_str("        c.state_args = new Dictionary<string, object>(this.state_args);\n");
+    code.push_str("        c.state_args = new List<object>(this.state_args);\n");
     code.push_str("        c.state_vars = new Dictionary<string, object>(this.state_vars);\n");
-    code.push_str("        c.enter_args = new Dictionary<string, object>(this.enter_args);\n");
-    code.push_str("        c.exit_args = new Dictionary<string, object>(this.exit_args);\n");
+    code.push_str("        c.enter_args = new List<object>(this.enter_args);\n");
+    code.push_str("        c.exit_args = new List<object>(this.exit_args);\n");
     code.push_str("        c.forward_event = this.forward_event;\n");
     code.push_str("        c.parent_compartment = this.parent_compartment;\n");
     code.push_str("        return c;\n");
@@ -1540,7 +1538,7 @@ pub fn generate_go_compartment_types(system: &SystemAst) -> String {
     // FrameEvent struct
     code.push_str(&format!("type {}FrameEvent struct {{\n", sys));
     code.push_str("    _message    string\n");
-    code.push_str("    _parameters map[string]any\n");
+    code.push_str("    _parameters []any\n");
     code.push_str("}\n\n");
 
     // FrameContext struct
@@ -1554,10 +1552,10 @@ pub fn generate_go_compartment_types(system: &SystemAst) -> String {
     // Compartment struct
     code.push_str(&format!("type {}Compartment struct {{\n", sys));
     code.push_str("    state            string\n");
-    code.push_str("    stateArgs        map[string]any\n");
+    code.push_str("    stateArgs        []any\n");
     code.push_str("    stateVars        map[string]any\n");
-    code.push_str("    enterArgs        map[string]any\n");
-    code.push_str("    exitArgs         map[string]any\n");
+    code.push_str("    enterArgs        []any\n");
+    code.push_str("    exitArgs         []any\n");
     code.push_str(&format!("    forwardEvent     *{}FrameEvent\n", sys));
     code.push_str(&format!("    parentCompartment *{}Compartment\n", sys));
     code.push_str("}\n\n");
@@ -1569,10 +1567,10 @@ pub fn generate_go_compartment_types(system: &SystemAst) -> String {
     ));
     code.push_str(&format!("    return &{}Compartment{{\n", sys));
     code.push_str("        state:    state,\n");
-    code.push_str("        stateArgs: make(map[string]any),\n");
+    code.push_str("        stateArgs: []any{},\n");
     code.push_str("        stateVars: make(map[string]any),\n");
-    code.push_str("        enterArgs: make(map[string]any),\n");
-    code.push_str("        exitArgs:  make(map[string]any),\n");
+    code.push_str("        enterArgs: []any{},\n");
+    code.push_str("        exitArgs:  []any{},\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
 
@@ -1583,17 +1581,14 @@ pub fn generate_go_compartment_types(system: &SystemAst) -> String {
     ));
     code.push_str(&format!("    nc := &{}Compartment{{\n", sys));
     code.push_str("        state: c.state,\n");
-    code.push_str("        stateArgs: make(map[string]any),\n");
+    code.push_str("        stateArgs: append([]any{}, c.stateArgs...),\n");
     code.push_str("        stateVars: make(map[string]any),\n");
-    code.push_str("        enterArgs: make(map[string]any),\n");
-    code.push_str("        exitArgs:  make(map[string]any),\n");
+    code.push_str("        enterArgs: append([]any{}, c.enterArgs...),\n");
+    code.push_str("        exitArgs:  append([]any{}, c.exitArgs...),\n");
     code.push_str("        forwardEvent:     c.forwardEvent,\n");
     code.push_str("        parentCompartment: c.parentCompartment,\n");
     code.push_str("    }\n");
-    code.push_str("    for k, v := range c.stateArgs { nc.stateArgs[k] = v }\n");
     code.push_str("    for k, v := range c.stateVars { nc.stateVars[k] = v }\n");
-    code.push_str("    for k, v := range c.enterArgs { nc.enterArgs[k] = v }\n");
-    code.push_str("    for k, v := range c.exitArgs { nc.exitArgs[k] = v }\n");
     code.push_str("    return nc\n");
     code.push_str("}\n\n");
 

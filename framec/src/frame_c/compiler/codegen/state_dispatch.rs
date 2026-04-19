@@ -46,15 +46,14 @@ pub(crate) struct DispatchSyntax {
     /// HSM compartment navigation preamble
     pub fmt_hsm_nav: fn(state_name: &str, system_name: &str) -> String,
     /// Bind a state param to a local variable
-    pub fmt_bind_param: fn(name: &str, type_str: &str, system_name: &str) -> String,
+    pub fmt_bind_param: fn(name: &str, type_str: &str, system_name: &str, index: usize) -> String,
     /// Check-and-init a state var (inside enter handler or auto-init)
     pub fmt_init_sv: fn(var_name: &str, init_val: &str, indent: &str, system_name: &str) -> String,
     /// Unpack a handler param. `source` is "event" for interface handlers,
     /// "enter" for $> handlers, "exit" for <$ handlers.
     /// `default` is `Some("expr")` for params with declared defaults
     /// (e.g., `$>(val: int = 0)`). `index` is the positional index of
-    /// the param — used for enter/exit handlers where pop$ sets
-    /// positional keys ("0", "1") while normal transitions set named keys.
+    /// the param in the parameter list — used for Vec/List/Array access.
     pub fmt_unpack: fn(
         name: &str,
         type_str: &str,
@@ -91,8 +90,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
                 s
             },
-            fmt_bind_param: |name, _type_str, _sys| {
-                format!("{name} = self.__compartment.state_args.get(\"{name}\")\n")
+            fmt_bind_param: |name, _type_str, _sys, index| {
+                format!("{name} = self.__compartment.state_args[{index}]\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -101,17 +100,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, _type_str, indent, _sys, source, default, index| {
-                if source == "enter" || source == "exit" {
-                    if let Some(d) = default {
-                        format!("{indent}{name} = __e._parameters.get(\"{name}\", __e._parameters.get(\"{index}\", {d}))\n")
-                    } else {
-                        format!("{indent}{name} = __e._parameters.get(\"{name}\", __e._parameters.get(\"{index}\"))\n")
-                    }
-                } else if let Some(d) = default {
-                    format!("{indent}{name} = __e._parameters.get(\"{name}\", {d})\n")
-                } else {
-                    format!("{indent}{name} = __e._parameters[\"{name}\"]\n")
-                }
+                format!("{indent}{name} = __e._parameters[{index}]\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}self._state_{parent}(__e)\n"),
         }),
@@ -135,8 +124,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("    __sv_comp = __sv_comp.parent_compartment\n");
                 s
             },
-            fmt_bind_param: |name, _type_str, _sys| {
-                format!("var {name} = self.__compartment.state_args[\"{name}\"]\n")
+            fmt_bind_param: |name, _type_str, _sys, index| {
+                format!("var {name} = self.__compartment.state_args[{index}]\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -145,17 +134,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, _type_str, indent, _sys, source, default, index| {
-                if source == "enter" || source == "exit" {
-                    if let Some(d) = default {
-                        format!("{indent}var {name} = __e._parameters.get(\"{name}\", __e._parameters.get(\"{index}\", {d}))\n")
-                    } else {
-                        format!("{indent}var {name} = __e._parameters.get(\"{name}\", __e._parameters.get(\"{index}\"))\n")
-                    }
-                } else if let Some(d) = default {
-                    format!("{indent}var {name} = __e._parameters.get(\"{name}\", {d})\n")
-                } else {
-                    format!("{indent}var {name} = __e._parameters[\"{name}\"]\n")
-                }
+                format!("{indent}var {name} = __e._parameters[{index}]\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}self._state_{parent}(__e)\n"),
         }),
@@ -180,8 +159,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("}\n");
                 s
             },
-            fmt_bind_param: |name, _type_str, _sys| {
-                format!("let {name} = this.__compartment.state_args[\"{name}\"];\n")
+            fmt_bind_param: |name, _type_str, _sys, index| {
+                format!("let {name} = this.__compartment.state_args[{index}];\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -191,17 +170,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, _type_str, indent, _sys, source, default, index| {
-                if source == "enter" || source == "exit" {
-                    if let Some(d) = default {
-                        format!("{indent}let {name} = __e._parameters?.[\"{name}\"] ?? __e._parameters?.[\"{index}\"] ?? {d};\n")
-                    } else {
-                        format!("{indent}let {name} = __e._parameters?.[\"{name}\"] ?? __e._parameters?.[\"{index}\"];\n")
-                    }
-                } else if let Some(d) = default {
-                    format!("{indent}let {name} = __e._parameters?.[\"{name}\"] ?? {d};\n")
-                } else {
-                    format!("{indent}let {name} = __e._parameters[\"{name}\"];\n")
-                }
+                format!("{indent}let {name} = __e._parameters[{index}];\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}this._state_{parent}(__e);\n"),
         }),
@@ -226,8 +195,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("end\n");
                 s
             },
-            fmt_bind_param: |name, _type_str, _sys| {
-                format!("{name} = @__compartment.state_args[\"{name}\"]\n")
+            fmt_bind_param: |name, _type_str, _sys, index| {
+                format!("{name} = @__compartment.state_args[{index}]\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -237,7 +206,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, _type_str, indent, _sys, _source, default, index| {
-                format!("{indent}{name} = __e._parameters[\"{name}\"]\n")
+                format!("{indent}{name} = __e._parameters[{index}]\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e)\n"),
         }),
@@ -262,8 +231,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("end\n");
                 s
             },
-            fmt_bind_param: |name, _type_str, _sys| {
-                format!("local {name} = self.__compartment.state_args[\"{name}\"]\n")
+            fmt_bind_param: |name, _type_str, _sys, index| {
+                format!("local {name} = self.__compartment.state_args[{}]\n", index + 1)
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -273,17 +242,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, _type_str, indent, _sys, source, default, index| {
-                if source == "enter" || source == "exit" {
-                    if let Some(d) = default {
-                        format!("{indent}local {name} = __e._parameters[\"{name}\"] or __e._parameters[\"{index}\"] or {d}\n")
-                    } else {
-                        format!("{indent}local {name} = __e._parameters[\"{name}\"] or __e._parameters[\"{index}\"]\n")
-                    }
-                } else if let Some(d) = default {
-                    format!("{indent}local {name} = __e._parameters[\"{name}\"] or {d}\n")
-                } else {
-                    format!("{indent}local {name} = __e._parameters[\"{name}\"]\n")
-                }
+                let lua_index = index + 1; // Lua is 1-indexed
+                format!("{indent}local {name} = __e._parameters[{lua_index}]\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}self:_state_{parent}(__e)\n"),
         }),
@@ -308,8 +268,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("}\n");
                 s
             },
-            fmt_bind_param: |name, _type_str, _sys| {
-                format!("${name} = $this->__compartment->state_args[\"{name}\"];\n")
+            fmt_bind_param: |name, _type_str, _sys, index| {
+                format!("${name} = $this->__compartment->state_args[{index}];\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -319,17 +279,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, _type_str, indent, _sys, source, default, index| {
-                if source == "enter" || source == "exit" {
-                    if let Some(d) = default {
-                        format!("{indent}${name} = $__e->_parameters[\"{name}\"] ?? $__e->_parameters[\"{index}\"] ?? {d};\n")
-                    } else {
-                        format!("{indent}${name} = $__e->_parameters[\"{name}\"] ?? $__e->_parameters[\"{index}\"];\n")
-                    }
-                } else if let Some(d) = default {
-                    format!("{indent}${name} = $__e->_parameters[\"{name}\"] ?? {d};\n")
-                } else {
-                    format!("{indent}${name} = $__e->_parameters[\"{name}\"];\n")
-                }
+                format!("{indent}${name} = $__e->_parameters[{index}];\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}$this->_state_{parent}($__e);\n"),
         }),
@@ -355,9 +305,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("var __sv_comp = __sv_comp_n!;\n");
                 s
             },
-            fmt_bind_param: |name, type_str, _sys| {
+            fmt_bind_param: |name, type_str, _sys, index| {
                 let cs_type = csharp_map_type(type_str);
-                format!("{cs_type} {name} = ({cs_type}) __compartment.state_args[\"{name}\"];\n")
+                format!("{cs_type} {name} = ({cs_type}) __compartment.state_args[{index}];\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -368,12 +318,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_unpack: |name, type_str, indent, _sys, source, default, index| {
                 let cs_type = csharp_map_type(type_str);
-                let dict = match source {
+                let list = match source {
                     "enter" => "__compartment.enter_args",
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}var {name} = ({cs_type}) {dict}[\"{name}\"];\n")
+                format!("{indent}var {name} = ({cs_type}) {list}[{index}];\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
         }),
@@ -393,9 +343,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str(&format!("while (__sv_comp != null && !__sv_comp.state.equals(\"{}\")) {{ __sv_comp = __sv_comp.parent_compartment; }}\n", state));
                 s
             },
-            fmt_bind_param: |name, type_str, _sys| {
+            fmt_bind_param: |name, type_str, _sys, index| {
                 let java_type = java_map_type(type_str);
-                format!("{java_type} {name} = ({java_type}) __compartment.state_args.get(\"{name}\");\n")
+                format!("{java_type} {name} = ({java_type}) __compartment.state_args.get({index});\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -406,12 +356,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_unpack: |name, type_str, indent, _sys, source, default, index| {
                 let java_type = java_map_type(type_str);
-                let dict = match source {
+                let list = match source {
                     "enter" => "__compartment.enter_args",
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}var {name} = ({java_type}) {dict}.get(\"{name}\");\n")
+                format!("{indent}var {name} = ({java_type}) {list}.get({index});\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
         }),
@@ -431,9 +381,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str(&format!("while (__sv_comp != null && __sv_comp.state != \"{}\") {{ __sv_comp = __sv_comp.parent_compartment!! }}\n", state));
                 s
             },
-            fmt_bind_param: |name, type_str, _sys| {
+            fmt_bind_param: |name, type_str, _sys, index| {
                 let kt_type = kotlin_map_type(type_str);
-                format!("val {name} = __compartment.state_args[\"{name}\"] as {kt_type}\n")
+                format!("val {name} = __compartment.state_args[{index}] as {kt_type}\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -444,12 +394,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_unpack: |name, type_str, indent, _sys, source, default, index| {
                 let kt_type = kotlin_map_type(type_str);
-                let dict = match source {
+                let list = match source {
                     "enter" => "__compartment.enter_args",
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}val {name} = {dict}[\"{name}\"] as {kt_type}\n")
+                format!("{indent}val {name} = {list}[{index}] as {kt_type}\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e)\n"),
         }),
@@ -469,9 +419,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str(&format!("while __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parent_compartment! }}\n", state));
                 s
             },
-            fmt_bind_param: |name, type_str, _sys| {
+            fmt_bind_param: |name, type_str, _sys, index| {
                 let sw_type = swift_map_type(type_str);
-                format!("let {name} = __compartment.state_args[\"{name}\"] as! {sw_type}\n")
+                format!("let {name} = __compartment.state_args[{index}] as! {sw_type}\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -482,12 +432,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_unpack: |name, type_str, indent, _sys, source, default, index| {
                 let sw_type = swift_map_type(type_str);
-                let dict = match source {
+                let list = match source {
                     "enter" => "__compartment.enter_args",
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}let {name} = {dict}[\"{name}\"] as! {sw_type}\n")
+                format!("{indent}let {name} = {list}[{index}] as! {sw_type}\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e)\n"),
         }),
@@ -518,8 +468,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("}\n");
                 s
             },
-            fmt_bind_param: |name, _type_str, _sys| {
-                format!("var {name} = __compartment.state_args[\"{name}\"];\n")
+            fmt_bind_param: |name, _type_str, _sys, index| {
+                format!("var {name} = __compartment.state_args[{index}];\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -529,10 +479,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, type_str, indent, _sys, source, default, index| {
-                let dict = match source {
+                let list = match source {
                     "enter" => "__compartment.enter_args",
                     "exit" => "__compartment.exit_args",
-                    _ => "__e._parameters?",
+                    _ => "__e._parameters",
                 };
                 // Dart: cast to declared type to avoid dynamic/num issues
                 let dart_type = match type_str {
@@ -543,9 +493,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     _ => "",
                 };
                 if dart_type.is_empty() {
-                    format!("{indent}final {name} = {dict}[\"{name}\"];\n")
+                    format!("{indent}final {name} = {list}[{index}];\n")
                 } else {
-                    format!("{indent}final {name} = {dict}[\"{name}\"] as {dart_type};\n")
+                    format!("{indent}final {name} = {list}[{index}] as {dart_type};\n")
                 }
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
@@ -566,12 +516,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str(&format!("while (__sv_comp && __sv_comp->state != \"{}\") {{ __sv_comp = __sv_comp->parent_compartment.get(); }}\n", state));
                 s
             },
-            fmt_bind_param: |name, type_str, _sys| {
+            fmt_bind_param: |name, type_str, _sys, index| {
                 let cpp_type = cpp_map_type(type_str);
                 if cpp_type == "std::any" {
-                    format!("auto {name} = __compartment->state_args[\"{name}\"];\n")
+                    format!("auto {name} = __compartment->state_args[{index}];\n")
                 } else {
-                    format!("{cpp_type} {name} = std::any_cast<{cpp_type}>(__compartment->state_args[\"{name}\"]);\n")
+                    format!("{cpp_type} {name} = std::any_cast<{cpp_type}>(__compartment->state_args[{index}]);\n")
                 }
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
@@ -590,16 +540,16 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_unpack: |name, type_str, indent, _sys, source, default, index| {
                 let cpp_type = cpp_map_type(type_str);
-                let dict = match source {
+                let list = match source {
                     "enter" => "__compartment->enter_args",
                     "exit" => "__compartment->exit_args",
                     _ => "__e._parameters",
                 };
                 // Don't any_cast to std::any — just copy directly
                 if cpp_type == "std::any" {
-                    format!("{indent}auto {name} = {dict}[\"{name}\"];\n")
+                    format!("{indent}auto {name} = {list}[{index}];\n")
                 } else {
-                    format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>({dict}[\"{name}\"]);\n")
+                    format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>({list}[{index}]);\n")
                 }
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
@@ -620,9 +570,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str(&format!("for __sv_comp != nil && __sv_comp.state != \"{}\" {{ __sv_comp = __sv_comp.parentCompartment }}\n", state));
                 s
             },
-            fmt_bind_param: |name, type_str, _sys| {
+            fmt_bind_param: |name, type_str, _sys, index| {
                 let go_type = go_map_type(type_str);
-                format!("{name} := s.__compartment.stateArgs[\"{name}\"].({go_type})\n_ = {name}\n")
+                format!("{name} := s.__compartment.stateArgs[{index}].({go_type})\n_ = {name}\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -633,12 +583,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_unpack: |name, type_str, indent, _sys, source, default, index| {
                 let go_type = go_map_type(type_str);
-                let dict = match source {
+                let list = match source {
                     "enter" => "s.__compartment.enterArgs",
                     "exit" => "s.__compartment.exitArgs",
                     _ => "__e._parameters",
                 };
-                format!("{indent}{name} := {dict}[\"{name}\"].({go_type})\n{indent}_ = {name}\n")
+                format!("{indent}{name} := {list}[{index}].({go_type})\n{indent}_ = {name}\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}s._state_{parent}(__e)\n"),
         }),
@@ -666,14 +616,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("}\n");
                 s
             },
-            fmt_bind_param: |name, type_str, sys| {
+            fmt_bind_param: |name, type_str, sys, index| {
                 let (c_type, cast) = match type_str {
                     "str" | "string" | "String" | "char*" | "const char*" => {
                         ("const char*", "(const char*)")
                     }
                     _ => ("int", "(int)(intptr_t)"),
                 };
-                format!("{c_type} {name} = {cast}{sys}_FrameDict_get(self->__compartment->state_args, \"{name}\");\n")
+                format!("{c_type} {name} = {cast}self->__compartment->state_args[{index}];\n")
             },
             fmt_init_sv: |var_name, init_val, indent, sys| {
                 format!(
@@ -683,10 +633,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 )
             },
             fmt_unpack: |name, type_str, indent, sys, source, default, index| {
-                let dict = match source {
-                    "enter" => format!("self->__compartment->enter_args"),
-                    "exit" => format!("self->__compartment->exit_args"),
-                    _ => format!("__e->_parameters"),
+                let list = match source {
+                    "enter" => "self->__compartment->enter_args",
+                    "exit" => "self->__compartment->exit_args",
+                    _ => "__e->_parameters",
                 };
                 let (c_type, cast) = match type_str {
                     "str" | "string" | "String" | "char*" | "const char*" => {
@@ -695,7 +645,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     _ => ("int", "(int)(intptr_t)"),
                 };
                 format!(
-                    "{indent}{c_type} {name} = {cast}{sys}_FrameDict_get({dict}, \"{name}\");\n"
+                    "{indent}{c_type} {name} = {cast}{list}[{index}];\n"
                 )
             },
             fmt_forward: |parent, indent, sys| {
@@ -725,12 +675,12 @@ pub(crate) fn generate_unified_state_dispatch(
     let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
 
     // 1. State param binding
-    for sp in state_params {
+    for (i, sp) in state_params.iter().enumerate() {
         let type_str = match &sp.param_type {
             Type::Custom(s) => s.as_str(),
             Type::Unknown => "int",
         };
-        code.push_str(&(syn.fmt_bind_param)(&sp.name, type_str, system_name));
+        code.push_str(&(syn.fmt_bind_param)(&sp.name, type_str, system_name, i));
     }
 
     // 2. HSM compartment navigation
