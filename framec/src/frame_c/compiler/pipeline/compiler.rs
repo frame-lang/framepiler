@@ -160,6 +160,7 @@ pub fn compile_ast_based(
             body_span,
             header_params_span,
             bases,
+            visibility,
             ..
         } = segment
         {
@@ -209,6 +210,48 @@ pub fn compile_ast_based(
 
             // Attach base classes from `: Base1, Base2` syntax
             system_ast.bases = bases.clone();
+            // Validate and attach visibility from `@@system private Foo` syntax
+            if visibility.as_deref() == Some("public") {
+                return Ok(CompileResult {
+                    code: String::new(),
+                    errors: vec![CompileError::new(
+                        "E408",
+                        &format!(
+                            "System '{}': 'public' is redundant — systems are public by default. \
+                             Remove the 'public' keyword.",
+                            name
+                        ),
+                    )],
+                    warnings: vec![],
+                    source_map: None,
+                });
+            }
+            if visibility.as_deref() == Some("private") {
+                let unsupported = matches!(
+                    config.target,
+                    TargetLanguage::Python3
+                        | TargetLanguage::Ruby
+                        | TargetLanguage::Lua
+                        | TargetLanguage::C
+                        | TargetLanguage::GDScript
+                        | TargetLanguage::Erlang
+                );
+                if unsupported {
+                    return Ok(CompileResult {
+                        code: String::new(),
+                        errors: vec![CompileError::new(
+                            "E409",
+                            &format!(
+                                "System '{}': target language {:?} does not support private class visibility.",
+                                name, config.target
+                            ),
+                        )],
+                        warnings: vec![],
+                        source_map: None,
+                    });
+                }
+            }
+            system_ast.visibility = visibility.clone();
 
             if has_persist {
                 system_ast.persist_attr = Some(crate::frame_c::compiler::frame_ast::PersistAttr {
@@ -245,6 +288,25 @@ pub fn compile_ast_based(
                 "E406",
                 &format!(
                     "Erlang requires one module per file, but this file contains {} systems: {}. \
+                     Split into separate files (one @@system per file).",
+                    system_asts.len(),
+                    names.join(", ")
+                ),
+            )],
+            warnings: vec![],
+            source_map: None,
+        });
+    }
+
+    // Java: one public class per file — reject multi-system files
+    if matches!(config.target, TargetLanguage::Java) && system_asts.len() > 1 {
+        let names: Vec<&str> = system_asts.iter().map(|s| s.name.as_str()).collect();
+        return Ok(CompileResult {
+            code: String::new(),
+            errors: vec![CompileError::new(
+                "E407",
+                &format!(
+                    "Java allows only one public class per file, but this file contains {} systems: {}. \
                      Split into separate files (one @@system per file).",
                     system_asts.len(),
                     names.join(", ")

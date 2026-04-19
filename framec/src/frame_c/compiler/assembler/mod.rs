@@ -451,6 +451,7 @@ mod tests {
                     header_params_span: None,
                     name: "Foo".to_string(),
                     bases: vec![],
+                    visibility: None,
                 },
                 Segment::Native {
                     span: Span {
@@ -600,6 +601,7 @@ mod tests {
                     header_params_span: None,
                     name: "Alpha".to_string(),
                     bases: vec![],
+                    visibility: None,
                 },
                 Segment::Native {
                     span: Span {
@@ -619,6 +621,7 @@ mod tests {
                     header_params_span: None,
                     name: "Beta".to_string(),
                     bases: vec![],
+                    visibility: None,
                 },
                 Segment::Native {
                     span: Span {
@@ -655,6 +658,7 @@ mod tests {
                 header_params_span: None,
                 name: "Foo".to_string(),
                 bases: vec![],
+                visibility: None,
             }],
         );
         let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]);
@@ -700,6 +704,7 @@ mod tests {
                     header_params_span: None,
                     name: "MySystem".to_string(),
                     bases: vec![],
+                    visibility: None,
                 },
             ],
         );
@@ -738,6 +743,7 @@ mod tests {
                     header_params_span: None,
                     name: "Foo".to_string(),
                     bases: vec![],
+                    visibility: None,
                 },
             ],
         );

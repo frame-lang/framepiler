@@ -93,7 +93,11 @@ pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]
         base_classes: system.bases.clone(),
         is_abstract: false,
         derives: vec![],
-        visibility: Visibility::Public,
+        visibility: if system.visibility.as_deref() == Some("private") {
+            Visibility::Private
+        } else {
+            Visibility::Public
+        },
     };
 
     if needs_async {

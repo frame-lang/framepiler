@@ -115,6 +115,9 @@ pub struct SystemAst {
     pub persist_attr: Option<PersistAttr>,
     /// Section order as encountered in source (may contain duplicates for validation)
     pub section_order: Vec<SystemSectionKind>,
+    /// Visibility modifier: "private" overrides the public default.
+    /// None or absent means public (the default).
+    pub visibility: Option<String>,
 }
 
 /// Which group a system header parameter belongs to.
@@ -620,6 +623,7 @@ impl SystemAst {
             section_spans: SystemSectionSpans::default(),
             persist_attr: None,
             section_order: vec![],
+            visibility: None,
         }
     }
 

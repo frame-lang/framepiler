@@ -235,7 +235,11 @@ pub fn generate_system_shared(
         base_classes: system.bases.clone(),
         is_abstract: false,
         derives: vec![], // Derives not used - we manually build JSON
-        visibility: Visibility::Public,
+        visibility: if system.visibility.as_deref() == Some("private") {
+            Visibility::Private
+        } else {
+            Visibility::Public
+        },
     };
 
     // Post-process: make dispatch chain async if any interface method is async

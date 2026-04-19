@@ -82,6 +82,9 @@ pub enum Segment {
         name: String,
         /// Base classes/interfaces from `: Base1, Base2` syntax
         bases: Vec<String>,
+        /// Visibility modifier: "private" or None (default = public).
+        /// "public" is rejected by the validator as redundant.
+        visibility: Option<String>,
     },
 }
 
@@ -312,7 +315,7 @@ pub fn segment<S: SyntaxSkipper>(skipper: &S, source: &[u8]) -> Result<SourceMap
                     }
                     _ if kind == PragmaKind::Other && is_system_pragma(source, i) => {
                         // @@system Name(optional params) { ... }
-                        let (system_name, name_end) = extract_system_name(source, i);
+                        let (system_name, system_visibility, name_end) = extract_system_name(source, i);
 
                         // After the name we may have an optional parameter list `(...)`.
                         // Skip whitespace, and if `(` is next, capture the span between
@@ -468,6 +471,7 @@ pub fn segment<S: SyntaxSkipper>(skipper: &S, source: &[u8]) -> Result<SourceMap
                             header_params_span,
                             name: system_name,
                             bases,
+                            visibility: system_visibility,
                         });
 
                         i = outer_end;
@@ -604,8 +608,8 @@ fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
     (kind, value)
 }
 
-/// Extract system name from `@@system <Name> ...`
-fn extract_system_name(bytes: &[u8], start: usize) -> (String, usize) {
+/// Extract system name (and optional visibility) from `@@system [private] <Name> ...`
+fn extract_system_name(bytes: &[u8], start: usize) -> (String, Option<String>, usize) {
     let n = bytes.len();
     let mut i = start + 8; // Skip "@@system"
 
@@ -614,14 +618,32 @@ fn extract_system_name(bytes: &[u8], start: usize) -> (String, usize) {
         i += 1;
     }
 
-    // Extract identifier
-    let name_start = i;
+    // Extract first identifier — could be visibility keyword or name
+    let first_start = i;
     while i < n && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
         i += 1;
     }
+    let first = String::from_utf8_lossy(&bytes[first_start..i]).to_string();
 
-    let name = String::from_utf8_lossy(&bytes[name_start..i]).to_string();
-    (name, i)
+    // Check if first identifier is a visibility keyword
+    if first == "private" || first == "public" {
+        let visibility = Some(first);
+
+        // Skip whitespace after visibility
+        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+
+        // Extract actual system name
+        let name_start = i;
+        while i < n && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        let name = String::from_utf8_lossy(&bytes[name_start..i]).to_string();
+        (name, visibility, i)
+    } else {
+        (first, None, i)
+    }
 }
 
 /// Find end of line (including the newline character)
