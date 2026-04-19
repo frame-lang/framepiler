@@ -2280,7 +2280,7 @@ mod tests {
         let metas = scan_for_metadata("{ $.count }");
         assert_eq!(metas.len(), 1);
         match &metas[0].1 {
-            SegmentMetadata::StateVar { name } => assert_eq!(name, "count"),
+            SegmentMetadata::StateVar { name, .. } => assert_eq!(name, "count"),
             other => panic!("Expected StateVar, got {:?}", other),
         }
     }

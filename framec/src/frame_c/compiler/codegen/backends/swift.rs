@@ -43,9 +43,14 @@ impl LanguageBackend for SwiftBackend {
                 methods,
                 base_classes,
                 is_abstract,
+                visibility,
                 ..
             } => {
                 let mut result = String::new();
+                let vis_kw = match visibility {
+                    Visibility::Public => "public ",
+                    _ => "",
+                };
                 // Swift doesn't have abstract classes, but we can note it
                 let _abstract_kw = if *is_abstract { "/* abstract */ " } else { "" };
                 let extends = if base_classes.is_empty() {
@@ -55,8 +60,9 @@ impl LanguageBackend for SwiftBackend {
                 };
 
                 result.push_str(&format!(
-                    "{}class {}{} {{\n",
+                    "{}{}class {}{} {{\n",
                     ctx.get_indent(),
+                    vis_kw,
                     name,
                     extends
                 ));

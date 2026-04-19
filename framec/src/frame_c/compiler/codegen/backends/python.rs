@@ -769,6 +769,7 @@ mod tests {
             base_classes: vec![],
             is_abstract: false,
             derives: vec![],
+            visibility: Visibility::Public,
         };
 
         let result = backend.emit(&node, &mut ctx);

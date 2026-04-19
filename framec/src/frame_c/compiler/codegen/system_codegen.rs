@@ -235,6 +235,7 @@ pub fn generate_system_shared(
         base_classes: system.bases.clone(),
         is_abstract: false,
         derives: vec![], // Derives not used - we manually build JSON
+        visibility: Visibility::Public,
     };
 
     // Post-process: make dispatch chain async if any interface method is async

@@ -55,10 +55,15 @@ impl LanguageBackend for TypeScriptBackend {
                 methods,
                 base_classes,
                 is_abstract,
+                visibility,
                 ..
             } => {
                 let mut result = String::new();
 
+                let vis_kw = match visibility {
+                    Visibility::Public => "export ",
+                    _ => "",
+                };
                 let abstract_kw = if *is_abstract { "abstract " } else { "" };
                 let extends = if base_classes.is_empty() {
                     String::new()
@@ -67,8 +72,9 @@ impl LanguageBackend for TypeScriptBackend {
                 };
 
                 result.push_str(&format!(
-                    "{}{}class {}{} {{\n",
+                    "{}{}{}class {}{} {{\n",
                     ctx.get_indent(),
+                    vis_kw,
                     abstract_kw,
                     name,
                     extends
@@ -744,10 +750,11 @@ mod tests {
             base_classes: vec![],
             is_abstract: false,
             derives: vec![],
+            visibility: Visibility::Public,
         };
 
         let result = backend.emit(&node, &mut ctx);
-        assert!(result.contains("class TestClass {"));
+        assert!(result.contains("export class TestClass {"));
         assert!(result.contains("private _state"));
     }
 }

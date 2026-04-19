@@ -184,6 +184,8 @@ pub enum CodegenNode {
         is_abstract: bool,
         /// Derive attributes for Rust (e.g., ["Serialize", "Deserialize"])
         derives: Vec<String>,
+        /// Visibility (Public for system classes, Private for helpers)
+        visibility: Visibility,
     },
 
     /// Enum definition

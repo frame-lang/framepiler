@@ -47,6 +47,7 @@ impl LanguageBackend for RustBackend {
                 base_classes: _,
                 is_abstract: _,
                 derives,
+                visibility,
             } => {
                 let mut result = String::new();
 
@@ -63,7 +64,11 @@ impl LanguageBackend for RustBackend {
                 }
 
                 // Struct definition
-                result.push_str(&format!("{}pub struct {} {{\n", ctx.get_indent(), name));
+                let vis_kw = match visibility {
+                    Visibility::Public => "pub ",
+                    _ => "",
+                };
+                result.push_str(&format!("{}{}struct {} {{\n", ctx.get_indent(), vis_kw, name));
                 ctx.push_indent();
                 for field in fields {
                     result.push_str(&self.emit_field(field, ctx));
