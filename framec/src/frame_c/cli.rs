@@ -603,6 +603,18 @@ pub fn run_with(args: Cli) {
                         let rel = f.strip_prefix(&dir).unwrap_or(&f);
                         let mut outp = output_root.join(lang_dir).join(rel);
                         outp.set_extension(ext.trim_start_matches('.'));
+
+                        // Java requires filename to match the public class name
+                        if matches!(lang, TargetLanguage::Java) {
+                            if let Some(cap) = code.find("public class ") {
+                                let after = &code[cap + 13..];
+                                let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
+                                let class_name = &after[..end];
+                                if !class_name.is_empty() {
+                                    outp.set_file_name(format!("{}.java", class_name));
+                                }
+                            }
+                        }
                         if let Some(parent) = outp.parent() {
                             if let Err(e) = std::fs::create_dir_all(parent) {
                                 eprintln!("cannot create output dir: {}", e);
@@ -869,8 +881,19 @@ pub fn run_with(args: Cli) {
                                     TargetLanguage::GDScript => ".gd",
                                     TargetLanguage::Graphviz => ".dot",
                                 };
-                                let stem =
-                                    file.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+                                let mut stem =
+                                    file.file_stem().and_then(|s| s.to_str()).unwrap_or("out").to_string();
+                                // Java requires filename to match the public class name
+                                if matches!(lang, TargetLanguage::Java) {
+                                    if let Some(cap) = code.find("public class ") {
+                                        let after = &code[cap + 13..];
+                                        let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
+                                        let class_name = &after[..end];
+                                        if !class_name.is_empty() {
+                                            stem = class_name.to_string();
+                                        }
+                                    }
+                                }
                                 let out_path = dir.join(format!("{}{}", stem, ext));
                                 if let Err(e) = std::fs::write(&out_path, code) {
                                     eprintln!("write error: {}", e);
