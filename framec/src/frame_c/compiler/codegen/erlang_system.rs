@@ -2028,6 +2028,7 @@ pub(crate) fn generate_erlang_system(
 
             // Process lines: strip return keyword, capitalize params, rewrite self
             let mut processed_lines: Vec<String> = Vec::new();
+            let mut data_bind_counter: usize = 0;
             for line in inner.lines() {
                 let l = line.trim();
                 if l.is_empty() {
@@ -2041,6 +2042,36 @@ pub(crate) fn generate_erlang_system(
                     l.to_string()
                 };
                 let l = l.replace("self.", "Data#data.");
+                // Detect domain field assignment: Data#data.field = value
+                // Rewrite to Erlang record update with sequential bindings:
+                //   Data1 = Data#data{field = Value}
+                //   Data2 = Data1#data{field2 = Value2}
+                // Erlang is single-assignment — can't rebind Data.
+                let l = {
+                    if let Some(eq_pos) = l.find(" = ") {
+                        let lhs = l[..eq_pos].trim();
+                        if lhs.starts_with("Data#data.") {
+                            let field = &lhs["Data#data.".len()..];
+                            let rhs = l[eq_pos + 3..].trim().trim_end_matches(|c: char| c == ',' || c == '.');
+                            data_bind_counter += 1;
+                            let prev = if data_bind_counter == 1 {
+                                "Data".to_string()
+                            } else {
+                                format!("Data{}", data_bind_counter - 1)
+                            };
+                            format!("Data{} = {}#data{{{} = {}}}", data_bind_counter, prev, field, rhs)
+                        } else {
+                            l
+                        }
+                    } else {
+                        // Replace reads of Data#data. with latest binding
+                        if data_bind_counter > 0 {
+                            l.replace("Data#data.", &format!("Data{}#data.", data_bind_counter))
+                        } else {
+                            l
+                        }
+                    }
+                };
                 let l = if op_params.is_empty() {
                     l
                 } else {

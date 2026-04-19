@@ -3162,8 +3162,35 @@ pub(crate) fn generate_frame_expansion(
                             format!("{}.new", native_call)
                         }
                     }
+                    TargetLanguage::Rust => {
+                        // Rust: @@System() becomes System::new()
+                        if let Some(paren_pos) = native_call.find('(') {
+                            let args = &native_call[paren_pos..];
+                            format!("{}::new{}", tagged_system_name, args)
+                        } else {
+                            format!("{}::new()", tagged_system_name)
+                        }
+                    }
+                    TargetLanguage::GDScript => {
+                        // GDScript: @@System() becomes System.new()
+                        if let Some(paren_pos) = native_call.find('(') {
+                            let args = &native_call[paren_pos..];
+                            format!("{}.new{}", tagged_system_name, args)
+                        } else {
+                            format!("{}.new()", tagged_system_name)
+                        }
+                    }
+                    TargetLanguage::Lua => {
+                        // Lua: @@System() becomes System:new()
+                        if let Some(paren_pos) = native_call.find('(') {
+                            let args = &native_call[paren_pos..];
+                            format!("{}:new{}", tagged_system_name, args)
+                        } else {
+                            format!("{}:new()", tagged_system_name)
+                        }
+                    }
                     _ => {
-                        // Python/TypeScript/Rust: @@System() becomes System()
+                        // Python/TypeScript/Dart/Erlang: @@System() becomes System()
                         native_call.to_string()
                     }
                 }
