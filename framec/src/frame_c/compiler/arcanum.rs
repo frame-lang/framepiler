@@ -44,6 +44,7 @@ pub struct FrameSymbol {
     pub kind: FrameSymbolKind,
     pub declared_at: Span,
     pub symbol_type: Option<String>, // Type annotation if present
+    pub default_value: Option<String>, // Default for enter/exit handler params
 }
 
 /// Handler entry with parameters and body span
@@ -414,6 +415,7 @@ fn build_system_entry_from_frame_ast(system: &FrameSystemAst) -> SystemEntry {
                 end: var.span.end,
             },
             symbol_type: Some(format!("{:?}", var.var_type)),
+            default_value: None,
         };
         entry.domain_symbols.insert(var.name.clone(), symbol);
     }
@@ -474,6 +476,7 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
             kind: FrameSymbolKind::StateParam,
             declared_at: convert_span(&p.span),
             symbol_type: Some(type_to_string(&p.param_type)),
+            default_value: None,
         })
         .collect();
 
@@ -495,6 +498,7 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
                     kind: FrameSymbolKind::HandlerParam,
                     declared_at: convert_span(&p.span),
                     symbol_type: Some(type_to_string(&p.param_type)),
+                    default_value: p.default_value.clone(),
                 })
                 .collect(),
             return_type: None, // Enter handlers don't have return types
@@ -519,6 +523,7 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
                     kind: FrameSymbolKind::HandlerParam,
                     declared_at: convert_span(&p.span),
                     symbol_type: Some(type_to_string(&p.param_type)),
+                    default_value: p.default_value.clone(),
                 })
                 .collect(),
             return_type: None, // Exit handlers don't have return types
@@ -558,6 +563,7 @@ fn build_handler_entry_from_ast(handler: &FrameHandlerAst) -> HandlerEntry {
             kind: FrameSymbolKind::HandlerParam,
             declared_at: convert_span(&p.span),
             symbol_type: Some(type_to_string(&p.param_type)),
+            default_value: None,
         })
         .collect();
 

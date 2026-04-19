@@ -630,9 +630,44 @@ impl<'a> Parser<'a> {
             } else {
                 Type::Unknown
             };
+            // Optional default value: `= expr`
+            // Scan raw bytes to end of param (stop at `,` or `)`)
+            let default_value = if self.check(&Token::Equals)? {
+                self.advance()?; // =
+                let src = self.lexer.source();
+                let init_start = self.lexer.cursor();
+                let mut pos = init_start;
+                let mut depth = 0i32;
+                while pos < src.len() {
+                    match src[pos] {
+                        b'(' | b'[' | b'{' => { depth += 1; pos += 1; }
+                        b')' | b']' | b'}' => {
+                            if depth == 0 { break; }
+                            depth -= 1;
+                            pos += 1;
+                        }
+                        b',' if depth == 0 => break,
+                        b'\n' => break,
+                        _ => pos += 1,
+                    }
+                }
+                let init_text = std::str::from_utf8(&src[init_start..pos])
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                self.lexer.set_cursor(pos);
+                if init_text.is_empty() {
+                    None
+                } else {
+                    Some(init_text)
+                }
+            } else {
+                None
+            };
             params.push(EventParam {
                 name,
                 param_type,
+                default_value,
                 span,
             });
             if self.check(&Token::Comma)? {

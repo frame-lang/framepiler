@@ -243,6 +243,10 @@ pub struct ExitHandler {
 pub struct EventParam {
     pub name: String,
     pub param_type: Type,
+    /// Optional default value for enter/exit handler params.
+    /// Enables `$>(collected: list = [])` — the handler works both
+    /// on initial entry (no args → default) and on pop return (with args).
+    pub default_value: Option<String>,
     pub span: Span,
 }
 
