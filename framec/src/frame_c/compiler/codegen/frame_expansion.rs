@@ -3149,9 +3149,13 @@ pub(crate) fn generate_frame_expansion(
                             format!("New{}", native_call)
                         }
                     }
-                    TargetLanguage::JavaScript => {
-                        // JavaScript: @@System() becomes new System()
+                    TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
+                        // JS/TS: @@System() becomes new System()
                         format!("new {}", native_call)
+                    }
+                    TargetLanguage::Dart => {
+                        // Dart: @@System() becomes System()
+                        native_call.to_string()
                     }
                     TargetLanguage::Ruby => {
                         // Ruby: @@System() becomes System.new()
