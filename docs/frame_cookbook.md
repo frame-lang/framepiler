@@ -1170,6 +1170,8 @@ if __name__ == '__main__':
 
 **Features used:** multi-system files, `@@SystemName()` instantiation, domain variable initialization
 
+> **Note:** Java and Erlang require one system per file. For these targets, split Logger and App into separate source files and import/require the dependency.
+
 -----
 
 ## 21. Configurable Worker Pool (Parameterized Systems)

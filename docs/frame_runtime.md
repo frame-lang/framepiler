@@ -578,6 +578,32 @@ This section documents how Frame's runtime concepts map to each target language.
 
 C is the only backend that requires explicit cleanup via `System_destroy(s)`. Rust uses ownership semantics — no explicit destroy needed.
 
+### System Class Visibility
+
+System classes are public by default. `@@system private Foo` overrides this for languages that support class visibility:
+
+| Language | Default (public) | `@@system private Foo` |
+|----------|-----------------|----------------------|
+| Java | `public class Foo` | `class Foo` |
+| C# | `public class Foo` | `class Foo` |
+| Swift | `public class Foo` | `class Foo` |
+| TypeScript | `export class Foo` | `class Foo` |
+| JavaScript | `export class Foo` | `class Foo` |
+| Kotlin | `class Foo` | `private class Foo` |
+| Rust | `pub struct Foo` | `struct Foo` |
+| Dart | `class Foo` | `class Foo` |
+| C++ | `class Foo` | `class Foo` |
+| Go | `type Foo struct` | `type Foo struct` |
+| PHP | `class Foo` | `class Foo` |
+| Python | `class Foo:` | error (not supported) |
+| Ruby | `class Foo` | error (not supported) |
+| Lua | table+metatable | error (not supported) |
+| GDScript | `class Foo:` | error (not supported) |
+| Erlang | `-module(foo).` | error (not supported) |
+| C | `struct Foo` | error (not supported) |
+
+Helper classes (FrameEvent, Compartment, FrameContext) are always non-public regardless of the system's visibility.
+
 ### Interface Method Calls
 
 Interface methods are called in the target language's native method syntax:

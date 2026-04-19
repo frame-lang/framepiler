@@ -135,6 +135,35 @@ Frame passes base class names through **verbatim** to the target language. It do
 
 Systems without `:` generate standalone classes with no base (the default).
 
+### Visibility
+
+System classes are **public by default** — they emit `public class` (Java/C#/Swift), `export class` (TypeScript/JavaScript), or `pub struct` (Rust). Languages where classes are public by default (Python, Kotlin, Dart, PHP, Ruby, Lua) emit a bare class declaration.
+
+To make a system non-public, use the `private` keyword:
+
+```
+@@system private Helper { ... }
+```
+
+| Target | `@@system Foo` (default) | `@@system private Foo` |
+|--------|-------------------------|----------------------|
+| Java | `public class Foo` | `class Foo` (package-private) |
+| C# | `public class Foo` | `class Foo` (internal) |
+| Swift | `public class Foo` | `class Foo` (internal) |
+| TypeScript | `export class Foo` | `class Foo` (not exported) |
+| JavaScript | `export class Foo` | `class Foo` (not exported) |
+| Kotlin | `class Foo` (public) | `private class Foo` |
+| Rust | `pub struct Foo` | `struct Foo` (crate-private) |
+
+**Rules:**
+- `@@system public Foo` is an **error** — systems are public by default; the keyword is redundant.
+- `@@system private Foo` targeting Python, Ruby, Lua, C, GDScript, or Erlang is an **error** — these languages do not support class-level visibility modifiers.
+
+**Other elements** follow fixed visibility and do not accept modifiers:
+- **Interface methods** — always public (that is their purpose)
+- **Operations** — always public
+- **Actions and handlers** — always private (implementation details)
+
 ### System Parameters
 
 Three parameter groups configure a system at construction time. Each is optional, but when present they must appear in this order: **state params** (`$()`), then **enter params** (`$>()`), then **domain params** (bare).
