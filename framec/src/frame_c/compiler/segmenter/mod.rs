@@ -756,6 +756,13 @@ pub fn segment_source(source: &[u8], lang: TargetLanguage) -> Result<SourceMap, 
         // semantics are close enough for segmentation of most dynamic langs).
         TargetLanguage::Graphviz => {
             let source_lang = detect_source_language(source).unwrap_or(TargetLanguage::Python3);
+            // Graphviz is output-only — if @@target is graphviz, there's no valid source language
+            if source_lang == TargetLanguage::Graphviz {
+                return Err(SegmentError::InvalidTarget {
+                    value: "graphviz".to_string(),
+                    pos: 0,
+                });
+            }
             segment_source(source, source_lang)
         }
     }
