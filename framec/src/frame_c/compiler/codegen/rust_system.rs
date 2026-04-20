@@ -324,8 +324,8 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
                     // the param was moved into the field in the struct init above.
                     body.push(CodegenNode::NativeBlock {
                         code: format!(
-                            "self.__compartment.enter_args.insert(\"{}\".to_string(), self.__sys_{}.to_string());",
-                            p.name, p.name
+                            "self.__compartment.enter_args.push(self.__sys_{}.to_string());",
+                            p.name
                         ),
                         span: None,
                     });
