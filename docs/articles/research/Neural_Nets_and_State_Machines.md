@@ -1,5 +1,7 @@
 # Neural Networks and State Machines: The Bidirectional Relationship
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 Neural networks and state machines occupy opposite ends of a spectrum. State machines are discrete, explicit, inspectable, and verifiable. Neural networks are continuous, implicit, opaque, and learned. State machines are designed; neural networks are trained. A state machine's behavior can be read from its specification. A neural network's behavior emerges from billions of parameters that no human can interpret directly.
 
 And yet the two are deeply entangled. Neural networks — particularly recurrent networks and transformers — implicitly learn state machine representations when trained on sequential tasks. Researchers can extract discrete automata from trained networks, recovering the state machine hiding inside the continuous approximation. And in the other direction, explicit state machines are increasingly used to constrain neural network behavior, providing structural guarantees that the networks themselves cannot provide.

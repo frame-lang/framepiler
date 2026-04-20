@@ -1,5 +1,7 @@
 # Frame and Hardware: The Parallel That Points Somewhere
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 There is a world where state machines never stopped being the primary abstraction for building systems. That world is hardware design.
 
 Digital circuits are physical state machines. Flip-flops store the current state. Combinational logic computes the next state. The clock edge triggers the transition. There is no abstraction gap between the theory and the implementation. A hardware engineer designing an FSM in Verilog isn't applying a "design pattern" on top of a language that doesn't understand state — they're working in a medium where state is the fundamental unit of structure.

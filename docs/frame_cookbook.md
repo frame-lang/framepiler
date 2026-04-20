@@ -1,5 +1,7 @@
 # Frame Cookbook
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 52 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
 
 For language syntax details, see the [Frame Language Reference](frame_language.md). For a tutorial introduction, see [Getting Started](frame_getting_started.md).

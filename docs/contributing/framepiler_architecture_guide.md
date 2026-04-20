@@ -1,5 +1,7 @@
 # Framepiler Architecture Guide
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 This document describes the internal architecture of the Frame transpiler for contributors who want to understand, modify, or extend the codebase.
 
 ## The Oceans Model

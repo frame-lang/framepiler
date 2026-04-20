@@ -1,5 +1,7 @@
 # Frame and Formal Verification: Closing the Spec-Code Gap
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 Formal verification has a problem, and it isn't the math.
 
 The math works. TLA+ can specify distributed protocols with mathematical precision. Model checkers can exhaustively explore state spaces and find violations of safety and liveness properties. Proof assistants can establish correctness guarantees that no amount of testing can match. The theory is mature, the tools exist, and the results — when applied — are impressive. Amazon has used TLA+ to find subtle bugs in AWS protocols that testing missed. Hardware companies routinely verify chip designs before committing to silicon.

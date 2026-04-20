@@ -1,5 +1,7 @@
 # Reinforcement Learning and State Machines: The Foundation Hiding in Plain Sight
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 Reinforcement learning is built on state machines. This is not a metaphor — though the correspondence is looser than the opening sentence suggests, and the caveats matter.
 
 A Markov Decision Process — the mathematical object at the foundation of virtually all RL — shares deep structural properties with state machines. It has states, actions (which are events by another name), a transition function that maps (state, action) pairs to probability distributions over next states, and a reward function that assigns value to transitions [1]. The Markov property — the future depends only on the current state, not on the history of how the agent got there — is a probabilistic independence condition, not the same thing as the defining property of finite state machines. But the shared intuition is real: in both formalisms, the current state is all you need to determine what happens next. History is irrelevant once the state is known.

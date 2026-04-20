@@ -1,5 +1,7 @@
 # Impossible by Construction: Frame and Agent Security
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 How compile-time state machines enforce safety properties that runtime checks cannot — applied to the agent systems where it matters most.
 
 ## Table of Contents

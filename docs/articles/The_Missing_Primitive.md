@@ -1,5 +1,7 @@
 # The Missing Primitive: Why Programming Languages Don't Have State
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 Software has state. Every developer knows this. We spend enormous effort managing it, debugging it, documenting it, and cleaning up after it. State management is consistently rated among the hardest problems in software engineering.
 
 And yet the languages we use to build software have no concept of it.

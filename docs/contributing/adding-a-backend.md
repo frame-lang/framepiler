@@ -1,5 +1,7 @@
 # Adding a New Language Backend
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 This guide walks you through adding a new target language to the Frame transpiler. A backend is the final stage of the compilation pipeline — it takes Frame's intermediate representation and emits code in your target language.
 
 ## Overview
@@ -248,19 +250,15 @@ We checked this rule against every language family before committing to it. It s
 
 If the rule survives Erlang and C, it survives anything. New backends rarely hit a wall here; if you think you have, double-check that you're emitting initialization where the params are still in scope.
 
-### The state_args / enter_args naming standardization
+### The state_args / enter_args Vec migration
 
-Before this rollout, transitions stored positional state and enter args under string-encoded integer keys: `state_args["0"] = first_arg`, `state_args["1"] = second_arg`. The dispatch reader pulled them out the same way. This worked because the read site and the write site agreed on the convention.
+The runtime has been migrated from HashMap/Dict to Vec/List for `state_args`, `enter_args`, `exit_args`, and event `_parameters`. All access is now positional: `state_args[0]` for the first parameter, `state_args[1]` for the second, and so on.
 
-System params broke that agreement. The system constructor doesn't have positional integers — it has param names from the header. So we standardized: **all writes use the declared param name as the key, not the integer index.** Both transition codegen and the system constructor write under the name, and both the state dispatch and the enter handler binding read by the name.
+The key insight is that **read and write must agree on a single positional convention**. The write site appends args in declaration order, and the read site pulls them out by index. This is simpler and more efficient than string-keyed access.
 
-The key insight is that **read and write must agree on a single naming convention**. We picked names because:
+Note: Lua uses 1-based indexing (`state_args[1]` for the first parameter).
 
-- They survive code review better than `state_args["3"]`.
-- They don't break when the user reorders or renames a state's parameter list.
-- They eliminate the ambiguity between system-constructor-set args and transition-set args — both look identical in the compartment.
-
-This change required updating every transition emit site in `frame_expansion.rs` and the manual `state_args["0"]` reads in `tests/common/positive/primary/26_state_params.*` (17 versions, one per backend).
+This change required updating every transition emit site in `frame_expansion.rs` and the manual `state_args[0]` reads in `tests/common/positive/primary/26_state_params.*` (17 versions, one per backend).
 
 ### Field/param name collision (Q2) — a non-issue
 

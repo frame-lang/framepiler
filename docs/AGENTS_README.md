@@ -1,5 +1,7 @@
 # Frame for AI Agents
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 How Frame state machines solve the hardest problems in building, orchestrating, and operating AI agents.
 
 ## Table of Contents

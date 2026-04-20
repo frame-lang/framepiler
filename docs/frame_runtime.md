@@ -292,7 +292,7 @@ All `@@` accessors follow a uniform grammar:
 
 | Frame Syntax | Runtime Access (Python) |
 |-------------|------------------------|
-| `@@:params.x` | `self._context_stack[-1].event._parameters["x"]` |
+| `@@:params.x` | `self._context_stack[-1].event._parameters[N]` (positional index) |
 | `@@:return` | `self._context_stack[-1]._return` |
 | `@@:event` | `self._context_stack[-1].event._message` |
 | `@@:data.key` | `self._context_stack[-1]._data["key"]` |

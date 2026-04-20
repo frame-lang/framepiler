@@ -1,5 +1,7 @@
 # Getting Started with Frame
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 ## Table of Contents
 
 - [Introduction](#introduction)

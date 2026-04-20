@@ -1,5 +1,7 @@
 # A Brief History of State Machine Languages — And Why Frame Is Different
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 Automata theory has been settled science since the 1950s. The concepts — states, transitions, inputs, outputs — are well-defined, mathematically rigorous, and practically useful. And yet, sixty years later, the mainstream programming languages used to build software still have no native concept of state. The theory won in the textbooks. It lost in the editors.
 
 This isn't because nobody tried. There is a long history of languages, notations, tools, and standards designed to bring state machines into the practice of software development. Each made a different set of tradeoffs. Each found an audience. None broke through to general adoption. Understanding why tells you something important about what it takes for a state machine tool to actually get used — and what Frame does differently.

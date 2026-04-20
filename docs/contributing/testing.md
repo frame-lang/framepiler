@@ -1,5 +1,7 @@
 # Testing the Framepiler
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 ## Two Levels of Testing
 
 ### 1. Unit Tests (in this repo)

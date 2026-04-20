@@ -1,5 +1,7 @@
 # Framepiler Design
 
+*Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
+
 Architecture and internals of the Frame transpiler. For the Frame language itself, see [Frame Language Reference](frame_language.md). For the generated runtime, see [Frame Runtime Architecture](frame_runtime.md).
 
 ## Table of Contents
