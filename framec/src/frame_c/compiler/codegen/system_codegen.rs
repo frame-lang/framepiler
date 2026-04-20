@@ -1206,14 +1206,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\n{}_FrameDict_set(self->__compartment->state_args, \"{}\", (void*)(intptr_t)({}));",
-                                        system.name, p.name, p.name
+                                        "\n{}_FrameVec_push(self->__compartment->state_args, (void*)(intptr_t)({}));",
+                                        system.name, p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     hsm_init_code.push_str(&format!(
-                                        "\n{}_FrameDict_set(self->__compartment->enter_args, \"{}\", (void*)(intptr_t)({}));",
-                                        system.name, p.name, p.name
+                                        "\n{}_FrameVec_push(self->__compartment->enter_args, (void*)(intptr_t)({}));",
+                                        system.name, p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
@@ -1244,14 +1244,14 @@ pub(crate) fn generate_constructor(
                             match p.kind {
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
                                     compartment_inits.push(format!(
-                                        "{}_FrameDict_set(self->__compartment->state_args, \"{}\", (void*)(intptr_t)({}));",
-                                        system.name, p.name, p.name
+                                        "{}_FrameVec_push(self->__compartment->state_args, (void*)(intptr_t)({}));",
+                                        system.name, p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
                                     compartment_inits.push(format!(
-                                        "{}_FrameDict_set(self->__compartment->enter_args, \"{}\", (void*)(intptr_t)({}));",
-                                        system.name, p.name, p.name
+                                        "{}_FrameVec_push(self->__compartment->enter_args, (void*)(intptr_t)({}));",
+                                        system.name, p.name
                                     ));
                                 }
                                 crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}

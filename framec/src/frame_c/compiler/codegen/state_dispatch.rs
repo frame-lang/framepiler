@@ -623,7 +623,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     }
                     _ => ("int", "(int)(intptr_t)"),
                 };
-                format!("{c_type} {name} = {cast}self->__compartment->state_args[{index}];\n")
+                // state_args is now a FrameVec*, so access via ->items[N].
+                format!("{c_type} {name} = {cast}self->__compartment->state_args->items[{index}];\n")
             },
             fmt_init_sv: |var_name, init_val, indent, sys| {
                 format!(
@@ -644,8 +645,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     }
                     _ => ("int", "(int)(intptr_t)"),
                 };
+                // _parameters / enter_args / exit_args are FrameVec*; dereference ->items[N].
                 format!(
-                    "{indent}{c_type} {name} = {cast}{list}[{index}];\n"
+                    "{indent}{c_type} {name} = {cast}{list}->items[{index}];\n"
                 )
             },
             fmt_forward: |parent, indent, sys| {

@@ -916,7 +916,7 @@ pub(crate) fn generate_frame_expansion(
                         // Store exit_args in current compartment (positional via integer key)
                         if let Some(ref exit) = exit_str {
                             for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
-                                code.push_str(&format!("{}{}_FrameDict_set(self->__compartment->exit_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, i, arg));
+                                code.push_str(&format!("{}{}_FrameVec_push(self->__compartment->exit_args, (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, arg));
                             }
                         }
 
@@ -932,14 +932,14 @@ pub(crate) fn generate_frame_expansion(
                         // Set state_args if present (positional via integer key)
                         if let Some(ref state) = state_str {
                             for (i, arg) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
-                                code.push_str(&format!("{}{}_FrameDict_set(__compartment->state_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, i, arg));
+                                code.push_str(&format!("{}{}_FrameVec_push(__compartment->state_args, (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, arg));
                             }
                         }
 
                         // Set enter_args if present (positional via integer key)
                         if let Some(ref enter) = enter_str {
                             for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
-                                code.push_str(&format!("{}{}_FrameDict_set(__compartment->enter_args, \"{}\", (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, i, arg));
+                                code.push_str(&format!("{}{}_FrameVec_push(__compartment->enter_args, (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, arg));
                             }
                         }
 
@@ -2652,7 +2652,10 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1].event._parameters[{}]", index),
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", index),
                 TargetLanguage::Dart => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", index),
-                TargetLanguage::C => format!("{}", index),
+                TargetLanguage::C => format!(
+                    "((({}_FrameContext*){}_FrameVec_last(self->_context_stack))->event->_parameters->items[{}])",
+                    ctx.system_name, ctx.system_name, index
+                ),
                 TargetLanguage::Rust => super::rust_system::rust_context_param(&key),
                 TargetLanguage::Cpp => format!("{}", index),
                 TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get({})", index),
@@ -3449,7 +3452,7 @@ fn generate_pop_transition(
                     code.push_str(&super::rust_system::rust_pop_exit_arg(indent, value));
                 }
                 TargetLanguage::C => {
-                    code.push_str(&format!("{}{}_FrameDict_set(self->__compartment->exit_args, \"{}\", (void*)(intptr_t)({}));\n", indent, ctx.system_name, value, value));
+                    code.push_str(&format!("{}{}_FrameVec_push(self->__compartment->exit_args, (void*)(intptr_t)({}));\n", indent, ctx.system_name, value));
                 }
                 TargetLanguage::Cpp => {
                     code.push_str(&format!(
@@ -3572,8 +3575,8 @@ fn generate_pop_transition(
                 }
                 TargetLanguage::C => {
                     code.push_str(&format!(
-                        "{}{}_FrameDict_set(__saved->enter_args, \"{}\", (void*)(intptr_t)({}));\n",
-                        indent, ctx.system_name, value, value
+                        "{}{}_FrameVec_push(__saved->enter_args, (void*)(intptr_t)({}));\n",
+                        indent, ctx.system_name, value
                     ));
                 }
                 TargetLanguage::Cpp => {

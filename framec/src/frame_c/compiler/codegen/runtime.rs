@@ -735,16 +735,16 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
                 .with_type("String")
                 .with_visibility(Visibility::Public),
             Field::new("state_args")
-                .with_type("Map<String, dynamic>")
+                .with_type("List<dynamic>")
                 .with_visibility(Visibility::Public),
             Field::new("state_vars")
                 .with_type("Map<String, dynamic>")
                 .with_visibility(Visibility::Public),
             Field::new("enter_args")
-                .with_type("Map<String, dynamic>")
+                .with_type("List<dynamic>")
                 .with_visibility(Visibility::Public),
             Field::new("exit_args")
-                .with_type("Map<String, dynamic>")
+                .with_type("List<dynamic>")
                 .with_visibility(Visibility::Public),
             Field::new("forward_event")
                 .with_type("dynamic")
@@ -1869,8 +1869,26 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
         "static void {}_FrameVec_destroy({}_FrameVec* v) {{\n",
         sys, sys
     ));
+    code.push_str("    if (!v) return;\n");
     code.push_str("    free(v->items);\n");
     code.push_str("    free(v);\n");
+    code.push_str("}\n\n");
+
+    // FrameVec_copy — shallow copy (items are void*; caller owns pointees).
+    // Used by Compartment_copy when snapshotting args for push$.
+    code.push_str(&format!(
+        "static {}_FrameVec* {}_FrameVec_copy({}_FrameVec* src) {{\n",
+        sys, sys, sys
+    ));
+    code.push_str("    if (!src) return NULL;\n");
+    code.push_str(&format!(
+        "    {}_FrameVec* v = {}_FrameVec_new();\n",
+        sys, sys
+    ));
+    code.push_str("    for (int i = 0; i < src->size; i++) {\n");
+    code.push_str(&format!("        {}_FrameVec_push(v, src->items[i]);\n", sys));
+    code.push_str("    }\n");
+    code.push_str("    return v;\n");
     code.push_str("}\n\n");
 
     // ============================================================================
@@ -1886,12 +1904,13 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
 
     code.push_str(&format!("typedef struct {{\n"));
     code.push_str("    const char* _message;\n");
-    code.push_str(&format!("    {}_FrameDict* _parameters;\n", sys));
+    code.push_str(&format!("    {}_FrameVec* _parameters;\n", sys));
     code.push_str("    int _owns_parameters;\n");
     code.push_str(&format!("}} {}_FrameEvent;\n\n", sys));
 
-    // FrameEvent_new — owns_parameters=1 means this event allocated the dict
-    code.push_str(&format!("static {}_FrameEvent* {}_FrameEvent_new(const char* message, {}_FrameDict* parameters, int owns_parameters) {{\n", sys, sys, sys));
+    // FrameEvent_new — owns_parameters=1 means this event allocated the vec.
+    // Parameters are positional: dispatch reads `_parameters->items[N]`.
+    code.push_str(&format!("static {}_FrameEvent* {}_FrameEvent_new(const char* message, {}_FrameVec* parameters, int owns_parameters) {{\n", sys, sys, sys));
     code.push_str(&format!(
         "    {}_FrameEvent* e = malloc(sizeof({}_FrameEvent));\n",
         sys, sys
@@ -1908,7 +1927,7 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
         sys, sys
     ));
     code.push_str(&format!(
-        "    if (e->_owns_parameters && e->_parameters) {}_FrameDict_destroy(e->_parameters);\n",
+        "    if (e->_owns_parameters && e->_parameters) {}_FrameVec_destroy(e->_parameters);\n",
         sys
     ));
     code.push_str("    free(e);\n");
@@ -1968,12 +1987,15 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
         "// ============================================================================\n\n"
     ));
 
+    // state_args / enter_args / exit_args are POSITIONAL — codegen accesses
+    // them as `args->items[N]`, so they're FrameVec not FrameDict.
+    // state_vars is KEYED by variable name (`$.varName`), so it stays dict.
     code.push_str(&format!("typedef struct {}_Compartment {{\n", sys));
     code.push_str("    const char* state;\n");
-    code.push_str(&format!("    {}_FrameDict* state_args;\n", sys));
+    code.push_str(&format!("    {}_FrameVec* state_args;\n", sys));
     code.push_str(&format!("    {}_FrameDict* state_vars;\n", sys));
-    code.push_str(&format!("    {}_FrameDict* enter_args;\n", sys));
-    code.push_str(&format!("    {}_FrameDict* exit_args;\n", sys));
+    code.push_str(&format!("    {}_FrameVec* enter_args;\n", sys));
+    code.push_str(&format!("    {}_FrameVec* exit_args;\n", sys));
     code.push_str(&format!("    {}_FrameEvent* forward_event;\n", sys));
     code.push_str(&format!(
         "    struct {}_Compartment* parent_compartment;\n",
@@ -1992,10 +2014,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
         sys, sys
     ));
     code.push_str("    c->state = state;\n");
-    code.push_str(&format!("    c->state_args = {}_FrameDict_new();\n", sys));
+    code.push_str(&format!("    c->state_args = {}_FrameVec_new();\n", sys));
     code.push_str(&format!("    c->state_vars = {}_FrameDict_new();\n", sys));
-    code.push_str(&format!("    c->enter_args = {}_FrameDict_new();\n", sys));
-    code.push_str(&format!("    c->exit_args = {}_FrameDict_new();\n", sys));
+    code.push_str(&format!("    c->enter_args = {}_FrameVec_new();\n", sys));
+    code.push_str(&format!("    c->exit_args = {}_FrameVec_new();\n", sys));
     code.push_str("    c->forward_event = NULL;\n");
     code.push_str("    c->parent_compartment = NULL;\n");
     code.push_str("    c->_ref_count = 1;\n");
@@ -2024,15 +2046,15 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
         "        {sys}_Compartment_unref(c->parent_compartment);\n"
     ));
     code.push_str(&format!(
-        "        {sys}_FrameDict_destroy(c->state_args);\n"
+        "        {sys}_FrameVec_destroy(c->state_args);\n"
     ));
     code.push_str(&format!(
         "        {sys}_FrameDict_destroy(c->state_vars);\n"
     ));
     code.push_str(&format!(
-        "        {sys}_FrameDict_destroy(c->enter_args);\n"
+        "        {sys}_FrameVec_destroy(c->enter_args);\n"
     ));
-    code.push_str(&format!("        {sys}_FrameDict_destroy(c->exit_args);\n"));
+    code.push_str(&format!("        {sys}_FrameVec_destroy(c->exit_args);\n"));
     code.push_str("        free(c);\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
@@ -2048,7 +2070,7 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     ));
     code.push_str("    c->state = src->state;\n");
     code.push_str(&format!(
-        "    c->state_args = {}_FrameDict_copy(src->state_args);\n",
+        "    c->state_args = {}_FrameVec_copy(src->state_args);\n",
         sys
     ));
     code.push_str(&format!(
@@ -2056,11 +2078,11 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
         sys
     ));
     code.push_str(&format!(
-        "    c->enter_args = {}_FrameDict_copy(src->enter_args);\n",
+        "    c->enter_args = {}_FrameVec_copy(src->enter_args);\n",
         sys
     ));
     code.push_str(&format!(
-        "    c->exit_args = {}_FrameDict_copy(src->exit_args);\n",
+        "    c->exit_args = {}_FrameVec_copy(src->exit_args);\n",
         sys
     ));
     code.push_str("    c->forward_event = src->forward_event;  // Shallow copy OK\n");
@@ -2073,10 +2095,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
         "static void {}_Compartment_destroy({}_Compartment* c) {{\n",
         sys, sys
     ));
-    code.push_str(&format!("    {}_FrameDict_destroy(c->state_args);\n", sys));
+    code.push_str(&format!("    {}_FrameVec_destroy(c->state_args);\n", sys));
     code.push_str(&format!("    {}_FrameDict_destroy(c->state_vars);\n", sys));
-    code.push_str(&format!("    {}_FrameDict_destroy(c->enter_args);\n", sys));
-    code.push_str(&format!("    {}_FrameDict_destroy(c->exit_args);\n", sys));
+    code.push_str(&format!("    {}_FrameVec_destroy(c->enter_args);\n", sys));
+    code.push_str(&format!("    {}_FrameVec_destroy(c->exit_args);\n", sys));
     code.push_str("    free(c);\n");
     code.push_str("}\n\n");
 
