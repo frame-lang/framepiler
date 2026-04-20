@@ -10,7 +10,8 @@
 cargo test
 ```
 
-244 unit tests covering the parser, validator, and codegen internals. Run these before every commit.
+370 unit tests covering the parser, validator, scanner FSMs, and codegen
+internals. Run these before every commit.
 
 ### 2. Integration Tests (separate repo)
 
@@ -28,7 +29,7 @@ projects/
 └── framepiler_test_env/     # integration tests
 ```
 
-#### Running Integration Tests
+## Running Integration Tests
 
 ```bash
 cd framepiler_test_env/docker
@@ -46,57 +47,121 @@ make test-python
 make help
 ```
 
-The Makefile automatically:
-- Cross-compiles framec from your local framepiler source for Linux (Docker containers need a Linux binary)
-- Builds language-specific Docker containers (cached after first build)
-- Runs tests and reports results
+The Makefile:
 
-By default it looks for the framepiler source at `../../framepiler` relative to the `docker/` directory. Override with:
+- Cross-compiles framec from your local framepiler source for Linux
+  (Docker containers need a Linux binary).
+- Builds language-specific Docker images, each containing a pre-built
+  TestRunner binary (cached after first build; see *Batched Harness*
+  below).
+- Runs the chosen language(s)' batched harness and emits TAP.
+
+By default it looks for the framepiler source at `../../framepiler`
+relative to the `docker/` directory. Override with:
 
 ```bash
 make test FRAMEPILER_SRC=/path/to/your/framepiler
 ```
 
-#### What the Integration Tests Validate
+## Batched Harness
 
-Each test is a Frame source file (e.g., `.fpy` for Python, `.frs` for Rust) containing:
-1. A `@@system` block with the state machine
-2. Native epilog code that instantiates the system, calls methods, and checks results
+The test harness is **batched** — one compiler invocation + one runtime
+process per language, rather than one of each per test. Each language's
+flow lives in `docker/runners/<lang>_batch.sh` + `docker/runners/TestRunner.<ext>`
+and follows the same three phases:
 
-The test runner **transpiles**, **compiles**, and **executes** every test. A test passes only if all three steps succeed and the output indicates PASS.
+1. **Transpile** — run `framec` once per `.f*` test file. Output is
+   cached by `framec_cached.sh` (keyed on framec binary hash + source
+   content hash) so re-runs skip unchanged tests.
+2. **Compile** — for compiled languages, one batch invocation
+   (`javac`, `kotlinc`, `dotnet build`, `cargo build`, parallel `g++`
+   etc.) produces all test binaries / class files.
+3. **Dispatch** — `TestRunner.<lang>` iterates a manifest, invokes each
+   test's entry point (via reflection for JVM/.NET/Python/Ruby/PHP/Lua;
+   `dart <dill>` for Dart; direct exec for native-compiled langs;
+   dynamic `import()` for JS/TS), captures stdout/stderr, and emits TAP.
 
-#### Current Test Counts
+Per-test isolation:
+- Each test lives in a unique namespace/package/subdirectory
+  (`frametest.t<N>_<name>`) so same-basename tests across categories
+  don't collide.
+- stdout/stderr is captured per test; crashes don't take out the
+  harness.
+- Every dispatcher enforces a 30s per-test timeout (overridable via
+  `<LANG>_TEST_TIMEOUT` env).
+- A trailing integrity check asserts `pass+fail+skip == 1..N` plan;
+  silent dispatcher crashes surface as `__harness_integrity__`
+  failures.
 
-| Language | Tests | Status |
-|---|---|---|
-| Python | 161 | Core |
-| TypeScript | 143 | Core |
-| JavaScript | 137 | Core |
-| Rust | 147 | Core |
-| C | 147 | Core |
-| C++ | 137 | Core |
-| C# | 133 | Core |
-| Java | 133 | Core |
-| Go | 133 | Core |
-| PHP | 133 | Experimental |
-| Kotlin | 133 | Experimental |
-| Swift | 127 | Experimental |
-| Ruby | 136 | Experimental |
-| Erlang | 132 | Experimental |
-| Lua | 136 | Experimental |
-| Dart | 132 | Experimental |
-| GDScript | 136 | Experimental |
+On compile failure (JVM/.NET/Rust), the batch script scrapes the
+error output for offending source files, marks them as `COMPILE_FAIL`,
+removes them, and retries once — so one buggy test doesn't poison the
+whole batch.
 
-#### When to Run Integration Tests
+## Current Test Counts
 
-- **Before any PR**: Run at least the language(s) affected by your change
-- **Backend changes**: Run the specific language — `make test-python` if you changed `backends/python.rs`
-- **Core pipeline changes** (parser, validator, codegen framework): Run all — `make test`
-- **New tests**: Add test files to `framepiler_test_env/tests/common/positive/<category>/`
+Pass counts from the latest matrix run (2026-04-20):
 
-#### Interpreting Failures
+| Language   | Passed | Skipped |
+|------------|-------:|--------:|
+| Python     |    225 |       0 |
+| TypeScript |    205 |       1 |
+| Rust       |    201 |       0 |
+| C          |    200 |      10 |
+| JavaScript |    199 |       1 |
+| Ruby       |    197 |       2 |
+| Lua        |    196 |       3 |
+| C++        |    195 |       5 |
+| C#         |    194 |       2 |
+| GDScript   |    194 |       5 |
+| Kotlin     |    194 |       2 |
+| Dart       |    192 |       7 |
+| PHP        |    191 |       5 |
+| Go         |    190 |       6 |
+| Swift      |    188 |       2 |
+| Java       |    185 |      11 |
+| Erlang     |    183 |      15 |
+| **TOTAL**  | **3329** | **77** |
 
-If a test fails, debug inside the container:
+All 17 languages are at **zero failures**.
+
+## When to Run Integration Tests
+
+- **Before any PR**: Run at least the language(s) affected by your change.
+- **Backend changes**: Run the specific language — `make test-python` if
+  you changed `backends/python.rs`.
+- **Core pipeline changes** (scanner, parser, validator, codegen
+  framework): Run all — `make test`.
+- **New tests**: Add test files to
+  `framepiler_test_env/tests/common/positive/<category>/`.
+
+## Interpreting Failures
+
+TAP output looks like:
+
+```
+TAP version 14
+1..196
+ok 1 - 01_traffic_light
+ok 2 - 02_toggle_switch
+not ok 3 - foo_bar # runtime error (exit 1)
+  # actual error output, first 5 lines
+# kotlin: 195 passed, 1 failed, 0 skipped
+```
+
+Failure reasons the harness emits:
+- `# transpile failed` — framec rejected the input.
+- `# <tool> failed` (e.g. `# javac failed`, `# kotlinc failed`) —
+  generated code didn't compile; framec emitted invalid target code.
+- `# runtime error (exit N)` — test binary compiled but exited non-zero.
+- `# TIMEOUT` — test exceeded the per-language timeout.
+- `# unrecognized output` — test produced neither an `ok` nor a
+  `not ok` / `PASS` / `FAIL` marker and exited clean; harness can't
+  classify it.
+- `# __harness_integrity__ …` — the harness itself detected that fewer
+  TAP lines were emitted than declared (silent dispatcher exit).
+
+To reproduce a single failure interactively:
 
 ```bash
 make shell-python
@@ -105,7 +170,20 @@ framec compile -l python_3 -o /tmp/out /tests/common/positive/primary/01_interfa
 python3 /tmp/out/01_interface_return.py
 ```
 
-Common failure types:
-- **Transpile failed**: framec rejected the input or crashed — check the error message
-- **Compile failed**: Generated code has syntax errors — the backend emitted invalid target language
-- **Runtime error**: Generated code compiles but behaves incorrectly — logic bug in codegen
+## Harness Caveats
+
+- **Static-state leakage.** JVM/.NET/Python/Ruby/PHP/Lua dispatchers
+  run tests in a shared interpreter. Frame-generated code is
+  instance-based, so leakage is rare, but a test that defines an
+  `object` (Kotlin) or a module-global (Python) and mutates it could
+  affect subsequent tests. If you hit this, the fast path is to fork
+  a process per affected test in the batch script.
+- **stdout capture.** Shell-dispatch languages (cpp, rust, swift, go,
+  dart, erlang, gdscript) capture per-test output via file redirect
+  (`> out.log 2>&1`), preserving NUL bytes and multibyte boundaries.
+  In-process dispatchers use their language's native capture APIs
+  (`StringIO` / `PrintStream`/etc.).
+- **`process.exit()` in tests.** The TypeScript / JavaScript TestRunner
+  intercepts `process.exit()` so a failing test can't take down the
+  node harness. If you see tests silently disappearing mid-run, check
+  that intercept is still wired up.

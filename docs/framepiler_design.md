@@ -253,6 +253,17 @@ The scanner distinguishes between system accessors and self-calls by the prefix 
 - `@@:self.method()` — parens → self-call (expand to interface call)
 - `@@:self.method(a, b)` — parens with args → self-call with arguments
 
+**Whitespace handling:** The scanner trims trailing whitespace from the
+preceding native text ONLY when the Frame segment is standalone on its
+line (everything between the previous newline and the segment is
+whitespace). For inline usage — e.g. Swift's `let x = @@:self.method()`
+— the preceding native text is preserved verbatim, so the expansion
+becomes `let x = self.method()` with the space intact. Whitespace-
+sensitive languages (Swift, Dart) rely on this; collapsing `= @@:self`
+to `=self` would produce invalid target code. The check is a
+look-back from the segment start to the previous `\n`, requiring all
+intervening bytes to be space or tab to qualify as standalone.
+
 ### Splicer
 
 Takes the scanner's region list and builds `CodegenNode` output by emitting `NativeBlock` nodes for native regions and expanding Frame regions into their `CodegenNode` equivalents.
