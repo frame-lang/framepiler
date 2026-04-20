@@ -2657,7 +2657,7 @@ pub(crate) fn generate_frame_expansion(
                     ctx.system_name, ctx.system_name, index
                 ),
                 TargetLanguage::Rust => super::rust_system::rust_context_param(&key),
-                TargetLanguage::Cpp => format!("{}", index),
+                TargetLanguage::Cpp => format!("_context_stack.back()._event._parameters[{}]", index),
                 TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get({})", index),
                 TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._event._parameters[{}]", index),
                 TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._event._parameters[{}]", index),

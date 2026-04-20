@@ -589,14 +589,34 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         0
                     };
 
-                    // Emit deferred native text. For standalone @@
-                    // constructs (computed_indent > 0), trim trailing
-                    // whitespace — the expansion provides indent via
-                    // indent_str. For inline (indent = 0), preserve the
-                    // native text as-is so assignment targets, operators,
-                    // and other preceding code aren't lost.
+                    // Emit deferred native text. Trim trailing whitespace
+                    // only when the construct is STANDALONE on its line —
+                    // i.e. everything between the previous newline and
+                    // `ctx_start` is whitespace. In that case the expansion
+                    // supplies its own leading indent via `indent_str`, so
+                    // we must strip the preceding whitespace to avoid
+                    // double-indentation. For INLINE usage (e.g. Swift's
+                    // `let x = @@:self.method()`) the preceding native
+                    // text contains a real expression; trimming here would
+                    // collapse `= @@:self` → `=self`, breaking
+                    // whitespace-sensitive languages. Detect by walking
+                    // back to the previous newline: if any non-whitespace
+                    // byte is seen before then, we're inline.
                     if seg_start < ctx_start {
-                        let native_end = if computed_indent > 0 {
+                        let standalone = computed_indent > 0 && {
+                            let mut p = ctx_start;
+                            let mut only_ws = true;
+                            while p > seg_start && bytes[p - 1] != b'\n' {
+                                let b = bytes[p - 1];
+                                if b != b' ' && b != b'\t' {
+                                    only_ws = false;
+                                    break;
+                                }
+                                p -= 1;
+                            }
+                            only_ws
+                        };
+                        let native_end = if standalone {
                             let mut ne = ctx_start;
                             while ne > seg_start
                                 && (bytes[ne - 1] == b' ' || bytes[ne - 1] == b'\t')

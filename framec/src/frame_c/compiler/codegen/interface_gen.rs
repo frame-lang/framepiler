@@ -2427,10 +2427,12 @@ pub(crate) fn generate_persistence_methods(
                 "    comp := new{}Compartment(m[\"state\"].(string))\n",
                 system.name
             ));
+            // state_vars is a map (keyed by $.varName); state_args / enter_args /
+            // exit_args are positional slices (Vec of interface{}).
             restore_body.push_str("    if sv, ok := m[\"state_vars\"].(map[string]interface{}); ok { for k, v := range sv { comp.stateVars[k] = v } }\n");
-            restore_body.push_str("    if sa, ok := m[\"state_args\"].(map[string]interface{}); ok { for k, v := range sa { comp.stateArgs[k] = v } }\n");
-            restore_body.push_str("    if ea, ok := m[\"enter_args\"].(map[string]interface{}); ok { for k, v := range ea { comp.enterArgs[k] = v } }\n");
-            restore_body.push_str("    if xa, ok := m[\"exit_args\"].(map[string]interface{}); ok { for k, v := range xa { comp.exitArgs[k] = v } }\n");
+            restore_body.push_str("    if sa, ok := m[\"state_args\"].([]interface{}); ok { comp.stateArgs = append(comp.stateArgs, sa...) }\n");
+            restore_body.push_str("    if ea, ok := m[\"enter_args\"].([]interface{}); ok { comp.enterArgs = append(comp.enterArgs, ea...) }\n");
+            restore_body.push_str("    if xa, ok := m[\"exit_args\"].([]interface{}); ok { comp.exitArgs = append(comp.exitArgs, xa...) }\n");
             restore_body.push_str("    // forward_event is typically nil in persisted state\n");
             restore_body.push_str(
                 "    comp.parentCompartment = deserializeComp(m[\"parent_compartment\"])\n",
