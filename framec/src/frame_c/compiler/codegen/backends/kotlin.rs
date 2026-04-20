@@ -198,7 +198,7 @@ impl LanguageBackend for KotlinBackend {
                 params,
                 return_type,
                 body,
-                is_async: _,
+                is_async,
                 is_static,
                 visibility,
                 ..
@@ -217,12 +217,18 @@ impl LanguageBackend for KotlinBackend {
                     .map(|t| format!(": {}", self.map_type(t)))
                     .unwrap_or_default();
 
+                // Kotlin async == `suspend fun`. No return-type wrapping —
+                // a suspend fun returning T is callable as T from other
+                // suspend contexts (coroutines compile to continuations).
+                let suspend_prefix = if *is_async { "suspend " } else { "" };
+
                 // Static methods are wrapped in a single `companion object`
                 // block by the Class emitter — emit a bare `fun` here.
                 let mut result = format!(
-                    "{}{}fun {}({}){} {{\n",
+                    "{}{}{}fun {}({}){} {{\n",
                     ctx.get_indent(),
                     vis_prefix,
+                    suspend_prefix,
                     name,
                     params_str,
                     return_str

@@ -26,6 +26,35 @@ use crate::frame_c::compiler::native_region_scanner::{
 use crate::frame_c::compiler::splice::Splicer;
 use crate::frame_c::visitors::TargetLanguage;
 
+/// C `_return` assignment with double-aware marshalling.
+///
+/// The `_return` slot is `void*`. Ints/bools/pointers travel via
+/// `(void*)(intptr_t)(val)` cleanly. Doubles don't — `(intptr_t)(42.0)`
+/// truncates the fractional part. When the handler's declared return
+/// type is `float`/`double`, pack via a memcpy helper the runtime emits
+/// (`Sys_pack_double`).
+fn c_return_assign(system_name: &str, expanded_expr: &str, return_type: &Option<String>) -> String {
+    let is_dbl = return_type
+        .as_deref()
+        .map(|t| {
+            let t = t.trim();
+            t == "float" || t == "double"
+        })
+        .unwrap_or(false);
+    if is_dbl {
+        format!(
+            "{sys}_CTX(self)->_return = {sys}_pack_double({expr});",
+            sys = system_name,
+            expr = expanded_expr,
+        )
+    } else {
+        format!(
+            "{}_CTX(self)->_return = (void*)(intptr_t)({});",
+            system_name, expanded_expr
+        )
+    }
+}
+
 /// Resolve the storage key for a positional state-arg in a transition.
 /// Returns the declared param name — used by Rust backend for typed
 /// StateContext struct field assignment.
@@ -2256,8 +2285,9 @@ pub(crate) fn generate_frame_expansion(
                         indent_str, expanded_expr
                     ),
                     TargetLanguage::C => format!(
-                        "{}{}_CTX(self)->_return = (void*)(intptr_t)({});",
-                        indent_str, ctx.system_name, expanded_expr
+                        "{}{}",
+                        indent_str,
+                        c_return_assign(&ctx.system_name, &expanded_expr, &ctx.current_return_type),
                     ),
                     TargetLanguage::Rust => {
                         super::rust_system::rust_expand_box_return(&indent_str, &expanded_expr)
@@ -2429,9 +2459,10 @@ pub(crate) fn generate_frame_expansion(
                         expanded_expr
                     )
                 }
-                TargetLanguage::C => format!(
-                    "{}_CTX(self)->_return = (void*)(intptr_t)({});",
-                    ctx.system_name, expanded_expr
+                TargetLanguage::C => c_return_assign(
+                    &ctx.system_name,
+                    &expanded_expr,
+                    &ctx.current_return_type,
                 ),
                 TargetLanguage::Rust => {
                     super::rust_system::rust_expand_box_return_bare(&indent_str, &expanded_expr)
@@ -2852,9 +2883,10 @@ pub(crate) fn generate_frame_expansion(
                         expanded_expr
                     )
                 }
-                TargetLanguage::C => format!(
-                    "{}_CTX(self)->_return = (void*)(intptr_t)({});",
-                    ctx.system_name, expanded_expr
+                TargetLanguage::C => c_return_assign(
+                    &ctx.system_name,
+                    &expanded_expr,
+                    &ctx.current_return_type,
                 ),
                 TargetLanguage::Rust => {
                     super::rust_system::rust_expand_box_return_bare(&indent_str, &expanded_expr)
@@ -2986,7 +3018,31 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Php => format!("$this->{}{}", method_name, args_with_parens),
                 TargetLanguage::Ruby => format!("self.{}{}", method_name, args_with_parens),
                 TargetLanguage::Lua => format!("self:{}{}", method_name, args_with_parens),
-                TargetLanguage::Erlang => String::new(),
+                TargetLanguage::Erlang => {
+                    // @@:self.method(args) dispatches through the already-
+                    // emitted `frame_dispatch__` helper, which runs the
+                    // handler on the current state and returns
+                    // `{NewData, RetVal}`. Take `element(2, ...)` for the
+                    // return value. NOTE: this path drops NewData, so
+                    // @@:self cannot currently propagate state transitions
+                    // back to the caller — pure queries and writes to the
+                    // called state's compartment work; a transition in the
+                    // called method would be lost. Tracked as a known
+                    // limitation; exercising pure-query @@:self still
+                    // validates return-value propagation.
+                    let args_inner = args_with_parens.trim();
+                    let args_list = if args_inner == "()" || args_inner.is_empty() {
+                        "[]".to_string()
+                    } else {
+                        // strip outer parens, wrap in list
+                        let inner = &args_inner[1..args_inner.len() - 1];
+                        format!("[{}]", inner)
+                    };
+                    format!(
+                        "element(2, frame_dispatch__({}, {}, Data))",
+                        method_name, args_list
+                    )
+                }
                 TargetLanguage::Graphviz => unreachable!(),
             };
 
@@ -3987,6 +4043,7 @@ mod tests {
             state_enter_param_names: std::collections::HashMap::new(),
             state_exit_param_names: std::collections::HashMap::new(),
             event_param_names: std::collections::HashMap::new(),
+            current_return_type: None,
         }
     }
 

@@ -146,12 +146,22 @@ impl LanguageBackend for DartBackend {
                 let mut result = String::new();
 
                 let static_kw = if *is_static { "static " } else { "" };
-                let async_kw = if *is_async { "async " } else { "" };
+                // Dart: `async` is a *body* modifier, placed after the
+                // parameter list and before the `{`. The return type must
+                // also be wrapped in `Future<T>` (or `Future<void>` for
+                // void methods). `async void` is accepted but considered a
+                // lint warning; `Future<void>` is canonical.
                 let params_str = self.emit_params(params);
-                let return_str = return_type
+                let raw_return = return_type
                     .as_ref()
                     .map(|rt| self.convert_type(rt))
                     .unwrap_or_else(|| "void".to_string());
+                let return_str = if *is_async {
+                    format!("Future<{}>", raw_return)
+                } else {
+                    raw_return
+                };
+                let async_suffix = if *is_async { " async" } else { "" };
 
                 // Dart visibility: don't add _ prefix for methods called from
                 // handler code (actions, operations, state methods). The _ prefix
@@ -160,13 +170,13 @@ impl LanguageBackend for DartBackend {
                 let method_name = name.clone();
 
                 result.push_str(&format!(
-                    "{}{}{}{} {}({}) {{\n",
+                    "{}{}{} {}({}){} {{\n",
                     ctx.get_indent(),
                     static_kw,
-                    async_kw,
                     return_str,
                     method_name,
-                    params_str
+                    params_str,
+                    async_suffix,
                 ));
 
                 ctx.push_indent();

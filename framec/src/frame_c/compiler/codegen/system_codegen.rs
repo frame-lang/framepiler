@@ -242,12 +242,47 @@ pub fn generate_system_shared(
         },
     };
 
-    // Post-process: make dispatch chain async if any interface method is async
+    // Post-process: make dispatch chain async if any interface method is async.
+    // Java is excluded — it has no native async/await. Instead, Java
+    // interface methods return CompletableFuture<T> (see `make_java_interface_async`)
+    // while the internal dispatch chain stays synchronous.
     if needs_async {
-        make_system_async(&mut class_node, &system.name, lang);
+        if matches!(lang, TargetLanguage::Java) {
+            make_java_interface_async(&mut class_node, system);
+        } else {
+            make_system_async(&mut class_node, &system.name, lang);
+        }
     }
 
     class_node
+}
+
+/// Java-specific async handling: only the public interface methods get
+/// `is_async = true` (triggering `CompletableFuture<T>` return-type wrapping
+/// in the Java backend). The internal dispatch chain (__kernel, __router,
+/// _state_X, __transition, init) stays synchronous — callers would have to
+/// `.get()` each internal call otherwise, and deep chains become noisy
+/// without buying real concurrency. Users call `worker.get_status().get()`
+/// to await an interface result.
+fn make_java_interface_async(class_node: &mut CodegenNode, system: &SystemAst) {
+    let async_names: std::collections::HashSet<String> = system
+        .interface
+        .iter()
+        .filter(|m| m.is_async)
+        .map(|m| m.name.clone())
+        .collect();
+    if let CodegenNode::Class { ref mut methods, .. } = class_node {
+        for method in methods.iter_mut() {
+            if let CodegenNode::Method {
+                is_async, name, ..
+            } = method
+            {
+                if async_names.contains(name) {
+                    *is_async = true;
+                }
+            }
+        }
+    }
 }
 
 /// Transform a generated system class to use async dispatch.
@@ -329,18 +364,62 @@ self._context_stack.pop();"#,
                 s = system_name
             ),
             // Async not supported for these targets — emit a comment placeholder
-            TargetLanguage::C | TargetLanguage::Cpp => format!("// async not supported for C/C++"),
+            TargetLanguage::C => format!("// async not supported for C"),
+            TargetLanguage::Cpp => format!(
+                r#"{s}FrameEvent __e("$>");
+{s}FrameContext __ctx(std::move(__e));
+_context_stack.push_back(std::move(__ctx));
+co_await __kernel(_context_stack.back()._event);
+_context_stack.pop_back();
+co_return;"#,
+                s = system_name
+            ),
+            TargetLanguage::Dart => format!(
+                r#"final __e = {s}FrameEvent("\$>", []);
+final __ctx = {s}FrameContext(__e, null);
+_context_stack.add(__ctx);
+await __kernel(__e);
+_context_stack.removeLast();"#,
+                s = system_name
+            ),
+            TargetLanguage::GDScript => format!(
+                r#"var __e = {s}FrameEvent.new("$>", [])
+var __ctx = {s}FrameContext.new(__e, null)
+self._context_stack.append(__ctx)
+await self.__kernel(__e)
+self._context_stack.pop_back()"#,
+                s = system_name
+            ),
+            TargetLanguage::Kotlin => format!(
+                r#"val __e = {s}FrameEvent("$>", mutableListOf<Any?>())
+val __ctx = {s}FrameContext(__e, null)
+_context_stack.add(__ctx)
+__kernel(__e)
+_context_stack.removeLast()"#,
+                s = system_name
+            ),
+            TargetLanguage::Swift => format!(
+                r#"let __e = {s}FrameEvent(message: "$>", parameters: [])
+let __ctx = {s}FrameContext(event: __e)
+_context_stack.append(__ctx)
+await __kernel(__e)
+_context_stack.removeLast()"#,
+                s = system_name
+            ),
+            TargetLanguage::CSharp => format!(
+                r#"var __e = new {s}FrameEvent("$>", new List<object>());
+var __ctx = new {s}FrameContext(__e, null);
+_context_stack.Add(__ctx);
+await __kernel(__e);
+_context_stack.RemoveAt(_context_stack.Count - 1);"#,
+                s = system_name
+            ),
             // Languages with async that haven't been implemented yet
             TargetLanguage::Java
-            | TargetLanguage::Kotlin
-            | TargetLanguage::Swift
-            | TargetLanguage::CSharp
             | TargetLanguage::Go
             | TargetLanguage::Php
             | TargetLanguage::Ruby
-            | TargetLanguage::Lua
-            | TargetLanguage::Dart
-            | TargetLanguage::GDScript => {
+            | TargetLanguage::Lua => {
                 format!("// async init not yet implemented for {:?}", lang)
             }
             TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
@@ -351,8 +430,16 @@ self._context_stack.pop();"#,
             span: None,
         }];
 
+        // Swift: `init` is reserved for constructors — `func init() async`
+        // is a parse error. Rename just for Swift so tests call
+        // `await w.initAsync()` instead of `await w.init()`.
+        let init_name = match lang {
+            TargetLanguage::Swift => "initAsync".to_string(),
+            _ => "init".to_string(),
+        };
+
         methods.push(CodegenNode::Method {
-            name: "init".to_string(),
+            name: init_name,
             params: vec![],
             return_type: None,
             body: init_body,
@@ -412,7 +499,11 @@ fn add_await_to_string(code: &str, lang: TargetLanguage) -> String {
     let mut result = String::with_capacity(code.len() + 100);
     for line in code.lines() {
         let trimmed = line.trim();
-        // Match dispatch call patterns that need await
+        // Match dispatch call patterns that need await.
+        // Swift/Kotlin/C#/Dart (and some branches of others) emit bare
+        // references without a `self.`/`this.` prefix — match those too.
+        // These names are framec-generated (`__kernel`, `__router`,
+        // `_state_<Name>`, `_s_<...>`) so bare matching is safe.
         let needs_await = trimmed.starts_with("self.__kernel(")
             || trimmed.starts_with("self.__router(")
             || (trimmed.starts_with("self._state_") && !trimmed.starts_with("self._state_stack"))
@@ -428,6 +519,11 @@ fn add_await_to_string(code: &str, lang: TargetLanguage) -> String {
             || trimmed.starts_with("$this->__kernel(")
             || trimmed.starts_with("$this->__router(")
             || trimmed.starts_with("$this->_state_")
+            // Bare references (no `self.`/`this.` prefix): Swift uses bare
+            // for same-instance method calls.
+            || trimmed.starts_with("__kernel(")
+            || trimmed.starts_with("__router(")
+            || (trimmed.starts_with("_state_") && !trimmed.starts_with("_state_stack"))
             // Rust match arms and braced dispatch:
             // "StateName" => self._state_X(__e),
             // { self._s_Ready_fetch(__e, key); }
@@ -447,17 +543,30 @@ fn add_await_to_string(code: &str, lang: TargetLanguage) -> String {
                         result.push_str(line);
                     }
                 }
+                // Kotlin: `suspend fun` → `suspend fun` calls are bare,
+                // no `await` keyword. Emit the line unchanged.
+                TargetLanguage::Kotlin => {
+                    result.push_str(line);
+                }
+                // C++: coroutines use `co_await` keyword, not `await`.
+                TargetLanguage::Cpp => {
+                    if !trimmed.starts_with("co_await ") {
+                        result.push_str(indent);
+                        result.push_str("co_await ");
+                        result.push_str(trimmed);
+                    } else {
+                        result.push_str(line);
+                    }
+                }
                 // All other async-capable languages use prefix `await`
                 TargetLanguage::Python3
                 | TargetLanguage::TypeScript
                 | TargetLanguage::JavaScript
                 | TargetLanguage::CSharp
-                | TargetLanguage::Kotlin
                 | TargetLanguage::Swift
                 | TargetLanguage::Java
                 | TargetLanguage::Go
                 | TargetLanguage::C
-                | TargetLanguage::Cpp
                 | TargetLanguage::Php
                 | TargetLanguage::Ruby
                 | TargetLanguage::Erlang
@@ -4195,8 +4304,15 @@ pub(crate) fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> S
                     i += 1; // skip closing )
                             // Generate native constructor
                     let constructor = match lang {
-                        TargetLanguage::Python3 | TargetLanguage::GDScript => {
+                        TargetLanguage::Python3 => {
                             format!("{}({})", name, args)
+                        }
+                        // GDScript instantiation is `Class.new(...)`; bare
+                        // `Class(...)` parses as a function call at runtime
+                        // and fails with "Cannot call non-static function
+                        // 'Logger()' on a null instance."
+                        TargetLanguage::GDScript => {
+                            format!("{}.new({})", name, args)
                         }
                         TargetLanguage::TypeScript
                         | TargetLanguage::JavaScript

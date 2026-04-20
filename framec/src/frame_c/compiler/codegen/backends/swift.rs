@@ -103,7 +103,7 @@ impl LanguageBackend for SwiftBackend {
                 params,
                 return_type,
                 body,
-                is_async: _,
+                is_async,
                 is_static,
                 visibility,
                 ..
@@ -124,13 +124,17 @@ impl LanguageBackend for SwiftBackend {
                     .unwrap_or_default();
 
                 let static_kw = if *is_static { "static " } else { "" };
+                // Swift: `async` goes between the param list and return type.
+                //   func foo() async -> Int { ... }
+                let async_kw = if *is_async { " async" } else { "" };
                 let mut result = format!(
-                    "{}{}{}func {}({}){} {{\n",
+                    "{}{}{}func {}({}){}{} {{\n",
                     ctx.get_indent(),
                     vis_prefix,
                     static_kw,
                     name,
                     params_str,
+                    async_kw,
                     return_str
                 );
 

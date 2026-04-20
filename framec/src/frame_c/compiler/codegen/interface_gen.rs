@@ -298,17 +298,36 @@ self._context_stack.pop()"#,
                     .map(|s| s != "void" && s != "None")
                     .unwrap_or(false);
 
-                // Set default return value after context creation
+                // Set default return value after context creation. For
+                // float/double returns, pack via the memcpy helper since
+                // `(void*)(intptr_t)(3.14)` truncates to an integer.
+                let is_double_return = return_type_str
+                    .as_ref()
+                    .map(|s| s == "double")
+                    .unwrap_or(false);
                 let default_init = if let Some(ref init_expr) = method.return_init {
-                    format!("\n__ctx->_return = (void*)(intptr_t)({});", init_expr)
+                    if is_double_return {
+                        format!("\n__ctx->_return = {}_pack_double({});", sys, init_expr)
+                    } else {
+                        format!("\n__ctx->_return = (void*)(intptr_t)({});", init_expr)
+                    }
                 } else {
                     String::new()
                 };
 
                 if let (true, Some(return_type_str)) = (has_return_value, return_type_str) {
-                    let cast = match return_type_str.as_str() {
-                        "bool" | "int" => "(intptr_t)",
-                        _ => "",
+                    // Unpack based on declared return type:
+                    //   bool/int  → `(intptr_t)__ctx->_return`  (truncates to int size)
+                    //   double    → `Sys_unpack_double(...)`     (memcpy round-trip)
+                    //   str/ptr   → `(T)__ctx->_return`          (pointer already fits)
+                    let extract = if return_type_str == "double" {
+                        format!("{}_unpack_double(__result_ctx->_return)", sys)
+                    } else {
+                        let cast = match return_type_str.as_str() {
+                            "bool" | "int" => "(intptr_t)",
+                            _ => "",
+                        };
+                        format!("({}){}__result_ctx->_return", return_type_str, cast)
                     };
                     CodegenNode::NativeBlock {
                         code: format!(
@@ -317,12 +336,12 @@ self._context_stack.pop()"#,
 {}_FrameVec_push(self->_context_stack, __ctx);
 {}_kernel(self, __e);
 {}_FrameContext* __result_ctx = ({}_FrameContext*){}_FrameVec_pop(self->_context_stack);
-{} __result = ({}){}__result_ctx->_return;
+{} __result = {};
 {}_FrameContext_destroy(__result_ctx);
 {}_FrameEvent_destroy(__e);
 return __result;"#,
                             params_code, sys, sys, default_init, sys, sys, sys, sys, sys,
-                            return_type_str, return_type_str, cast, sys, sys
+                            return_type_str, extract, sys, sys
                         ),
                         span: None,
                     }
@@ -361,6 +380,10 @@ return __result;"#,
                 // pushed so the handler can run, but we never read back.
                 let returns_value = (method.return_type.is_some() || method.return_init.is_some())
                     && return_type_str != "void";
+                // System is async when any interface method is declared
+                // async. Bodies `co_return` instead of `return`; internal
+                // dispatch calls get `co_await` prefix (see `add_await_to_string`).
+                let system_is_async = system.interface.iter().any(|m| m.is_async);
 
                 let mut code = String::new();
 
@@ -391,12 +414,22 @@ return __result;"#,
                 }
 
                 code.push_str("_context_stack.push_back(std::move(__ctx));\n");
-                code.push_str("__kernel(_context_stack.back()._event);\n");
+                // Async: await the kernel so nested co_awaits work; sync:
+                // plain call.
+                if system_is_async {
+                    code.push_str("co_await __kernel(_context_stack.back()._event);\n");
+                } else {
+                    code.push_str("__kernel(_context_stack.back()._event);\n");
+                }
 
+                let ret_kw = if system_is_async { "co_return" } else { "return" };
                 if returns_value {
                     code.push_str(&format!("auto __result = std::any_cast<{}>(std::move(_context_stack.back()._return));\n", return_type_str));
                     code.push_str("_context_stack.pop_back();\n");
-                    code.push_str("return __result;");
+                    code.push_str(&format!("{} __result;", ret_kw));
+                } else if system_is_async {
+                    code.push_str("_context_stack.pop_back();\n");
+                    code.push_str("co_return;");
                 } else {
                     code.push_str("_context_stack.pop_back();");
                 }
@@ -409,6 +442,12 @@ return __result;"#,
                 let return_type_str = method.return_type.as_ref()
                     .map(|t| type_to_string(t))
                     .unwrap_or_else(|| "void".to_string());
+                // Java has no native async/await; `async` methods return
+                // `CompletableFuture<T>` with the body running synchronously
+                // and wrapping its result via `completedFuture(...)`. If any
+                // interface method is async, all interface methods share
+                // the wrapping (like how other languages' async cascade).
+                let system_is_async = system.interface.iter().any(|m| m.is_async);
 
                 let mut code = String::new();
 
@@ -439,9 +478,16 @@ return __result;"#,
                     let java_type = java_map_type(&return_type_str);
                     code.push_str(&format!("{} __result = ({}) _context_stack.get(_context_stack.size() - 1)._return;\n", java_type, java_type));
                     code.push_str("_context_stack.remove(_context_stack.size() - 1);\n");
-                    code.push_str("return __result;");
+                    if system_is_async {
+                        code.push_str("return java.util.concurrent.CompletableFuture.completedFuture(__result);");
+                    } else {
+                        code.push_str("return __result;");
+                    }
                 } else {
                     code.push_str("_context_stack.remove(_context_stack.size() - 1);");
+                    if system_is_async {
+                        code.push_str("\nreturn java.util.concurrent.CompletableFuture.completedFuture(null);");
+                    }
                 }
 
                 CodegenNode::NativeBlock { code, span: None }
@@ -2492,19 +2538,21 @@ pub(crate) fn generate_persistence_methods(
             // save_state — serialize to JSON via dart:convert
             let mut save_body = String::new();
             save_body.push_str(&format!(
-                "Map<String, dynamic> serializeComp({}? comp) {{\n",
+                "Map<String, dynamic>? serializeComp({}? comp) {{\n",
                 compartment_type
             ));
-            save_body.push_str("    if (comp == null) return {};\n");
+            save_body.push_str("    if (comp == null) return null;\n");
             save_body.push_str("    return {\n");
             save_body.push_str("        'state': comp.state,\n");
+            // state_args / enter_args / exit_args are List<dynamic> (positional)
+            // since the HashMap→Vec migration. state_vars stays a Map keyed by var name.
             save_body
-                .push_str("        'state_args': Map<String, dynamic>.from(comp.state_args),\n");
+                .push_str("        'state_args': List<dynamic>.from(comp.state_args),\n");
             save_body
                 .push_str("        'state_vars': Map<String, dynamic>.from(comp.state_vars),\n");
             save_body
-                .push_str("        'enter_args': Map<String, dynamic>.from(comp.enter_args),\n");
-            save_body.push_str("        'exit_args': Map<String, dynamic>.from(comp.exit_args),\n");
+                .push_str("        'enter_args': List<dynamic>.from(comp.enter_args),\n");
+            save_body.push_str("        'exit_args': List<dynamic>.from(comp.exit_args),\n");
             save_body.push_str("        'forward_event': comp.forward_event,\n");
             save_body.push_str(
                 "        'parent_compartment': serializeComp(comp.parent_compartment),\n",
@@ -2538,11 +2586,17 @@ pub(crate) fn generate_persistence_methods(
             // _restore — private named constructor for deserialization.
             // Creates an uninitialized instance (skips the normal
             // constructor's $> enter event and compartment setup).
-            // restoreState() populates fields from JSON after construction.
+            // Initializes `late` fields (_state_stack, _context_stack)
+            // so the instance is safe to touch before restoreState()
+            // finishes populating the compartment chain.
             methods.push(CodegenNode::NativeBlock {
                 code: format!(
-                    "{}._restore() : __compartment = {}(\"\"), __next_compartment = null;",
-                    system.name, compartment_type
+                    "{system}._restore() : __compartment = {comp}(\"\"), __next_compartment = null {{\n\
+                     \x20   _state_stack = [];\n\
+                     \x20   _context_stack = [];\n\
+                     }}",
+                    system = system.name,
+                    comp = compartment_type,
                 ),
                 span: None,
             });
@@ -2559,16 +2613,16 @@ pub(crate) fn generate_persistence_methods(
                 compartment_type
             ));
             restore_body.push_str(
-                "    comp.state_args = Map<String, dynamic>.from(data['state_args'] ?? {});\n",
+                "    comp.state_args = List<dynamic>.from(data['state_args'] ?? <dynamic>[]);\n",
             );
             restore_body.push_str(
                 "    comp.state_vars = Map<String, dynamic>.from(data['state_vars'] ?? {});\n",
             );
             restore_body.push_str(
-                "    comp.enter_args = Map<String, dynamic>.from(data['enter_args'] ?? {});\n",
+                "    comp.enter_args = List<dynamic>.from(data['enter_args'] ?? <dynamic>[]);\n",
             );
             restore_body.push_str(
-                "    comp.exit_args = Map<String, dynamic>.from(data['exit_args'] ?? {});\n",
+                "    comp.exit_args = List<dynamic>.from(data['exit_args'] ?? <dynamic>[]);\n",
             );
             restore_body.push_str("    comp.forward_event = data['forward_event'];\n");
             restore_body.push_str(
@@ -2585,8 +2639,34 @@ pub(crate) fn generate_persistence_methods(
                 "instance._state_stack = (data['_state_stack'] as List?)?.map((c) => deserializeComp(c)!).toList() ?? <{}>[];\n",
                 compartment_type
             ));
+            // Domain field restores. jsonDecode hands back dynamic values
+            // that on assignment are rejected when the field is a typed
+            // container (List<X>/Map<K,V>) — dynamic != String at runtime.
+            // Emit a `.cast<...>()` for those; leave primitives as direct
+            // assignment since dynamic→num/int/String is implicit.
             for var in &system.domain {
-                restore_body.push_str(&format!("instance.{} = data['{}'];\n", var.name, var.name));
+                let ty = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.trim(),
+                    _ => "",
+                };
+                if let Some(inner) = ty.strip_prefix("List<").and_then(|s| s.strip_suffix('>')) {
+                    restore_body.push_str(&format!(
+                        "instance.{name} = (data['{name}'] as List).cast<{inner}>();\n",
+                        name = var.name,
+                        inner = inner.trim(),
+                    ));
+                } else if let Some(inner) = ty.strip_prefix("Map<").and_then(|s| s.strip_suffix('>')) {
+                    restore_body.push_str(&format!(
+                        "instance.{name} = (data['{name}'] as Map).cast<{inner}>();\n",
+                        name = var.name,
+                        inner = inner.trim(),
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "instance.{name} = data['{name}'];\n",
+                        name = var.name,
+                    ));
+                }
             }
             restore_body.push_str("return instance;");
 
@@ -2676,6 +2756,9 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("instance.__compartment = deserialize_comp(data._compartment)\n");
             restore_body.push_str("instance.__next_compartment = nil\n");
             restore_body.push_str("instance._state_stack = {}\n");
+            // _context_stack is pushed/popped per interface call; a restored
+            // instance starts with an empty context just like a fresh one.
+            restore_body.push_str("instance._context_stack = {}\n");
             restore_body.push_str("if data._state_stack then\n");
             restore_body.push_str("    for _, c in ipairs(data._state_stack) do\n");
             restore_body.push_str(

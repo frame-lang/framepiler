@@ -63,6 +63,7 @@ impl TryFrom<&str> for TargetLanguage {
             || normalized == "cpp"
             || normalized == "cpp_17"
             || normalized == "cpp_20"
+            || normalized == "cpp_23"
         {
             Ok(TargetLanguage::Cpp)
         } else if normalized == "java" {

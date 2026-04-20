@@ -1892,6 +1892,42 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str("}\n\n");
 
     // ============================================================================
+    // Double-return marshalling helpers
+    // ============================================================================
+    // `_return` is a `void*` slot. Casting a `double` through `(intptr_t)`
+    // truncates the fractional part, and casting a `void*` back to `double`
+    // is illegal C. Bit-pun through `memcpy` — legal and round-trips
+    // cleanly on every 64-bit target (both `double` and `void*` are 8
+    // bytes). The C backend emits calls to these wherever a handler's
+    // return type is `float` / `double`.
+    code.push_str(&format!(
+        "// ============================================================================\n"
+    ));
+    code.push_str(&format!(
+        "// {}_pack_double / {}_unpack_double — bit-pun doubles through void*\n",
+        sys, sys
+    ));
+    code.push_str(&format!(
+        "// ============================================================================\n\n"
+    ));
+    code.push_str(&format!(
+        "static inline void* {}_pack_double(double v) {{\n",
+        sys
+    ));
+    code.push_str("    void* p = 0;\n");
+    code.push_str("    memcpy(&p, &v, sizeof(double));\n");
+    code.push_str("    return p;\n");
+    code.push_str("}\n\n");
+    code.push_str(&format!(
+        "static inline double {}_unpack_double(void* p) {{\n",
+        sys
+    ));
+    code.push_str("    double d;\n");
+    code.push_str("    memcpy(&d, &p, sizeof(double));\n");
+    code.push_str("    return d;\n");
+    code.push_str("}\n\n");
+
+    // ============================================================================
     // FrameEvent - Event routing object
     // ============================================================================
     code.push_str(&format!(

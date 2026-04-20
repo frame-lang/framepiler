@@ -1,10 +1,104 @@
-//! C++17 code generation backend
+//! C++23 code generation backend
 
 use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
 use crate::frame_c::visitors::TargetLanguage;
 
-/// C++17 backend for code generation
+/// Coroutine promise-type emitted at file scope before any async Frame
+/// class. Header-guarded so a file with multiple `@@system`s (each
+/// potentially async) only declares the template once.
+const FRAME_TASK_PRELUDE: &str = r#"#ifndef FRAME_TASK_H
+#define FRAME_TASK_H
+#include <coroutine>
+#include <exception>
+#include <utility>
+
+template <typename T>
+struct FrameTask {
+    struct promise_type {
+        T value_{};
+        std::exception_ptr err_;
+        FrameTask get_return_object() noexcept { return FrameTask{std::coroutine_handle<promise_type>::from_promise(*this)}; }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        template <typename U> void return_value(U&& v) { value_ = std::forward<U>(v); }
+        void unhandled_exception() noexcept { err_ = std::current_exception(); }
+    };
+    std::coroutine_handle<promise_type> h_;
+    explicit FrameTask(std::coroutine_handle<promise_type> h) noexcept : h_(h) {}
+    FrameTask(const FrameTask&) = delete;
+    FrameTask& operator=(const FrameTask&) = delete;
+    FrameTask(FrameTask&& o) noexcept : h_(std::exchange(o.h_, {})) {}
+    FrameTask& operator=(FrameTask&& o) noexcept { if (this != &o) { if (h_) h_.destroy(); h_ = std::exchange(o.h_, {}); } return *this; }
+    ~FrameTask() { if (h_) h_.destroy(); }
+    bool await_ready() const noexcept { return h_.done(); }
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+    T await_resume() { if (h_.promise().err_) std::rethrow_exception(h_.promise().err_); return std::move(h_.promise().value_); }
+    T get() { if (h_.promise().err_) std::rethrow_exception(h_.promise().err_); return std::move(h_.promise().value_); }
+};
+
+template <>
+struct FrameTask<void> {
+    struct promise_type {
+        std::exception_ptr err_;
+        FrameTask get_return_object() noexcept { return FrameTask{std::coroutine_handle<promise_type>::from_promise(*this)}; }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() noexcept { err_ = std::current_exception(); }
+    };
+    std::coroutine_handle<promise_type> h_;
+    explicit FrameTask(std::coroutine_handle<promise_type> h) noexcept : h_(h) {}
+    FrameTask(const FrameTask&) = delete;
+    FrameTask& operator=(const FrameTask&) = delete;
+    FrameTask(FrameTask&& o) noexcept : h_(std::exchange(o.h_, {})) {}
+    FrameTask& operator=(FrameTask&& o) noexcept { if (this != &o) { if (h_) h_.destroy(); h_ = std::exchange(o.h_, {}); } return *this; }
+    ~FrameTask() { if (h_) h_.destroy(); }
+    bool await_ready() const noexcept { return h_.done(); }
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+    void await_resume() { if (h_.promise().err_) std::rethrow_exception(h_.promise().err_); }
+    void get() { if (h_.promise().err_) std::rethrow_exception(h_.promise().err_); }
+};
+#endif // FRAME_TASK_H
+
+"#;
+
+/// Rewrite every `return;` / `return expr;` in an async-method body to
+/// `co_return;` / `co_return expr;`. The existing state-dispatch and
+/// frame-expansion emitters sprinkle plain `return`s in transition/forward
+/// code paths (~20 sites across the codebase), and each is synchronous
+/// when emitted. Inside a C++ coroutine, plain `return` is ill-formed —
+/// the compiler refuses to mix the two. Post-processing the body string
+/// keeps the upstream emitters language-agnostic.
+///
+/// Word-boundary match on `return` (leading whitespace OK, not inside an
+/// identifier) — we don't want to clobber `returned`, string literals, or
+/// a `// return` comment. This walks lines, checks the trimmed prefix,
+/// and preserves indentation and trailing content (e.g. `return __result;`).
+fn rewrite_return_to_co_return(body: &str) -> String {
+    let mut out = String::with_capacity(body.len() + 64);
+    for line in body.split_inclusive('\n') {
+        let trimmed_start = line.trim_start();
+        let indent_len = line.len() - trimmed_start.len();
+        // Bail if this isn't a `return` statement. Comment lines
+        // (`// ...`) already leave `return` inside a non-statement
+        // position, so a strict prefix check is safe.
+        let bare_return = trimmed_start == "return;" || trimmed_start == "return;\n";
+        let return_with_val = trimmed_start.starts_with("return ")
+            && !trimmed_start.starts_with("return_")  // defensive: no identifier collision
+            && !trimmed_start.starts_with("returns");
+        if bare_return || return_with_val {
+            out.push_str(&line[..indent_len]);
+            out.push_str("co_");
+            out.push_str(trimmed_start);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// C++23 backend for code generation
 pub struct CppBackend;
 
 impl LanguageBackend for CppBackend {
@@ -44,6 +138,25 @@ impl LanguageBackend for CppBackend {
                 } else {
                     format!(" : public {}", base_classes.join(", public "))
                 };
+
+                // C++ async: if any method is async, emit a self-contained
+                // `FrameTask<T>` coroutine promise at file scope before the
+                // class. `#ifndef FRAME_TASK_H` guards multi-@@system
+                // files (e.g. 33_ai_agent) from re-declaring the template.
+                //
+                // Model: `initial_suspend` is `suspend_never` (bodies run
+                // synchronously from creation to the first real await or
+                // `co_return`), and `final_suspend` is `suspend_always` so
+                // the caller can extract the return value before the
+                // handle is destroyed. This matches Frame's semantics:
+                // the dispatch chain has no true async I/O — `co_await`
+                // just threads return values.
+                let has_async = methods.iter().any(|m| {
+                    matches!(m, CodegenNode::Method { is_async: true, .. })
+                });
+                if has_async {
+                    result.push_str(FRAME_TASK_PRELUDE);
+                }
 
                 result.push_str(&format!(
                     "{}class {}{} {{\n",
@@ -146,14 +259,43 @@ impl LanguageBackend for CppBackend {
                 params,
                 return_type,
                 body,
-                is_async: _,
+                is_async,
                 is_static,
                 visibility: _,
                 ..
             } => {
                 let static_kw = if *is_static { "static " } else { "" };
-                let return_str = self.map_type(return_type.as_ref().unwrap_or(&"void".to_string()));
+                let raw_return = self.map_type(return_type.as_ref().unwrap_or(&"void".to_string()));
+                // C++23 async: methods marked async become coroutines
+                // returning `FrameTask<T>`. Void methods return `FrameTask<void>`.
+                // Bodies must `co_return` (or `co_return value`) — the
+                // interface_gen Cpp arm emits `co_return` directly, and
+                // any transition-level `return;` / `return expr;` left in
+                // the rest of the body is rewritten after emission below
+                // (mixing `return` with `co_return` / `co_await` is a
+                // hard compile error in a coroutine).
+                let return_str = if *is_async {
+                    format!("FrameTask<{}>", raw_return)
+                } else {
+                    raw_return
+                };
                 let params_str = self.emit_params(params);
+
+                let mut body_str = String::new();
+                ctx.push_indent();
+                for stmt in body {
+                    body_str.push_str(&self.emit(stmt, ctx));
+                    if self.needs_semicolon(stmt) {
+                        body_str.push_str(";\n");
+                    } else {
+                        body_str.push('\n');
+                    }
+                }
+                ctx.pop_indent();
+
+                if *is_async {
+                    body_str = rewrite_return_to_co_return(&body_str);
+                }
 
                 let mut result = format!(
                     "{}{}{} {}({}) {{\n",
@@ -163,17 +305,7 @@ impl LanguageBackend for CppBackend {
                     name,
                     params_str
                 );
-
-                ctx.push_indent();
-                for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    if self.needs_semicolon(stmt) {
-                        result.push_str(";\n");
-                    } else {
-                        result.push('\n');
-                    }
-                }
-                ctx.pop_indent();
+                result.push_str(&body_str);
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
                 result
             }

@@ -592,7 +592,21 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}s._state_{parent}(__e)\n"),
         }),
-        TargetLanguage::C => Some(DispatchSyntax {
+        TargetLanguage::C => {
+            /// Map a Frame parameter type to its C declaration + void*-cast.
+            /// Strings → `const char*`, pointer-types (anything ending in `*`)
+            /// stay as-is, everything else defaults to `int` via intptr_t.
+            fn c_param_type_and_cast(type_str: &str) -> (String, String) {
+                let t = type_str.trim();
+                match t {
+                    "str" | "string" | "String" | "char*" | "const char*" => {
+                        ("const char*".to_string(), "(const char*)".to_string())
+                    }
+                    _ if t.ends_with('*') => (t.to_string(), format!("({})", t)),
+                    _ => ("int".to_string(), "(int)(intptr_t)".to_string()),
+                }
+            }
+            Some(DispatchSyntax {
             lang,
             semi: ";",
             empty_body: "",
@@ -616,13 +630,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s.push_str("}\n");
                 s
             },
-            fmt_bind_param: |name, type_str, sys, index| {
-                let (c_type, cast) = match type_str {
-                    "str" | "string" | "String" | "char*" | "const char*" => {
-                        ("const char*", "(const char*)")
-                    }
-                    _ => ("int", "(int)(intptr_t)"),
-                };
+            fmt_bind_param: |name, type_str, _sys, index| {
+                let (c_type, cast) = c_param_type_and_cast(type_str);
                 // state_args is now a FrameVec*, so access via ->items[N].
                 format!("{c_type} {name} = {cast}self->__compartment->state_args->items[{index}];\n")
             },
@@ -633,18 +642,13 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
             },
-            fmt_unpack: |name, type_str, indent, sys, source, default, index| {
+            fmt_unpack: |name, type_str, indent, _sys, source, _default, index| {
                 let list = match source {
                     "enter" => "self->__compartment->enter_args",
                     "exit" => "self->__compartment->exit_args",
                     _ => "__e->_parameters",
                 };
-                let (c_type, cast) = match type_str {
-                    "str" | "string" | "String" | "char*" | "const char*" => {
-                        ("const char*", "(const char*)")
-                    }
-                    _ => ("int", "(int)(intptr_t)"),
-                };
+                let (c_type, cast) = c_param_type_and_cast(type_str);
                 // _parameters / enter_args / exit_args are FrameVec*; dereference ->items[N].
                 format!(
                     "{indent}{c_type} {name} = {cast}{list}->items[{index}];\n"
@@ -653,7 +657,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             fmt_forward: |parent, indent, sys| {
                 format!("{indent}{sys}_state_{parent}(self, __e);\n")
             },
-        }),
+            })
+        }
         // Rust and Erlang stay separate (different dispatch patterns)
         _ => None,
     }
@@ -783,6 +788,7 @@ pub(crate) fn generate_unified_state_dispatch(
         // Handler body
         let mut handler_ctx = ctx.clone();
         handler_ctx.event_name = event.clone();
+        handler_ctx.current_return_type = handler.return_type.clone();
         let body =
             emit_handler_body_via_statements(&handler.body_span, source, syn.lang, &handler_ctx);
 
@@ -837,7 +843,30 @@ fn emit_handler_return_init(
     let assign = match lang {
         TargetLanguage::Python3 => format!("{}self._context_stack[-1]._return = {}\n", indent, init_expr),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._return = {};\n", indent, init_expr),
-        TargetLanguage::C => format!("{}{}_CTX(self)->_return = (void*)(intptr_t)({});\n", indent, system_name, init_expr),
+        TargetLanguage::C => {
+            // Doubles don't survive `(void*)(intptr_t)(val)` — the
+            // intptr_t cast truncates. Bit-pun through memcpy via the
+            // generated `Sys_pack_double` helper.
+            let is_dbl = handler
+                .return_type
+                .as_deref()
+                .map(|t| {
+                    let t = t.trim();
+                    t == "float" || t == "double"
+                })
+                .unwrap_or(false);
+            if is_dbl {
+                format!(
+                    "{}{}_CTX(self)->_return = {}_pack_double({});\n",
+                    indent, system_name, system_name, init_expr
+                )
+            } else {
+                format!(
+                    "{}{}_CTX(self)->_return = (void*)(intptr_t)({});\n",
+                    indent, system_name, init_expr
+                )
+            }
+        }
         TargetLanguage::Rust => format!("{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(Box::new({}) as Box<dyn std::any::Any>); }}\n", indent, init_expr),
         TargetLanguage::Cpp => format!("{}_context_stack.back()._return = std::any({});\n", indent, init_expr),
         TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._return = {};\n", indent, init_expr),
@@ -1049,6 +1078,7 @@ pub(crate) fn generate_state_method(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        current_return_type: None,
     };
 
     // Generate the dispatch body based on __e._message / __e.message
@@ -1217,6 +1247,7 @@ pub(crate) fn generate_handler_from_arcanum(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        current_return_type: handler.return_type.clone(),
     };
 
     // Emit handler default return value if present

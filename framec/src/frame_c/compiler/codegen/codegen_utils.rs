@@ -38,6 +38,10 @@ pub(crate) struct HandlerContext {
     /// Map from event name to its interface method's declared param names.
     /// Used by @@:params.name to resolve named parameter to positional index.
     pub event_param_names: std::collections::HashMap<String, Vec<String>>,
+    /// Declared return type of the handler currently being expanded.
+    /// Used by the C backend to branch on `float`/`double` when emitting
+    /// `@@:(expr)` so doubles survive the `void*` return slot.
+    pub current_return_type: Option<String>,
 }
 
 /// Get default initialization value for a type

@@ -107,14 +107,28 @@ impl LanguageBackend for JavaBackend {
                 params,
                 return_type,
                 body,
-                is_async: _,
+                is_async,
                 is_static,
                 visibility,
                 ..
             } => {
                 let vis = self.emit_visibility(*visibility);
                 let static_kw = if *is_static { "static " } else { "" };
-                let return_str = self.map_type(return_type.as_ref().unwrap_or(&"void".to_string()));
+                let raw_return = self.map_type(return_type.as_ref().unwrap_or(&"void".to_string()));
+                // Java has no async keyword — async methods return
+                // `CompletableFuture<T>` (or `CompletableFuture<Void>` for
+                // void). The interface_gen body wraps results in
+                // `CompletableFuture.completedFuture(...)` to match.
+                let return_str = if *is_async {
+                    if raw_return == "void" {
+                        "java.util.concurrent.CompletableFuture<Void>".to_string()
+                    } else {
+                        // Primitive wrappers map 1:1 via java_map_type already.
+                        format!("java.util.concurrent.CompletableFuture<{}>", raw_return)
+                    }
+                } else {
+                    raw_return
+                };
                 let params_str = self.emit_params(params);
 
                 let mut result = format!(
