@@ -920,6 +920,20 @@ pub(crate) fn generate_state_handlers_via_arcanum(
         })
         .collect();
 
+    // Build event→param-names lookup for @@:params.name → positional index resolution.
+    // Built from the machine AST's interface handler params.
+    let mut event_param_names: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for state in &machine.states {
+        for handler in &state.handlers {
+            if !handler.params.is_empty() && !event_param_names.contains_key(&handler.event) {
+                event_param_names.insert(
+                    handler.event.clone(),
+                    handler.params.iter().map(|p| p.name.clone()).collect(),
+                );
+            }
+        }
+    }
+
     // Identify the start state (first state in the machine) so the
     // Rust dispatch can switch on whether this state's lifecycle params
     // are bound from system header (start) or from transitions (non-start).
@@ -955,6 +969,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             &state_param_names,
             &state_enter_param_names,
             &state_exit_param_names,
+            &event_param_names,
             source,
             lang,
             has_state_vars,
@@ -995,6 +1010,7 @@ pub(crate) fn generate_state_method(
     state_param_names: &std::collections::HashMap<String, Vec<String>>,
     state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
     source: &[u8],
     lang: TargetLanguage,
     _has_state_vars: bool,
@@ -1030,6 +1046,7 @@ pub(crate) fn generate_state_method(
         state_param_names: state_param_names.clone(),
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
+        event_param_names: event_param_names.clone(),
     };
 
     // Generate the dispatch body based on __e._message / __e.message
@@ -1134,6 +1151,7 @@ pub(crate) fn generate_handler_from_arcanum(
     state_param_names: &std::collections::HashMap<String, Vec<String>>,
     state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     // Build params from handler's parameter symbols
@@ -1196,6 +1214,7 @@ pub(crate) fn generate_handler_from_arcanum(
         state_param_names: state_param_names.clone(),
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
+        event_param_names: event_param_names.clone(),
     };
 
     // Emit handler default return value if present

@@ -1350,6 +1350,7 @@ pub(crate) fn generate_erlang_system(
                     state_param_names: std::collections::HashMap::new(),
                     state_enter_param_names: std::collections::HashMap::new(),
                     state_exit_param_names: std::collections::HashMap::new(),
+                    event_param_names: std::collections::HashMap::new(),
                 };
                 let enter_span = crate::frame_c::compiler::ast::Span {
                     start: enter.body.span.start,
@@ -1501,6 +1502,7 @@ pub(crate) fn generate_erlang_system(
                     state_param_names: std::collections::HashMap::new(),
                     state_enter_param_names: std::collections::HashMap::new(),
                     state_exit_param_names: std::collections::HashMap::new(),
+                    event_param_names: std::collections::HashMap::new(),
                 };
                 // Convert frame_ast::Span to ast::Span
                 let body_span = crate::frame_c::compiler::ast::Span {
@@ -1841,6 +1843,7 @@ pub(crate) fn generate_erlang_system(
                     state_param_names: std::collections::HashMap::new(),
                     state_enter_param_names: std::collections::HashMap::new(),
                     state_exit_param_names: std::collections::HashMap::new(),
+                    event_param_names: std::collections::HashMap::new(),
                 };
                 let exit_span = crate::frame_c::compiler::ast::Span {
                     start: exit.body.span.start,

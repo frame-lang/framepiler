@@ -2636,27 +2636,33 @@ pub(crate) fn generate_frame_expansion(
             }
         }
         FrameSegmentKind::ContextParams => {
-            // @@:params.key - dot-accessor for interface parameter
+            // @@:params.key - dot-accessor for interface parameter (positional)
             let key = if let SegmentMetadata::ContextParams { key } = metadata {
                 key.clone()
             } else {
                 extract_dot_key(&segment_text, "@@:params") // fallback
             };
+            // Resolve param name to positional index
+            let index = ctx.event_param_names
+                .get(&ctx.event_name)
+                .and_then(|names| names.iter().position(|n| n == &key))
+                .unwrap_or(0);
+            let lua_index = index + 1; // Lua is 1-indexed
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1].event._parameters[\"{}\"]", key),
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[\"{}\"]", key),
-                TargetLanguage::Dart => format!("this._context_stack[this._context_stack.length - 1].event._parameters![\"{}\"]", key),
-                TargetLanguage::C => key.to_string(),
-                TargetLanguage::Rust => super::rust_system::rust_context_param(&key),
-                TargetLanguage::Cpp => key.to_string(),
-                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get(\"{}\")", key),
-                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._event._parameters[\"{}\"]", key),
-                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._event._parameters[\"{}\"]", key),
-                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._event._parameters[\"{}\"]", key),
-                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._event._parameters[\"{}\"]", key),
-                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_event->_parameters[\"{}\"]", key),
-                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._event._parameters[\"{}\"]", key),
-                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._event._parameters[\"{}\"]", key),
+                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1].event._parameters[{}]", index),
+                TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", index),
+                TargetLanguage::Dart => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", index),
+                TargetLanguage::C => format!("{}", index),
+                TargetLanguage::Rust => super::rust_system::rust_context_param(index),
+                TargetLanguage::Cpp => format!("{}", index),
+                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get({})", index),
+                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._event._parameters[{}]", index),
+                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._event._parameters[{}]", index),
+                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._event._parameters[{}]", index),
+                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._event._parameters[{}]", index),
+                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_event->_parameters[{}]", index),
+                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._event._parameters[{}]", index),
+                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._event._parameters[{}]", lua_index),
                 TargetLanguage::Erlang => "undefined".to_string(), // params accessed as variables directly
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -3977,6 +3983,7 @@ mod tests {
             state_param_names: std::collections::HashMap::new(),
             state_enter_param_names: std::collections::HashMap::new(),
             state_exit_param_names: std::collections::HashMap::new(),
+            event_param_names: std::collections::HashMap::new(),
         }
     }
 

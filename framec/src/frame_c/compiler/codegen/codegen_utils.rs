@@ -35,6 +35,9 @@ pub(crate) struct HandlerContext {
     /// (`exit_args["the_param_name"] = ...`), matching the named
     /// convention the dispatch reader uses for exit handlers.
     pub state_exit_param_names: std::collections::HashMap<String, Vec<String>>,
+    /// Map from event name to its interface method's declared param names.
+    /// Used by @@:params.name to resolve named parameter to positional index.
+    pub event_param_names: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// Get default initialization value for a type

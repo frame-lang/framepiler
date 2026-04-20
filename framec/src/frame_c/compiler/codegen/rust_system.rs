@@ -747,6 +747,7 @@ pub(crate) fn generate_rust_handler_methods(
                 state_param_names,
                 state_enter_param_names,
                 state_exit_param_names,
+                &std::collections::HashMap::new(), // event_param_names — Rust uses typed params directly
                 &handler_state_var_types,
             );
             methods.push(method);
@@ -1056,8 +1057,8 @@ pub(crate) fn rust_event_message() -> String {
 }
 
 /// `@@:params[key]` — context parameter access
-pub(crate) fn rust_context_param(key: &str) -> String {
-    key.to_string()
+pub(crate) fn rust_context_param(index: usize) -> String {
+    format!("{}", index)
 }
 
 /// `@@:data[key]` read — context data access with downcast
