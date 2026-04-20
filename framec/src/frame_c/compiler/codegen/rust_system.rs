@@ -774,8 +774,9 @@ pub(crate) fn generate_rust_interface_body(
         let param_items: Vec<String> = method.params.iter()
             .map(|p| format!("Box::new({}.clone()) as Box<dyn std::any::Any>", p.name))
             .collect();
-        format!("let mut __e = {}::new_with_params(\"{}\", vec![{}]);\n",
-            event_class, method.name, param_items.join(", "))
+        let mut s = format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name);
+        s.push_str(&format!("__e.parameters = vec![{}];\n", param_items.join(", ")));
+        s
     };
 
     code.push_str(&format!(

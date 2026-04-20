@@ -1019,7 +1019,7 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("            parameters: Vec::new(),\n");
     code.push_str("        }\n");
     code.push_str("    }\n");
-    code.push_str("    fn new_with_params(message: &str, params: &Vec<String>) -> Self {\n");
+    code.push_str("    fn new_with_params(message: &str, params: &[String]) -> Self {\n");
     code.push_str("        Self {\n");
     code.push_str("            message: message.to_string(),\n");
     code.push_str("            parameters: params.iter().map(|v| Box::new(v.clone()) as Box<dyn std::any::Any>).collect(),\n");

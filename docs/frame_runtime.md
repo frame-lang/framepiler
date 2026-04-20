@@ -38,10 +38,10 @@ The compartment is Frame's central runtime data structure — "a closure concept
 ```
 Compartment {
     state: string              # Current state identifier
-    state_args: dict           # Arguments passed via $State(args)
+    state_args: list           # Arguments passed via $State(args) — positional
     state_vars: dict           # State variables declared with $.varName
-    enter_args: dict           # Arguments passed via -> (args) $State
-    exit_args: dict            # Arguments passed via (args) -> $State
+    enter_args: list           # Arguments passed via -> (args) $State — positional
+    exit_args: list            # Arguments passed via (args) -> $State — positional
     forward_event: Event?      # Stashed event for -> => forwarding
 }
 ```
@@ -57,7 +57,7 @@ Lean routing object:
 ```
 FrameEvent {
     _message: string           # Event type ("$>", "<$", "methodName")
-    _parameters: dict | null   # Event arguments
+    _parameters: list          # Event arguments (positional)
 }
 ```
 
@@ -189,7 +189,7 @@ return  # Handler exits; kernel processes transition
 
 ```python
 __compartment = Compartment("Target")
-__compartment.state_args["param1"] = value1
+__compartment.state_args.append(value1)
 self.__transition(__compartment)
 return
 ```
@@ -198,8 +198,8 @@ return
 
 ```python
 __compartment = Compartment("Target")
-__compartment.enter_args["0"] = data
-__compartment.enter_args["1"] = priority
+__compartment.enter_args.append(data)
+__compartment.enter_args.append(priority)
 self.__transition(__compartment)
 return
 ```
@@ -207,7 +207,7 @@ return
 ### Transition with Exit Args
 
 ```python
-self.__compartment.exit_args["0"] = cleanup_data  # Set on CURRENT compartment
+self.__compartment.exit_args.append(cleanup_data)  # Set on CURRENT compartment
 __compartment = Compartment("Target")
 self.__transition(__compartment)
 return
