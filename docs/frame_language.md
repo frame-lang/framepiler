@@ -127,15 +127,24 @@ Frame passes base class names through **verbatim** to the target language. It do
 | Target | `@@system Foo : A, B` |
 |--------|----------------------|
 | Python | `class Foo(A, B):` |
-| GDScript | `extends A` (module scope) |
 | TypeScript | `class Foo extends A implements B` |
+| JavaScript | `export class Foo extends A implements B` |
 | Java | `class Foo extends A implements B` |
-| C# | `class Foo : A, B` |
-| C++ | `class Foo : public A, public B` |
 | Kotlin | `class Foo : A(), B` |
 | Swift | `class Foo: A, B` |
+| C# | `class Foo : A, B` |
+| C++ | `class Foo : public A, public B` |
+| PHP | `class Foo extends A implements B` |
+| Ruby | `class Foo < A` (single inheritance; extra bases ignored with a warning) |
+| Dart | `class Foo extends A implements B` |
+| GDScript | `extends A` (module scope; only one base) |
+| Rust | *(not supported — structs have no inheritance; use traits via native code)* |
+| Go | *(not supported — structs have no inheritance; use embedding via native code)* |
+| C | *(not supported — no inheritance)* |
+| Lua | *(not supported — use metatables via native code)* |
+| Erlang | *(not supported — use behaviours via native code)* |
 
-Systems without `:` generate standalone classes with no base (the default).
+Systems without `:` generate standalone classes with no base (the default). For targets that don't support inheritance (Rust, Go, C, Lua, Erlang), declaring `:` on a system is currently ignored — a warning may be added in a future revision.
 
 ### Visibility
 
