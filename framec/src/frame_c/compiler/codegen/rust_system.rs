@@ -569,32 +569,32 @@ pub(crate) fn generate_rust_state_dispatch(
                 continue;
             }
             code.push_str(&format!("    \"{}\" => {{\n", message));
-            for param in &handler.params {
+            for (idx, param) in handler.params.iter().enumerate() {
                 let param_type = param.symbol_type.as_deref().unwrap_or("String");
                 let extraction = match param_type {
                     "String" | "str" | "string" => format!(
-                        "        let {0}: String = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
-                        param.name
+                        "        let {}: String = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
+                        param.name, idx
                     ),
                     "i32" => format!(
-                        "        let {0}: i32 = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name
+                        "        let {}: i32 = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
+                        param.name, idx
                     ),
                     "i64" => format!(
-                        "        let {0}: i64 = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name
+                        "        let {}: i64 = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
+                        param.name, idx
                     ),
                     "f64" | "f32" => format!(
-                        "        let {0}: {1} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name, param_type
+                        "        let {}: {} = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
+                        param.name, param_type, idx
                     ),
                     "bool" => format!(
-                        "        let {0}: bool = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name
+                        "        let {}: bool = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
+                        param.name, idx
                     ),
                     _ => format!(
-                        "        let {0} = __e.parameters.get(\"{0}\").and_then(|v| v.downcast_ref::<{1}>()).cloned().unwrap_or_default();\n",
-                        param.name, param_type
+                        "        let {} = __e.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).cloned().unwrap_or_default();\n",
+                        param.name, idx, param_type
                     ),
                 };
                 code.push_str(&extraction);
@@ -614,28 +614,28 @@ pub(crate) fn generate_rust_state_dispatch(
             code.push_str(
                 "        let __ctx_event = &self._context_stack.last().unwrap().event;\n",
             );
-            for param in &handler.params {
+            for (idx, param) in handler.params.iter().enumerate() {
                 let param_type = param.symbol_type.as_deref().unwrap_or("String");
                 let extraction = match param_type {
                     "String" | "str" | "string" => format!(
-                        "        let {}: String = __ctx_event.parameters.get(\"{}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
-                        param.name, param.name
+                        "        let {}: String = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
+                        param.name, idx
                     ),
                     "i64" | "i32" | "isize" => format!(
-                        "        let {}: {} = __ctx_event.parameters.get(\"{}\").and_then(|v| v.downcast_ref::<{}>()).copied().unwrap_or_default();\n",
-                        param.name, param_type, param.name, param_type
+                        "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).copied().unwrap_or_default();\n",
+                        param.name, param_type, idx, param_type
                     ),
                     "f64" | "f32" => format!(
-                        "        let {}: {} = __ctx_event.parameters.get(\"{}\").and_then(|v| v.downcast_ref::<{}>()).copied().unwrap_or_default();\n",
-                        param.name, param_type, param.name, param_type
+                        "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).copied().unwrap_or_default();\n",
+                        param.name, param_type, idx, param_type
                     ),
                     "bool" => format!(
-                        "        let {}: bool = __ctx_event.parameters.get(\"{}\").and_then(|v| v.downcast_ref::<bool>()).copied().unwrap_or_default();\n",
-                        param.name, param.name
+                        "        let {}: bool = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<bool>()).copied().unwrap_or_default();\n",
+                        param.name, idx
                     ),
                     _ => format!(
-                        "        let {} = __ctx_event.parameters.get(\"{}\").and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
-                        param.name, param.name
+                        "        let {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
+                        param.name, idx
                     ),
                 };
                 code.push_str(&extraction);
