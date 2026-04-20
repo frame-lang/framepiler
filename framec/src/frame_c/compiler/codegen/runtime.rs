@@ -871,10 +871,10 @@ return c;"#,
             vec![CodegenNode::NativeBlock {
                 code: format!(
                     r#"final c = {}(this.state, this.parent_compartment);
-c.state_args = Map<String, dynamic>.from(this.state_args);
+c.state_args = List<dynamic>.from(this.state_args);
 c.state_vars = Map<String, dynamic>.from(this.state_vars);
-c.enter_args = Map<String, dynamic>.from(this.enter_args);
-c.exit_args = Map<String, dynamic>.from(this.exit_args);
+c.enter_args = List<dynamic>.from(this.enter_args);
+c.exit_args = List<dynamic>.from(this.exit_args);
 c.forward_event = this.forward_event;
 return c;"#,
                     class_name
@@ -1379,10 +1379,10 @@ pub fn generate_kotlin_compartment_types(system: &SystemAst) -> String {
     ));
     code.push_str(&format!("\n    fun copy(): {sys}Compartment {{\n"));
     code.push_str(&format!("        val c = {sys}Compartment(this.state)\n"));
-    code.push_str("        c.state_args.putAll(this.state_args)\n");
+    code.push_str("        c.state_args.addAll(this.state_args)\n");
     code.push_str("        c.state_vars.putAll(this.state_vars)\n");
-    code.push_str("        c.enter_args.putAll(this.enter_args)\n");
-    code.push_str("        c.exit_args.putAll(this.exit_args)\n");
+    code.push_str("        c.enter_args.addAll(this.enter_args)\n");
+    code.push_str("        c.exit_args.addAll(this.exit_args)\n");
     code.push_str("        c.forward_event = this.forward_event\n");
     code.push_str("        c.parent_compartment = this.parent_compartment\n");
     code.push_str("        return c\n");
