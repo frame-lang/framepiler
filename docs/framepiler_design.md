@@ -357,6 +357,141 @@ kernel(event):
 
 ---
 
+## Async Dispatch Per Language
+
+Async (`async interface_method(): T`) triggers a post-pass
+`make_system_async` that flips `is_async = true` on every non-static,
+non-constructor method in the dispatch chain, then rewalks the method
+bodies to inject the target's `await` keyword on each dispatch call.
+Per-language specifics:
+
+| Target | Signature | await injection | Entry point |
+|---|---|---|---|
+| Python | `async def foo(): ...` | `await self.__kernel(e)` | `asyncio.run(main())` |
+| TypeScript/JavaScript | `async foo(): Promise<T>` | `await this.__kernel(e)` | `await worker.init()` |
+| Rust | `async fn` + `Box::pin(async move { ... }).await` | postfix `.await` | runtime-specific |
+| Dart | `Future<T> foo() async` | `await __kernel(e)` | `await worker.init()` |
+| GDScript | plain `func` (no keyword) | bare `await __kernel(e)` | `await worker.init()` |
+| Kotlin | `suspend fun` | **bare** (suspend→suspend calls need no keyword) | `runBlocking { worker.init() }` |
+| Swift | `func foo() async -> T` | `await __kernel(e)` | `Task { await w.initAsync() }` |
+| C# | `async Task<T>` | `await __kernel(e)` | `await Main(args)` |
+| Java | public interface only: `CompletableFuture<T>` | (sync dispatch, no await) | `worker.init().get()` |
+| C++23 | `FrameTask<T>` | `co_await __kernel(e)` | `worker.init().get()` |
+
+### Java — interface-only async
+
+Java has no native `async`/`await` keyword. The dispatch chain stays
+synchronous; only the *public* interface methods are marked async, and
+they wrap their result in `CompletableFuture.completedFuture(...)` at
+return. This keeps the internal call graph tight (no `.thenCompose(...)`
+chains through `__kernel` → `__router` → `_state_X`) while exposing
+a future-shaped API. Implemented in
+`system_codegen.rs::make_java_interface_async`, which runs instead of
+the generic `make_system_async` for Java.
+
+Callers: `String s = worker.get_status().get();`
+
+### C++ — FrameTask<T> coroutines
+
+C++23 async uses a self-contained coroutine promise type emitted at
+file scope (header-guarded `FRAME_TASK_PRELUDE` in `backends/cpp.rs`)
+before any async class:
+
+```cpp
+template <typename T>
+struct FrameTask {
+    struct promise_type {
+        T value_{};
+        std::exception_ptr err_;
+        FrameTask get_return_object() noexcept { ... }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        template <typename U> void return_value(U&& v) { ... }
+        void unhandled_exception() noexcept { ... }
+    };
+    // move-only handle management + get() accessor
+    T get() { ... }          // caller extracts here
+    bool await_ready() const noexcept { ... }
+    T await_resume() { ... }
+};
+template <> struct FrameTask<void> { /* return_void specialization */ };
+```
+
+Design notes:
+
+- **`suspend_never` initial** — the coroutine body starts running as
+  soon as it's constructed. There's no scheduler involved; Frame's
+  state machine has no true async I/O, so `co_await` just threads
+  return values through nested coroutines.
+- **`suspend_always` final** — the handle lives until `.get()` / the
+  destructor, so the caller can extract the return value after
+  `co_return`.
+- **Post-pass `rewrite_return_to_co_return`** — the state-dispatch
+  and frame-expansion emitters sprinkle plain `return;` / `return expr;`
+  at transition/forward sites (~20 emit points). Plain `return` inside
+  a coroutine is ill-formed, so the Cpp backend rewrites each one to
+  `co_return` before emitting the method body.
+- **Multi-@@system files** — the `#ifndef FRAME_TASK_H` guard prevents
+  template redefinition when more than one async class lives in the
+  same translation unit (e.g. `33_ai_agent.fcpp`).
+- **Target flag** — C++ target must compile with `-std=c++23` (or
+  C++20+). Framec accepts `cpp`, `cpp_17`, `cpp_20`, `cpp_23` as
+  aliases for the Cpp backend.
+
+### C — double-return marshalling
+
+The C `FrameContext._return` slot is a `void*`. Integer and pointer
+return values round-trip cleanly through `(intptr_t)` casts; doubles
+don't — `(intptr_t)(3.14)` truncates the fractional part. For handlers
+with `float`/`double` return types the runtime emitter (`runtime.rs`)
+emits per-system helpers:
+
+```c
+static inline void* Sys_pack_double(double v) {
+    void* p = 0;
+    memcpy(&p, &v, sizeof(double));
+    return p;
+}
+static inline double Sys_unpack_double(void* p) {
+    double d;
+    memcpy(&d, &p, sizeof(double));
+    return d;
+}
+```
+
+Emit sites (`state_dispatch.rs`, `frame_expansion.rs`,
+`interface_gen.rs`) branch on the handler's declared return type via
+`HandlerContext.current_return_type`, falling back to `(void*)(intptr_t)`
+for non-double types. Safe on every 64-bit target (both `void*` and
+`double` are 8 bytes).
+
+The same C backend also now carries pointer-typed parameters through
+state args (`fmt_bind_param`) and event args (`fmt_unpack`) — any type
+ending in `*` is emitted as-is instead of being cast to `int`
+through `intptr_t`.
+
+### Erlang — @@:self via frame_dispatch__
+
+Erlang's `@@:self.method(args)` routes through the already-generated
+`frame_dispatch__` helper, which invokes the current state function
+directly (bypassing `gen_statem:call`, which would deadlock on
+`self()`) and extracts the reply action:
+
+```erlang
+Baseline = element(2, frame_dispatch__(get_base, [], Data)),
+```
+
+**Known limitation:** `frame_dispatch__` returns `{NewData, RetVal}`.
+The current expansion takes only `element(2, ...)`, dropping
+`NewData` — so a state transition inside a @@:self-called handler is
+lost. Pure-query @@:self (the case exercised by `39_self_call.ferl`)
+works end-to-end. The transition-guard scenarios in the Python/Go
+versions of the `@@:self` tests remain `@@skip`'d on Erlang; fixing
+them requires a compile-time rewrite pass that renames `Data` →
+`Data1` → `Data2` after each dispatch call in the handler body.
+
+---
+
 ## GraphViz Pipeline
 
 GraphViz bypasses the `CodegenNode` IR (designed for imperative code, wrong abstraction for graphs). Instead:

@@ -62,7 +62,7 @@ Required. Must appear before `@@system`. Specifies the target language.
 | `javascript` | JavaScript | | `kotlin` | Kotlin |
 | `rust` | Rust | | `swift` | Swift |
 | `c` | C (C11) | | `ruby` | Ruby |
-| `cpp_17` | C++17 | | `erlang` | Erlang |
+| `cpp_23` | C++ (≥ C++20 for async) | | `erlang` | Erlang |
 | `java` | Java | | `lua` | Lua |
 | `csharp` | C# | | `dart` | Dart |
 | `graphviz` | GraphViz DOT | | `gdscript` | GDScript |
@@ -855,15 +855,33 @@ actions:
     }
 ```
 
-If ANY interface method is `async`, the entire dispatch chain becomes async. For async systems, a two-phase init is required: `s = @@System()` (sync), then `await s.init()` (async).
+If ANY interface method is `async`, the entire dispatch chain becomes async (with a couple of per-language carve-outs noted below). Async systems use a two-phase init: `s = @@System()` (sync construct), then `await s.init()` (async — fires the `$>` enter event). Swift is the exception: `init` is a reserved keyword, so the async entry point is named `initAsync()`.
 
-| Language | Supported | Notes |
-|----------|-----------|-------|
-| Python | Yes | `async def` + `await` |
-| TypeScript | Yes | `async` + `await`, `Promise<T>` returns |
-| Rust | Yes | `async fn` + `.await`, boxed futures for recursion |
-| C | No | Warning, `async` ignored |
-| Go, Java 21+ | Not needed | Concurrency is transparent |
+| Target | Supported | Mechanism | Caller pattern |
+|---|---|---|---|
+| Python | Yes | `async def` + `await` | `asyncio.run(main())` |
+| TypeScript | Yes | `async` + `await`, `Promise<T>` | `await worker.get_status()` |
+| JavaScript | Yes | `async` + `await`, `Promise<T>` | `await worker.get_status()` |
+| Rust | Yes | `async fn` + `.await`, boxed futures for recursion | runtime-dependent (tokio / async-std) |
+| Dart | Yes | `Future<T> foo() async` + `await` | `await worker.get_status()` |
+| GDScript | Yes | bare `await` on dispatch calls (no keyword) | `await worker.get_status()` |
+| Kotlin | Yes | `suspend fun` — suspend→suspend calls are bare, no `await` keyword | `runBlocking { worker.get_status() }` |
+| Swift | Yes | `func foo() async -> T`; async entry is `initAsync()` (not `init()`) | `Task { await worker.get_status() }` |
+| C# | Yes | `async Task<T>` | `await worker.get_status()` (inside an async method) |
+| Java | Yes | `CompletableFuture<T>` on the public interface only — internal dispatch (`__kernel`, `__router`, `_state_X`) stays synchronous. Bodies run sync and wrap the result via `CompletableFuture.completedFuture(...)`. | `worker.get_status().get()` |
+| C++ | Yes (C++23) | `FrameTask<T>` coroutine promise emitted header-guarded at file scope. `suspend_never` initial + `suspend_always` final — bodies run sync until a real `co_await`; callers extract via `.get()`. | `worker.get_status().get()` |
+| C | No | No native async/await. `async` on an interface method is a framec error (the test environment marks these with `@@skip`). | — |
+| Go | No | No `async`/`await` keyword. Goroutines + channels model concurrency differently. | — |
+| PHP | No | No native async. Fibers (PHP 8.1+) exist but framec has no PHP fiber backend. | — |
+| Ruby | No | No native async. Fibers/Async gem exist but framec has no Ruby fiber backend. | — |
+| Lua | No | No native async. Coroutines exist but framec has no Lua coroutine backend. | — |
+| Erlang | No | gen_statem is a one-color functional async model — `async` isn't applicable. | — |
+
+**Notes:**
+
+- **Kotlin** is the one supported language that does *not* take an `await` keyword on internal dispatch calls — a `suspend fun` calling another `suspend fun` is bare syntax. This is handled by the framec backend.
+- **Java** (no native async/await) uses `CompletableFuture<T>` for the public interface only; the dispatch chain stays sync so the call graph doesn't explode through `.thenCompose(...)`. Net cost: callers `.get()`.
+- **C++** target must be `cpp_23` (the default `cpp`/`cpp_17` aliases also work, but the compiler needs ≥ C++20 for coroutines — see `framepiler_design.md` for the `FrameTask<T>` model).
 
 ---
 

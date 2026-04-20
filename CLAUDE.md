@@ -9,7 +9,7 @@ The framepiler — Frame's transpiler. Frame is a DSL for state machines that tr
 ```bash
 cargo build                     # Debug build
 cargo build --release           # Release build
-cargo test                      # 244 unit tests
+cargo test                      # 370 unit tests
 cargo clippy -- -D warnings     # Lint
 cargo fmt --check               # Format check
 ```
