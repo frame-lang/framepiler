@@ -2653,7 +2653,7 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", index),
                 TargetLanguage::Dart => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", index),
                 TargetLanguage::C => format!("{}", index),
-                TargetLanguage::Rust => super::rust_system::rust_context_param(index),
+                TargetLanguage::Rust => super::rust_system::rust_context_param(&key),
                 TargetLanguage::Cpp => format!("{}", index),
                 TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get({})", index),
                 TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._event._parameters[{}]", index),

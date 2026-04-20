@@ -622,15 +622,15 @@ pub(crate) fn generate_rust_state_dispatch(
                         param.name, idx
                     ),
                     "i64" | "i32" | "isize" => format!(
-                        "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).copied().unwrap_or_default();\n",
-                        param.name, param_type, idx, param_type
+                        "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
+                        param.name, param_type, idx
                     ),
                     "f64" | "f32" => format!(
-                        "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).copied().unwrap_or_default();\n",
-                        param.name, param_type, idx, param_type
+                        "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
+                        param.name, param_type, idx
                     ),
                     "bool" => format!(
-                        "        let {}: bool = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<bool>()).copied().unwrap_or_default();\n",
+                        "        let {}: bool = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
                         param.name, idx
                     ),
                     _ => format!(
@@ -773,7 +773,7 @@ pub(crate) fn generate_rust_interface_body(
         format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name)
     } else {
         let param_items: Vec<String> = method.params.iter()
-            .map(|p| format!("Box::new({}.clone()) as Box<dyn std::any::Any>", p.name))
+            .map(|p| format!("Box::new({}.to_string()) as Box<dyn std::any::Any>", p.name))
             .collect();
         let mut s = format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name);
         s.push_str(&format!("__e.parameters = vec![{}];\n", param_items.join(", ")));
@@ -1056,9 +1056,11 @@ pub(crate) fn rust_event_message() -> String {
     "__e.message.clone()".to_string()
 }
 
-/// `@@:params[key]` — context parameter access
-pub(crate) fn rust_context_param(index: usize) -> String {
-    format!("{}", index)
+/// `@@:params[key]` — context parameter access.
+/// In Rust, handler params are bound as typed locals in scope,
+/// so @@:params.name just references the local variable directly.
+pub(crate) fn rust_context_param(key: &str) -> String {
+    key.to_string()
 }
 
 /// `@@:data[key]` read — context data access with downcast
