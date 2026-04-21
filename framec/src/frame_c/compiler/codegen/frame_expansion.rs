@@ -3588,14 +3588,22 @@ fn generate_pop_transition(
         TargetLanguage::Graphviz => unreachable!(),
     }
 
-    // Fresh enter_args: clear + write (RFC-0008 replace semantics, positional append)
+    // Fresh enter_args: clear + write (RFC-0008 replace semantics, positional append).
+    // The arg expression arrives straight from the Frame source — `$.items`,
+    // `self.field`, `@@:params.name` and friends are Frame sigils that the
+    // standard expression expander resolves to language-specific accessors
+    // (e.g. `$.items` → `__sv_comp.state_vars["items"]` in Python). Without
+    // this expansion pop-args like `-> ($.items) pop$` would emit the raw
+    // sigil into native code and blow up at parse time.
     if let Some(ref enter) = enter_args {
         for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-            let value = if let Some(eq_pos) = arg.find('=') {
+            let raw_value = if let Some(eq_pos) = arg.find('=') {
                 arg[eq_pos + 1..].trim()
             } else {
                 arg
             };
+            let value_owned = expand_expression(raw_value, lang, ctx);
+            let value = value_owned.as_str();
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
                     code.push_str(&format!(

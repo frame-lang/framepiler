@@ -5226,6 +5226,244 @@ if __name__ == '__main__':
 
 -----
 
+## Scanner and Parser Recipes
+
+The next two recipes stand alone as a pair: a lexical scanner and a pushdown parser, composed to form a minimal "Frame as parser generator" pipeline. They answer the Ragel-style question — *can Frame do what a dedicated scanner/parser generator does?* — with two small systems totaling fewer than a hundred Frame lines. Every feature used is already in play elsewhere in the cookbook; the scanner uses state variables and `@@:self` for delimiter replay, the parser uses `push$` / `pop$` as a call stack.
+
+-----
+
+## 53. Byte Scanner — Tokenize a Simple Language
+
+**Problem:** Tokenize an input string into identifiers, numbers, strings, and punctuation — the scanning half of a parser. The input `set x = 42 "hello"` should emit:
+
+```
+IDENT(set) IDENT(x) PUNCT(=) NUMBER(42) STRING(hello) EOF
+```
+
+Scanners are the classic state-machine workload. Frame handles it naturally because every scanner is a state machine: you sit in a mode (`$Start`, `$InIdent`, `$InNumber`, `$InString`), consume a byte, decide whether to stay, emit, or change modes, and loop.
+
+```frame
+@@target python_3
+
+@@system Scanner {
+    interface:
+        feed(ch: str)
+        eof()
+        tokens(): list
+
+    machine:
+        $Start {
+            feed(ch: str) {
+                if ch.isalpha():
+                    self.buf = ch
+                    -> $InIdent
+                elif ch.isdigit():
+                    self.buf = ch
+                    -> $InNumber
+                elif ch == '"':
+                    self.buf = ""
+                    -> $InString
+                elif ch.isspace():
+                    return
+                else:
+                    self.emit("PUNCT", ch)
+            }
+            eof() {
+                self.emit("EOF", "")
+            }
+            tokens(): list {
+                @@:(self.out)
+            }
+        }
+
+        $InIdent {
+            feed(ch: str) {
+                if ch.isalnum() or ch == "_":
+                    self.buf = self.buf + ch
+                else:
+                    self.emit("IDENT", self.buf)
+                    -> $Start
+                    @@:self.feed(ch)      # replay the delimiter byte
+            }
+            eof() {
+                self.emit("IDENT", self.buf)
+                self.emit("EOF", "")
+            }
+        }
+
+        $InNumber {
+            feed(ch: str) {
+                if ch.isdigit():
+                    self.buf = self.buf + ch
+                else:
+                    self.emit("NUMBER", self.buf)
+                    -> $Start
+                    @@:self.feed(ch)
+            }
+            eof() {
+                self.emit("NUMBER", self.buf)
+                self.emit("EOF", "")
+            }
+        }
+
+        $InString {
+            feed(ch: str) {
+                if ch == '"':
+                    self.emit("STRING", self.buf)
+                    -> $Start
+                else:
+                    self.buf = self.buf + ch
+            }
+            eof() {
+                self.emit("ERROR", "unterminated string")
+            }
+        }
+
+    actions:
+        emit(kind: str, lexeme: str) {
+            self.out.append(f"{kind}({lexeme})")
+        }
+
+    domain:
+        buf: str = ""
+        out: list = []
+}
+
+if __name__ == '__main__':
+    s = @@Scanner()
+    for ch in 'set x = 42 "hello"':
+        s.feed(ch)
+    s.eof()
+    print(s.tokens())
+    # ['IDENT(set)', 'IDENT(x)', 'PUNCT(=)', 'NUMBER(42)', 'STRING(hello)', 'EOF()']
+```
+
+**How it works:** Each mode is a state. `self.buf` is a domain variable — persistent across transitions so the accumulated token survives the move back to `$Start`. The tokenized output accumulates in `self.out` for the same reason.
+
+The characteristic bit is **delimiter replay**: when `$InIdent` sees a non-identifier byte, it has to emit the identifier *and* let that byte restart scanning as something else. `@@:self.feed(ch)` re-dispatches the byte through the kernel. Because the kernel processes the pending `-> $Start` transition before the replayed `feed` runs, the byte arrives in `$Start` and scanning resumes cleanly. This is the `@@:self` pattern (RFC-0006) — with the transition-guard semantics making the "replay after transition" form safe to write.
+
+**Features used:** domain variables for buffer/output persistence across transitions, `@@:self.method()` for byte replay after a transition, states-as-modes, `return` to stay in the current state without emission.
+
+-----
+
+## 54. Pushdown Parser — Nested Structure with `push$` / `pop$`
+
+**Problem:** Recognize balanced bracket structures like `[1, [2, 3], 4]` and rebuild the nested Python list. A flat scanner cannot do this — nested structures need a stack. Frame's `push$` / `pop$` give you one without writing a separate data structure.
+
+This recipe is the natural complement to #53: the scanner handles token recognition, the parser handles structure.
+
+```frame
+@@target python_3
+
+@@system BracketParser {
+    interface:
+        open()
+        close()
+        value(v: int)
+        result(): list
+
+    machine:
+        $Flat {
+            open() {
+                push$
+                -> $Nested
+            }
+            close() {
+                self.emit_error("unbalanced close at top level")
+            }
+            value(v: int) {
+                self.items.append(v)
+            }
+            result(): list {
+                @@:(self.items)
+            }
+        }
+
+        $Nested {
+            $.items: list
+
+            open() {
+                push$
+                -> $Nested
+            }
+            close() {
+                self.bubble_up($.items)
+                -> pop$
+            }
+            value(v: int) {
+                $.items.append(v)
+            }
+            result(): list {
+                @@:($.items)
+            }
+        }
+
+    actions:
+        bubble_up(items: list) {
+            # pop$ will restore _state_stack[-1] as the current compartment.
+            # If it's another $Nested, append our items as a sublist
+            # (preserves structure). If we're about to return to $Flat
+            # (the outermost frame), spread into the domain so the
+            # top-level list is flat at depth 0.
+            if len(self._state_stack) > 0:
+                parent = self._state_stack[-1]
+                if "items" in parent.state_vars:
+                    parent.state_vars["items"].append(items)
+                else:
+                    self.items.extend(items)
+            else:
+                self.items.extend(items)
+        }
+        emit_error(msg: str) {
+            print(f"parse error: {msg}")
+        }
+
+    domain:
+        items: list = []
+}
+
+if __name__ == '__main__':
+    p = @@BracketParser()
+    # Input: [1, [2, 3], 4]
+    p.open()
+    p.value(1)
+    p.open()
+    p.value(2)
+    p.value(3)
+    p.close()            # inner list [2, 3] bubbles into outer $Nested
+    p.value(4)
+    p.close()            # full [1, [2, 3], 4] bubbles out to $Flat's domain
+    print(p.result())
+    # [1, [2, 3], 4]
+```
+
+**How it works:** Each `open()` pushes the current compartment and enters a fresh `$Nested`. The new compartment has its own `$.items` (per-compartment state variable, empty by default for the declared `list` type), so sibling nested lists never alias. When `close()` fires, the action `bubble_up($.items)` delivers the collected list to the compartment that `pop$` is about to restore — peeked via `self._state_stack[-1]` — and only then does the transition happen. `$Nested → $Nested` appends the sub-list as a single element (preserving nesting); `$Nested → $Flat` spreads into the domain list (so the outer bracket pair contributes its contents directly, not as one wrapped element).
+
+The shape of the code is the point: `push$` is `call`, `pop$` is `ret`, the compartment is the activation record, `$.items` is a local. Frame's state stack is a proper pushdown automaton — exactly what's needed to recognize nested grammars that regular state machines (flat ones, like #53) cannot.
+
+**Features used:** `push$` for activation records, `-> pop$` for return, typed per-state variable (`$.items: list`) for compartment-local state, action reading the saved compartment via `self._state_stack[-1]` for cross-frame data transfer.
+
+### Running #53 and #54 Together
+
+```python
+src = '[1, [2, 3], 4]'
+s = Scanner()
+for ch in src: s.feed(ch)
+s.eof()
+
+p = BracketParser()
+for tok in s.tokens():
+    if tok.startswith('PUNCT(['):      p.open()
+    elif tok.startswith('PUNCT(]'):    p.close()
+    elif tok.startswith('NUMBER('):    p.value(int(tok[7:-1]))
+print(p.result())
+# [1, [2, 3], 4]
+```
+
+Two small Frame systems, composed, produce a scanner + parser pipeline in plain dependency-free Python — and in any of the other sixteen target languages with no codegen changes.
+
+-----
+
 ## Feature Coverage
 
 |Feature                      |Recipes 1-22|Recipes 23-33   |EIP (34-45)         |Stress (46-49)       |Deferred (50-52)     |
