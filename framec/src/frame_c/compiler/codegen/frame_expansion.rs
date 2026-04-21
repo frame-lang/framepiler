@@ -1315,13 +1315,22 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Php => {
                         let mut code = String::new();
+                        // PHP params sigil-rewrite: bare identifiers referencing
+                        // current handler params (e.g. `sig`) must be `$sig`.
+                        let current_params = ctx
+                            .event_param_names
+                            .get(&ctx.event_name)
+                            .cloned()
+                            .unwrap_or_default();
+                        let php_fix =
+                            |expr: &str| php_prefix_params(expr, &current_params);
 
                         // Store exit_args in current compartment (positional append)
                         if let Some(ref exit) = exit_str {
                             for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
                                 code.push_str(&format!(
                                     "{}$this->__compartment->exit_args[] = {};\n",
-                                    indent_str, arg
+                                    indent_str, php_fix(arg)
                                 ));
                             }
                         }
@@ -1338,7 +1347,7 @@ pub(crate) fn generate_frame_expansion(
                                 };
                                 code.push_str(&format!(
                                     "{}$__compartment->state_args[] = {};\n",
-                                    indent_str, value
+                                    indent_str, php_fix(value)
                                 ));
                             }
                         }
@@ -1348,7 +1357,7 @@ pub(crate) fn generate_frame_expansion(
                             for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
                                 code.push_str(&format!(
                                     "{}$__compartment->enter_args[] = {};\n",
-                                    indent_str, arg
+                                    indent_str, php_fix(arg)
                                 ));
                             }
                         }
@@ -2122,15 +2131,39 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Php => {
+                    // For PHP, combine interface-event params, enter-handler
+                    // params, and exit-handler params since any of them may
+                    // be referenced by name on the RHS of a state var write
+                    // (e.g. `$.signum = sig` inside `$>(sig: str)`).
+                    let mut current_params: Vec<String> = ctx
+                        .event_param_names
+                        .get(&ctx.event_name)
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some(ep) = ctx.state_enter_param_names.get(&ctx.state_name) {
+                        for p in ep {
+                            if !current_params.contains(p) {
+                                current_params.push(p.clone());
+                            }
+                        }
+                    }
+                    if let Some(ep) = ctx.state_exit_param_names.get(&ctx.state_name) {
+                        for p in ep {
+                            if !current_params.contains(p) {
+                                current_params.push(p.clone());
+                            }
+                        }
+                    }
+                    let rhs = php_prefix_params(&expanded_expr, &current_params);
                     if ctx.use_sv_comp {
                         format!(
                             "{}$__sv_comp->state_vars[\"{}\"] = {};",
-                            indent_str, var_name, expanded_expr
+                            indent_str, var_name, rhs
                         )
                     } else {
                         format!(
                             "{}$this->__compartment->state_vars[\"{}\"] = {};",
-                            indent_str, var_name, expanded_expr
+                            indent_str, var_name, rhs
                         )
                     }
                 }
@@ -3103,6 +3136,90 @@ pub(crate) fn generate_frame_expansion(
             }
         }
     }
+}
+
+/// PHP helper: prefix bare identifiers matching the current handler's declared
+/// params with `$`. PHP variables are sigil-required — `sig` must be `$sig`.
+///
+/// The Frame parser captures expression text (enter args, state-var RHS, etc.)
+/// verbatim, so `-> (sig) $State` and `$.signum = sig` leak `sig` into the
+/// generated PHP where it's interpreted as an undefined constant. This walks
+/// the expression outside of string literals and rewrites bare-word occurrences
+/// of known handler params to `$param`.
+///
+/// Safe under:
+///   - string literals (skipped)
+///   - already-prefixed `$foo` (not doubled)
+///   - method/property access `->foo`, `::foo` (not prefixed — `foo` is a
+///     member name, not a variable)
+///   - member calls on `$this` (already has `$`)
+pub(crate) fn php_prefix_params(expr: &str, params: &[String]) -> String {
+    if params.is_empty() {
+        return expr.to_string();
+    }
+    let bytes = expr.as_bytes();
+    let mut out = String::with_capacity(expr.len() + 4);
+    let mut i = 0;
+    let mut in_string: Option<u8> = None;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(quote) = in_string {
+            out.push(c as char);
+            if c == quote && (i == 0 || bytes[i - 1] != b'\\') {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' || c == b'\'' {
+            in_string = Some(c);
+            out.push(c as char);
+            i += 1;
+            continue;
+        }
+        // Identifier start: lowercase alpha or underscore, not already
+        // preceded by `$`, `->`, `::`, or an ident char (i.e. part of a
+        // larger token).
+        let is_ident_start = (c.is_ascii_lowercase() || c == b'_')
+            && !(i > 0 && (bytes[i - 1] == b'$' || is_ident_char(bytes[i - 1])))
+            && !(i >= 2 && bytes[i - 1] == b'>' && bytes[i - 2] == b'-')
+            && !(i >= 2 && bytes[i - 1] == b':' && bytes[i - 2] == b':');
+        if is_ident_start {
+            let start = i;
+            while i < bytes.len() && is_ident_char(bytes[i]) {
+                i += 1;
+            }
+            let ident = &expr[start..i];
+            // Skip PHP keywords
+            let is_keyword = matches!(
+                ident,
+                "true" | "false" | "null" | "and" | "or" | "xor" | "new" | "return"
+                | "if" | "else" | "elseif" | "while" | "for" | "foreach" | "do"
+                | "switch" | "case" | "break" | "continue" | "function" | "class"
+                | "public" | "private" | "protected" | "static" | "use" | "namespace"
+                | "as" | "throw" | "try" | "catch" | "finally" | "instanceof"
+            );
+            // Next non-space char: if it's `(`, this is a function call,
+            // not a variable reference — leave it alone.
+            let mut j = i;
+            while j < bytes.len() && bytes[j] == b' ' {
+                j += 1;
+            }
+            let followed_by_call = j < bytes.len() && bytes[j] == b'(';
+            if !is_keyword && !followed_by_call && params.iter().any(|p| p == ident) {
+                out.push('$');
+            }
+            out.push_str(ident);
+            continue;
+        }
+        out.push(c as char);
+        i += 1;
+    }
+    out
+}
+
+fn is_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Extract bracketed key from syntax like "@@:data[key]" or "@@:params[key]"

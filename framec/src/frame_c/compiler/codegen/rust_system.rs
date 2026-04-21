@@ -104,6 +104,14 @@ pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]
         super::system_codegen::make_system_async(&mut class_node, &system.name, lang);
     }
 
+    // Auto-clone non-Copy domain fields passed by value to Frame calls.
+    // See `apply_rust_auto_clone` for semantics — this closes the borrow-check
+    // hole where `self.do_resolve(self.name)` with a String `name` would be
+    // rejected by rustc.
+    let call_targets = rust_frame_call_targets(system);
+    let non_copy_fields = rust_non_copy_domain_fields(system);
+    apply_rust_auto_clone(&mut class_node, &call_targets, &non_copy_fields);
+
     class_node
 }
 
@@ -1411,4 +1419,404 @@ fn rust_json_extract_unwrap(var_name: &str, var_type: &Type) -> String {
             var_name
         ),
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Rust auto-clone for non-Copy domain fields passed to Frame calls
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Frame handlers and actions are written as native target-language code, but
+// the constructs `self.<action>(...)`, `self.<operation>(...)`, and
+// `self.<interface_method>(...)` are Frame-structural: they name Frame-declared
+// callables and framec owns their emission semantics (the Erlang backend, for
+// instance, rewrites `self.next_pid()` → `next_pid(Data)`).
+//
+// Rust's ownership semantics bite at the arg boundary: `self.do_resolve(self.name)`
+// moves `self.name` out of `self`, which the borrow checker rejects because
+// `self` is already mutably borrowed for the outer method call. The idiomatic
+// user-written fix is `self.name.clone()`.
+//
+// Rather than ask recipe authors to write `.clone()` at every Frame-call site
+// that passes a non-Copy domain field — and have to reason about when it's
+// needed vs. superfluous — we apply the rewrite structurally here. It matches
+// the precedent set by the Erlang classifier for `self.<action>(...)` rewrites.
+//
+// Scope of rewrite:
+//   • Triggers only when the call target is a declared Frame action,
+//     operation, or interface method of this system.
+//   • Rewrites only arguments of the form `self.<field>` (exactly, after
+//     trimming) where `<field>` is a domain field with a non-Copy type.
+//   • Leaves alone: literals, arithmetic expressions, already-cloned args,
+//     `&self.field` borrows, and any `self.field` passed to non-Frame calls.
+//
+// The tokenizer walks char-by-char, skipping string literals and line
+// comments, and balances parens/brackets/braces when splitting the arg list.
+
+/// Maps a Frame type string to whether the generated Rust type is `Copy`.
+/// Conservative: unknown or custom types are assumed non-Copy.
+fn rust_type_is_copy(type_str: &str) -> bool {
+    let t = type_str.trim();
+    matches!(
+        t,
+        "int"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "float"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "boolean"
+            | "char"
+            | "()"
+            | "number"
+    )
+}
+
+/// Collect the names of all domain fields whose declared type maps to a
+/// non-Copy Rust type. These are the fields that need `.clone()` when passed
+/// by value to a Frame call.
+fn rust_non_copy_domain_fields(system: &SystemAst) -> Vec<String> {
+    system
+        .domain
+        .iter()
+        .filter_map(|var| {
+            let type_str = match &var.var_type {
+                Type::Custom(s) => s.clone(),
+                Type::Unknown => return None,
+            };
+            if rust_type_is_copy(&type_str) {
+                None
+            } else {
+                Some(var.name.clone())
+            }
+        })
+        .collect()
+}
+
+/// Collect the names of every Frame-callable from this system — actions,
+/// operations, and interface methods. These are the call targets where an
+/// auto-clone rewrite is in scope.
+fn rust_frame_call_targets(system: &SystemAst) -> Vec<String> {
+    let mut names = Vec::new();
+    for a in &system.actions {
+        names.push(a.name.clone());
+    }
+    for o in &system.operations {
+        names.push(o.name.clone());
+    }
+    for m in &system.interface {
+        names.push(m.name.clone());
+    }
+    names
+}
+
+/// Post-pass that walks a generated Rust `CodegenNode::Class` tree and applies
+/// `rust_auto_clone_in_code` to every `NativeBlock` in every method body.
+fn apply_rust_auto_clone(
+    class: &mut CodegenNode,
+    call_targets: &[String],
+    non_copy_fields: &[String],
+) {
+    if non_copy_fields.is_empty() || call_targets.is_empty() {
+        return;
+    }
+    if let CodegenNode::Class { methods, .. } = class {
+        for method in methods.iter_mut() {
+            if let CodegenNode::Method { body, .. } = method {
+                for stmt in body.iter_mut() {
+                    rewrite_native_blocks_in_node(stmt, call_targets, non_copy_fields);
+                }
+            }
+        }
+    }
+}
+
+fn rewrite_native_blocks_in_node(
+    node: &mut CodegenNode,
+    call_targets: &[String],
+    non_copy_fields: &[String],
+) {
+    match node {
+        CodegenNode::NativeBlock { code, .. } => {
+            *code = rust_auto_clone_in_code(code, call_targets, non_copy_fields);
+        }
+        CodegenNode::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            for stmt in then_block.iter_mut() {
+                rewrite_native_blocks_in_node(stmt, call_targets, non_copy_fields);
+            }
+            if let Some(else_b) = else_block {
+                for stmt in else_b.iter_mut() {
+                    rewrite_native_blocks_in_node(stmt, call_targets, non_copy_fields);
+                }
+            }
+        }
+        CodegenNode::While { body, .. } | CodegenNode::For { body, .. } => {
+            for stmt in body.iter_mut() {
+                rewrite_native_blocks_in_node(stmt, call_targets, non_copy_fields);
+            }
+        }
+        CodegenNode::Match { arms, .. } => {
+            for arm in arms.iter_mut() {
+                for stmt in arm.body.iter_mut() {
+                    rewrite_native_blocks_in_node(stmt, call_targets, non_copy_fields);
+                }
+            }
+        }
+        CodegenNode::Method { body, .. } => {
+            for stmt in body.iter_mut() {
+                rewrite_native_blocks_in_node(stmt, call_targets, non_copy_fields);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk a block of native Rust code and rewrite args of Frame-call sites.
+///
+/// For every `self.<target>(<args>)` where `<target>` is in `call_targets`,
+/// split `<args>` on top-level commas (balanced across parens/brackets/braces
+/// and ignoring commas inside string literals), and for each arg whose trimmed
+/// text exactly matches `self.<field>` with `<field>` in `non_copy_fields`,
+/// rewrite to `self.<field>.clone()`.
+fn rust_auto_clone_in_code(
+    code: &str,
+    call_targets: &[String],
+    non_copy_fields: &[String],
+) -> String {
+    let bytes = code.as_bytes();
+    let mut out = String::with_capacity(code.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip string and char literals.
+        if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let quote = bytes[i];
+            out.push(quote as char);
+            i += 1;
+            while i < bytes.len() {
+                let c = bytes[i];
+                out.push(c as char);
+                i += 1;
+                if c == b'\\' && i < bytes.len() {
+                    out.push(bytes[i] as char);
+                    i += 1;
+                    continue;
+                }
+                if c == quote {
+                    break;
+                }
+            }
+            continue;
+        }
+        // Skip line comments.
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+            continue;
+        }
+        // Try to match `self.<target>(`
+        if looks_like_self_call(bytes, i) {
+            let target_start = i + 5; // len("self.")
+            let (target_end, paren_pos) = match find_call_target(bytes, target_start) {
+                Some(pair) => pair,
+                None => {
+                    out.push(bytes[i] as char);
+                    i += 1;
+                    continue;
+                }
+            };
+            let target = &code[target_start..target_end];
+            if !call_targets.iter().any(|t| t == target) {
+                out.push(bytes[i] as char);
+                i += 1;
+                continue;
+            }
+            // Find matching close paren.
+            let close = match find_matching_paren(bytes, paren_pos) {
+                Some(p) => p,
+                None => {
+                    out.push(bytes[i] as char);
+                    i += 1;
+                    continue;
+                }
+            };
+            // Emit `self.<target>(`
+            out.push_str(&code[i..paren_pos + 1]);
+            // Split args, rewrite each if it matches the non-copy pattern.
+            let args_src = &code[paren_pos + 1..close];
+            let rewritten_args = split_top_level_args(args_src)
+                .into_iter()
+                .map(|arg| rewrite_arg_if_non_copy_field(&arg, non_copy_fields))
+                .collect::<Vec<_>>()
+                .join(",");
+            out.push_str(&rewritten_args);
+            out.push(')');
+            i = close + 1;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn looks_like_self_call(bytes: &[u8], i: usize) -> bool {
+    // Need "self." here, and not preceded by an ident char (so "myself."
+    // doesn't match).
+    if i + 5 > bytes.len() {
+        return false;
+    }
+    if &bytes[i..i + 5] != b"self." {
+        return false;
+    }
+    if i > 0 {
+        let prev = bytes[i - 1];
+        if prev.is_ascii_alphanumeric() || prev == b'_' {
+            return false;
+        }
+    }
+    true
+}
+
+/// From a position right after `self.`, find the end of the identifier and
+/// the position of the `(` that starts the call. Skips whitespace between
+/// ident and `(`. Returns `None` if no call (`(`) follows the identifier.
+fn find_call_target(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
+    let mut end = start;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+        end += 1;
+    }
+    if end == start {
+        return None;
+    }
+    let mut j = end;
+    while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+        j += 1;
+    }
+    if j < bytes.len() && bytes[j] == b'(' {
+        Some((end, j))
+    } else {
+        None
+    }
+}
+
+/// Given the position of an opening `(`, return the position of its matching
+/// `)` at depth 0, or `None` if unbalanced. Ignores parens inside string
+/// literals.
+fn find_matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut i = open;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' || c == b'\'' {
+            let quote = c;
+            i += 1;
+            while i < bytes.len() {
+                let d = bytes[i];
+                if d == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                    continue;
+                }
+                if d == quote {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'(' {
+            depth += 1;
+        } else if c == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Split an argument-list string on top-level commas, preserving commas inside
+/// nested `()`, `[]`, `{}`, and inside string literals.
+fn split_top_level_args(src: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    let mut start = 0;
+    let mut depth = 0i32;
+    let mut in_string: Option<u8> = None;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(quote) = in_string {
+            if c == b'\\' && i + 1 < bytes.len() {
+                i += 2;
+                continue;
+            }
+            if c == quote {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'"' || c == b'\'' {
+            in_string = Some(c);
+            i += 1;
+            continue;
+        }
+        match c {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 => {
+                args.push(src[start..i].to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if start < src.len() {
+        args.push(src[start..].to_string());
+    } else if !src.is_empty() {
+        // Empty arg after a trailing comma — preserve as empty.
+        args.push(String::new());
+    }
+    args
+}
+
+/// If `arg` trimmed matches `self.<field>` exactly and `<field>` is in the
+/// non-Copy list, rewrite to `self.<field>.clone()`. Otherwise return as-is.
+fn rewrite_arg_if_non_copy_field(arg: &str, non_copy_fields: &[String]) -> String {
+    let trimmed = arg.trim();
+    // Preserve original whitespace around the arg so formatting stays intact.
+    let prefix_end = arg.len() - arg.trim_start().len();
+    let suffix_start = arg.trim_end().len() + prefix_end;
+    let prefix = &arg[..prefix_end];
+    let suffix = &arg[suffix_start..];
+    if let Some(rest) = trimmed.strip_prefix("self.") {
+        // Ensure rest is a bare ident (no further access like `.to_string()`
+        // or `.x.y` — those cases the user has already handled).
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            if non_copy_fields.iter().any(|f| f == rest) {
+                return format!("{}self.{}.clone(){}", prefix, rest, suffix);
+            }
+        }
+    }
+    arg.to_string()
 }

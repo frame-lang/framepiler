@@ -1186,6 +1186,89 @@ fn rewrite_mixed_case_arms(
     result
 }
 
+/// Post-process emitted handler lines to inject gen_statem reply tuples at
+/// orphan `__ReturnVal = "..."` leaves in **nested** case blocks (depth > 1).
+///
+/// `rewrite_mixed_case_arms` already handles the outermost case — for each
+/// top-level arm that doesn't transition, it injects a reply tuple. But it
+/// only descends one level deep. When a handler uses nested `if/else`
+/// (producing nested case blocks), the inner else branches that just set
+/// `__ReturnVal` without transitioning escape the rewriter and leak bare
+/// values into the gen_statem return, crashing with
+/// `bad_return_from_state_function`.
+///
+/// This pass handles the inner cases: finds every `__ReturnVal = <expr>`
+/// that sits at case nesting depth ≥ 2 AND is the final statement of its
+/// arm (followed by `end`, `; false ->`, or `; _ ->` with no transition or
+/// reply tuple in between), and rewrites it to:
+///     __ReturnVal = <expr>,
+///     {keep_state, <Data>, [{reply, From, __ReturnVal}]}
+///
+/// Depth-1 orphans are left alone because `rewrite_mixed_case_arms` handles
+/// them via its top-level arm-boundary injection.
+fn erlang_inject_orphan_reply_tuples(lines: &[String], default_data: &str) -> Vec<String> {
+    let mut result: Vec<String> = Vec::with_capacity(lines.len());
+    let mut depth: i32 = 0;
+
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+
+        // Track case nesting depth.
+        let opens_case = (t.starts_with("case ") || t.starts_with("case("))
+            && (t.ends_with(" of") || t.ends_with(" of,"));
+
+        // `end` / `end,` / `end;` closes the innermost case. We bump depth
+        // down AFTER emitting so the `end` line is attributed to its case.
+        let closes_case = t == "end" || t == "end," || t == "end;";
+
+        if opens_case {
+            depth += 1;
+        }
+
+        let is_orphan_candidate = t.starts_with("__ReturnVal = ")
+            && !t.ends_with(',')
+            && !t.ends_with(';');
+
+        if !is_orphan_candidate || depth < 2 {
+            result.push(line.clone());
+            if closes_case {
+                depth = (depth - 1).max(0);
+            }
+            continue;
+        }
+
+        // Look ahead: next non-blank line.
+        let mut j = i + 1;
+        while j < lines.len() && lines[j].trim().is_empty() {
+            j += 1;
+        }
+        let next_trimmed = lines.get(j).map(|s| s.trim()).unwrap_or("");
+        let arm_closes = next_trimmed == "end"
+            || next_trimmed == "end,"
+            || next_trimmed == "end;"
+            || next_trimmed.starts_with("; false")
+            || next_trimmed.starts_with("; _");
+
+        let already_has_reply = next_trimmed.starts_with("{keep_state,")
+            || next_trimmed.starts_with("{next_state,")
+            || next_trimmed.starts_with("frame_transition__(");
+
+        if arm_closes && !already_has_reply {
+            let lead_len = line.len() - line.trim_start().len();
+            let indent = &line[..lead_len];
+            result.push(format!("{}{},", indent, t));
+            result.push(format!(
+                "{}{{keep_state, {}, [{{reply, From, __ReturnVal}}]}}",
+                indent, default_data
+            ));
+        } else {
+            result.push(line.clone());
+        }
+    }
+
+    result
+}
+
 // ============================================================================
 
 pub(crate) fn generate_erlang_system(
@@ -1676,6 +1759,13 @@ pub(crate) fn generate_erlang_system(
                         &processed,
                         &to_snake_case(&state.name),
                     );
+                    // Inject gen_statem reply tuples at any orphan
+                    // `__ReturnVal = "..."` leaves (innermost else branches
+                    // of nested if/else that don't transition). Fixes the
+                    // "bad_return_from_state_function" crash when a handler
+                    // has a non-transitioning terminal case arm.
+                    let processed =
+                        erlang_inject_orphan_reply_tuples(&processed, &_final_data);
                     if !processed.is_empty() {
                         // Use structured case arm analysis when a case block exists
                         if let Some((classification, arms, case_start, case_end)) =
@@ -2066,11 +2156,18 @@ pub(crate) fn generate_erlang_system(
             let body_bytes = &source[body_span.start..body_span.end];
             let body_text = std::str::from_utf8(body_bytes).unwrap_or("    ok");
             let trimmed = body_text.trim();
-            let inner = if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            let inner_raw = if trimmed.starts_with('{') && trimmed.ends_with('}') {
                 trimmed[1..trimmed.len() - 1].trim()
             } else {
                 trimmed
             };
+            // Run `if {...} else {...}` → `case X of true -> ...; false -> ... end`
+            // conversion over the action body before the classifier pipeline.
+            // Handler bodies get this via erlang_transform_blocks at their
+            // emission sites; action bodies previously skipped it, causing
+            // malformed output for any action containing control flow.
+            let transformed = erlang_transform_blocks(inner_raw);
+            let inner = transformed.as_str();
             // Build param name mappings for capitalization
             let act_params: Vec<(&str, String)> = action
                 .params
@@ -2110,7 +2207,16 @@ pub(crate) fn generate_erlang_system(
                     && !last_line.starts_with("__")
                     && !last_line.is_empty()
                     && !last_line.starts_with("{")
-                    && !last_line.starts_with("ok");
+                    && !last_line.starts_with("ok")
+                    // A trailing case-block or control-flow closer is a
+                    // statement, not a value expression. Emit `{Data, ok}`
+                    // rather than trying to return `end` as a value.
+                    && last_line != "end"
+                    && last_line != "end,"
+                    && last_line != "end;"
+                    && !last_line.starts_with("; false")
+                    && !last_line.starts_with("; _")
+                    && !last_line.starts_with("true ->");
 
                 if last_is_value && processed.len() > 0 {
                     // Last expression is the return value — emit body up to last line,
