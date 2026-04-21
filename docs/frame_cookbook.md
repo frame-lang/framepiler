@@ -1180,8 +1180,6 @@ if __name__ == '__main__':
 
 ![21 state diagram](images/cookbook/21.svg)
 
-![21 state diagram](images/cookbook/21.svg)
-
 A task executor whose pool size and retry policy are set at construction time. Domain, state, and enter parameters flow through the constructor to initialize the machine.
 
 ```frame
@@ -1243,8 +1241,6 @@ if __name__ == '__main__':
 -----
 
 ## 22. Self-Calibrating Sensor (@@:self Interface Call)
-
-![22 state diagram](images/cookbook/22.svg)
 
 ![22 state diagram](images/cookbook/22.svg)
 
@@ -1318,8 +1314,6 @@ if __name__ == '__main__':
 -----
 
 ## 23. Vending Machine — Operations and System Params
-
-![23 state diagram](images/cookbook/23.svg)
 
 ![23 state diagram](images/cookbook/23.svg)
 
@@ -1414,8 +1408,6 @@ if __name__ == '__main__':
 
 ![24 state diagram](images/cookbook/24.svg)
 
-![24 state diagram](images/cookbook/24.svg)
-
 **Problem:** A circuit breaker where the failure counter resets each time we re-enter the closed state.
 
 ```frame
@@ -1492,8 +1484,6 @@ if __name__ == '__main__':
 
 ![25 state diagram](images/cookbook/25.svg)
 
-![25 state diagram](images/cookbook/25.svg)
-
 **Problem:** A token bucket rate limiter with a static utility function.
 
 ```frame
@@ -1548,8 +1538,6 @@ if __name__ == '__main__':
 -----
 
 ## 26. Thermostat — 3-Level HSM
-
-![26 state diagram](images/cookbook/26.svg)
 
 ![26 state diagram](images/cookbook/26.svg)
 
@@ -1632,8 +1620,6 @@ if __name__ == '__main__':
 -----
 
 ## 27. Deployment Pipeline — push$ and Enter Args
-
-![27 state diagram](images/cookbook/27.svg)
 
 ![27 state diagram](images/cookbook/27.svg)
 
@@ -1724,8 +1710,6 @@ if __name__ == '__main__':
 -----
 
 ## 28. Auth Flow — Managed Login/Session
-
-![28 state diagram](images/cookbook/28.svg)
 
 ![28 state diagram](images/cookbook/28.svg)
 
@@ -1869,8 +1853,6 @@ if __name__ == '__main__':
 
 ![29 state diagram](images/cookbook/29.svg)
 
-![29 state diagram](images/cookbook/29.svg)
-
 **Problem:** Different level types created per config. Re-entering `$InLevel` automatically swaps managers.
 
 ```frame
@@ -1976,8 +1958,6 @@ if __name__ == '__main__':
 
 ![30 state diagram](images/cookbook/30.svg)
 
-![30 state diagram](images/cookbook/30.svg)
-
 **Problem:** A long-running service where the constructor never returns. HSM provides shared quit logic.
 
 ```frame
@@ -2041,8 +2021,6 @@ if __name__ == '__main__':
 -----
 
 ## 31. Pipeline Processor — Kernel Loop Validation
-
-![31 state diagram](images/cookbook/31.svg)
 
 ![31 state diagram](images/cookbook/31.svg)
 
@@ -2133,8 +2111,6 @@ if __name__ == '__main__':
 
 ![32 state diagram](images/cookbook/32.svg)
 
-![32 state diagram](images/cookbook/32.svg)
-
 **Problem:** A system with operations for test inspection. `@@:system.state` is a read-only accessor — allowed in operations because it doesn't mutate the state machine.
 
 ```frame
@@ -2220,8 +2196,6 @@ if __name__ == '__main__':
 -----
 
 ## 33. AI Coding Agent — Capstone
-
-![33 state diagram](images/cookbook/33.svg)
 
 ![33 state diagram](images/cookbook/33.svg)
 
@@ -5234,6 +5208,8 @@ The next two recipes stand alone as a pair: a lexical scanner and a pushdown par
 
 ## 53. Byte Scanner — Tokenize a Simple Language
 
+![53 state diagram](images/cookbook/53.svg)
+
 **Problem:** Tokenize an input string into identifiers, numbers, strings, and punctuation — the scanning half of a parser. The input `set x = 42 "hello"` should emit:
 
 ```
@@ -5347,6 +5323,8 @@ The characteristic bit is **delimiter replay**: when `$InIdent` sees a non-ident
 -----
 
 ## 54. Pushdown Parser — Nested Structure with `push$` / `pop$`
+
+![54 state diagram](images/cookbook/54.svg)
 
 **Problem:** Recognize balanced bracket structures like `[1, [2, 3], 4]` and rebuild the nested Python list. A flat scanner cannot do this — nested structures need a stack. Frame's `push$` / `pop$` give you one without writing a separate data structure.
 

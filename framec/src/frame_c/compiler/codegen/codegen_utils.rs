@@ -299,7 +299,16 @@ pub(crate) fn expression_to_string(expr: &Expression, lang: TargetLanguage) -> S
             };
             format!("{}{}", op_str, expression_to_string(expr, lang))
         }
-        _ => "0".to_string(), // Fallback for complex expressions
+        // NativeExpr carries the source verbatim — used for target-specific
+        // literals (list/map/closure forms) that the Frame parser doesn't
+        // structurally model. State-var inits use this path for things like
+        // `$.items: list = [1, 2, 3]` — the bytes between `=` and the next
+        // separator are captured as-is and emitted unchanged. The previous
+        // fallback silently substituted `"0"` for anything non-primitive,
+        // which turned `[1, 2, 3]` into an int and looked like a typo in
+        // the generated code.
+        Expression::NativeExpr(code) => code.clone(),
+        _ => "0".to_string(), // Fallback for complex expressions (Call/Member/Index/Assign)
     }
 }
 

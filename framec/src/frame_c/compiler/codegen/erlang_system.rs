@@ -2081,8 +2081,22 @@ pub(crate) fn generate_erlang_system(
                 })
                 .collect();
             let lines: Vec<&str> = inner.lines().collect();
-            let (processed, final_data) =
-                erlang_process_body_lines_with_params(&lines, &action_names, "Data", &act_params);
+            // Pass `interface_names` so `@@:self.method(args)` calls inside
+            // an action body route through the classifier's `InterfaceCall`
+            // rewrite (`{DataN, Result} = frame_dispatch__(method, [args],
+            // DataPrev)`) rather than collapsing to `Data#data.method(args)`.
+            // Transition-guard wrapping is intentionally *not* applied at
+            // the action level — actions return `{Data, RetVal}` not a
+            // gen_statem tuple, and the calling handler's own guard picks
+            // up the new state after the action returns with the transitioned
+            // Data.
+            let (processed, final_data) = erlang_process_body_lines_full(
+                &lines,
+                &action_names,
+                &interface_names,
+                "Data",
+                &act_params,
+            );
             if processed.is_empty() {
                 // No body — return {Data, ok}
                 code.push_str("    {Data, ok}");
@@ -2172,6 +2186,58 @@ pub(crate) fn generate_erlang_system(
                     "ok".to_string()
                 } else {
                     l.to_string()
+                };
+                // `@@:self.method(args)` inside a non-static operation body
+                // expands (in frame_expansion.rs) to bare `self.method(args)`.
+                // Catch that shape BEFORE the blanket `self. → Data#data.`
+                // substitution below — otherwise `self.method(args)` would
+                // collapse to `Data#data.method(args)` (record-field access)
+                // and lose the dispatch. Routes through `frame_dispatch__`
+                // with Data-threading, matching the handler-level semantics.
+                // Static operations have no Data parameter and therefore
+                // no `@@:self` semantics — this branch only fires when
+                // `op.is_static == false`.
+                let l = if !op.is_static {
+                    let mut out = None;
+                    for iface in &interface_names {
+                        let pattern = format!("self.{}(", iface);
+                        if l.contains(&pattern) {
+                            data_bind_counter += 1;
+                            let prev = if data_bind_counter == 1 {
+                                "Data".to_string()
+                            } else {
+                                format!("Data{}", data_bind_counter - 1)
+                            };
+                            let new_var = format!("Data{}", data_bind_counter);
+                            let method_snake = to_snake_case(iface);
+                            let call_start = l.find(&pattern).unwrap() + pattern.len();
+                            let call_end = l.rfind(')').unwrap_or(l.len());
+                            let args = l[call_start..call_end].trim();
+                            let args_list = if args.is_empty() {
+                                "[]".to_string()
+                            } else {
+                                format!("[{}]", args)
+                            };
+                            let lhs = if let Some(eq_pos) = l.find(" = ") {
+                                let raw = l[..eq_pos].trim();
+                                let mut chars = raw.chars();
+                                match chars.next() {
+                                    None => "_".to_string(),
+                                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                                }
+                            } else {
+                                "_".to_string()
+                            };
+                            out = Some(format!(
+                                "{{{}, {}}} = frame_dispatch__({}, {}, {})",
+                                new_var, lhs, method_snake, args_list, prev
+                            ));
+                            break;
+                        }
+                    }
+                    out.unwrap_or(l)
+                } else {
+                    l
                 };
                 let l = l.replace("self.", "Data#data.");
                 // Detect domain field assignment: Data#data.field = value
