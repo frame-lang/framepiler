@@ -8099,7 +8099,7 @@ Operations (`get_offset()` and `is_reachable()`) provide read-only access to the
             $>() {
                 self.tcp_connect(self.host, self.port)
                 print(f"  [http] connecting to {self.host}:{self.port}")
-                -> $Idle
+                -> "tcp up" $Idle
             }
         }
 
@@ -8140,9 +8140,9 @@ Operations (`get_offset()` and `is_reachable()`) provide read-only access to the
                 self.content_length = content_length
                 self.received_body = ""
                 if content_length == 0:
-                    -> $ResponseComplete
+                    -> "empty body" $ResponseComplete
                 else:
-                    -> $ReceivingBody
+                    -> "body expected" $ReceivingBody
             }
             status(): str { @@:("awaiting response") }
             => $^
@@ -8164,9 +8164,9 @@ Operations (`get_offset()` and `is_reachable()`) provide read-only access to the
                 self.request_count = self.request_count + 1
                 print(f"  [http] response {self.response_status} complete ({len(self.received_body)} bytes)")
                 if self.keep_alive:
-                    -> $Idle
+                    -> "keep-alive" $Idle
                 else:
-                    -> $Closing
+                    -> "server close" $Closing
             }
             => $^
         }
@@ -8186,7 +8186,7 @@ Operations (`get_offset()` and `is_reachable()`) provide read-only access to the
             $>() {
                 self.tcp_close()
                 print(f"  [http] closed after {self.request_count} requests")
-                -> $Disconnected
+                -> "tcp closed" $Disconnected
             }
         }
 
