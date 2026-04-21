@@ -100,30 +100,36 @@ whole batch.
 
 ## Current Test Counts
 
-Pass counts from the latest matrix run (2026-04-20):
+Pass counts from the latest matrix run (2026-04-20, after the async
++ C double + C++23 coroutines + Erlang @@:self work):
 
 | Language   | Passed | Skipped |
 |------------|-------:|--------:|
 | Python     |    225 |       0 |
-| TypeScript |    205 |       1 |
+| TypeScript |    206 |       0 |
 | Rust       |    201 |       0 |
-| C          |    200 |      10 |
-| JavaScript |    199 |       1 |
-| Ruby       |    197 |       2 |
-| Lua        |    196 |       3 |
-| C++        |    195 |       5 |
-| C#         |    194 |       2 |
-| GDScript   |    194 |       5 |
-| Kotlin     |    194 |       2 |
-| Dart       |    192 |       7 |
-| PHP        |    191 |       5 |
-| Go         |    190 |       6 |
-| Swift      |    188 |       2 |
-| Java       |    185 |      11 |
-| Erlang     |    183 |      15 |
-| **TOTAL**  | **3329** | **77** |
+| JavaScript |    200 |       0 |
+| Dart       |    199 |       0 |
+| GDScript   |    199 |       0 |
+| Ruby       |    198 |       1 |
+| Lua        |    198 |       1 |
+| C#         |    196 |       0 |
+| Kotlin     |    196 |       0 |
+| Go         |    195 |       1 |
+| PHP        |    192 |       4 |
+| Swift      |    190 |       0 |
+| C          |    208 |       2 |
+| C++        |    200 |       0 |
+| Java       |    187 |       9 |
+| Erlang     |    187 |      11 |
+| **TOTAL**  | **3377** | **29** |
 
-All 17 languages are at **zero failures**.
+All 17 languages are at **zero failures**. Ten languages (Python,
+TypeScript, JavaScript, Rust, C++, C#, Kotlin, Swift, Dart, GDScript)
+are at **zero skips**. All 29 remaining skips are legitimate
+language-incompat — marked with inline comments on each `@@skip`
+directive (e.g. "Ruby does not have native async/await", "Erlang
+requires one module per file; multi-system tested via other targets").
 
 ## When to Run Integration Tests
 

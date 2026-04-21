@@ -93,7 +93,7 @@ framec --help
 
 - [Getting Started](docs/frame_getting_started.md) — learn Frame from scratch
 - [Language Reference](docs/frame_language.md) — complete Frame language reference
-- [Cookbook](docs/frame_cookbook.md) — 20 recipes for real-world patterns
+- [Cookbook](docs/frame_cookbook.md) — 54 recipes from traffic lights through EIP patterns, protocol/systems stress tests, deferred event processing, and a scanner/parser pair
 - [Runtime Architecture](docs/frame_runtime.md) — how generated code works
 - [Framepiler Design](docs/framepiler_design.md) — transpiler internals
 - [Contributing](CONTRIBUTING.md) — build from source, run tests, submit PRs

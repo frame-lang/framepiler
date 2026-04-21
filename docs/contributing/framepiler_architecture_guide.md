@@ -200,16 +200,26 @@ class System:
 
 ## Async Architecture
 
-When any interface method is declared `async`:
+Eleven of the seventeen target backends generate true async/await interfaces: Python, TypeScript, JavaScript, Rust, Dart, GDScript, Kotlin, Swift, C#, Java, and C++. When any interface method is declared `async`:
 
-1. The kernel, router, and all state dispatch methods become async
-2. ALL interface methods become async (shared dispatch path)
-3. Internal calls use `await`
-4. Constructors remain sync — a generated `init()` method handles async enter events (two-phase init)
+1. The kernel, router, and state dispatch methods become async.
+2. All interface methods become async (shared dispatch path).
+3. Internal dispatch calls use the target's await syntax — `await` for most, `.await` postfix for Rust, `co_await` for C++, bare suspend→suspend calls for Kotlin (no keyword).
+4. Constructors stay sync; a generated `init()` method fires the `$>` enter event asynchronously (two-phase init). Swift renames it `initAsync` since `init` is reserved.
 
-The async transformation is mechanical: `def` → `async def`, `self.method()` → `await self.method()` for all dispatch calls. The specific syntax varies by backend.
+Per-backend specifics:
 
-Languages with "one-color" concurrency (Go, Java 21+) ignore `async` entirely — the synchronous generated code works correctly because concurrency is handled by the runtime.
+- **Python / TypeScript / JavaScript / Dart / GDScript** — direct `async`/`await` mapping; Dart wraps return types in `Future<T>`, TS in `Promise<T>`.
+- **Kotlin** — `suspend fun` prefix; suspend→suspend calls don't take `await` (the coroutine runtime inlines continuations).
+- **Swift** — `func … async` suffix; state-dispatch and kernel methods are bare references (`__kernel(...)`) so the await-injector uses Swift-specific patterns.
+- **C#** — `async Task<T>` wrapping on signatures; caller `await`s.
+- **Java** — no native async/await. Frame takes a different path: `make_java_interface_async` wraps only the public interface methods in `CompletableFuture<T>` (body runs synchronously, returns `CompletableFuture.completedFuture(result)`). The internal dispatch chain (`__kernel`, `__router`, `_state_X`) stays fully synchronous, keeping the call graph tight. Callers `.get()` / `.join()` to await.
+- **C++23** — coroutines via a self-contained `FrameTask<T>` promise type emitted header-guarded at file scope. `suspend_never` initial + `suspend_always` final; bodies run sync to the first real `co_await`, callers extract via `.get()`. A post-pass rewrites transition-site `return;` / `return expr;` to `co_return` (mixing `return` with `co_return` is ill-formed inside a coroutine). Target alias `cpp_23` pins the ISO standard; `cpp`/`cpp_17`/`cpp_20` resolve to the same backend but the generated file needs `-std=c++20`+.
+- **Rust** — `async fn` + `.await` postfix; recursive dispatch uses boxed futures.
+
+Six backends have no native async/await — **C, Go, PHP, Ruby, Lua, Erlang**. For these the `@@skip` marker is used in the test suite and the skip reason is language-incompat. Go uses goroutines + channels for concurrency, a structurally different model; Erlang's gen_statem is already a one-color async runtime.
+
+The per-language await-injection rules live in `system_codegen.rs::add_await_to_string`, and language-specific method-signature wrapping is in each backend's `Method` emitter in `codegen/backends/`.
 
 ## Key Source Files
 

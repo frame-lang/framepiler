@@ -1615,16 +1615,34 @@ The generated Python code uses `async def` for all dispatch methods and `await` 
 
 ### Language Support
 
-| Language | Async Support | Mechanism |
-|----------|--------------|-----------|
-| Python | Yes | `async def` / `await` |
-| TypeScript | Yes | `async` / `await`, `Promise<T>` |
-| Rust | Yes | `async fn` / `.await` |
-| C | No | Warning emitted, `async` ignored |
-| Go | Not needed | Goroutines handle concurrency without coloring |
-| Java 21+ | Not needed | Virtual threads handle concurrency without coloring |
+Eleven targets generate real async interfaces; six don't have native async/await and the `@@skip` marker handles those tests.
 
-Languages like Go and Java don't need async/await — their concurrency models are "one-color," meaning any function can do concurrent work without special syntax. The `async` keyword is simply ignored for these targets.
+| Language | Async | Mechanism | Caller pattern |
+|---|---|---|---|
+| Python | yes | `async def` + `await` | `asyncio.run(main())` |
+| TypeScript | yes | `async` + `await`, `Promise<T>` | `await worker.get()` |
+| JavaScript | yes | `async` + `await`, `Promise<T>` | `await worker.get()` |
+| Rust | yes | `async fn` + `.await` | runtime-specific (tokio/async-std) |
+| Dart | yes | `Future<T> foo() async` + `await` | `await worker.get()` |
+| GDScript | yes | bare `await` (no keyword) | `await worker.get()` |
+| Kotlin | yes | `suspend fun` (bare suspend→suspend calls) | `runBlocking { worker.get() }` |
+| Swift | yes | `func foo() async -> T`; async entry is `initAsync()` | `Task { await w.get() }` |
+| C# | yes | `async Task<T>` | `await worker.get()` |
+| Java | yes | `CompletableFuture<T>` on the public interface (internal dispatch stays sync) | `worker.get().get()` |
+| C++ | yes (C++23) | `FrameTask<T>` coroutine (`co_await` / `co_return`) | `worker.get().get()` |
+| C | no | — | — |
+| Go | no (goroutines instead) | — | — |
+| PHP | no | — | — |
+| Ruby | no | — | — |
+| Lua | no | — | — |
+| Erlang | no (gen_statem is already async) | — | — |
+
+Some notes:
+
+- **Swift** reserves `init` for constructors; the async entry point is named `initAsync()` instead — `await w.initAsync()`.
+- **Kotlin** `suspend fun` calls from inside another `suspend fun` don't take an `await` keyword (Kotlin inlines the continuation), so internal dispatch in a Frame Kotlin system is bare.
+- **Java** has no `async`/`await` keyword. Frame wraps each public interface method's return in `CompletableFuture.completedFuture(...)` and keeps `__kernel` / `__router` / `_state_X` synchronous — callers `.get()` to await.
+- **C++** async requires a C++20+ compiler; Frame emits a header-guarded `FrameTask<T>` coroutine promise at file scope. `cpp`, `cpp_17`, `cpp_20`, `cpp_23` all alias the same backend, but the generated file needs `-std=c++23` (or `-std=c++20`) to build.
 
 ### Two-Phase Initialization
 
