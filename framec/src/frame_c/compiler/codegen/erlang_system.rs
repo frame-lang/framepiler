@@ -253,6 +253,95 @@ fn erlang_process_body_lines_with_params(
     erlang_process_body_lines_full(lines, action_names, &[], initial_data, param_names)
 }
 
+/// Tracks per-arm data-threading state so each case's arms can converge
+/// on a single `DataN` binding that downstream code can reference.
+///
+/// # The bug this structure exists to prevent
+///
+/// Frame's Erlang backend threads the record-typed compartment through
+/// statements by binding a fresh `DataN` each time a field is updated:
+///
+/// ```text
+/// Data1 = Data0#compartment{...},
+/// Data2 = Data1#compartment{...},
+/// ```
+///
+/// The counter is the `data_gen` field on this module's outer loop. When
+/// a `case ... of true -> ...; false -> ... end` block appears, each arm
+/// is emitted with its own run of updates. If the two arms emit different
+/// numbers of updates, the arms end with *different* names:
+///
+/// ```text
+/// case X of
+///   true  -> Data1 = ..., Data2 = ...;   % ends at Data2
+///   false -> Data1 = ...                 % ends at Data1
+/// end,
+/// %% What's bound after the case? Erlang says: whichever arm ran.
+/// %% But our caller wants ONE name to reference — and whichever we
+/// %% pick is wrong on the other arm's path.
+/// ```
+///
+/// Before this fix, the outer loop simply popped the saved state at
+/// `end` and kept using the LAST arm's final gen, so the short arm left
+/// its binding unreferenced (dead) while callers wrote code that only
+/// worked on the long-arm path.
+///
+/// # Why rebind-based unification (not case-as-expression)
+///
+/// The idiomatic Erlang fix is to make `case` produce the compartment
+/// as its expression value:
+///
+/// ```text
+/// Data2 = case X of
+///   true  -> Data1a = ..., Data1a#compartment{...};
+///   false -> Data0#compartment{...}
+/// end,
+/// ```
+///
+/// That would require the backend to know, at `case` entry, that
+/// whatever follows will want a compartment binding — and to re-parent
+/// the arms' last expressions accordingly. That transformation touches
+/// many code paths (enter/exit handlers, transitions, returns) and is
+/// hard to audit for correctness across all of them.
+///
+/// Instead we rebind: after both arms emit, splice `DataMax = DataN` into
+/// the shorter arm so every path ends at the same name. This is exactly
+/// what a compiler targeting SSA form would do at a join point — it's
+/// the standard way to unify divergent values in scoped-binding targets.
+/// The trade-off is slightly less idiomatic generated code (an extra
+/// `Data2 = Data1` rebind), but correctness is local to this function
+/// and easy to prove.
+///
+/// # Terminal arms
+///
+/// Arms ending in `frame_transition__(...)`, `{keep_state,...}`,
+/// `{next_state,...}`, or `{stop,...}` return their own value — control
+/// leaves the enclosing function, so the post-case `DataN` is never
+/// observed on that path. Padding those arms would put dead code after
+/// the return statement. We detect and skip them.
+///
+/// # How the fields are used
+///
+/// * `saved_var` / `saved_gen`: captured at `true ->`. Restored each
+///   time we enter a fresh arm (`; false ->`, `; _ ->`) so every arm
+///   starts threading from the same `DataN`.
+/// * `arms`: populated as each arm closes (at `; false ->`, `; _ ->`,
+///   or at `end`). Each entry is `(result_idx, final_gen)` — the index
+///   of the arm's last emitted statement and the arm's final data_gen.
+///   At `end` we scan this list to pick the unifying `DataMax`, then
+///   splice rebind statements into each shorter arm.
+struct CaseFrame {
+    /// data_var at case entry (restored at each new arm so arms start
+    /// threading from the same point, not cumulatively).
+    saved_var: String,
+    /// data_gen at case entry (paired with `saved_var`).
+    saved_gen: usize,
+    /// Closed arms' `(last_result_idx, final_data_gen)`. Populated at
+    /// `; false ->` / `; _ ->` / `end`. Used at `end` to compute the
+    /// join-point gen and splice padding rebinds into shorter arms.
+    arms: Vec<(usize, usize)>,
+}
+
 fn erlang_process_body_lines_full(
     lines: &[&str],
     action_names: &[String],
@@ -260,11 +349,10 @@ fn erlang_process_body_lines_full(
     initial_data: &str,
     param_names: &[(&str, String)],
 ) -> (Vec<String>, String) {
-    let mut result = Vec::new();
+    let mut result: Vec<String> = Vec::new();
     let mut data_var = initial_data.to_string();
     let mut data_gen = 0;
-    // Stack to save data_var at case branch boundaries
-    let mut case_data_stack: Vec<(String, usize)> = Vec::new();
+    let mut case_data_stack: Vec<CaseFrame> = Vec::new();
 
     // Pre-process: split lines with inline % comments so the comment
     // can't eat trailing syntax (commas, semicolons, record close braces).
@@ -349,21 +437,94 @@ fn erlang_process_body_lines_full(
             || l.starts_with("frame_transition__(")
             || is_forward_call;
         if is_structural {
-            // Track case branch boundaries for Data variable scoping
-            // Both data_var AND data_gen are saved/restored so that both arms
-            // produce the same DataN sequence (e.g., both arms end with Data2).
+            // Case-arm unification — see CaseFrame doc for the full rationale.
+            //
+            //   true ->       push a CaseFrame snapshotting saved_var/gen
+            //   ; false ->    record true arm's tail gen; restore saved gen
+            //   ; _ ->        same as `; false ->`
+            //   end / end,    record final arm's tail gen; pop the frame;
+            //                 pad shorter arms with `DataMax = DataN` so
+            //                 all non-terminal paths converge on DataMax.
             if l.starts_with("true ->") {
-                // Entering true branch — save current data_var and data_gen
-                case_data_stack.push((data_var.clone(), data_gen));
+                case_data_stack.push(CaseFrame {
+                    saved_var: data_var.clone(),
+                    saved_gen: data_gen,
+                    arms: Vec::new(),
+                });
             } else if l.starts_with("; false") || l.starts_with("; _") {
-                // Entering alternate branch — restore data_var and data_gen from before true branch
-                if let Some(&(ref saved_var, saved_gen)) = case_data_stack.last() {
-                    data_var = saved_var.clone();
-                    data_gen = saved_gen;
+                if let Some(frame) = case_data_stack.last_mut() {
+                    // Record the true arm's final position: index of last
+                    // emitted line (which came before this `; false ->`).
+                    let last_idx = result.len().saturating_sub(1);
+                    frame.arms.push((last_idx, data_gen));
+                    data_var = frame.saved_var.clone();
+                    data_gen = frame.saved_gen;
                 }
             } else if l == "end" || l == "end," {
-                // Exiting case block — pop the saved state
-                case_data_stack.pop();
+                if let Some(frame) = case_data_stack.last_mut() {
+                    let last_idx = result.len().saturating_sub(1);
+                    frame.arms.push((last_idx, data_gen));
+                }
+                if let Some(frame) = case_data_stack.pop() {
+                    // Compute max gen across *non-terminal* arms only.
+                    // Arms ending in `frame_transition__(...)`, `{keep_state,...}`,
+                    // or `{next_state,...}` return their own value and
+                    // don't participate in the post-case data-var flow —
+                    // padding them with a trailing rebind would put dead
+                    // code after the return, which erlc accepts but the
+                    // Erlang runtime treats as unreachable.
+                    let is_terminal_line = |l: &str| -> bool {
+                        let t = l.trim();
+                        t.starts_with("frame_transition__(")
+                            || t.starts_with("{next_state,")
+                            || t.starts_with("{keep_state,")
+                            || t.starts_with("{stop,")
+                    };
+                    let arm_is_terminal = |idx: usize| -> bool {
+                        idx < result.len() && is_terminal_line(&result[idx])
+                    };
+                    let max_gen = frame
+                        .arms
+                        .iter()
+                        .filter(|(idx, _)| !arm_is_terminal(*idx))
+                        .map(|a| a.1)
+                        .max()
+                        .unwrap_or(frame.saved_gen);
+                    if max_gen > frame.saved_gen {
+                        let max_name = format!("Data{}", max_gen);
+                        let mut pads: Vec<(usize, String)> = Vec::new();
+                        for (idx, gen) in frame.arms.iter().rev() {
+                            if arm_is_terminal(*idx) {
+                                continue; // don't pad arms with explicit return
+                            }
+                            if *gen < max_gen {
+                                let src = if *gen == frame.saved_gen {
+                                    frame.saved_var.clone()
+                                } else {
+                                    format!("Data{}", gen)
+                                };
+                                pads.push((*idx, format!("    {} = {}", max_name, src)));
+                            }
+                        }
+                        for (idx, pad) in pads {
+                            if idx < result.len() {
+                                let trimmed = result[idx].trim_end();
+                                if !trimmed.ends_with(',')
+                                    && !trimmed.ends_with(';')
+                                {
+                                    result[idx] = format!("{},", result[idx]);
+                                }
+                            }
+                            if idx < result.len() {
+                                result.insert(idx + 1, pad);
+                            } else {
+                                result.push(pad);
+                            }
+                        }
+                        data_var = max_name;
+                        data_gen = max_gen;
+                    }
+                }
             }
 
             // Rewrite self.action() calls and self.field access in structural lines
