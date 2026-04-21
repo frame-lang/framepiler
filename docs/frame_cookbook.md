@@ -119,6 +119,8 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 
 ## 1. Traffic Light
 
+[top](#table-of-contents) · [↓ down](#2-toggle-switch)
+
 ![1 state diagram](images/cookbook/01.svg)
 
 **Problem:** Cycle through a fixed sequence of states on each event.
@@ -165,6 +167,8 @@ if __name__ == '__main__':
 
 ## 2. Toggle Switch
 
+[↑ up](#1-traffic-light) · [top](#table-of-contents) · [↓ down](#3-turnstile)
+
 ![2 state diagram](images/cookbook/02.svg)
 
 **Problem:** A switch that alternates between on and off.
@@ -209,6 +213,8 @@ if __name__ == '__main__':
 
 ## 3. Turnstile
 
+[↑ up](#2-toggle-switch) · [top](#table-of-contents) · [↓ down](#4-login-flow)
+
 ![3 state diagram](images/cookbook/03.svg)
 
 **Problem:** A coin-operated turnstile that locks after each passage.
@@ -250,6 +256,8 @@ if __name__ == '__main__':
 -----
 
 ## 4. Login Flow
+
+[↑ up](#3-turnstile) · [top](#table-of-contents) · [↓ down](#5-connection-manager)
 
 ![4 state diagram](images/cookbook/04.svg)
 
@@ -309,6 +317,8 @@ if __name__ == '__main__':
 
 ## 5. Connection Manager
 
+[↑ up](#4-login-flow) · [top](#table-of-contents) · [↓ down](#6-retry-with-backoff)
+
 ![5 state diagram](images/cookbook/05.svg)
 
 **Problem:** A network connection with proper setup/teardown lifecycle.
@@ -363,6 +373,8 @@ if __name__ == '__main__':
 -----
 
 ## 6. Retry with Backoff
+
+[↑ up](#5-connection-manager) · [top](#table-of-contents) · [↓ down](#7-modal-dialog-stack)
 
 ![6 state diagram](images/cookbook/06.svg)
 
@@ -427,6 +439,8 @@ if __name__ == '__main__':
 
 ## 7. Modal Dialog Stack
 
+[↑ up](#6-retry-with-backoff) · [top](#table-of-contents) · [↓ down](#8-state-stack-pushpop)
+
 ![7 state diagram](images/cookbook/07.svg)
 
 **Problem:** Open nested modal dialogs and return to the previous one on close.
@@ -486,6 +500,8 @@ if __name__ == '__main__':
 
 ## 8. State Stack (Push/Pop)
 
+[↑ up](#7-modal-dialog-stack) · [top](#table-of-contents) · [↓ down](#9-video-player)
+
 ![8 state diagram](images/cookbook/08.svg)
 
 **Problem:** Track state history and allow stepping backward.
@@ -532,6 +548,8 @@ For true snapshot undo, use `push$` with a transition (`push$ -> $Editing`) to c
 -----
 
 ## 9. Video Player
+
+[↑ up](#8-state-stack-pushpop) · [top](#table-of-contents) · [↓ down](#10-order-processor)
 
 ![9 state diagram](images/cookbook/09.svg)
 
@@ -585,6 +603,8 @@ if __name__ == '__main__':
 -----
 
 ## 10. Order Processor
+
+[↑ up](#9-video-player) · [top](#table-of-contents) · [↓ down](#11-approval-chain)
 
 ![10 state diagram](images/cookbook/10.svg)
 
@@ -652,6 +672,8 @@ if __name__ == '__main__':
 
 ## 11. Approval Chain
 
+[↑ up](#10-order-processor) · [top](#table-of-contents) · [↓ down](#12-character-controller)
+
 ![11 state diagram](images/cookbook/11.svg)
 
 **Problem:** A document requires approval from two reviewers before it's published.
@@ -716,6 +738,8 @@ if __name__ == '__main__':
 
 ## 12. Character Controller
 
+[↑ up](#11-approval-chain) · [top](#table-of-contents) · [↓ down](#13-ai-agent)
+
 ![12 state diagram](images/cookbook/12.svg)
 
 **Problem:** A game character with idle, walking, running, and jumping states.
@@ -778,6 +802,8 @@ if __name__ == '__main__':
 
 ## 13. AI Agent
 
+[↑ up](#12-character-controller) · [top](#table-of-contents) · [↓ down](#14-led-blink-controller)
+
 ![13 state diagram](images/cookbook/13.svg)
 
 **Problem:** An AI agent that explores, flees from threats, and tracks its actions.
@@ -836,6 +862,8 @@ if __name__ == '__main__':
 
 ## 14. LED Blink Controller
 
+[↑ up](#13-ai-agent) · [top](#table-of-contents) · [↓ down](#15-switch-debouncer)
+
 ![14 state diagram](images/cookbook/14.svg)
 
 **Problem:** An LED that blinks on a timer, with on/off control.
@@ -881,6 +909,8 @@ if __name__ == '__main__':
 -----
 
 ## 15. Switch Debouncer
+
+[↑ up](#14-led-blink-controller) · [top](#table-of-contents) · [↓ down](#16-mealy-machine)
 
 ![15 state diagram](images/cookbook/15.svg)
 
@@ -941,6 +971,8 @@ if __name__ == '__main__':
 
 ## 16. Mealy Machine
 
+[↑ up](#15-switch-debouncer) · [top](#table-of-contents) · [↓ down](#17-moore-machine)
+
 ![16 state diagram](images/cookbook/16.svg)
 
 **Problem:** Output depends on both the current state AND the input (classic Mealy machine).
@@ -987,6 +1019,8 @@ if __name__ == '__main__':
 
 ## 17. Moore Machine
 
+[↑ up](#16-mealy-machine) · [top](#table-of-contents) · [↓ down](#18-session-persistence)
+
 ![17 state diagram](images/cookbook/17.svg)
 
 **Problem:** Output depends only on the current state (classic Moore machine).
@@ -1030,6 +1064,8 @@ if __name__ == '__main__':
 -----
 
 ## 18. Session Persistence
+
+[↑ up](#17-moore-machine) · [top](#table-of-contents) · [↓ down](#19-async-http-client)
 
 ![18 state diagram](images/cookbook/18.svg)
 
@@ -1085,6 +1121,8 @@ if __name__ == '__main__':
 -----
 
 ## 19. Async HTTP Client
+
+[↑ up](#18-session-persistence) · [top](#table-of-contents) · [↓ down](#20-multi-system-composition)
 
 ![19 state diagram](images/cookbook/19.svg)
 
@@ -1147,6 +1185,8 @@ asyncio.run(main())
 
 ## 20. Multi-System Composition
 
+[↑ up](#19-async-http-client) · [top](#table-of-contents) · [↓ down](#21-configurable-worker-pool-parameterized-systems)
+
 ![20 state diagram](images/cookbook/20.svg)
 
 **Problem:** A logger and an app as separate systems, with the app using the logger.
@@ -1205,6 +1245,8 @@ if __name__ == '__main__':
 -----
 
 ## 21. Configurable Worker Pool (Parameterized Systems)
+
+[↑ up](#20-multi-system-composition) · [top](#table-of-contents) · [↓ down](#22-self-calibrating-sensor-self-interface-call)
 
 ![21 state diagram](images/cookbook/21.svg)
 
@@ -1269,6 +1311,8 @@ if __name__ == '__main__':
 -----
 
 ## 22. Self-Calibrating Sensor (@@:self Interface Call)
+
+[↑ up](#21-configurable-worker-pool-parameterized-systems) · [top](#table-of-contents) · [↓ down](#23-vending-machine--operations-and-system-params)
 
 ![22 state diagram](images/cookbook/22.svg)
 
@@ -1342,6 +1386,8 @@ if __name__ == '__main__':
 -----
 
 ## 23. Vending Machine — Operations and System Params
+
+[↑ up](#22-self-calibrating-sensor-self-interface-call) · [top](#table-of-contents) · [↓ down](#24-circuit-breaker--state-variable-reset-on-reentry)
 
 ![23 state diagram](images/cookbook/23.svg)
 
@@ -1434,6 +1480,8 @@ if __name__ == '__main__':
 
 ## 24. Circuit Breaker — State Variable Reset on Reentry
 
+[↑ up](#23-vending-machine--operations-and-system-params) · [top](#table-of-contents) · [↓ down](#25-rate-limiter--static-operations)
+
 ![24 state diagram](images/cookbook/24.svg)
 
 **Problem:** A circuit breaker where the failure counter resets each time we re-enter the closed state.
@@ -1510,6 +1558,8 @@ if __name__ == '__main__':
 
 ## 25. Rate Limiter — Static Operations
 
+[↑ up](#24-circuit-breaker--state-variable-reset-on-reentry) · [top](#table-of-contents) · [↓ down](#26-thermostat--3-level-hsm)
+
 ![25 state diagram](images/cookbook/25.svg)
 
 **Problem:** A token bucket rate limiter with a static utility function.
@@ -1566,6 +1616,8 @@ if __name__ == '__main__':
 -----
 
 ## 26. Thermostat — 3-Level HSM
+
+[↑ up](#25-rate-limiter--static-operations) · [top](#table-of-contents) · [↓ down](#27-deployment-pipeline--push-and-enter-args)
 
 ![26 state diagram](images/cookbook/26.svg)
 
@@ -1648,6 +1700,8 @@ if __name__ == '__main__':
 -----
 
 ## 27. Deployment Pipeline — push$ and Enter Args
+
+[↑ up](#26-thermostat--3-level-hsm) · [top](#table-of-contents) · [↓ down](#28-auth-flow--managed-loginsession)
 
 ![27 state diagram](images/cookbook/27.svg)
 
@@ -1738,6 +1792,8 @@ if __name__ == '__main__':
 -----
 
 ## 28. Auth Flow — Managed Login/Session
+
+[↑ up](#27-deployment-pipeline--push-and-enter-args) · [top](#table-of-contents) · [↓ down](#29-game-level-manager--polymorphic-delegation)
 
 ![28 state diagram](images/cookbook/28.svg)
 
@@ -1879,6 +1935,8 @@ if __name__ == '__main__':
 
 ## 29. Game Level Manager — Polymorphic Delegation
 
+[↑ up](#28-auth-flow--managed-loginsession) · [top](#table-of-contents) · [↓ down](#30-graceful-shutdown-service--hsm--enter-handler-chain)
+
 ![29 state diagram](images/cookbook/29.svg)
 
 **Problem:** Different level types created per config. Re-entering `$InLevel` automatically swaps managers.
@@ -1984,6 +2042,8 @@ if __name__ == '__main__':
 
 ## 30. Graceful Shutdown Service — HSM + Enter-Handler Chain
 
+[↑ up](#29-game-level-manager--polymorphic-delegation) · [top](#table-of-contents) · [↓ down](#31-pipeline-processor--kernel-loop-validation)
+
 ![30 state diagram](images/cookbook/30.svg)
 
 **Problem:** A long-running service where the constructor never returns. HSM provides shared quit logic.
@@ -2049,6 +2109,8 @@ if __name__ == '__main__':
 -----
 
 ## 31. Pipeline Processor — Kernel Loop Validation
+
+[↑ up](#30-graceful-shutdown-service--hsm--enter-handler-chain) · [top](#table-of-contents) · [↓ down](#32-test-harness--white-box-testing-with-operations)
 
 ![31 state diagram](images/cookbook/31.svg)
 
@@ -2137,6 +2199,8 @@ if __name__ == '__main__':
 
 ## 32. Test Harness — White-Box Testing with Operations
 
+[↑ up](#31-pipeline-processor--kernel-loop-validation) · [top](#table-of-contents) · [↓ down](#33-ai-coding-agent--capstone)
+
 ![32 state diagram](images/cookbook/32.svg)
 
 **Problem:** A system with operations for test inspection. `@@:system.state` is a read-only accessor — allowed in operations because it doesn't mutate the state machine.
@@ -2224,6 +2288,8 @@ if __name__ == '__main__':
 -----
 
 ## 33. AI Coding Agent — Capstone
+
+[↑ up](#32-test-harness--white-box-testing-with-operations) · [top](#table-of-contents) · [↓ down](#34-idempotent-receiver)
 
 ![33 state diagram](images/cookbook/33.svg)
 
@@ -2448,6 +2514,8 @@ All recipes target Python 3 for readability; the patterns generate identically f
 
 ## 34. Idempotent Receiver
 
+[↑ up](#33-ai-coding-agent--capstone) · [top](#table-of-contents) · [↓ down](#35-content-based-router)
+
 ![34 state diagram](images/cookbook/34.svg)
 
 **Problem:** A sender may redeliver the same message. The receiver must process each business message exactly once, even if it arrives multiple times.
@@ -2494,6 +2562,8 @@ if __name__ == '__main__':
 -----
 
 ## 35. Content-Based Router
+
+[↑ up](#34-idempotent-receiver) · [top](#table-of-contents) · [↓ down](#36-message-filter)
 
 ![35 state diagram](images/cookbook/35.svg)
 
@@ -2542,6 +2612,8 @@ if __name__ == '__main__':
 -----
 
 ## 36. Message Filter
+
+[↑ up](#35-content-based-router) · [top](#table-of-contents) · [↓ down](#37-aggregator)
 
 ![36 state diagram](images/cookbook/36.svg)
 
@@ -2599,6 +2671,8 @@ if __name__ == '__main__':
 -----
 
 ## 37. Aggregator
+
+[↑ up](#36-message-filter) · [top](#table-of-contents) · [↓ down](#38-resequencer)
 
 ![37 state diagram](images/cookbook/37.svg)
 
@@ -2659,6 +2733,8 @@ if __name__ == '__main__':
 
 ## 38. Resequencer
 
+[↑ up](#37-aggregator) · [top](#table-of-contents) · [↓ down](#39-circuit-breaker)
+
 ![38 state diagram](images/cookbook/38.svg)
 
 **Problem:** Messages arrive out of order (each tagged with a sequence number). Release them downstream strictly in order, buffering anything premature.
@@ -2717,6 +2793,8 @@ if __name__ == '__main__':
 -----
 
 ## 39. Circuit Breaker
+
+[↑ up](#38-resequencer) · [top](#table-of-contents) · [↓ down](#40-dead-letter-channel)
 
 ![39 state diagram](images/cookbook/39.svg)
 
@@ -2806,6 +2884,8 @@ if __name__ == '__main__':
 -----
 
 ## 40. Dead Letter Channel
+
+[↑ up](#39-circuit-breaker) · [top](#table-of-contents) · [↓ down](#41-polling-consumer)
 
 ![40 state diagram](images/cookbook/40.svg)
 
@@ -2898,6 +2978,8 @@ if __name__ == '__main__':
 -----
 
 ## 41. Polling Consumer
+
+[↑ up](#40-dead-letter-channel) · [top](#table-of-contents) · [↓ down](#42-process-manager-saga)
 
 ![41 state diagram](images/cookbook/41.svg)
 
@@ -2996,6 +3078,8 @@ if __name__ == '__main__':
 -----
 
 ## 42. Process Manager (Saga)
+
+[↑ up](#41-polling-consumer) · [top](#table-of-contents) · [↓ down](#43-competing-consumers)
 
 ![42 state diagram](images/cookbook/42.svg)
 
@@ -3124,6 +3208,8 @@ if __name__ == '__main__':
 
 ## 43. Competing Consumers
 
+[↑ up](#42-process-manager-saga) · [top](#table-of-contents) · [↓ down](#44-message-store)
+
 ![43 state diagram](images/cookbook/43.svg)
 
 **Problem:** One queue of work, multiple workers pulling from it. The dispatcher hands each message to exactly one worker; workers process in parallel.
@@ -3212,6 +3298,8 @@ if __name__ == '__main__':
 
 ## 44. Message Store
 
+[↑ up](#43-competing-consumers) · [top](#table-of-contents) · [↓ down](#45-migrating-machine)
+
 ![44 state diagram](images/cookbook/44.svg)
 
 **Problem:** Every message that flows through an integration should be persisted for audit, replay, and debugging. The store survives restarts.
@@ -3270,6 +3358,8 @@ if __name__ == '__main__':
 -----
 
 ## 45. Migrating Machine
+
+[↑ up](#44-message-store) · [top](#table-of-contents) · [↓ down](#46-fix-protocol--buy-side-order-lifecycle)
 
 ![45 state diagram](images/cookbook/45.svg)
 
@@ -3413,6 +3503,8 @@ Recipes 46-49 model real-world protocols and safety-critical systems at full fid
 -----
 
 ## 46. FIX Protocol — Buy-Side Order Lifecycle
+
+[↑ up](#45-migrating-machine) · [top](#table-of-contents) · [↓ down](#47-fix-protocol--sell-side-order-manager)
 
 ![46 state diagram](images/cookbook/46.svg)
 
@@ -3805,6 +3897,8 @@ if __name__ == '__main__':
 
 ## 47. FIX Protocol — Sell-Side Order Manager
 
+[↑ up](#46-fix-protocol--buy-side-order-lifecycle) · [top](#table-of-contents) · [↓ down](#48-launch-sequence-controller--abort-from-any-phase)
+
 ![47 state diagram](images/cookbook/47.svg)
 
 **Problem:** The broker/exchange side of FIX. Receives orders from the buy-side, manages the book, and sends execution reports back. Interacts with the buy-side system.
@@ -4056,6 +4150,8 @@ if __name__ == '__main__':
 ---
 
 ## 48. Launch Sequence Controller — Abort from Any Phase
+
+[↑ up](#47-fix-protocol--sell-side-order-manager) · [top](#table-of-contents) · [↓ down](#49-robot-arm-controller--safety-overlay-with-hsm)
 
 ![48 state diagram](images/cookbook/48.svg)
 
@@ -4444,6 +4540,8 @@ if __name__ == '__main__':
 
 ## 49. Robot Arm Controller — Safety Overlay with HSM
 
+[↑ up](#48-launch-sequence-controller--abort-from-any-phase) · [top](#table-of-contents) · [↓ down](#50-print-spooler--basic-work-queue)
+
 ![49 state diagram](images/cookbook/49.svg)
 
 **Problem:** An industrial robot arm with three concerns layered via HSM: safety (emergency stop), operational mode (manual/auto), and motion states (idle/moving/gripping). Safety overrides everything.
@@ -4801,6 +4899,8 @@ Recipes 50-52 demonstrate the **work queue pattern**: a system receives events i
 
 ## 50. Print Spooler — Basic Work Queue
 
+[↑ up](#49-robot-arm-controller--safety-overlay-with-hsm) · [top](#table-of-contents) · [↓ down](#51-manufacturing-cell--priority-queue-with-sub-phases)
+
 ![50 state diagram](images/cookbook/50.svg)
 
 **Problem:** A printer that accepts jobs while busy. Jobs are queued and printed in FIFO order. The printer processes one job at a time.
@@ -4910,6 +5010,8 @@ if __name__ == '__main__':
 -----
 
 ## 51. Manufacturing Cell — Priority Queue with Sub-Phases
+
+[↑ up](#50-print-spooler--basic-work-queue) · [top](#table-of-contents) · [↓ down](#52-elevator--directional-scan-algorithm)
 
 ![51 state diagram](images/cookbook/51.svg)
 
@@ -5054,6 +5156,8 @@ if __name__ == '__main__':
 -----
 
 ## 52. Elevator — Directional Scan Algorithm
+
+[↑ up](#51-manufacturing-cell--priority-queue-with-sub-phases) · [top](#table-of-contents) · [↓ down](#53-byte-scanner--tokenize-a-simple-language)
 
 ![52 state diagram](images/cookbook/52.svg)
 
@@ -5236,6 +5340,8 @@ The next two recipes stand alone as a pair: a lexical scanner and a pushdown par
 
 ## 53. Byte Scanner — Tokenize a Simple Language
 
+[↑ up](#52-elevator--directional-scan-algorithm) · [top](#table-of-contents) · [↓ down](#54-pushdown-parser--nested-structure-with-push--pop)
+
 ![53 state diagram](images/cookbook/53.svg)
 
 **Problem:** Tokenize an input string into identifiers, numbers, strings, and punctuation — the scanning half of a parser. The input `set x = 42 "hello"` should emit:
@@ -5351,6 +5457,8 @@ The characteristic bit is **delimiter replay**: when `$InIdent` sees a non-ident
 -----
 
 ## 54. Pushdown Parser — Nested Structure with `push$` / `pop$`
+
+[↑ up](#53-byte-scanner--tokenize-a-simple-language) · [top](#table-of-contents) · [↓ down](#55-process-lifecycle)
 
 ![54 state diagram](images/cookbook/54.svg)
 
@@ -5477,6 +5585,8 @@ Nine recipes modeling real kernel subsystems as Frame state machines. Each recip
 -----
 
 ## 55. Process Lifecycle
+
+[↑ up](#54-pushdown-parser--nested-structure-with-push--pop) · [top](#table-of-contents) · [↓ down](#56-runtime-power-management)
 
 ![55 state diagram](images/cookbook/55.svg)
 
@@ -5653,6 +5763,8 @@ The `$Zombie` → `$Dead` transition (via `wait_by_parent()`) models the parent 
 
 ## 56. Runtime Power Management
 
+[↑ up](#55-process-lifecycle) · [top](#table-of-contents) · [↓ down](#57-block-io-request)
+
 ![56 state diagram](images/cookbook/56.svg)
 
 **Problem:** Model the kernel’s runtime PM framework (`drivers/base/power/runtime.c`). Devices transition through power states based on usage counts and autosuspend timers. The kernel implementation is 1,800 lines of nested conditionals and spinlock-protected flag checks.
@@ -5800,6 +5912,8 @@ The race condition where `get()` arrives during `$Suspending` is handled natural
 
 ## 57. Block I/O Request
 
+[↑ up](#56-runtime-power-management) · [top](#table-of-contents) · [↓ down](#58-usb-device-enumeration)
+
 ![57 state diagram](images/cookbook/57.svg)
 
 **Problem:** Model the lifecycle of a block I/O request through the kernel’s blk-mq layer (`block/blk-mq.c`). Requests move through queuing, dispatch, in-flight, completion, and error recovery stages.
@@ -5920,6 +6034,8 @@ The retry logic uses a domain variable (`self.attempts`) that persists across th
 
 
 ## 58. USB Device Enumeration
+
+[↑ up](#57-block-io-request) · [top](#table-of-contents) · [↓ down](#59-watchdog-timer)
 
 ![58 state diagram](images/cookbook/58.svg)
 
@@ -6125,6 +6241,8 @@ In the kernel’s `hub_port_connect_change()`, this logic is a 300-line function
 
 ## 59. Watchdog Timer
 
+[↑ up](#58-usb-device-enumeration) · [top](#table-of-contents) · [↓ down](#60-oom-killer)
+
 ![59 state diagram](images/cookbook/59.svg)
 
 **Problem:** Model the kernel’s watchdog device (`drivers/watchdog/watchdog_dev.c`). A hardware watchdog resets the system unless software periodically pings it. The “magic close” feature prevents accidental disarming: the device stays armed unless the close is preceded by writing a magic character (‘V’).
@@ -6252,6 +6370,8 @@ In the kernel, this is implemented with a `WDOG_ALLOW_RELEASE` status bit. The F
 
 ## 60. OOM Killer
 
+[↑ up](#59-watchdog-timer) · [top](#table-of-contents) · [↓ down](#61-filesystem-freeze)
+
 ![60 state diagram](images/cookbook/60.svg)
 
 **Problem:** Model the kernel’s Out-Of-Memory killer (`mm/oom_kill.c`). When the system runs out of memory, it must select a victim process, kill it, and wait for memory to be freed. The critical safety property: the OOM killer must not select a new victim while still waiting for the previous one to die. In the kernel, this is enforced by `oom_lock` and careful flag management. In Frame, it’s structural.
@@ -6368,6 +6488,8 @@ if __name__ == '__main__':
 
 
 ## 61. Filesystem Freeze
+
+[↑ up](#60-oom-killer) · [top](#table-of-contents) · [↓ down](#62-kernel-module-loader)
 
 ![61 state diagram](images/cookbook/61.svg)
 
@@ -6512,6 +6634,8 @@ The trailing `=> $^` on every HSM state ensures events propagate up the full 3-l
 
 
 ## 62. Kernel Module Loader
+
+[↑ up](#61-filesystem-freeze) · [top](#table-of-contents) · [↓ down](#63-signal-handler-stack)
 
 ![62 state diagram](images/cookbook/62.svg)
 
@@ -6729,6 +6853,8 @@ Reference counting is exposed through the interface (`acquire()`/`release()`) ra
 
 ## 63. Signal Handler Stack
 
+[↑ up](#62-kernel-module-loader) · [top](#table-of-contents) · [↓ down](#64-dhcp-client)
+
 ![63 state diagram](images/cookbook/63.svg)
 
 **Problem:** Model signal delivery to a user-mode process. When a signal arrives, the kernel saves the current user context, jumps to the handler, and restores the context via `sigreturn`. Nested signals build a stack of saved frames. This is the textbook use case for `push$`/`pop$`.
@@ -6846,6 +6972,8 @@ Eight recipes modeling network protocols from their RFCs as Frame state machines
 -----
 
 ## 64. DHCP Client
+
+[↑ up](#63-signal-handler-stack) · [top](#table-of-contents) · [↓ down](#65-tls-handshake)
 
 ![64 state diagram](images/cookbook/64.svg)
 
@@ -7076,6 +7204,8 @@ This matches real DHCP clients (e.g., `dhclient`, `systemd-networkd`): T1/T2/exp
 
 ## 65. TLS Handshake
 
+[↑ up](#64-dhcp-client) · [top](#table-of-contents) · [↓ down](#66-wi-fi-station-management)
+
 ![65 state diagram](images/cookbook/65.svg)
 
 **Problem:** Model the TLS 1.2 handshake from the server’s perspective (RFC 5246 §7.3). The handshake is a multi-step protocol where a fatal alert at any stage tears down the connection. HSM provides shared alert handling.
@@ -7240,6 +7370,8 @@ if __name__ == '__main__':
 
 
 ## 66. Wi-Fi Station Management
+
+[↑ up](#65-tls-handshake) · [top](#table-of-contents) · [↓ down](#67-bgp-finite-state-machine)
 
 ![66 state diagram](images/cookbook/66.svg)
 
@@ -7410,6 +7542,8 @@ The 4-way handshake uses a state variable (`$.key_step`) that resets on every en
 
 
 ## 67. BGP Finite State Machine
+
+[↑ up](#66-wi-fi-station-management) · [top](#table-of-contents) · [↓ down](#68-ppp-link-control-protocol)
 
 ![67 state diagram](images/cookbook/67.svg)
 
@@ -7638,6 +7772,8 @@ With `@@persist`, a `bgpd` graceful restart can save the session state to disk, 
 
 
 ## 68. PPP Link Control Protocol
+
+[↑ up](#67-bgp-finite-state-machine) · [top](#table-of-contents) · [↓ down](#69-ntp-client-association)
 
 ![68 state diagram](images/cookbook/68.svg)
 
@@ -7916,6 +8052,8 @@ Comparing this spec against RFC 1661 Table 4 is a line-by-line verification exer
 
 ## 69. NTP Client Association
 
+[↑ up](#68-ppp-link-control-protocol) · [top](#table-of-contents) · [↓ down](#70-http11-connection)
+
 ![69 state diagram](images/cookbook/69.svg)
 
 **Problem:** Model an NTP client’s per-server association (RFC 5905). The client manages a polling interval that backs off when synchronized and resets when unsynchronized, plus a reachability register that tracks recent poll successes.
@@ -8065,6 +8203,8 @@ Operations (`get_offset()` and `is_reachable()`) provide read-only access to the
 
 
 ## 70. HTTP/1.1 Connection
+
+[↑ up](#69-ntp-client-association) · [top](#table-of-contents) · [↓ down](#71-smtp-conversation)
 
 ![70 state diagram](images/cookbook/70.svg)
 
@@ -8263,6 +8403,8 @@ if __name__ == '__main__':
 
 
 ## 71. SMTP Conversation
+
+[↑ up](#70-http11-connection) · [top](#table-of-contents)
 
 ![71 state diagram](images/cookbook/71.svg)
 
