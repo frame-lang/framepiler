@@ -94,13 +94,16 @@ fn emit_state_recursive(
     let pad = "    ".repeat(indent);
 
     if !state.children.is_empty() {
-        // Parent state → subgraph cluster
+        // Parent state → subgraph cluster. The cluster label mirrors the
+        // leaf-node structure (header row + <hr/> + handler list) so HSM
+        // parents visibly show their own event handlers (e.g. a parent
+        // that catches `connection_error()` uniformly via `=> $^`).
         writeln!(out, "{}subgraph cluster_{} {{", pad, state.name).ok();
         writeln!(out, "{}    label = <", pad).ok();
         writeln!(out, "{}        <table cellborder=\"0\" border=\"0\">", pad).ok();
         writeln!(out, "{}            <tr><td>{}</td></tr>", pad, state.name).ok();
         writeln!(out, "{}            <hr/>", pad).ok();
-        writeln!(out, "{}            <tr><td></td></tr>", pad).ok();
+        emit_handler_row(state, out, &format!("{}            ", pad));
         writeln!(out, "{}        </table>", pad).ok();
         writeln!(out, "{}    >", pad).ok();
         writeln!(out, "{}    style = rounded", pad).ok();
@@ -125,6 +128,61 @@ fn emit_state_recursive(
         // Leaf state → HTML-label node
         emit_leaf_node(state, out, &pad);
     }
+}
+
+/// Build the list of handler labels (`$>()`, `<$()`, `event(params)`, …)
+/// for a state, in the order they should appear.
+fn handler_lines(state: &StateNode) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    if state.has_enter {
+        lines.push("$&gt;()".to_string());
+    }
+    if state.has_exit {
+        lines.push("&lt;$()".to_string());
+    }
+    for h in &state.handlers {
+        if h.params.is_empty() {
+            lines.push(format!("{}()", h.event));
+        } else {
+            let params: Vec<String> = h
+                .params
+                .iter()
+                .map(|(name, typ)| format!("{}: {}", name, escape_html(typ)))
+                .collect();
+            lines.push(format!("{}({})", h.event, params.join(", ")));
+        }
+    }
+    lines
+}
+
+/// Emit a `<tr><td><font>…</font></td></tr>` row listing the state's
+/// handlers. Used by both leaf nodes and HSM parent clusters so the
+/// two presentations stay in sync. `pad` is the indent to place at the
+/// start of each emitted line (matches the enclosing `<table>`).
+fn emit_handler_row(state: &StateNode, out: &mut String, pad: &str) {
+    let lines = handler_lines(state);
+    if lines.is_empty() {
+        writeln!(out, "{}<tr><td></td></tr>", pad).ok();
+        return;
+    }
+    writeln!(
+        out,
+        "{}<tr><td align=\"left\"><font point-size=\"10\">",
+        pad
+    )
+    .ok();
+    // First line unprefixed; subsequent lines separated by <br ALIGN="LEFT"/>.
+    // Trailing <br ALIGN="LEFT"/> forces the last line's left alignment.
+    // Whitespace inside <font> renders literally in GraphViz, so no indent padding.
+    for (idx, line) in lines.iter().enumerate() {
+        if idx > 0 {
+            write!(out, "<br ALIGN=\"LEFT\"/>").ok();
+        }
+        write!(out, "{}", line).ok();
+    }
+    write!(out, "<br ALIGN=\"LEFT\"/>").ok();
+    writeln!(out).ok();
+    writeln!(out, "{}</font></td></tr>", pad).ok();
 }
 
 /// Emit a leaf state node with HTML label.
@@ -155,53 +213,7 @@ fn emit_leaf_node(state: &StateNode, out: &mut String, pad: &str) {
     writeln!(out, "{}        <hr/>", pad).ok();
 
     // Body row: handler list (enter/exit + event handlers)
-    let has_handlers = state.has_enter || state.has_exit || !state.handlers.is_empty();
-    if has_handlers {
-        writeln!(
-            out,
-            "{}        <tr><td align=\"left\"><font point-size=\"10\">",
-            pad
-        )
-        .ok();
-
-        let mut handler_lines: Vec<String> = Vec::new();
-        if state.has_enter {
-            handler_lines.push("$&gt;()".to_string());
-        }
-        if state.has_exit {
-            handler_lines.push("&lt;$()".to_string());
-        }
-        for h in &state.handlers {
-            if h.params.is_empty() {
-                handler_lines.push(format!("{}()", h.event));
-            } else {
-                let params: Vec<String> = h
-                    .params
-                    .iter()
-                    .map(|(name, typ)| format!("{}: {}", name, escape_html(typ)))
-                    .collect();
-                handler_lines.push(format!("{}({})", h.event, params.join(", ")));
-            }
-        }
-
-        // First line emitted directly; subsequent lines preceded by
-        // <br ALIGN="LEFT"/> to left-align within the text block.
-        // No whitespace padding — GraphViz renders whitespace in <font> literally.
-        for (idx, line) in handler_lines.iter().enumerate() {
-            if idx > 0 {
-                write!(out, "<br ALIGN=\"LEFT\"/>").ok();
-            }
-            write!(out, "{}", line).ok();
-        }
-        // Trailing <br ALIGN="LEFT"/> forces last line's alignment too
-        write!(out, "<br ALIGN=\"LEFT\"/>").ok();
-        writeln!(out).ok();
-
-        writeln!(out, "{}        </font></td></tr>", pad).ok();
-    } else {
-        // Empty body row
-        writeln!(out, "{}        <tr><td></td></tr>", pad).ok();
-    }
+    emit_handler_row(state, out, &format!("{}        ", pad));
 
     // State variables section (V4 improvement)
     if !state.state_vars.is_empty() {
@@ -394,6 +406,73 @@ mod tests {
         assert!(dot.contains("subgraph cluster_Parent {"));
         assert!(dot.contains("Parent [shape=\"point\" width=\"0\"]"));
         assert!(dot.contains("Child [label = <"));
+    }
+
+    #[test]
+    fn test_hsm_parent_shows_its_own_handlers() {
+        // Regression: parent states (rendered as subgraph clusters) used
+        // to emit an empty `<tr><td></td></tr>` handler row regardless of
+        // what the parent actually defined. An HSM parent with cross-
+        // cutting handlers (e.g. `connection_error()` caught once for
+        // every child via `=> $^`) should show those handlers in the
+        // cluster label just like a leaf node would.
+        let graph = SystemGraph {
+            name: "Hsm".to_string(),
+            states: vec![
+                StateNode {
+                    name: "Open".to_string(),
+                    parent: None,
+                    children: vec!["Idle".to_string()],
+                    has_enter: false,
+                    has_exit: false,
+                    handlers: vec![
+                        HandlerInfo {
+                            event: "connection_error".to_string(),
+                            params: vec![("reason".to_string(), "str".to_string())],
+                        },
+                        HandlerInfo {
+                            event: "close".to_string(),
+                            params: vec![],
+                        },
+                    ],
+                    state_vars: vec![],
+                    state_params: vec![],
+                },
+                StateNode {
+                    name: "Idle".to_string(),
+                    parent: Some("Open".to_string()),
+                    children: vec![],
+                    has_enter: false,
+                    has_exit: false,
+                    handlers: vec![],
+                    state_vars: vec![],
+                    state_params: vec![],
+                },
+            ],
+            transitions: vec![],
+            entry_state: Some("Open".to_string()),
+            has_state_stack: false,
+        };
+
+        let dot = emit_dot(&graph);
+        assert!(dot.contains("subgraph cluster_Open {"));
+        // Parent's own handlers must appear inside the cluster label.
+        assert!(dot.contains("connection_error(reason: str)"));
+        assert!(dot.contains("close()"));
+        // And the old empty row must no longer appear in the cluster's
+        // own label (which sits between `label = <` and the first `>`).
+        // Inner leaf nodes may legitimately render empty handler rows.
+        let cluster_start = dot.find("subgraph cluster_Open {").unwrap();
+        let label_open = cluster_start
+            + dot[cluster_start..].find("label = <").unwrap()
+            + "label = <".len();
+        let label_close = label_open + dot[label_open..].find(">").unwrap();
+        let cluster_label = &dot[label_open..label_close];
+        assert!(
+            !cluster_label.contains("<tr><td></td></tr>"),
+            "cluster label with handlers must not emit an empty handler row: {}",
+            cluster_label
+        );
     }
 
     #[test]
