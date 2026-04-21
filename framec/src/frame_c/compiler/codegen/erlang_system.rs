@@ -1156,27 +1156,58 @@ fn rewrite_mixed_case_arms(
         };
         result.push(clean_header);
 
-        // Emit arm body lines, filtering as needed
+        // Emit arm body lines, filtering as needed. Track nested case
+        // depth so we only strip `__ReturnVal = ...` at depth 0 (this arm's
+        // top level). `__ReturnVal` inside nested cases belongs to the inner
+        // case's own arm — the depth-≥2 injector already turned those into
+        // complete reply tuples and stripping them here would leak an
+        // unbound `__ReturnVal` reference.
+        let mut nested_depth = 0i32;
         for i in arm.body_start..arm.body_end {
             let t = processed[i].trim();
 
-            if t.starts_with("__ReturnVal = ") {
-                // In transition arms, drop (transition replies ok)
-                // In non-transition arms, capture but don't emit (used in injected tuple)
+            let opens = (t.starts_with("case ") || t.starts_with("case("))
+                && (t.ends_with(" of") || t.ends_with(" of,"));
+            let closes = t == "end" || t == "end," || t == "end;";
+
+            if opens {
+                result.push(processed[i].clone());
+                nested_depth += 1;
+                continue;
+            }
+
+            if t.starts_with("__ReturnVal = ") && nested_depth == 0 {
+                // Top-level of this arm: drop. Captured via arm.return_val
+                // and re-emitted in the injected reply tuple below.
                 continue;
             }
 
             result.push(processed[i].clone());
+
+            if closes {
+                nested_depth = (nested_depth - 1).max(0);
+            }
         }
 
-        // For non-transition arms, inject the gen_statem return tuple
+        // For non-transition arms, inject the gen_statem return tuple.
+        // Skip if the arm body already contains a reply tuple (the depth-≥2
+        // injector may have planted one at a nested leaf that's the only
+        // exit of this arm).
         if !arm.has_transition {
-            let data = arm.final_data_var.as_deref().unwrap_or(default_data);
-            let reply = arm.return_val.as_deref().unwrap_or("ok");
-            result.push(format!(
-                "        {{keep_state, {}, [{{reply, From, {}}}]}}",
-                data, reply
-            ));
+            let arm_has_reply = processed[arm.body_start..arm.body_end]
+                .iter()
+                .any(|l| {
+                    let t = l.trim();
+                    t.starts_with("{keep_state,") || t.starts_with("{next_state,")
+                });
+            if !arm_has_reply {
+                let data = arm.final_data_var.as_deref().unwrap_or(default_data);
+                let reply = arm.return_val.as_deref().unwrap_or("ok");
+                result.push(format!(
+                    "        {{keep_state, {}, [{{reply, From, {}}}]}}",
+                    data, reply
+                ));
+            }
         }
     }
 
