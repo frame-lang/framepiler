@@ -803,10 +803,35 @@ fn erlang_transform_blocks(text: &str) -> String {
                 result.push_str("    ok\n");
             }
             result.push_str(&format!("{}end", indent));
-            // If this was an elif, we also need to close the outer case
+            // If this was an elif, we also need to close the outer case.
+            // And for an `if ... else if ... else {}` chain, the terminal
+            // `}` pops the innermost "if" with ctx="if" (has_else=true)
+            // but the enclosing "elif" wrappers are still on the stack —
+            // drain each one, emitting an `end` per wrapper so the nested
+            // case structure closes fully.
             if ctx == "elif" {
                 if !block_depth.is_empty() {
                     block_depth.pop();
+                    result.push_str(&format!("\n{}end", indent));
+                }
+            } else if ctx == "if" && has_else {
+                // Drain any "elif" entries stacked underneath this if —
+                // each represents an outer case that opened at the
+                // matching `} else if` and needs its own closing `end`.
+                while let Some(&(outer_ctx, _)) = block_depth.last() {
+                    if outer_ctx != "elif" {
+                        break;
+                    }
+                    block_depth.pop();
+                    // An "elif" entry is always preceded by an "if" that
+                    // tracks the inner case block. It's already been closed
+                    // by this time, but drain defensively in case the shape
+                    // diverges (nested mixed patterns).
+                    if let Some(&(c, _)) = block_depth.last() {
+                        if c == "if" {
+                            block_depth.pop();
+                        }
+                    }
                     result.push_str(&format!("\n{}end", indent));
                 }
             }
