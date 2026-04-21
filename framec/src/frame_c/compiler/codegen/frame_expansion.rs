@@ -3019,29 +3019,18 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Ruby => format!("self.{}{}", method_name, args_with_parens),
                 TargetLanguage::Lua => format!("self:{}{}", method_name, args_with_parens),
                 TargetLanguage::Erlang => {
-                    // @@:self.method(args) dispatches through the already-
-                    // emitted `frame_dispatch__` helper, which runs the
-                    // handler on the current state and returns
-                    // `{NewData, RetVal}`. Take `element(2, ...)` for the
-                    // return value. NOTE: this path drops NewData, so
-                    // @@:self cannot currently propagate state transitions
-                    // back to the caller — pure queries and writes to the
-                    // called state's compartment work; a transition in the
-                    // called method would be lost. Tracked as a known
-                    // limitation; exercising pure-query @@:self still
-                    // validates return-value propagation.
-                    let args_inner = args_with_parens.trim();
-                    let args_list = if args_inner == "()" || args_inner.is_empty() {
-                        "[]".to_string()
-                    } else {
-                        // strip outer parens, wrap in list
-                        let inner = &args_inner[1..args_inner.len() - 1];
-                        format!("[{}]", inner)
-                    };
-                    format!(
-                        "element(2, frame_dispatch__({}, {}, Data))",
-                        method_name, args_list
-                    )
+                    // Emit bare `self.method(args)` and let the Erlang
+                    // handler post-pass (erlang_system.rs::
+                    // erlang_rewrite_native_classified_full) recognize the
+                    // pattern as an `InterfaceCall` and rewrite it to
+                    // `{DataN, Result} = frame_dispatch__(method, [args],
+                    // DataPrev)`. That pass threads NewData forward
+                    // through the rest of the handler body via
+                    // `data_gen`/`data_var` — so `self.field` reads and
+                    // `-> $State` transitions after a @@:self call
+                    // correctly see the state changes the called
+                    // handler made.
+                    format!("self.{}{}", method_name, args_with_parens)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             };

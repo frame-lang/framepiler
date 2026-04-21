@@ -442,8 +442,14 @@ fn erlang_process_body_lines_full(
             ErlangRewrite::RecordUpdate { field, value } => {
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
-                // Erlang string concat is ++ not + — fix when adjacent to string literals
+                // Erlang string concat is ++ not + — fix when adjacent to string literals.
+                // Also strip any trailing `,` / `.` / whitespace: the native
+                // text arrives with the user's statement separator attached
+                // (e.g. `self.count = self.count + 1,`), and including it
+                // inside the record-update braces is a parse error
+                // (`Data#data{count = ... ,}`).
                 let value = value
+                    .trim_end_matches(|c: char| c == ',' || c == '.' || c.is_whitespace())
                     .replace("\" + \"", "\" ++ \"")
                     .replace("\" + ", "\" ++ ")
                     .replace(" + \"", " ++ \"");
@@ -502,6 +508,108 @@ fn erlang_process_body_lines_full(
     }
 
     (result, data_var)
+}
+
+/// Wrap a state handler body in transition-guard `case` expressions after
+/// every `@@:self.method()` call. Preserves semantics: if the called
+/// handler transitioned the system to a new state, the rest of the
+/// caller's body is suppressed and the handler returns `{next_state,
+/// NewState, NewData, [{reply, From, undefined}]}` to gen_statem — same
+/// behavior Python/TS/etc. get for free via the mutable `_transitioned`
+/// context flag plus early `return`.
+///
+/// Input: the linear output of `erlang_process_body_lines_full` (each
+/// line comma-suffixed, terminal tuple has no separator). Lines containing
+/// `= frame_dispatch__(` are the InterfaceCall sites the classifier
+/// emitted for @@:self.
+///
+/// Output: same lines, but each dispatch-call site is followed by a case
+/// split on the returned Data's `frame_current_state`. The state's own
+/// atom (snake_case) is the "no transition" arm; any other state is the
+/// "transitioned" early-return arm.
+///
+/// Recurses on the tail so nested @@:self calls produce nested cases
+/// without needing an explicit counter.
+///
+/// `state_atom` is the snake_case atom for the handler's enclosing state
+/// (e.g., `active`, `logged_out`). `reply_expr` is whatever the handler
+/// would return in the transition arm (use the latest `__ReturnVal`
+/// binding if one was set before the @@:self, else `undefined`).
+fn erlang_wrap_self_call_guards(
+    lines: &[String],
+    state_atom: &str,
+) -> Vec<String> {
+    fn is_dispatch_call(line: &str) -> bool {
+        line.contains("= frame_dispatch__(")
+    }
+
+    // Pull the `DataN` new-binding variable name out of a line like
+    //   "    {Data2, _} = frame_dispatch__(method, [args], Data1),"
+    fn extract_new_data_var(line: &str) -> Option<&str> {
+        let open = line.find('{')?;
+        let rest = &line[open + 1..];
+        let comma = rest.find(',')?;
+        Some(rest[..comma].trim())
+    }
+
+    // Recursion: wrap from the first dispatch onward in a case, then
+    // recurse on the tail so nested dispatches get nested cases.
+    for (idx, line) in lines.iter().enumerate() {
+        if !is_dispatch_call(line) {
+            continue;
+        }
+        let data_var = match extract_new_data_var(line) {
+            Some(v) => v.to_string(),
+            None => continue,
+        };
+
+        let inner_wrapped = erlang_wrap_self_call_guards(&lines[idx + 1..], state_atom);
+        if inner_wrapped.is_empty() {
+            // No tail — the dispatch was the last statement. No guard
+            // needed because there's nothing to suppress; the outer
+            // handler's terminal tuple will emit from the caller.
+            continue;
+        }
+
+        let mut result: Vec<String> = lines[..=idx].to_vec();
+        let ind = "    ";
+        result.push(format!(
+            "{ind}case {dv}#data.frame_current_state of",
+            ind = ind, dv = data_var
+        ));
+        result.push(format!("{ind}    {atom} ->", ind = ind, atom = state_atom));
+
+        // Arm body sits two indent levels deeper than the outer `    case`
+        // (i.e. 12 spaces here, but — and this matters for nested guards —
+        // inner lines that ALREADY contain deeper structure must preserve
+        // their relative indent. So re-indent by prefixing 8 spaces rather
+        // than resetting.
+        let last = inner_wrapped.len().saturating_sub(1);
+        for (i, l) in inner_wrapped.iter().enumerate() {
+            // Prepend 8 spaces to whatever relative indent the line has.
+            let re_indent = format!("        {}", l);
+            if i == last {
+                // Arms are separated by `;`. The last statement of the
+                // `atom ->` arm needs a trailing `;` (not `,`); strip any
+                // pre-existing comma first.
+                let trimmed = re_indent
+                    .trim_end_matches(|c: char| c == ',' || c.is_whitespace())
+                    .to_string();
+                result.push(format!("{};", trimmed));
+            } else {
+                result.push(re_indent);
+            }
+        }
+
+        result.push(format!("{ind}    _ ->", ind = ind));
+        result.push(format!(
+            "{ind}        {{next_state, {dv}#data.frame_current_state, {dv}, [{{reply, From, undefined}}]}}",
+            ind = ind, dv = data_var
+        ));
+        result.push(format!("{ind}end", ind = ind));
+        return result;
+    }
+    lines.to_vec()
 }
 
 /// Simple rewrite for contexts where Data threading isn't needed (expressions only)
@@ -1560,6 +1668,14 @@ pub(crate) fn generate_erlang_system(
                         "Data",
                         &handler_params,
                     );
+                    // Wrap any @@:self dispatch sites in transition-guard
+                    // `case` expressions so a state change inside the called
+                    // handler short-circuits the rest of the caller's body.
+                    // No-op if the body has no `= frame_dispatch__(` lines.
+                    let processed = erlang_wrap_self_call_guards(
+                        &processed,
+                        &to_snake_case(&state.name),
+                    );
                     if !processed.is_empty() {
                         // Use structured case arm analysis when a case block exists
                         if let Some((classification, arms, case_start, case_end)) =
@@ -1751,12 +1867,22 @@ pub(crate) fn generate_erlang_system(
                                 final_data, reply_val
                             ));
                         } else {
-                            erlang_smart_join(&processed, &mut code);
-                            code.push_str(",\n");
-                            code.push_str(&format!(
-                                "    {{keep_state, {}, [{{reply, From, {}}}]}};\n",
+                            // Build the full body — processed body + keep_state terminal —
+                            // then wrap any `@@:self` dispatch sites in transition-guard
+                            // cases so a state change inside the called handler
+                            // short-circuits the rest of the caller and propagates the
+                            // new state back through gen_statem.
+                            let mut full = processed.clone();
+                            full.push(format!(
+                                "    {{keep_state, {}, [{{reply, From, {}}}]}}",
                                 final_data, reply_val
                             ));
+                            let wrapped = erlang_wrap_self_call_guards(
+                                &full,
+                                &to_snake_case(&state.name),
+                            );
+                            erlang_smart_join(&wrapped, &mut code);
+                            code.push_str(";\n");
                         }
                     }
                 }

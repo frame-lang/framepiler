@@ -470,25 +470,76 @@ state args (`fmt_bind_param`) and event args (`fmt_unpack`) — any type
 ending in `*` is emitted as-is instead of being cast to `int`
 through `intptr_t`.
 
-### Erlang — @@:self via frame_dispatch__
+### Erlang — @@:self via frame_dispatch__ + transition guards
 
 Erlang's `@@:self.method(args)` routes through the already-generated
 `frame_dispatch__` helper, which invokes the current state function
 directly (bypassing `gen_statem:call`, which would deadlock on
-`self()`) and extracts the reply action:
+`self()`) and extracts the reply action. The Frame-level expansion
+(`frame_expansion.rs::FrameSegmentKind::ContextSelfCall` → Erlang)
+emits bare `self.method(args)` and lets the Erlang handler post-pass
+(`erlang_system.rs::erlang_rewrite_native_classified_full`) recognize
+it as an `InterfaceCall` and rewrite:
 
 ```erlang
-Baseline = element(2, frame_dispatch__(get_base, [], Data)),
+{Data2, Baseline} = frame_dispatch__(reading, [], Data1),
 ```
 
-**Known limitation:** `frame_dispatch__` returns `{NewData, RetVal}`.
-The current expansion takes only `element(2, ...)`, dropping
-`NewData` — so a state transition inside a @@:self-called handler is
-lost. Pure-query @@:self (the case exercised by `39_self_call.ferl`)
-works end-to-end. The transition-guard scenarios in the Python/Go
-versions of the `@@:self` tests remain `@@skip`'d on Erlang; fixing
-them requires a compile-time rewrite pass that renames `Data` →
-`Data1` → `Data2` after each dispatch call in the handler body.
+The pass tracks `data_gen` so subsequent `self.field` reads and
+`self.field = value` record-updates see the latest `DataN` (immutable
+single-assignment semantics).
+
+**Transition guards.** `frame_dispatch__` returns `{NewData, RetVal}`
+with `NewData#data.frame_current_state` reflecting any transition
+fired inside the called handler. After each dispatch site, the codegen
+wraps the *rest of the caller's body* (including the terminal reply
+tuple) in a `case` that short-circuits on state change. Source:
+
+```frame
+attempt_post_shutdown() {
+    self.trace = 1,
+    @@:self.trigger_shutdown(),
+    self.trace = 2    // guarded — trigger_shutdown transitions
+}
+```
+
+Emitted:
+
+```erlang
+active({call, From}, attempt_post_shutdown, Data) ->
+    Data1 = Data#data{trace = 1},
+    {Data2, _} = frame_dispatch__(trigger_shutdown, [], Data1),
+    case Data2#data.frame_current_state of
+        active ->
+            Data3 = Data2#data{trace = 2},   %% suppressed when transition fires
+            {keep_state, Data3, [{reply, From, ok}]};
+        _ ->
+            {next_state, Data2#data.frame_current_state, Data2,
+             [{reply, From, undefined}]}
+    end;
+```
+
+Nested `@@:self` calls produce nested cases — the inner `case` closes
+inside the outer `active -> ... ;` arm. Emitted by
+`erlang_system.rs::erlang_wrap_self_call_guards` as a post-process on
+the classifier's linear output.
+
+The `_ -> ... undefined` arm is the functional-language equivalent of
+Python/TS's `if ctx._transitioned: return;`: the caller's handler
+exits early and hands gen_statem the new state plus a default reply
+value. The declared return type's `return_init` isn't currently
+threaded into the early-return arm (only `undefined`) — callers that
+actually read a post-transition return value see `undefined`. This
+matches Python semantics reasonably (the `_return` slot in Python
+retains whatever was last set; if nothing, it's `None`).
+
+**Scope:** the guard + Data-threading apply to `has_return_tuple` and
+the common non-tuple branches of the handler emission. The
+`has_case && has_transition` and `has_return_val && has_case` branches
+(user-written `case ... of ... end` blocks in the handler body) still
+use the older linear emission — a handler that mixes user-written
+case blocks with `@@:self` calls isn't currently tested. If a future
+test needs it, the wrap should move into those branches too.
 
 ---
 
