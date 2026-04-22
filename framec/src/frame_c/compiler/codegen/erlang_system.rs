@@ -96,12 +96,19 @@ fn erlang_rewrite_native_classified_full(
 
     // self.field = expr → record update.
     // String-aware replacement on the RHS so a `self.` appearing inside
-    // a string literal in the expression isn't mangled.
+    // a string literal in the expression isn't mangled. A trailing
+    // semicolon (`self.x = v;`) is stripped because C-family Frame
+    // bodies use `;` as a statement terminator but Erlang's record
+    // update `Data#data{x = v}` can't carry it — `,`/`.` are the only
+    // separators Erlang accepts at that position.
     if l.starts_with("self.") && l.contains('=') {
         let rest = &l[5..]; // skip "self."
         if let Some(eq_pos) = rest.find('=') {
             let field = rest[..eq_pos].trim().to_string();
-            let rhs = rest[eq_pos + 1..].trim();
+            let rhs = rest[eq_pos + 1..]
+                .trim()
+                .trim_end_matches(';')
+                .trim();
             let replacement = format!("{}#data.", data_var);
             let value = replace_outside_strings_and_comments(
                 rhs,
