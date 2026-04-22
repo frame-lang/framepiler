@@ -2350,10 +2350,19 @@ pub(crate) fn generate_frame_expansion(
                         "{}_context_stack[_context_stack.Count - 1]._return = {};",
                         indent_str, expanded_expr
                     ),
-                    TargetLanguage::Go => format!(
-                        "{}s._context_stack[len(s._context_stack)-1]._return = {}",
-                        indent_str, expanded_expr
-                    ),
+                    TargetLanguage::Go => {
+                        // Go's generated methods use `s` as the receiver
+                        // name, not `self`. The statement-body path in
+                        // system_codegen rewrites `self.` → `s.`, but the
+                        // `@@:()` return-expression path reaches here with
+                        // `self.` still present. Mirror what Erlang does
+                        // below and apply the rewrite inline.
+                        let go_expr = expanded_expr.replace("self.", "s.");
+                        format!(
+                            "{}s._context_stack[len(s._context_stack)-1]._return = {}",
+                            indent_str, go_expr
+                        )
+                    }
                     TargetLanguage::Php => format!(
                         "{}$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
                         indent_str, expanded_expr
@@ -2524,10 +2533,15 @@ pub(crate) fn generate_frame_expansion(
                     "_context_stack[_context_stack.Count - 1]._return = {};",
                     expanded_expr
                 ),
-                TargetLanguage::Go => format!(
-                    "s._context_stack[len(s._context_stack)-1]._return = {}",
-                    expanded_expr
-                ),
+                TargetLanguage::Go => {
+                    // Rewrite `self.` → `s.` in the return expression,
+                    // matching the `@@:return = expr` Go branch above.
+                    let go_expr = expanded_expr.replace("self.", "s.");
+                    format!(
+                        "s._context_stack[len(s._context_stack)-1]._return = {}",
+                        go_expr
+                    )
+                }
                 TargetLanguage::Php => format!(
                     "$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
                     expanded_expr
@@ -2950,10 +2964,15 @@ pub(crate) fn generate_frame_expansion(
                     "_context_stack[_context_stack.Count - 1]._return = {};",
                     expanded_expr
                 ),
-                TargetLanguage::Go => format!(
-                    "s._context_stack[len(s._context_stack)-1]._return = {}",
-                    expanded_expr
-                ),
+                TargetLanguage::Go => {
+                    // Rewrite `self.` → `s.` in the return expression,
+                    // matching the `@@:return = expr` Go branch above.
+                    let go_expr = expanded_expr.replace("self.", "s.");
+                    format!(
+                        "s._context_stack[len(s._context_stack)-1]._return = {}",
+                        go_expr
+                    )
+                }
                 TargetLanguage::Php => format!(
                     "$this->_context_stack[count($this->_context_stack) - 1]->_return = {};",
                     expanded_expr

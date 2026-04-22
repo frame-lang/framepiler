@@ -536,11 +536,15 @@ impl GoBackend {
     /// the existing `synthesize_field_raw` behavior which does not apply
     /// `map_type` to the user-supplied type string.
     fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
-        let type_str = field
+        // Apply Frame-type → Go-type mapping so domain fields declared
+        // with the portable `str` / `int` / `bool` keywords compile.
+        // Without this, `s: str = ""` produces `s str` (undefined type).
+        let raw_type = field
             .type_annotation
             .as_ref()
             .map(|s| s.as_str())
             .unwrap_or("any");
+        let type_str = self.map_type(raw_type);
         format!("{}{} {}\n", ctx.get_indent(), field.name, type_str)
     }
 }
