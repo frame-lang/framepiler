@@ -2,7 +2,7 @@
 
 *Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
 
-71 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
+85 recipes showing how to solve real problems with Frame. Each recipe is a complete, runnable Frame spec with an explanation of the key patterns used.
 
 For language syntax details, see the [Frame Language Reference](frame_language.md). For a tutorial introduction, see [Getting Started](frame_getting_started.md).
 
@@ -114,6 +114,23 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 69. [NTP Client Association](#69-ntp-client-association) — polling backoff and reachability tracking
 70. [HTTP/1.1 Connection](#70-http11-connection) — keep-alive lifecycle with HSM error handling
 71. [SMTP Conversation](#71-smtp-conversation) — command-response protocol with STARTTLS upgrade
+
+**Scientific and Medical (72-85)**
+
+72. [Phases of Matter](#72-phases-of-matter) — solid/liquid/gas/plasma with latent-heat plateaus
+73. [Water with Supercooling](#73-water-with-supercooling) — metastable states
+74. [Radioactive Decay Chain](#74-radioactive-decay-chain) — U-238 → Pb-206 sequential states
+75. [Cell Cycle with Checkpoints](#75-cell-cycle-with-checkpoints) — G1/S/G2/M with arrest states
+76. [Enzyme Kinetics](#76-enzyme-kinetics-michaelismenten) — E + S ⇌ ES → E + P
+77. [Neuron Action Potential](#77-neuron-action-potential) — resting/depolarizing/repolarizing/refractory
+78. [Virus Infection Lifecycle (SIR)](#78-virus-infection-lifecycle-sir) — susceptible/infected/recovered
+79. [Titration Protocol](#79-titration-protocol) — lab procedure with endpoint as structural gate
+80. [PCR Thermal Cycler](#80-pcr-thermal-cycler) — denature/anneal/extend with cycle counting
+81. [Infusion Pump](#81-infusion-pump) — safety-critical delivery with HSM alarms
+82. [Ventilator Breath Cycle](#82-ventilator-breath-cycle) — inspiration/expiration with assist modes
+83. [Defibrillator / AED](#83-defibrillator--aed) — analyze → charge → shock, impossible-by-construction
+84. [ACLS Cardiac Arrest Algorithm](#84-acls-cardiac-arrest-algorithm) — shockable vs non-shockable branches
+85. [Sepsis Hour-1 Bundle](#85-sepsis-hour-1-bundle) — time-boxed treatment protocol
 
 -----
 
@@ -8650,6 +8667,1247 @@ STARTTLS is handled by cycling back to `$AwaitEhlo` after the TLS handshake comp
 The recipient list accumulates in a domain variable. Each RCPT TO adds an entry; a rejected recipient (non-250) is also added — matching real SMTP behavior where partially accepted messages still deliver to successful recipients.
 
 **Features used:** HSM parent as “connection up” sentinel, command-response cycling (`$Await*Response` transient states), multi-recipient accumulator pattern, conditional transition based on negotiated capabilities, protocol restart after STARTTLS
+
+-----
+
+## Scientific and Medical
+
+State machines fit physical sciences, biology, chemistry, and medicine naturally because nature itself is full of discrete regimes — phases, life-cycle stages, catalytic states, device modes — separated by well-defined transitions. "Impossible by construction" matters here: a medical device that cannot deliver a dose except through `$Primed -> $Running` is structurally safer than one that checks a flag.
+
+-----
+
+## 72. Phases of Matter
+
+**Problem:** Model a substance moving through solid, liquid, gas, and plasma, including the latent-heat plateaus where the temperature holds steady while phase-change energy is absorbed.
+
+```frame
+@@target python_3
+
+@@system Substance(melting_point: float, boiling_point: float, ionization_point: float) {
+    interface:
+        add_heat(joules: float)
+        remove_heat(joules: float)
+        temperature(): float
+        phase(): str
+
+    machine:
+        $Solid {
+            add_heat(joules: float) {
+                self.temp = self.temp + joules / self.heat_capacity
+                if self.temp >= self.mp:
+                    self.temp = self.mp
+                    self.latent_absorbed = 0.0
+                    -> $Melting
+            }
+            remove_heat(joules: float) {
+                self.temp = self.temp - joules / self.heat_capacity
+            }
+            temperature(): float { @@:(self.temp) }
+            phase(): str { @@:("solid") }
+        }
+
+        $Melting {
+            add_heat(joules: float) {
+                self.latent_absorbed = self.latent_absorbed + joules
+                if self.latent_absorbed >= self.latent_fusion:
+                    -> $Liquid
+            }
+            remove_heat(joules: float) {
+                self.latent_absorbed = self.latent_absorbed - joules
+                if self.latent_absorbed <= 0:
+                    -> $Solid
+            }
+            temperature(): float { @@:(self.mp) }
+            phase(): str { @@:("melting") }
+        }
+
+        $Liquid {
+            add_heat(joules: float) {
+                self.temp = self.temp + joules / self.heat_capacity
+                if self.temp >= self.bp:
+                    self.temp = self.bp
+                    self.latent_absorbed = 0.0
+                    -> $Boiling
+            }
+            remove_heat(joules: float) {
+                self.temp = self.temp - joules / self.heat_capacity
+                if self.temp <= self.mp:
+                    self.temp = self.mp
+                    self.latent_absorbed = self.latent_fusion
+                    -> $Melting
+            }
+            temperature(): float { @@:(self.temp) }
+            phase(): str { @@:("liquid") }
+        }
+
+        $Boiling {
+            add_heat(joules: float) {
+                self.latent_absorbed = self.latent_absorbed + joules
+                if self.latent_absorbed >= self.latent_vaporization:
+                    -> $Gas
+            }
+            remove_heat(joules: float) {
+                self.latent_absorbed = self.latent_absorbed - joules
+                if self.latent_absorbed <= 0:
+                    -> $Liquid
+            }
+            temperature(): float { @@:(self.bp) }
+            phase(): str { @@:("boiling") }
+        }
+
+        $Gas {
+            add_heat(joules: float) {
+                self.temp = self.temp + joules / self.heat_capacity
+                if self.temp >= self.ip:
+                    -> $Plasma
+            }
+            remove_heat(joules: float) {
+                self.temp = self.temp - joules / self.heat_capacity
+                if self.temp <= self.bp:
+                    self.temp = self.bp
+                    self.latent_absorbed = self.latent_vaporization
+                    -> $Boiling
+            }
+            temperature(): float { @@:(self.temp) }
+            phase(): str { @@:("gas") }
+        }
+
+        $Plasma {
+            remove_heat(joules: float) {
+                self.temp = self.temp - joules / self.heat_capacity
+                if self.temp <= self.ip:
+                    -> $Gas
+            }
+            temperature(): float { @@:(self.temp) }
+            phase(): str { @@:("plasma") }
+        }
+
+    domain:
+        mp = melting_point
+        bp = boiling_point
+        ip = ionization_point
+        temp: float = -50.0
+        heat_capacity: float = 4.18
+        latent_fusion: float = 334.0
+        latent_vaporization: float = 2260.0
+        latent_absorbed: float = 0.0
+}
+
+if __name__ == '__main__':
+    water = @@Substance(0.0, 100.0, 10000.0)
+    print(f"start: {water.phase()} at {water.temperature():.1f}")
+    for _ in range(30):
+        water.add_heat(100.0)
+        print(f"{water.phase():10s} {water.temperature():7.1f}")
+```
+
+**Features used:** system parameters, domain variables for conserved quantities, symmetric transitions for reversible processes, latent-heat plateau as a state with its own physics.
+
+-----
+
+## 73. Water with Supercooling
+
+**Problem:** Water can be cooled below 0 C without freezing if pure and undisturbed. A disturbance triggers crystallization. A supercooled droplet and ice at the same temperature respond to `shake()` differently — that's a state distinction.
+
+```frame
+@@target python_3
+
+@@system Water {
+    interface:
+        cool(delta: float)
+        heat(delta: float)
+        nucleate()
+        shake()
+        temperature(): float
+        phase(): str
+
+    machine:
+        $Liquid {
+            cool(delta: float) {
+                self.temp = self.temp - delta
+                if self.temp < 0.0:
+                    -> $Supercooled
+            }
+            heat(delta: float) { self.temp = self.temp + delta }
+            temperature(): float { @@:(self.temp) }
+            phase(): str { @@:("liquid") }
+        }
+
+        $Supercooled {
+            cool(delta: float) {
+                self.temp = self.temp - delta
+                if self.temp <= -42.0:
+                    -> $Ice
+            }
+            heat(delta: float) {
+                self.temp = self.temp + delta
+                if self.temp >= 0.0:
+                    -> $Liquid
+            }
+            nucleate() { -> $Ice }
+            shake() { -> $Ice }
+            temperature(): float { @@:(self.temp) }
+            phase(): str { @@:("supercooled liquid") }
+        }
+
+        $Ice {
+            heat(delta: float) {
+                self.temp = self.temp + delta
+                if self.temp >= 0.0:
+                    -> $Liquid
+            }
+            cool(delta: float) { self.temp = self.temp - delta }
+            temperature(): float { @@:(self.temp) }
+            phase(): str { @@:("ice") }
+        }
+
+    domain:
+        temp: float = 25.0
+}
+
+if __name__ == '__main__':
+    w = @@Water()
+    w.cool(30.0)
+    print(w.phase(), w.temperature())
+    w.shake()
+    print(w.phase(), w.temperature())
+```
+
+**Features used:** shared domain variable across states, multiple trigger events for the same transition, handler absence as behavioral distinction.
+
+-----
+
+## 74. Radioactive Decay Chain
+
+**Problem:** U-238 decay chain with probabilistic transitions per tick. Each nuclide owns its decay probability locally.
+
+```frame
+@@target python_3
+
+import random
+
+@@system DecayChain {
+    interface:
+        tick()
+        nuclide(): str
+        ticks_elapsed(): int
+
+    machine:
+        $U238 {
+            tick() {
+                self.ticks = self.ticks + 1
+                if random.random() < 0.08:
+                    -> $Th234
+            }
+            nuclide(): str { @@:("U-238") }
+        }
+        $Th234 {
+            tick() {
+                self.ticks = self.ticks + 1
+                if random.random() < 0.3:
+                    -> $Pa234
+            }
+            nuclide(): str { @@:("Th-234") }
+        }
+        $Pa234 {
+            tick() {
+                self.ticks = self.ticks + 1
+                if random.random() < 0.5:
+                    -> $U234
+            }
+            nuclide(): str { @@:("Pa-234") }
+        }
+        $U234 {
+            tick() {
+                self.ticks = self.ticks + 1
+                if random.random() < 0.05:
+                    -> $Pb206
+            }
+            nuclide(): str { @@:("U-234") }
+        }
+        $Pb206 {
+            nuclide(): str { @@:("Pb-206 (stable)") }
+        }
+
+    domain:
+        ticks: int = 0
+}
+
+if __name__ == '__main__':
+    random.seed(1)
+    n = @@DecayChain()
+    last = ""
+    for _ in range(200):
+        n.tick()
+        now = n.nuclide()
+        if now != last:
+            print(f"t={n.ticks_elapsed()}: {now}")
+            last = now
+        if now == "Pb-206 (stable)":
+            break
+```
+
+**Features used:** terminal state, stochastic transitions, each state owns its decay law locally.
+
+-----
+
+## 75. Cell Cycle with Checkpoints
+
+**Problem:** G1/S/G2/M cycle with checkpoint arrest states. DNA damage, nutrient depletion, and spindle misalignment halt the cycle; repair or apoptosis resolve the arrest.
+
+```frame
+@@target python_3
+
+@@system CellCycle {
+    interface:
+        tick()
+        dna_damage_detected()
+        damage_repaired()
+        nutrients_low()
+        nutrients_restored()
+        spindle_misaligned()
+        spindle_aligned()
+        apoptosis_signal()
+        phase(): str = ""
+
+    machine:
+        $Cycling {
+            dna_damage_detected() { -> $G1_Arrested }
+            nutrients_low() { -> $G0_Quiescent }
+            apoptosis_signal() { -> $Apoptotic }
+        }
+
+        $G1 => $Cycling {
+            $>() { self.mass = self.mass * 1.1 }
+            tick() {
+                if self.mass >= self.g1_threshold:
+                    -> $S
+            }
+            phase(): str { @@:("G1") }
+            => $^
+        }
+
+        $S => $Cycling {
+            $>() { self.dna_content = 1.0 }
+            tick() {
+                self.dna_content = self.dna_content + 0.1
+                if self.dna_content >= 2.0:
+                    self.dna_content = 2.0
+                    -> $G2
+            }
+            phase(): str { @@:("S") }
+            => $^
+        }
+
+        $G2 => $Cycling {
+            tick() {
+                self.g2_counter = self.g2_counter + 1
+                if self.g2_counter >= 3:
+                    self.g2_counter = 0
+                    -> $M
+            }
+            phase(): str { @@:("G2") }
+            => $^
+        }
+
+        $M => $Cycling {
+            tick() {
+                self.mass = self.mass / 2.0
+                self.dna_content = 1.0
+                -> $G1
+            }
+            spindle_misaligned() { -> $M_Arrested }
+            phase(): str { @@:("M") }
+            => $^
+        }
+
+        $G1_Arrested {
+            damage_repaired() { -> $G1 }
+            apoptosis_signal() { -> $Apoptotic }
+            phase(): str { @@:("G1-arrested") }
+        }
+
+        $M_Arrested {
+            spindle_aligned() { -> $M }
+            apoptosis_signal() { -> $Apoptotic }
+            phase(): str { @@:("M-arrested") }
+        }
+
+        $G0_Quiescent {
+            nutrients_restored() { -> $G1 }
+            phase(): str { @@:("G0") }
+        }
+
+        $Apoptotic {
+            phase(): str { @@:("apoptotic") }
+        }
+
+    domain:
+        mass: float = 1.0
+        g1_threshold: float = 1.8
+        dna_content: float = 1.0
+        g2_counter: int = 0
+}
+
+if __name__ == '__main__':
+    c = @@CellCycle()
+    for i in range(15):
+        c.tick()
+        if i == 5:
+            c.dna_damage_detected()
+        if i == 8:
+            c.damage_repaired()
+        print(f"t={i}: {c.phase()}")
+```
+
+**Features used:** HSM parent for shared checkpoint signaling, default forward `=> $^`, arrest states as distinct dispatch contexts, apoptosis as terminal state.
+
+-----
+
+## 76. Enzyme Kinetics (Michaelis-Menten)
+
+**Problem:** Single enzyme molecule: E + S ⇌ ES → E + P. Steady-state distribution reproduces Michaelis-Menten saturation.
+
+```frame
+@@target python_3
+
+import random
+
+@@system EnzymeMolecule(substrate_conc: float) {
+    interface:
+        tick()
+        state_name(): str
+        products_made(): int
+
+    machine:
+        $Free {
+            tick() {
+                if random.random() < 0.1 * self.s_conc:
+                    -> $Bound
+            }
+            state_name(): str { @@:("E (free)") }
+        }
+        $Bound {
+            tick() {
+                r = random.random()
+                if r < 0.3:
+                    self.products = self.products + 1
+                    -> $Free
+                elif r < 0.5:
+                    -> $Free
+            }
+            state_name(): str { @@:("ES (bound)") }
+        }
+
+    domain:
+        s_conc = substrate_conc
+        products: int = 0
+}
+
+if __name__ == '__main__':
+    random.seed(7)
+    for s in [0.5, 2.0, 10.0]:
+        e = @@EnzymeMolecule(s)
+        for _ in range(10000):
+            e.tick()
+        print(f"[S] = {s:5.1f}:  {e.products_made()} products")
+```
+
+**Features used:** system parameter, stochastic transitions, emergent kinetics from state distribution.
+
+-----
+
+## 77. Neuron Action Potential
+
+**Problem:** Resting → depolarizing → repolarizing → refractory. Absolute refractory cannot fire; relative refractory needs stronger input.
+
+```frame
+@@target python_3
+
+@@system Neuron {
+    interface:
+        stimulate(input: float)
+        tick()
+        voltage(): float
+        phase(): str
+
+    machine:
+        $Resting {
+            stimulate(input: float) {
+                self.v = self.v + input
+                if self.v >= self.threshold:
+                    -> $Depolarizing
+            }
+            tick() { self.v = self.v + (self.v_rest - self.v) * 0.2 }
+            voltage(): float { @@:(self.v) }
+            phase(): str { @@:("resting") }
+        }
+
+        $Depolarizing {
+            $>() { self.v = self.v_peak }
+            tick() { -> $Repolarizing }
+            voltage(): float { @@:(self.v) }
+            phase(): str { @@:("spike") }
+        }
+
+        $Repolarizing {
+            tick() {
+                self.v = self.v_hyper
+                -> $Refractory
+            }
+            voltage(): float { @@:(self.v) }
+            phase(): str { @@:("repolarizing") }
+        }
+
+        $Refractory {
+            stimulate(input: float) { }
+            tick() {
+                self.ref_ticks = self.ref_ticks + 1
+                if self.ref_ticks >= 3:
+                    self.ref_ticks = 0
+                    -> $Resting
+            }
+            voltage(): float { @@:(self.v) }
+            phase(): str { @@:("refractory") }
+        }
+
+    domain:
+        v: float = -70.0
+        v_rest: float = -70.0
+        v_peak: float = 40.0
+        v_hyper: float = -80.0
+        threshold: float = -55.0
+        ref_ticks: int = 0
+}
+
+if __name__ == '__main__':
+    n = @@Neuron()
+    for s in [5, 5, 10, 5, 0, 0, 0, 0, 0, 15, 30, 0, 0, 0, 0]:
+        if s > 0:
+            n.stimulate(float(s))
+        n.tick()
+        print(f"{n.phase():15s} V = {n.voltage():+.1f} mV")
+```
+
+**Features used:** state-dependent event handling, empty handler as no-op, enter handler side effects, timed sub-phases.
+
+-----
+
+## 78. Virus Infection Lifecycle (SIR)
+
+**Problem:** Individual person: Susceptible → Infected → Recovered. Run N of them to simulate an epidemic.
+
+```frame
+@@target python_3
+
+import random
+
+@@system Person(p_infect: float, recovery_days: int) {
+    interface:
+        expose()
+        tick()
+        status(): str
+
+    machine:
+        $Susceptible {
+            expose() {
+                if random.random() < self.p:
+                    self.days_infected = 0
+                    -> $Infected
+            }
+            status(): str { @@:("S") }
+        }
+
+        $Infected {
+            expose() { }
+            tick() {
+                self.days_infected = self.days_infected + 1
+                if self.days_infected >= self.rec_days:
+                    -> $Recovered
+            }
+            status(): str { @@:("I") }
+        }
+
+        $Recovered {
+            expose() { }
+            status(): str { @@:("R") }
+        }
+
+    domain:
+        p = p_infect
+        rec_days = recovery_days
+        days_infected: int = 0
+}
+
+if __name__ == '__main__':
+    random.seed(3)
+    pop = [@@Person(0.4, 7) for _ in range(200)]
+    pop[0].expose()
+    for day in range(30):
+        for p in pop:
+            if p.status() == "I":
+                pop[random.randint(0, len(pop) - 1)].expose()
+        for p in pop:
+            p.tick()
+        s = sum(1 for p in pop if p.status() == "S")
+        i = sum(1 for p in pop if p.status() == "I")
+        r = sum(1 for p in pop if p.status() == "R")
+        print(f"day {day:2d}: S={s:3d} I={i:3d} R={r:3d}")
+```
+
+**Features used:** system parameters, compositional simulation (200 independent state machines), no-op handlers, epidemic as emergent property of FSM interaction.
+
+-----
+
+## 79. Titration Protocol
+
+**Problem:** Add titrant drop by drop. Endpoint locks the result — no more titrant after declaring endpoint.
+
+```frame
+@@target python_3
+
+@@system Titration {
+    interface:
+        add_drop(volume_mL: float)
+        observe_color(color: str)
+        record_endpoint()
+        new_trial()
+        result_mL(): float = 0.0
+        status(): str
+
+    machine:
+        $Setup {
+            add_drop(volume_mL: float) {
+                self.volume = 0.0
+                -> $Titrating
+            }
+            status(): str { @@:("setup") }
+        }
+
+        $Titrating {
+            add_drop(volume_mL: float) { self.volume = self.volume + volume_mL }
+            observe_color(color: str) {
+                if color == "pink":
+                    -> $NearEndpoint
+            }
+            status(): str { @@:(f"titrating — {self.volume:.2f} mL") }
+        }
+
+        $NearEndpoint {
+            add_drop(volume_mL: float) { self.volume = self.volume + volume_mL }
+            observe_color(color: str) {
+                if color == "clear":
+                    -> $Titrating
+            }
+            record_endpoint() { -> $Complete }
+            status(): str { @@:(f"near endpoint — {self.volume:.2f} mL") }
+        }
+
+        $Complete {
+            new_trial() {
+                self.volume = 0.0
+                -> $Setup
+            }
+            result_mL(): float { @@:(self.volume) }
+            status(): str { @@:(f"complete — {self.volume:.3f} mL") }
+        }
+
+    domain:
+        volume: float = 0.0
+}
+
+if __name__ == '__main__':
+    t = @@Titration()
+    t.add_drop(1.0)
+    t.add_drop(5.0)
+    t.add_drop(3.0)
+    t.observe_color("pink")
+    t.add_drop(0.05)
+    t.record_endpoint()
+    t.add_drop(1.0)          # IGNORED — $Complete has no add_drop handler
+    print(f"endpoint: {t.result_mL():.3f} mL")
+```
+
+**Features used:** events ignored in wrong state, terminal state with explicit reset, state as protocol phase.
+
+-----
+
+## 80. PCR Thermal Cycler
+
+**Problem:** Denature at 95 C, anneal at 55 C, extend at 72 C. Repeat N times. Hold at 4 C.
+
+```frame
+@@target python_3
+
+@@system PCRCycler(total_cycles: int) {
+    interface:
+        start()
+        tick_minute()
+        temperature(): float
+        current_cycle(): int
+        phase(): str
+
+    machine:
+        $Idle {
+            start() {
+                self.cycle = 0
+                -> $Denature
+            }
+            temperature(): float { @@:(25.0) }
+            phase(): str { @@:("idle") }
+        }
+
+        $Running {
+        }
+
+        $Denature => $Running {
+            $>() { self.cycle = self.cycle + 1; self.phase_min = 0 }
+            tick_minute() {
+                self.phase_min = self.phase_min + 1
+                if self.phase_min >= 1:
+                    -> $Anneal
+            }
+            temperature(): float { @@:(95.0) }
+            phase(): str { @@:(f"denature (cycle {self.cycle}/{self.target})") }
+            => $^
+        }
+
+        $Anneal => $Running {
+            $>() { self.phase_min = 0 }
+            tick_minute() {
+                self.phase_min = self.phase_min + 1
+                if self.phase_min >= 1:
+                    -> $Extend
+            }
+            temperature(): float { @@:(55.0) }
+            phase(): str { @@:(f"anneal (cycle {self.cycle}/{self.target})") }
+            => $^
+        }
+
+        $Extend => $Running {
+            $>() { self.phase_min = 0 }
+            tick_minute() {
+                self.phase_min = self.phase_min + 1
+                if self.phase_min >= 2:
+                    if self.cycle >= self.target:
+                        -> $FinalHold
+                    else:
+                        -> $Denature
+            }
+            temperature(): float { @@:(72.0) }
+            phase(): str { @@:(f"extend (cycle {self.cycle}/{self.target})") }
+            => $^
+        }
+
+        $FinalHold {
+            temperature(): float { @@:(4.0) }
+            phase(): str { @@:("final hold at 4 C") }
+        }
+
+    domain:
+        target = total_cycles
+        cycle: int = 0
+        phase_min: int = 0
+}
+
+if __name__ == '__main__':
+    p = @@PCRCycler(3)
+    p.start()
+    for _ in range(20):
+        print(f"cycle={p.current_cycle()} {p.phase():40s} T={p.temperature():.0f}")
+        p.tick_minute()
+```
+
+**Features used:** HSM parent declared before children, per-phase enter handlers, cycle counting, conditional branch to terminal vs continuation.
+
+-----
+
+## 81. Infusion Pump
+
+**Problem:** Safety-critical delivery. Cannot infuse without priming. Alarm state has no infusion handlers — impossible by construction.
+
+```frame
+@@target python_3
+
+@@system InfusionPump {
+    interface:
+        power_on()
+        set_rate(ml_per_hr: float)
+        prime()
+        start_infusion()
+        occlusion_detected()
+        acknowledge_alarm()
+        tick_minute()
+        volume_delivered(): float = 0.0
+        status(): str
+
+    machine:
+        $Operational {
+            occlusion_detected() { -> ("occlusion") $Alarm }
+        }
+
+        $Off {
+            power_on() { -> $Idle }
+            status(): str { @@:("off") }
+        }
+
+        $Idle => $Operational {
+            set_rate(ml_per_hr: float) { self.rate = ml_per_hr }
+            prime() {
+                if self.rate > 0:
+                    -> $Primed
+            }
+            status(): str { @@:(f"idle — rate {self.rate}") }
+            => $^
+        }
+
+        $Primed => $Operational {
+            start_infusion() { -> $Running }
+            status(): str { @@:("primed") }
+            => $^
+        }
+
+        $Running => $Operational {
+            tick_minute() { self.volume = self.volume + self.rate / 60.0 }
+            status(): str { @@:(f"running — {self.volume:.1f} mL delivered") }
+            => $^
+        }
+
+        $Alarm {
+            $.reason: str = "unknown"
+            $>(reason: str) { $.reason = reason }
+            acknowledge_alarm() { -> $Idle }
+            status(): str { @@:(f"ALARM: {$.reason}") }
+        }
+
+    domain:
+        rate: float = 0.0
+        volume: float = 0.0
+}
+
+if __name__ == '__main__':
+    p = @@InfusionPump()
+    p.power_on()
+    p.set_rate(100.0)
+    p.start_infusion()       # IGNORED — not primed
+    p.prime()
+    p.start_infusion()
+    for _ in range(10):
+        p.tick_minute()
+    print(p.status())
+    p.occlusion_detected()
+    p.start_infusion()       # IGNORED — alarm
+    print(p.status())
+    p.acknowledge_alarm()
+    print(p.status())
+```
+
+**Features used:** HSM parent for safety signals, alarm as structural gate with enter args, events ignored in wrong state, impossible-by-construction safety.
+
+-----
+
+## 82. Ventilator Breath Cycle
+
+**Problem:** Inspiration/expiration/pause cycle. Patient effort triggers next breath only during pause — not mid-inspiration.
+
+```frame
+@@target python_3
+
+@@system Ventilator {
+    interface:
+        power_on()
+        tick_ms(ms: int)
+        patient_effort_detected()
+        stop()
+        phase(): str
+        breath_count(): int
+
+    machine:
+        $Off {
+            power_on() { -> $Inspiration }
+            phase(): str { @@:("off") }
+        }
+
+        $Ventilating {
+            stop() { -> $Off }
+        }
+
+        $Inspiration => $Ventilating {
+            $>() { self.phase_ms = 0; self.breaths = self.breaths + 1 }
+            tick_ms(ms: int) {
+                self.phase_ms = self.phase_ms + ms
+                if self.phase_ms >= 1000:
+                    -> $Expiration
+            }
+            patient_effort_detected() { }
+            phase(): str { @@:(f"inspiration ({self.phase_ms} ms)") }
+            => $^
+        }
+
+        $Expiration => $Ventilating {
+            $>() { self.phase_ms = 0 }
+            tick_ms(ms: int) {
+                self.phase_ms = self.phase_ms + ms
+                if self.phase_ms >= 1500:
+                    -> $Pause
+            }
+            patient_effort_detected() { }
+            phase(): str { @@:(f"expiration ({self.phase_ms} ms)") }
+            => $^
+        }
+
+        $Pause => $Ventilating {
+            $>() { self.phase_ms = 0 }
+            tick_ms(ms: int) {
+                self.phase_ms = self.phase_ms + ms
+                if self.phase_ms >= 500:
+                    -> $Inspiration
+            }
+            patient_effort_detected() { -> $Inspiration }
+            phase(): str { @@:("pause") }
+            => $^
+        }
+
+    domain:
+        phase_ms: int = 0
+        breaths: int = 0
+}
+
+if __name__ == '__main__':
+    v = @@Ventilator()
+    v.power_on()
+    for _ in range(40):
+        v.tick_ms(100)
+    print(f"breaths: {v.breath_count()}")
+```
+
+**Features used:** timed phases with enter handlers, state-dependent event handling, HSM parent for shared stop.
+
+-----
+
+## 83. Defibrillator / AED
+
+**Problem:** Rigid safety sequence: analyze → charge → confirm clear → shock. Cannot shock without completing the chain.
+
+```frame
+@@target python_3
+
+@@system AED {
+    interface:
+        power_on()
+        pads_attached()
+        rhythm_detected(rhythm: str)
+        tick_ms(ms: int)
+        press_shock()
+        confirm_clear()
+        status(): str
+
+    machine:
+        $Off {
+            power_on() { -> $AwaitingPads }
+            status(): str { @@:("off") }
+        }
+
+        $AwaitingPads {
+            pads_attached() { -> $Analyzing }
+            status(): str { @@:("attach pads") }
+        }
+
+        $Analyzing {
+            rhythm_detected(rhythm: str) {
+                self.last_rhythm = rhythm
+                if rhythm == "VF" or rhythm == "VT":
+                    -> $Charging
+                else:
+                    -> $NotAdvised
+            }
+            status(): str { @@:("analyzing") }
+        }
+
+        $Charging {
+            $>() { self.charge_pct = 0 }
+            tick_ms(ms: int) {
+                self.charge_pct = self.charge_pct + ms
+                if self.charge_pct >= 100:
+                    -> $AwaitingClear
+            }
+            status(): str { @@:(f"charging ({self.charge_pct}%)") }
+        }
+
+        $AwaitingClear {
+            confirm_clear() { -> $ReadyToShock }
+            status(): str { @@:("charged — press CLEAR") }
+        }
+
+        $ReadyToShock {
+            press_shock() {
+                self.shocks = self.shocks + 1
+                -> $Analyzing
+            }
+            status(): str { @@:("CLEAR — press SHOCK") }
+        }
+
+        $NotAdvised {
+            status(): str { @@:("no shock advised") }
+        }
+
+    domain:
+        last_rhythm: str = ""
+        charge_pct: int = 0
+        shocks: int = 0
+}
+
+if __name__ == '__main__':
+    a = @@AED()
+    a.power_on()
+    a.pads_attached()
+    a.rhythm_detected("VF")
+    a.press_shock()              # IGNORED — still charging
+    for _ in range(10):
+        a.tick_ms(12)
+    print(a.status())
+    a.press_shock()              # IGNORED — not cleared
+    a.confirm_clear()
+    a.press_shock()              # NOW fires
+    print(a.status())
+```
+
+**Features used:** linear mandatory state sequence, missing handlers as structural safety, `tick_ms` for charging progress.
+
+-----
+
+## 84. ACLS Cardiac Arrest Algorithm
+
+**Problem:** AHA ACLS algorithm. Branches on shockable vs non-shockable rhythm. CPR cycles, epinephrine, amiodarone, ROSC.
+
+```frame
+@@target python_3
+
+@@system ACLS {
+    interface:
+        start_code()
+        rhythm_check(rhythm: str)
+        cpr_cycle_complete()
+        give_epinephrine()
+        rosc_achieved()
+        pronounce()
+        phase(): str
+        shocks_given(): int
+
+    machine:
+        $PreArrest {
+            start_code() {
+                self.shocks = 0
+                self.cpr_cycles = 0
+                -> $Analyzing
+            }
+            phase(): str { @@:("pre-arrest") }
+        }
+
+        $Coding {
+            rosc_achieved() { -> $ROSC }
+            pronounce() { -> $Terminated }
+        }
+
+        $Analyzing => $Coding {
+            rhythm_check(rhythm: str) {
+                self.last_rhythm = rhythm
+                if rhythm == "VF" or rhythm == "pulseless_VT":
+                    self.shocks = self.shocks + 1
+                    -> $CPR_Shockable
+                else:
+                    -> $CPR_NonShockable
+            }
+            phase(): str { @@:("analyzing") }
+            => $^
+        }
+
+        $CPR_Shockable => $Coding {
+            give_epinephrine() { }
+            cpr_cycle_complete() {
+                self.cpr_cycles = self.cpr_cycles + 1
+                -> $Analyzing
+            }
+            phase(): str { @@:(f"CPR shockable (cycle {self.cpr_cycles + 1})") }
+            => $^
+        }
+
+        $CPR_NonShockable => $Coding {
+            give_epinephrine() { }
+            cpr_cycle_complete() {
+                self.cpr_cycles = self.cpr_cycles + 1
+                -> $Analyzing
+            }
+            phase(): str { @@:(f"CPR non-shockable (cycle {self.cpr_cycles + 1})") }
+            => $^
+        }
+
+        $ROSC {
+            phase(): str { @@:("ROSC — post-arrest care") }
+        }
+
+        $Terminated {
+            phase(): str { @@:("terminated") }
+        }
+
+    domain:
+        last_rhythm: str = ""
+        shocks: int = 0
+        cpr_cycles: int = 0
+}
+
+if __name__ == '__main__':
+    code = @@ACLS()
+    code.start_code()
+    code.rhythm_check("VF")
+    code.cpr_cycle_complete()
+    code.rhythm_check("asystole")
+    code.cpr_cycle_complete()
+    code.rosc_achieved()
+    print(f"{code.phase()}, shocks: {code.shocks_given()}")
+```
+
+**Features used:** HSM parent for cross-cutting ROSC/pronounce, rhythm-based branching, per-branch CPR cycling.
+
+-----
+
+## 85. Sepsis Hour-1 Bundle
+
+**Problem:** Timed checklist: lactate, cultures, antibiotics, fluids, reassess MAP, pressors if needed. On-time vs late as distinct terminal states.
+
+```frame
+@@target python_3
+
+@@system SepsisBundle {
+    interface:
+        recognize_sepsis()
+        lactate_drawn(value: float)
+        cultures_drawn()
+        antibiotics_given()
+        fluids_complete()
+        reassess_map(map_mmhg: int)
+        pressors_started()
+        tick_minute()
+        status(): str
+        bundle_complete(): bool = False
+
+    machine:
+        $PreRecognition {
+            recognize_sepsis() {
+                self.elapsed = 0
+                self.lactate = 0.0
+                self.cultures = False
+                self.abx = False
+                self.fluids = False
+                self.reassessed = False
+                self.pressors_needed = False
+                self.pressors = False
+                -> $BundleActive
+            }
+            status(): str { @@:("pre-recognition") }
+        }
+
+        $BundleActive {
+            lactate_drawn(value: float) {
+                self.lactate = value
+                if self.is_complete():
+                    if self.elapsed <= 60:
+                        -> $OnTime
+                    else:
+                        -> $Late
+            }
+            cultures_drawn() {
+                self.cultures = True
+                if self.is_complete():
+                    if self.elapsed <= 60:
+                        -> $OnTime
+                    else:
+                        -> $Late
+            }
+            antibiotics_given() {
+                self.abx = True
+                if self.is_complete():
+                    if self.elapsed <= 60:
+                        -> $OnTime
+                    else:
+                        -> $Late
+            }
+            fluids_complete() {
+                self.fluids = True
+                if self.is_complete():
+                    if self.elapsed <= 60:
+                        -> $OnTime
+                    else:
+                        -> $Late
+            }
+            reassess_map(map_mmhg: int) {
+                self.reassessed = True
+                self.pressors_needed = map_mmhg < 65
+                if self.is_complete():
+                    if self.elapsed <= 60:
+                        -> $OnTime
+                    else:
+                        -> $Late
+            }
+            pressors_started() {
+                self.pressors = True
+                if self.is_complete():
+                    if self.elapsed <= 60:
+                        -> $OnTime
+                    else:
+                        -> $Late
+            }
+            tick_minute() { self.elapsed = self.elapsed + 1 }
+            status(): str { @@:(f"active — {self.elapsed} min") }
+        }
+
+        $OnTime {
+            bundle_complete(): bool { @@:(True) }
+            status(): str { @@:("bundle complete (on time)") }
+        }
+
+        $Late {
+            bundle_complete(): bool { @@:(True) }
+            status(): str { @@:("bundle complete (late)") }
+        }
+
+    actions:
+        is_complete(): bool {
+            base = self.cultures and self.abx and self.fluids and self.lactate > 0 and self.reassessed
+            if self.pressors_needed:
+                return base and self.pressors
+            return base
+        }
+
+    domain:
+        elapsed: int = 0
+        lactate: float = 0.0
+        cultures: bool = False
+        abx: bool = False
+        fluids: bool = False
+        reassessed: bool = False
+        pressors_needed: bool = False
+        pressors: bool = False
+}
+
+if __name__ == '__main__':
+    b = @@SepsisBundle()
+    b.recognize_sepsis()
+    b.lactate_drawn(3.4)
+    for _ in range(15):
+        b.tick_minute()
+    b.cultures_drawn()
+    b.antibiotics_given()
+    for _ in range(25):
+        b.tick_minute()
+    b.fluids_complete()
+    b.reassess_map(58)
+    b.pressors_started()
+    print(b.status())
+    print(f"complete: {b.bundle_complete()}")
+```
+
+**Features used:** action returning bool (`is_complete()`), terminal states distinguishing on-time vs late, domain variables for bundle tracking, protocol timing.
 
 -----
 
