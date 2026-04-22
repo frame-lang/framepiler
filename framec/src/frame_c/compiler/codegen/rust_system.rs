@@ -232,7 +232,17 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
                 if is_domain_param {
                     domain_var.name.clone()
                 } else {
-                    expand_tagged_in_domain(init_text, TargetLanguage::Rust)
+                    let expanded = expand_tagged_in_domain(init_text, TargetLanguage::Rust);
+                    // Wrap string-literal defaults in `String::from(...)`
+                    // when the field type maps to Rust's `String` — without
+                    // this, `s: str = ""` in Frame produces `s: ""` in the
+                    // constructor, which fails to compile because `""` is
+                    // `&'static str` not `String`.
+                    let type_str = match &domain_var.var_type {
+                        Type::Custom(s) => Some(s.clone()),
+                        Type::Unknown => None,
+                    };
+                    rust_wrap_for_boxing(&expanded, &type_str)
                 }
             }
         };
@@ -578,7 +588,15 @@ pub(crate) fn generate_rust_state_dispatch(
             }
             code.push_str(&format!("    \"{}\" => {{\n", message));
             for (idx, param) in handler.params.iter().enumerate() {
-                let param_type = param.symbol_type.as_deref().unwrap_or("String");
+                // Normalize Frame type keywords so the Rust-typed match
+                // arms below catch them (same concern as the handler-
+                // dispatch block further down).
+                let raw_type = param.symbol_type.as_deref().unwrap_or("String");
+                let param_type = match raw_type {
+                    "int" => "i64",
+                    "float" => "f64",
+                    other => other,
+                };
                 let extraction = match param_type {
                     "String" | "str" | "string" => format!(
                         "        let {}: String = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
@@ -623,7 +641,18 @@ pub(crate) fn generate_rust_state_dispatch(
                 "        let __ctx_event = &self._context_stack.last().unwrap().event;\n",
             );
             for (idx, param) in handler.params.iter().enumerate() {
-                let param_type = param.symbol_type.as_deref().unwrap_or("String");
+                // Normalize Frame type keywords to the Rust target type
+                // so the dispatch arms below (which are keyed on Rust
+                // types) match correctly. Without this, `v: int` in a
+                // Frame handler falls through to the catch-all and
+                // unpacks as String, mismatching the `_s_*_handler(_, v: i64)`
+                // method signature.
+                let raw_type = param.symbol_type.as_deref().unwrap_or("String");
+                let param_type = match raw_type {
+                    "int" => "i64",
+                    "float" => "f64",
+                    other => other,
+                };
                 let extraction = match param_type {
                     "String" | "str" | "string" => format!(
                         "        let {}: String = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
@@ -1412,8 +1441,10 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
 fn rust_json_extract(var_name: &str, var_type: &Type) -> String {
     match var_type {
         Type::Custom(name) => match name.to_lowercase().as_str() {
-            "int" | "i32" => format!("data[\"{}\"].as_i64().unwrap_or(0) as i32", var_name),
-            "i64" => format!("data[\"{}\"].as_i64().unwrap_or(0)", var_name),
+            // Frame `int` maps to Rust `i64` (see RustBackend::convert_type).
+            // Only the explicit `i32` hint narrows.
+            "int" | "i64" => format!("data[\"{}\"].as_i64().unwrap_or(0)", var_name),
+            "i32" => format!("data[\"{}\"].as_i64().unwrap_or(0) as i32", var_name),
             "float" | "f32" | "f64" => {
                 format!("data[\"{}\"].as_f64().unwrap_or(0.0)", var_name)
             }
@@ -1439,8 +1470,9 @@ fn rust_json_extract(var_name: &str, var_type: &Type) -> String {
 fn rust_json_extract_unwrap(var_name: &str, var_type: &Type) -> String {
     match var_type {
         Type::Custom(name) => match name.to_lowercase().as_str() {
-            "int" | "i32" => format!("data[\"{}\"].as_i64().unwrap() as i32", var_name),
-            "i64" => format!("data[\"{}\"].as_i64().unwrap()", var_name),
+            // Frame `int` maps to Rust `i64`; only explicit `i32` narrows.
+            "int" | "i64" => format!("data[\"{}\"].as_i64().unwrap()", var_name),
+            "i32" => format!("data[\"{}\"].as_i64().unwrap() as i32", var_name),
             "float" | "f32" | "f64" => format!("data[\"{}\"].as_f64().unwrap()", var_name),
             "bool" => format!("data[\"{}\"].as_bool().unwrap()", var_name),
             "str" | "string" => {
