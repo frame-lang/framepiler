@@ -2159,7 +2159,13 @@ pub(crate) fn generate_persistence_methods(
                     span: None,
                 }],
                 is_async: false,
-                is_static: false,
+                // Route `restore_state` through Kotlin's companion-object
+                // pattern so callers can invoke it statically as
+                // `Sys.restore_state(blob)` — matching every other
+                // backend's persist API. The Kotlin backend's method
+                // partitioner groups `is_static: true` methods into a
+                // single `companion object { }` block.
+                is_static: true,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
