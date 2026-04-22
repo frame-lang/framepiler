@@ -8,7 +8,8 @@
 use super::ast::CodegenNode;
 use super::codegen_utils::{
     convert_expression, convert_literal, expression_to_string, is_bool_type, is_float_type,
-    is_int_type, is_string_type, to_snake_case, type_to_string, HandlerContext,
+    is_int_type, is_string_type, replace_outside_strings_and_comments, to_snake_case,
+    type_to_string, HandlerContext,
 };
 use super::frame_expansion::emit_handler_body_via_statements;
 use crate::frame_c::compiler::arcanum::Arcanum;
@@ -93,20 +94,32 @@ fn erlang_rewrite_native_classified_full(
         }
     }
 
-    // self.field = expr → record update
+    // self.field = expr → record update.
+    // String-aware replacement on the RHS so a `self.` appearing inside
+    // a string literal in the expression isn't mangled.
     if l.starts_with("self.") && l.contains('=') {
         let rest = &l[5..]; // skip "self."
         if let Some(eq_pos) = rest.find('=') {
             let field = rest[..eq_pos].trim().to_string();
-            let value = rest[eq_pos + 1..]
-                .trim()
-                .replace("self.", &format!("{}#data.", data_var));
+            let rhs = rest[eq_pos + 1..].trim();
+            let replacement = format!("{}#data.", data_var);
+            let value = replace_outside_strings_and_comments(
+                rhs,
+                TargetLanguage::Erlang,
+                &[("self.", replacement.as_str())],
+            );
             return ErlangRewrite::RecordUpdate { field, value };
         }
     }
 
-    // self.field → DataVar#data.field (access)
-    ErlangRewrite::Plain(l.replace("self.", &format!("{}#data.", data_var)))
+    // self.field → DataVar#data.field (access). String-aware so a
+    // `self.x` inside a quoted string in the line is preserved.
+    let replacement = format!("{}#data.", data_var);
+    ErlangRewrite::Plain(replace_outside_strings_and_comments(
+        l,
+        TargetLanguage::Erlang,
+        &[("self.", replacement.as_str())],
+    ))
 }
 
 /// Word-boundary string substitution. Replaces `needle` with `replacement`
@@ -543,8 +556,13 @@ fn erlang_process_body_lines_full(
                         // Extract the action call from "case (action_call) of"
                         if let Some(paren_start) = call_replaced.find('(') {
                             if let Some(of_pos) = call_replaced.rfind(") of") {
-                                let action_expr = call_replaced[paren_start + 1..of_pos]
-                                    .replace("self.", &format!("{}#data.", data_var));
+                                let extracted = &call_replaced[paren_start + 1..of_pos];
+                                let data_access = format!("{}#data.", data_var);
+                                let action_expr = replace_outside_strings_and_comments(
+                                    extracted,
+                                    TargetLanguage::Erlang,
+                                    &[("self.", data_access.as_str())],
+                                );
                                 // Emit the action call as a separate line, bind result
                                 data_gen += 1;
                                 let new_var = format!("Data{}", data_gen);
@@ -569,15 +587,35 @@ fn erlang_process_body_lines_full(
                     }
                 }
             }
-            rewritten = rewritten.replace("self.", &format!("{}#data.", data_var));
+            // Rewrite `self.` → `<data_var>#data.` everywhere in the
+            // line, skipping string literals and comments so a user
+            // string like `"self.x"` isn't mangled.
+            let data_access = format!("{}#data.", data_var);
+            rewritten = replace_outside_strings_and_comments(
+                &rewritten,
+                TargetLanguage::Erlang,
+                &[("self.", data_access.as_str())],
+            );
 
-            // Replace Data with current data_var in return tuples, expressions, and forward calls
+            // Replace Data with current data_var in return tuples,
+            // expressions, and forward calls. Grouped into a single
+            // string-aware pass so patterns like `, Data,` inside a
+            // user string literal stay intact.
             if data_var != "Data" {
-                rewritten = rewritten
-                    .replace(", Data,", &format!(", {},", data_var))
-                    .replace(", Data}", &format!(", {}}}", data_var))
-                    .replace(", Data)", &format!(", {})", data_var))
-                    .replace("Data#data.", &format!("{}#data.", data_var));
+                let data_comma = format!(", {},", data_var);
+                let data_brace = format!(", {}}}", data_var);
+                let data_paren = format!(", {})", data_var);
+                let data_access2 = format!("{}#data.", data_var);
+                rewritten = replace_outside_strings_and_comments(
+                    &rewritten,
+                    TargetLanguage::Erlang,
+                    &[
+                        (", Data,", data_comma.as_str()),
+                        (", Data}", data_brace.as_str()),
+                        (", Data)", data_paren.as_str()),
+                        ("Data#data.", data_access2.as_str()),
+                    ],
+                );
             }
             result.push(format!("    {}", rewritten));
             continue;
@@ -783,7 +821,11 @@ fn erlang_rewrite_expr(line: &str, action_names: &[String]) -> String {
             return replaced.replace("(Data, )", "(Data)");
         }
     }
-    l.replace("self.", "Data#data.").to_string()
+    replace_outside_strings_and_comments(
+        l,
+        TargetLanguage::Erlang,
+        &[("self.", "Data#data.")],
+    )
 }
 
 /// Transform C-family `if/else { }` block syntax to Erlang `case/of/end`.
@@ -2562,7 +2604,11 @@ pub(crate) fn generate_erlang_system(
                 } else {
                     l
                 };
-                let l = l.replace("self.", "Data#data.");
+                let l = replace_outside_strings_and_comments(
+                    &l,
+                    TargetLanguage::Erlang,
+                    &[("self.", "Data#data.")],
+                );
                 // Detect domain field assignment: Data#data.field = value
                 // Rewrite to Erlang record update with sequential bindings:
                 //   Data1 = Data#data{field = Value}
@@ -2587,7 +2633,12 @@ pub(crate) fn generate_erlang_system(
                     } else {
                         // Replace reads of Data#data. with latest binding
                         if data_bind_counter > 0 {
-                            l.replace("Data#data.", &format!("Data{}#data.", data_bind_counter))
+                            let binding = format!("Data{}#data.", data_bind_counter);
+                            replace_outside_strings_and_comments(
+                                &l,
+                                TargetLanguage::Erlang,
+                                &[("Data#data.", binding.as_str())],
+                            )
                         } else {
                             l
                         }

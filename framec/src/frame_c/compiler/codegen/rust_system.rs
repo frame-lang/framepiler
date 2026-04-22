@@ -1666,48 +1666,47 @@ fn rust_auto_clone_in_code(
     call_targets: &[String],
     non_copy_fields: &[String],
 ) -> String {
-    // Two-pass:
-    //   1. Rewrite `self.<field>` args of Frame calls (the original pass).
-    //   2. Rewrite `Box::new(self.<field>)` for non-Copy fields — this is
-    //      how `@@:(self.s)` return-value boxing shows up in NativeBlocks
-    //      and without `.clone()` rustc rejects it with E0507 (move out
-    //      of borrowed ref). Targeted text rewrite is safe: `Box::new(...)`
-    //      only appears in generated return-boxing code, and we only
-    //      clone when the argument is exactly `self.<non_copy_field>`.
-    let code = rust_rewrite_box_self_field(code, non_copy_fields);
+    // Two rewrites in one pass, both gated by the Rust `SyntaxSkipper`
+    // so neither can accidentally edit code inside a string literal or
+    // comment:
+    //   A. `self.<target>(args)` where <target> is a Frame call —
+    //      non-copy-field args get `.clone()`. (The original pass.)
+    //   B. `Box::new(self.<field>)` for non-Copy <field> — rewrite to
+    //      `Box::new(self.<field>.clone())` so `@@:(self.s)` return-
+    //      value boxing compiles. Without this, rustc rejects with
+    //      E0507 (move out of borrowed `&mut self`).
+    //
+    // String / comment skipping is delegated to `RustSkipper` rather
+    // than re-implemented inline; "never duplicate scanner logic in
+    // codegen" per the project compiler-discipline rule.
+    let skipper = crate::frame_c::compiler::native_region_scanner::create_skipper(
+        crate::frame_c::visitors::TargetLanguage::Rust,
+    );
     let bytes = code.as_bytes();
+    let end = bytes.len();
     let mut out = String::with_capacity(code.len());
     let mut i = 0;
-    while i < bytes.len() {
-        // Skip string and char literals.
-        if bytes[i] == b'"' || bytes[i] == b'\'' {
-            let quote = bytes[i];
-            out.push(quote as char);
-            i += 1;
-            while i < bytes.len() {
-                let c = bytes[i];
-                out.push(c as char);
-                i += 1;
-                if c == b'\\' && i < bytes.len() {
-                    out.push(bytes[i] as char);
-                    i += 1;
-                    continue;
-                }
-                if c == quote {
-                    break;
-                }
-            }
+    while i < end {
+        // Delegate string/comment skipping to the Rust skipper.
+        if let Some(next) = skipper.skip_string(bytes, i, end) {
+            out.push_str(&code[i..next]);
+            i = next;
             continue;
         }
-        // Skip line comments.
-        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                out.push(bytes[i] as char);
-                i += 1;
-            }
+        if let Some(next) = skipper.skip_comment(bytes, i, end) {
+            out.push_str(&code[i..next]);
+            i = next;
             continue;
         }
-        // Try to match `self.<target>(`
+        // Rewrite B: `Box::new(self.<field>)` for a non-Copy field.
+        if let Some((end_idx, field)) = try_match_box_self_field(bytes, i, non_copy_fields) {
+            out.push_str("Box::new(self.");
+            out.push_str(field);
+            out.push_str(".clone())");
+            i = end_idx;
+            continue;
+        }
+        // Rewrite A: `self.<target>(args)` where <target> is a Frame call.
         if looks_like_self_call(bytes, i) {
             let target_start = i + 5; // len("self.")
             let (target_end, paren_pos) = match find_call_target(bytes, target_start) {
@@ -1724,8 +1723,10 @@ fn rust_auto_clone_in_code(
                 i += 1;
                 continue;
             }
-            // Find matching close paren.
-            let close = match find_matching_paren(bytes, paren_pos) {
+            // Find matching close paren via the Rust skipper. It
+            // returns the position AFTER `)`; `close` is the position
+            // OF `)` to match the slice-range semantics below.
+            let after_close = match skipper.balanced_paren_end(bytes, paren_pos, end) {
                 Some(p) => p,
                 None => {
                     out.push(bytes[i] as char);
@@ -1733,6 +1734,7 @@ fn rust_auto_clone_in_code(
                     continue;
                 }
             };
+            let close = after_close - 1;
             // Emit `self.<target>(`
             out.push_str(&code[i..paren_pos + 1]);
             // Split args, rewrite each if it matches the non-copy pattern.
@@ -1744,7 +1746,7 @@ fn rust_auto_clone_in_code(
                 .join(",");
             out.push_str(&rewritten_args);
             out.push(')');
-            i = close + 1;
+            i = after_close;
             continue;
         }
         out.push(bytes[i] as char);
@@ -1753,20 +1755,33 @@ fn rust_auto_clone_in_code(
     out
 }
 
-/// Rewrite `Box::new(self.<field>)` → `Box::new(self.<field>.clone())` for
-/// each `field` that is non-Copy. Called before the Frame-call auto-clone
-/// pass so its text changes flow through unchanged.
-fn rust_rewrite_box_self_field(code: &str, non_copy_fields: &[String]) -> String {
-    if non_copy_fields.is_empty() {
-        return code.to_string();
+/// If `bytes[i..]` starts with `Box::new(self.<field>)` for any `<field>`
+/// in `non_copy_fields`, return `(end_index_after_close_paren, field_name)`.
+/// Otherwise `None`. Pure prefix match — caller handles the rewrite.
+fn try_match_box_self_field<'a>(
+    bytes: &[u8],
+    i: usize,
+    non_copy_fields: &'a [String],
+) -> Option<(usize, &'a str)> {
+    const PREFIX: &[u8] = b"Box::new(self.";
+    if i + PREFIX.len() >= bytes.len() || &bytes[i..i + PREFIX.len()] != PREFIX {
+        return None;
     }
-    let mut out = code.to_string();
-    for field in non_copy_fields {
-        let needle = format!("Box::new(self.{})", field);
-        let replacement = format!("Box::new(self.{}.clone())", field);
-        out = out.replace(&needle, &replacement);
+    let field_start = i + PREFIX.len();
+    let mut j = field_start;
+    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+        j += 1;
     }
-    out
+    if j == field_start || j >= bytes.len() || bytes[j] != b')' {
+        return None;
+    }
+    let field_bytes = &bytes[field_start..j];
+    for f in non_copy_fields {
+        if f.as_bytes() == field_bytes {
+            return Some((j + 1, f.as_str()));
+        }
+    }
+    None
 }
 
 fn looks_like_self_call(bytes: &[u8], i: usize) -> bool {
@@ -1809,72 +1824,30 @@ fn find_call_target(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
     }
 }
 
-/// Given the position of an opening `(`, return the position of its matching
-/// `)` at depth 0, or `None` if unbalanced. Ignores parens inside string
-/// literals.
-fn find_matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
-    let mut depth: i32 = 0;
-    let mut i = open;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'"' || c == b'\'' {
-            let quote = c;
-            i += 1;
-            while i < bytes.len() {
-                let d = bytes[i];
-                if d == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                    continue;
-                }
-                if d == quote {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-        if c == b'(' {
-            depth += 1;
-        } else if c == b')' {
-            depth -= 1;
-            if depth == 0 {
-                return Some(i);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
 /// Split an argument-list string on top-level commas, preserving commas inside
 /// nested `()`, `[]`, `{}`, and inside string literals.
 fn split_top_level_args(src: &str) -> Vec<String> {
-    let mut args = Vec::new();
+    // Delegate string-literal skipping to the Rust skipper; only the
+    // depth tracking + comma-splitting is the specialized concern here.
+    let skipper = crate::frame_c::compiler::native_region_scanner::create_skipper(
+        crate::frame_c::visitors::TargetLanguage::Rust,
+    );
     let bytes = src.as_bytes();
+    let end = bytes.len();
+    let mut args = Vec::new();
     let mut i = 0;
     let mut start = 0;
     let mut depth = 0i32;
-    let mut in_string: Option<u8> = None;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if let Some(quote) = in_string {
-            if c == b'\\' && i + 1 < bytes.len() {
-                i += 2;
-                continue;
-            }
-            if c == quote {
-                in_string = None;
-            }
-            i += 1;
+    while i < end {
+        if let Some(next) = skipper.skip_string(bytes, i, end) {
+            i = next;
             continue;
         }
-        if c == b'"' || c == b'\'' {
-            in_string = Some(c);
-            i += 1;
+        if let Some(next) = skipper.skip_comment(bytes, i, end) {
+            i = next;
             continue;
         }
-        match c {
+        match bytes[i] {
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth -= 1,
             b',' if depth == 0 => {

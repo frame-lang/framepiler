@@ -9,8 +9,8 @@
 
 use super::codegen_utils::{
     cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string, go_map_type,
-    java_map_type, kotlin_map_type, state_var_init_value, swift_map_type, to_snake_case,
-    type_to_cpp_string, HandlerContext,
+    java_map_type, kotlin_map_type, replace_outside_strings_and_comments, state_var_init_value,
+    swift_map_type, to_snake_case, type_to_cpp_string, HandlerContext,
 };
 use crate::frame_c::compiler::frame_ast::Type;
 use crate::frame_c::compiler::native_region_scanner::{
@@ -2274,11 +2274,16 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Erlang => {
-                    // State var assignment: $.var = expr → record update
+                    // State var assignment: $.var = expr → record update.
+                    // Rewrite `self.` in the RHS — string-literal-aware
+                    // so a `self.` inside a quoted string is preserved.
                     let state_prefix = to_snake_case(&ctx.state_name);
                     let field_name = format!("sv_{}_{}", state_prefix, var_name);
-                    // Rewrite self. references in the expression
-                    let erl_expr = expanded_expr.replace("self.", "Data#data.");
+                    let erl_expr = replace_outside_strings_and_comments(
+                        &expanded_expr,
+                        TargetLanguage::Erlang,
+                        &[("self.", "Data#data.")],
+                    );
                     format!("{}self.{} = {}", indent_str, field_name, erl_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
@@ -2352,12 +2357,15 @@ pub(crate) fn generate_frame_expansion(
                     ),
                     TargetLanguage::Go => {
                         // Go's generated methods use `s` as the receiver
-                        // name, not `self`. The statement-body path in
-                        // system_codegen rewrites `self.` → `s.`, but the
-                        // `@@:()` return-expression path reaches here with
-                        // `self.` still present. Mirror what Erlang does
-                        // below and apply the rewrite inline.
-                        let go_expr = expanded_expr.replace("self.", "s.");
+                        // name, not `self`. Rewrite `self.` → `s.` via the
+                        // string-literal-aware helper so a `self.` that
+                        // happens to appear inside a string literal or
+                        // comment isn't mangled.
+                        let go_expr = replace_outside_strings_and_comments(
+                            &expanded_expr,
+                            TargetLanguage::Go,
+                            &[("self.", "s.")],
+                        );
                         format!(
                             "{}s._context_stack[len(s._context_stack)-1]._return = {}",
                             indent_str, go_expr
@@ -2376,7 +2384,13 @@ pub(crate) fn generate_frame_expansion(
                         indent_str, expanded_expr
                     ),
                     TargetLanguage::Erlang => {
-                        let erl_expr = expanded_expr.replace("self.", "Data#data.");
+                        // String-literal-aware: `self.` inside a string
+                        // literal or `%` comment stays intact.
+                        let erl_expr = replace_outside_strings_and_comments(
+                            &expanded_expr,
+                            TargetLanguage::Erlang,
+                            &[("self.", "Data#data.")],
+                        );
                         format!("{}__ReturnVal = {}", indent_str, erl_expr)
                     }
                     TargetLanguage::Graphviz => unreachable!(),
@@ -2534,9 +2548,13 @@ pub(crate) fn generate_frame_expansion(
                     expanded_expr
                 ),
                 TargetLanguage::Go => {
-                    // Rewrite `self.` → `s.` in the return expression,
-                    // matching the `@@:return = expr` Go branch above.
-                    let go_expr = expanded_expr.replace("self.", "s.");
+                    // String-literal-aware rewrite of `self.` → `s.` —
+                    // same fix as the `@@:return = expr` Go branch above.
+                    let go_expr = replace_outside_strings_and_comments(
+                        &expanded_expr,
+                        TargetLanguage::Go,
+                        &[("self.", "s.")],
+                    );
                     format!(
                         "s._context_stack[len(s._context_stack)-1]._return = {}",
                         go_expr
@@ -2555,7 +2573,11 @@ pub(crate) fn generate_frame_expansion(
                     expanded_expr
                 ),
                 TargetLanguage::Erlang => {
-                    let erl_expr = expanded_expr.replace("self.", "Data#data.");
+                    let erl_expr = replace_outside_strings_and_comments(
+                        &expanded_expr,
+                        TargetLanguage::Erlang,
+                        &[("self.", "Data#data.")],
+                    );
                     format!("__ReturnVal = {}", erl_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
@@ -2965,9 +2987,13 @@ pub(crate) fn generate_frame_expansion(
                     expanded_expr
                 ),
                 TargetLanguage::Go => {
-                    // Rewrite `self.` → `s.` in the return expression,
-                    // matching the `@@:return = expr` Go branch above.
-                    let go_expr = expanded_expr.replace("self.", "s.");
+                    // String-literal-aware rewrite of `self.` → `s.` —
+                    // same fix as the `@@:return = expr` Go branch above.
+                    let go_expr = replace_outside_strings_and_comments(
+                        &expanded_expr,
+                        TargetLanguage::Go,
+                        &[("self.", "s.")],
+                    );
                     format!(
                         "s._context_stack[len(s._context_stack)-1]._return = {}",
                         go_expr
@@ -2986,7 +3012,11 @@ pub(crate) fn generate_frame_expansion(
                     expanded_expr
                 ),
                 TargetLanguage::Erlang => {
-                    let erl_expr = expanded_expr.replace("self.", "Data#data.");
+                    let erl_expr = replace_outside_strings_and_comments(
+                        &expanded_expr,
+                        TargetLanguage::Erlang,
+                        &[("self.", "Data#data.")],
+                    );
                     format!("__ReturnVal = {}", erl_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
@@ -3182,26 +3212,29 @@ pub(crate) fn php_prefix_params(expr: &str, params: &[String]) -> String {
     if params.is_empty() {
         return expr.to_string();
     }
+    // Delegate string-literal and comment skipping to the PHP skipper
+    // rather than re-implementing quote tracking inline. Only the
+    // identifier-walking + param-matching logic below is PHP-specific
+    // to this transformation.
+    let skipper = crate::frame_c::compiler::native_region_scanner::create_skipper(
+        crate::frame_c::visitors::TargetLanguage::Php,
+    );
     let bytes = expr.as_bytes();
+    let end = bytes.len();
     let mut out = String::with_capacity(expr.len() + 4);
     let mut i = 0;
-    let mut in_string: Option<u8> = None;
-    while i < bytes.len() {
+    while i < end {
+        if let Some(next) = skipper.skip_string(bytes, i, end) {
+            out.push_str(&expr[i..next]);
+            i = next;
+            continue;
+        }
+        if let Some(next) = skipper.skip_comment(bytes, i, end) {
+            out.push_str(&expr[i..next]);
+            i = next;
+            continue;
+        }
         let c = bytes[i];
-        if let Some(quote) = in_string {
-            out.push(c as char);
-            if c == quote && (i == 0 || bytes[i - 1] != b'\\') {
-                in_string = None;
-            }
-            i += 1;
-            continue;
-        }
-        if c == b'"' || c == b'\'' {
-            in_string = Some(c);
-            out.push(c as char);
-            i += 1;
-            continue;
-        }
         // Identifier start: lowercase alpha or underscore, not already
         // preceded by `$`, `->`, `::`, or an ident char (i.e. part of a
         // larger token).
@@ -3364,10 +3397,19 @@ pub(crate) fn expand_expression(expr: &str, lang: TargetLanguage, ctx: &HandlerC
 /// Uses compartment.state_vars for Python/TypeScript.
 /// For HSM: uses __sv_comp when ctx.use_sv_comp is true (navigates to correct parent compartment)
 fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerContext) -> String {
+    // Note: deliberately NOT string-literal-aware. `$.varName` is
+    // expanded even inside string literals because that's the contract
+    // for Frame interpolation — e.g. `f"count is {$.count}"` in Python
+    // needs `$.count` → `self.__compartment.state_vars["count"]` so the
+    // f-string interpolation resolves at runtime. Equivalent pattern
+    // applies to JS/TS backtick ``${ }``, Kotlin `"${ }"`, Ruby
+    // `"#{}"`, Swift `"\( )"`. Any false-match would require a user
+    // literally writing `$.foo` inside a non-interpolating string —
+    // exceedingly unusual, and not worth losing interpolation support.
     let mut result = String::new();
     let bytes = expr.as_bytes();
-    let mut i = 0;
 
+    let mut i = 0;
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'$' && bytes[i + 1] == b'.' {
             // Found $.varName

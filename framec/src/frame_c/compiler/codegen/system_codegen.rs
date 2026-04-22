@@ -4333,11 +4333,26 @@ fn generate_c_router_dispatch(system: &SystemAst) -> String {
 /// This handles the same pattern as the assembler's tagged instantiation expansion,
 /// but for domain code that is emitted during codegen (before the assembler runs).
 pub(crate) fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> String {
+    // Delegate string/comment skipping at the outer level to the target
+    // language's skipper so `@@Foo(...)` appearing inside a string or
+    // comment isn't mistakenly rewritten into a constructor call.
+    let skipper = crate::frame_c::compiler::native_region_scanner::create_skipper(lang);
     let bytes = raw_code.as_bytes();
+    let end = bytes.len();
     let mut result = String::new();
     let mut i = 0;
 
-    while i < bytes.len() {
+    while i < end {
+        if let Some(next) = skipper.skip_string(bytes, i, end) {
+            result.push_str(&raw_code[i..next]);
+            i = next;
+            continue;
+        }
+        if let Some(next) = skipper.skip_comment(bytes, i, end) {
+            result.push_str(&raw_code[i..next]);
+            i = next;
+            continue;
+        }
         // Look for @@ followed by uppercase letter
         if i + 2 < bytes.len()
             && bytes[i] == b'@'
@@ -4354,66 +4369,56 @@ pub(crate) fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> S
             let name = std::str::from_utf8(&bytes[name_start..i]).unwrap_or("");
 
             if i < bytes.len() && bytes[i] == b'(' {
-                // Find matching close paren
+                // Use the target language's skipper to find the matching
+                // close paren — handles string literals, escapes, and
+                // nested parens per-language rather than re-implementing
+                // them here.
+                let skipper = crate::frame_c::compiler::native_region_scanner::create_skipper(lang);
                 let args_start = i + 1;
-                let mut depth = 1;
-                i += 1;
-                while i < bytes.len() && depth > 0 {
-                    match bytes[i] {
-                        b'(' => depth += 1,
-                        b')' => depth -= 1,
-                        b'"' => {
-                            i += 1;
-                            while i < bytes.len() && bytes[i] != b'"' {
-                                if bytes[i] == b'\\' {
-                                    i += 1;
-                                }
-                                i += 1;
-                            }
-                        }
-                        _ => {}
+                let after_close = match skipper.balanced_paren_end(bytes, i, bytes.len()) {
+                    Some(pos) => pos,
+                    None => {
+                        // Unbalanced — emit the bare `@@Name` and move on.
+                        result.push_str(&raw_code[start..i]);
+                        continue;
                     }
-                    if depth > 0 {
-                        i += 1;
+                };
+                let close_paren = after_close - 1;
+                let args = std::str::from_utf8(&bytes[args_start..close_paren]).unwrap_or("");
+                i = after_close;
+                // Generate native constructor per target language.
+                let constructor = match lang {
+                    TargetLanguage::Python3 => {
+                        format!("{}({})", name, args)
                     }
-                }
-                if depth == 0 {
-                    let args = std::str::from_utf8(&bytes[args_start..i]).unwrap_or("");
-                    i += 1; // skip closing )
-                            // Generate native constructor
-                    let constructor = match lang {
-                        TargetLanguage::Python3 => {
-                            format!("{}({})", name, args)
-                        }
-                        // GDScript instantiation is `Class.new(...)`; bare
-                        // `Class(...)` parses as a function call at runtime
-                        // and fails with "Cannot call non-static function
-                        // 'Logger()' on a null instance."
-                        TargetLanguage::GDScript => {
-                            format!("{}.new({})", name, args)
-                        }
-                        TargetLanguage::TypeScript
-                        | TargetLanguage::JavaScript
-                        | TargetLanguage::Cpp
-                        | TargetLanguage::Java
-                        | TargetLanguage::CSharp
-                        | TargetLanguage::Dart
-                        | TargetLanguage::Kotlin
-                        | TargetLanguage::Php => format!("new {}({})", name, args),
-                        TargetLanguage::Rust => format!("{}::new({})", name, args),
-                        TargetLanguage::C => format!("{}_new({})", name, args),
-                        TargetLanguage::Go => format!("New{}({})", name, args),
-                        TargetLanguage::Swift => format!("{}({})", name, args),
-                        TargetLanguage::Ruby => format!("{}.new({})", name, args),
-                        TargetLanguage::Lua => format!("{}.new({})", name, args),
-                        TargetLanguage::Erlang => {
-                            format!("{}:start_link({})", to_snake_case_simple(name), args)
-                        }
-                        TargetLanguage::Graphviz => name.to_string(),
-                    };
-                    result.push_str(&constructor);
-                    continue;
-                }
+                    // GDScript instantiation is `Class.new(...)`; bare
+                    // `Class(...)` parses as a function call at runtime
+                    // and fails with "Cannot call non-static function
+                    // 'Logger()' on a null instance."
+                    TargetLanguage::GDScript => {
+                        format!("{}.new({})", name, args)
+                    }
+                    TargetLanguage::TypeScript
+                    | TargetLanguage::JavaScript
+                    | TargetLanguage::Cpp
+                    | TargetLanguage::Java
+                    | TargetLanguage::CSharp
+                    | TargetLanguage::Dart
+                    | TargetLanguage::Kotlin
+                    | TargetLanguage::Php => format!("new {}({})", name, args),
+                    TargetLanguage::Rust => format!("{}::new({})", name, args),
+                    TargetLanguage::C => format!("{}_new({})", name, args),
+                    TargetLanguage::Go => format!("New{}({})", name, args),
+                    TargetLanguage::Swift => format!("{}({})", name, args),
+                    TargetLanguage::Ruby => format!("{}.new({})", name, args),
+                    TargetLanguage::Lua => format!("{}.new({})", name, args),
+                    TargetLanguage::Erlang => {
+                        format!("{}:start_link({})", to_snake_case_simple(name), args)
+                    }
+                    TargetLanguage::Graphviz => name.to_string(),
+                };
+                result.push_str(&constructor);
+                continue;
             }
             // Not a valid pattern — copy original
             for b in &bytes[start..i] {

@@ -567,6 +567,95 @@ pub(crate) fn to_snake_case(s: &str) -> String {
     result
 }
 
+// ─── String-aware literal replace ────────────────────────────────────
+//
+// Used by codegen branches that need to rewrite tokens inside generated
+// native code (e.g. `self.` → `s.` for Go, `self.` → `Data#data.` for
+// Erlang). A naive `str::replace` would false-match inside string and
+// comment literals; this walker delegates string/comment skipping to
+// the target language's `SyntaxSkipper` and only performs replacements
+// in code positions.
+
+/// Replace each `(needle, replacement)` pair in `code`, skipping over
+/// string literals and comments using the language's `SyntaxSkipper`.
+///
+/// Matches are literal substrings (not regex); the first-matching rule
+/// at each byte position wins, so order rules with longer / more-
+/// specific needles first if overlapping.
+///
+/// Replacement is safe against:
+///   - single- and double-quoted string contents (per language rules)
+///   - single-line and block comments (per language rules)
+///   - backslash escapes inside strings (Rust/JS/etc.)
+///
+/// This is the preferred alternative to `str::replace` in any codegen
+/// branch operating on already-emitted native code.
+pub fn replace_outside_strings_and_comments(
+    code: &str,
+    lang: crate::frame_c::visitors::TargetLanguage,
+    replacements: &[(&str, &str)],
+) -> String {
+    let skipper = crate::frame_c::compiler::native_region_scanner::create_skipper(lang);
+    let bytes = code.as_bytes();
+    let end = bytes.len();
+    let mut out = String::with_capacity(code.len());
+    let mut i = 0;
+    while i < end {
+        // Delegate string-literal skipping to the language skipper.
+        if let Some(next) = skipper.skip_string(bytes, i, end) {
+            out.push_str(&code[i..next]);
+            i = next;
+            continue;
+        }
+        // Delegate comment skipping.
+        if let Some(next) = skipper.skip_comment(bytes, i, end) {
+            out.push_str(&code[i..next]);
+            i = next;
+            continue;
+        }
+        // Try each replacement rule; first match wins.
+        let mut replaced = false;
+        for (needle, replacement) in replacements {
+            let nb = needle.as_bytes();
+            if i + nb.len() <= end && &bytes[i..i + nb.len()] == nb {
+                out.push_str(replacement);
+                i += nb.len();
+                replaced = true;
+                break;
+            }
+        }
+        if replaced {
+            continue;
+        }
+        // Plain character — copy through. Advance by the full UTF-8
+        // width so a multibyte sequence in an identifier or unquoted
+        // literal isn't split across push calls.
+        let width = utf8_char_len(bytes[i]);
+        let next = (i + width).min(end);
+        out.push_str(&code[i..next]);
+        i = next;
+    }
+    out
+}
+
+/// Byte width of the UTF-8 character that starts with `first_byte`.
+/// Returns 1 for ASCII and any unexpected continuation byte (which
+/// should never appear at an iteration boundary since we always
+/// advance by full character widths).
+fn utf8_char_len(first_byte: u8) -> usize {
+    if first_byte < 0x80 {
+        1
+    } else if first_byte < 0xC0 {
+        1 // continuation byte — defensive
+    } else if first_byte < 0xE0 {
+        2
+    } else if first_byte < 0xF0 {
+        3
+    } else {
+        4
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,5 +837,102 @@ mod tests {
     #[test]
     fn test_cpp_wrap_any_arg_with_whitespace() {
         assert_eq!(cpp_wrap_any_arg("  \"hello\"  "), "std::string(\"hello\")");
+    }
+
+    // =========================================================
+    // replace_outside_strings_and_comments
+    // =========================================================
+
+    #[test]
+    fn replace_outside_strings_basic_match() {
+        // No strings or comments — straightforward replace.
+        let out = replace_outside_strings_and_comments(
+            "let x = self.y",
+            TargetLanguage::Rust,
+            &[("self.", "s.")],
+        );
+        assert_eq!(out, "let x = s.y");
+    }
+
+    #[test]
+    fn replace_outside_strings_spares_string_literals() {
+        // `self.` inside a double-quoted string must survive.
+        let out = replace_outside_strings_and_comments(
+            r#"let msg = "self.x is untouched"; self.y = 1;"#,
+            TargetLanguage::Rust,
+            &[("self.", "s.")],
+        );
+        assert_eq!(out, r#"let msg = "self.x is untouched"; s.y = 1;"#);
+    }
+
+    #[test]
+    fn replace_outside_strings_spares_line_comments_rust() {
+        let out = replace_outside_strings_and_comments(
+            "// self.should stay\nself.y = 1;",
+            TargetLanguage::Rust,
+            &[("self.", "s.")],
+        );
+        assert_eq!(out, "// self.should stay\ns.y = 1;");
+    }
+
+    #[test]
+    fn replace_outside_strings_handles_escapes() {
+        // `\"` inside a string shouldn't terminate it early.
+        let out = replace_outside_strings_and_comments(
+            r#"let s = "outer \"self.inner\" still in string"; self.done = 1;"#,
+            TargetLanguage::Rust,
+            &[("self.", "s.")],
+        );
+        assert_eq!(
+            out,
+            r#"let s = "outer \"self.inner\" still in string"; s.done = 1;"#
+        );
+    }
+
+    #[test]
+    fn replace_outside_strings_multiple_rules() {
+        // Multiple rules — first match at position wins.
+        let out = replace_outside_strings_and_comments(
+            "True False true",
+            TargetLanguage::Rust,
+            &[("True", "true"), ("False", "false")],
+        );
+        assert_eq!(out, "true false true");
+    }
+
+    #[test]
+    fn replace_outside_strings_utf8_passthrough() {
+        // Non-ASCII identifiers advance by full UTF-8 width.
+        let out = replace_outside_strings_and_comments(
+            "let café = self.x",
+            TargetLanguage::Rust,
+            &[("self.", "s.")],
+        );
+        assert_eq!(out, "let café = s.x");
+    }
+
+    #[test]
+    fn replace_outside_strings_works_for_go() {
+        // Go line comments use `//`, same as Rust.
+        let out = replace_outside_strings_and_comments(
+            "self.x = 1 // self.inside_comment\nself.y = 2",
+            TargetLanguage::Go,
+            &[("self.", "s.")],
+        );
+        assert_eq!(out, "s.x = 1 // self.inside_comment\ns.y = 2");
+    }
+
+    #[test]
+    fn replace_outside_strings_works_for_erlang() {
+        // Erlang uses `%` line comments — verify skipper respects language.
+        let out = replace_outside_strings_and_comments(
+            "X = self.a, % self.in_comment\nY = self.b.",
+            TargetLanguage::Erlang,
+            &[("self.", "Data#data.")],
+        );
+        assert_eq!(
+            out,
+            "X = Data#data.a, % self.in_comment\nY = Data#data.b."
+        );
     }
 }
