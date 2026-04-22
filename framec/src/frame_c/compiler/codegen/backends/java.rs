@@ -555,11 +555,18 @@ impl JavaBackend {
         } else {
             ""
         };
-        let type_str = field
+        // Route raw Frame type keywords through `map_type` so portable
+        // names like `str` / `bool` become native `String` / `boolean`
+        // in the emitted Java code, matching Rust / Go / C# / Dart
+        // behaviour. Prior code copied the raw token verbatim and
+        // relied on the author writing Java-native types directly.
+        let raw_type = field
             .type_annotation
             .as_ref()
             .map(|s| s.as_str())
             .unwrap_or("Object");
+        let mapped = self.map_type(raw_type);
+        let type_str = mapped.as_str();
         let init_suffix = match &field.initializer {
             Some(init) => format!(" = {}", self.emit(init, ctx)),
             None => String::new(),
