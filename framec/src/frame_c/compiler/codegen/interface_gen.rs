@@ -1489,7 +1489,11 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("};\n");
 
             restore_body.push_str("auto __j = nlohmann::json::parse(json);\n");
+            // Suppress the initial-state $>() dispatch on the restored
+            // instance. See Swift for rationale.
+            restore_body.push_str(&format!("{}::__skipInitialEnter = true;\n", sys));
             restore_body.push_str(&format!("{} __instance;\n", sys));
+            restore_body.push_str(&format!("{}::__skipInitialEnter = false;\n", sys));
             restore_body.push_str("__instance.__compartment = __deser(__j[\"_compartment\"]);\n");
 
             // Restore state stack
@@ -1638,10 +1642,16 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state(json) — static method, uses static __deserComp
+            // restore_state(json) — static method, uses static __deserComp.
+            //
+            // Sets the class-static `__skipInitialEnter` flag before
+            // invoking the ctor so the initial-state $>() handler does
+            // not fire on a restored instance. See Swift for rationale.
             let mut restore_body = String::new();
             restore_body.push_str("var __j = new org.json.JSONObject(json);\n");
+            restore_body.push_str("__skipInitialEnter = true;\n");
             restore_body.push_str(&format!("var __instance = new {}();\n", sys));
+            restore_body.push_str("__skipInitialEnter = false;\n");
             restore_body
                 .push_str("__instance.__compartment = __deserComp(__j.get(\"_compartment\"));\n");
             restore_body.push_str("if (__j.has(\"_state_stack\")) {\n");
@@ -2083,10 +2093,16 @@ pub(crate) fn generate_persistence_methods(
             // For Kotlin, static methods go in companion object, but for simplicity
             // emit as a top-level function or use companion object in the class
             // Actually, emit as a regular method and the test will call it on an instance
-            // OR use companion object pattern
+            // OR use companion object pattern.
+            //
+            // Sets the companion-static __skipInitialEnter flag so the ctor
+            // does not re-fire the initial-state $>() handler on a restored
+            // instance. See Swift comment for rationale.
             let mut restore_body = String::new();
             restore_body.push_str("val j = org.json.JSONObject(json)\n");
+            restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
             restore_body.push_str(&format!("val instance = {}()\n", sys));
+            restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
             restore_body.push_str(
                 "instance.__compartment = instance.__deserComp(j.get(\"_compartment\"))!!\n",
             );
@@ -2922,7 +2938,12 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("        result = comp\n");
             restore_body.push_str("    return result\n");
 
+            // Set the class-static __skipInitialEnter before constructing
+            // so the initial-state $>() handler is not re-fired on a
+            // restored instance. See Swift comment for the pattern.
+            restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", system.name));
             restore_body.push_str(&format!("var instance = {}.new()\n", system.name));
+            restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", system.name));
             restore_body.push_str(
                 "instance.__compartment = _deser_chain.call(state_data[\"_compartment\"])\n",
             );

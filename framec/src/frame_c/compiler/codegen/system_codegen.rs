@@ -2681,20 +2681,29 @@ self._context_stack.pop();"#,
                     )
                 },
                 TargetLanguage::Cpp => format!(
-                    r#"{}FrameEvent __frame_event("$>");
-{}FrameContext __ctx(std::move(__frame_event));
-_context_stack.push_back(std::move(__ctx));
-__kernel(_context_stack.back()._event);
-_context_stack.pop_back();"#,
-                    system.name, system.name
+                    // Class-static `__skipInitialEnter` — see Swift comment.
+                    r#"if (!__skipInitialEnter) {{
+    {0}FrameEvent __frame_event("$>");
+    {0}FrameContext __ctx(std::move(__frame_event));
+    _context_stack.push_back(std::move(__ctx));
+    __kernel(_context_stack.back()._event);
+    _context_stack.pop_back();
+}}"#,
+                    system.name
                 ),
                 TargetLanguage::Java => format!(
-                    r#"{}FrameEvent __frame_event = new {}FrameEvent("$>");
-{}FrameContext __ctx = new {}FrameContext(__frame_event, null);
-_context_stack.add(__ctx);
-__kernel(_context_stack.get(_context_stack.size() - 1)._event);
-_context_stack.remove(_context_stack.size() - 1);"#,
-                    system.name, system.name, system.name, system.name
+                    // `__skipInitialEnter` is a class-level static flag that
+                    // restore_state sets true before invoking the ctor so
+                    // the initial-state $>() handler does NOT fire on a
+                    // restored instance. See Swift comment for rationale.
+                    r#"if (!__skipInitialEnter) {{
+    {0}FrameEvent __frame_event = new {0}FrameEvent("$>");
+    {0}FrameContext __ctx = new {0}FrameContext(__frame_event, null);
+    _context_stack.add(__ctx);
+    __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+    _context_stack.remove(_context_stack.size() - 1);
+}}"#,
+                    system.name
                 ),
                 TargetLanguage::CSharp => format!(
                     r#"{}FrameEvent __frame_event = new {}FrameEvent("$>");
@@ -2713,12 +2722,16 @@ s._context_stack = s._context_stack[:len(s._context_stack)-1]"#,
                     system.name, system.name
                 ),
                 TargetLanguage::Kotlin => format!(
-                    r#"val __frame_event = {}FrameEvent("$>")
-val __ctx = {}FrameContext(__frame_event, null)
-_context_stack.add(__ctx)
-__kernel(_context_stack[_context_stack.size - 1]._event)
-_context_stack.removeAt(_context_stack.size - 1)"#,
-                    system.name, system.name
+                    // Companion-object static flag; see Swift comment for
+                    // rationale.
+                    r#"if (!__skipInitialEnter) {{
+    val __frame_event = {0}FrameEvent("$>")
+    val __ctx = {0}FrameContext(__frame_event, null)
+    _context_stack.add(__ctx)
+    __kernel(_context_stack[_context_stack.size - 1]._event)
+    _context_stack.removeAt(_context_stack.size - 1)
+}}"#,
+                    system.name
                 ),
                 TargetLanguage::Swift => format!(
                     // `__skipInitialEnter` is a class-level static flag that
@@ -2768,11 +2781,13 @@ self._context_stack[#self._context_stack] = nil"#,
                     event_class, system.name
                 ),
                 TargetLanguage::GDScript => format!(
-                    r#"var __frame_event = {}.new("$>", self.__compartment.enter_args)
-var __ctx = {}FrameContext.new(__frame_event, null)
-self._context_stack.append(__ctx)
-self.__kernel(self._context_stack[self._context_stack.size() - 1].event)
-self._context_stack.pop_back()"#,
+                    // Class-static `__skipInitialEnter` — see Swift comment.
+                    r#"if not __skipInitialEnter:
+    var __frame_event = {0}.new("$>", self.__compartment.enter_args)
+    var __ctx = {1}FrameContext.new(__frame_event, null)
+    self._context_stack.append(__ctx)
+    self.__kernel(self._context_stack[self._context_stack.size() - 1].event)
+    self._context_stack.pop_back()"#,
                     event_class, system.name
                 ),
                 TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
@@ -3337,6 +3352,16 @@ fn generate_cpp_machinery(
     compartment_class: &str,
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+
+    // Class-static flag used by restore_state to suppress the initial-
+    // state $>() dispatch on a restored instance. Inline initialization
+    // requires C++17+. See Swift comment for rationale — same class of
+    // bug across JVM + C++ + GDScript + Objective-C-style dynamic langs.
+    methods.push(CodegenNode::NativeBlock {
+        code: "inline static bool __skipInitialEnter = false;".to_string(),
+        span: None,
+    });
+
     let states: Vec<&str> = system
         .machine
         .as_ref()
@@ -3439,6 +3464,16 @@ fn generate_java_machinery(
     compartment_class: &str,
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+
+    // Class-static flag gating the ctor's ENTER dispatch. restore_state
+    // sets it true, calls the ctor, resets it false, then overwrites the
+    // compartment. See Swift comment in generate_swift_machinery for the
+    // rationale — same class of bug across JVM + C++ + GDScript.
+    methods.push(CodegenNode::NativeBlock {
+        code: "private static boolean __skipInitialEnter = false;".to_string(),
+        span: None,
+    });
+
     let states: Vec<&str> = system
         .machine
         .as_ref()
@@ -3559,6 +3594,19 @@ fn generate_kotlin_machinery(
     compartment_class: &str,
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+
+    // Companion-object flag gating the ctor's ENTER dispatch. restore_state
+    // sets it true, calls Canary(), resets false. Kotlin companion members
+    // are effectively static (JVM `Canary.Companion.__skipInitialEnter`);
+    // the ctor reads them via the bare name due to companion-member
+    // promotion inside the enclosing class scope. See Swift comment for
+    // the overall rationale.
+    methods.push(CodegenNode::NativeBlock {
+        code: "companion object { @JvmStatic var __skipInitialEnter: Boolean = false }"
+            .to_string(),
+        span: None,
+    });
+
     let states: Vec<&str> = system
         .machine
         .as_ref()
@@ -4168,6 +4216,16 @@ while (__next_compartment != null) {{
 
 fn generate_gdscript_machinery(event_class: &str) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+
+    // Class-static flag gating the ctor's ENTER dispatch. GDScript 4.1+
+    // supports `static var`. See Swift comment for the rationale — same
+    // class of bug across every language whose restore path uses the
+    // default-construction idiom.
+    methods.push(CodegenNode::NativeBlock {
+        code: "static var __skipInitialEnter: bool = false".to_string(),
+        span: None,
+    });
+
     // __kernel method
     methods.push(CodegenNode::Method {
         name: "__kernel".to_string(),
