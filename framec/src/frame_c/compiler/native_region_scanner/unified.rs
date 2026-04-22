@@ -162,10 +162,24 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
         if matches!(b, b'-' | b'=' | b'(' | b'p' | b'r') {
             if let Some((_new_i, kind)) = match_frame_statement(skipper, bytes, i, end) {
                 // Calculate indent: count leading whitespace from start of
-                // current line. When the Frame statement follows native
-                // code on the same line (e.g., `if cond: -> $State`), use
-                // the line's leading whitespace + 4 (one indent level into
-                // the block) rather than the character position of `->`.
+                // current line.
+                //
+                // When the Frame statement follows native code on the same
+                // line, we have to distinguish two cases:
+                //
+                //   1. Native is a block-opener (`if cond:`, `if (c) {`,
+                //      `for (…) {`). The Frame token forms the one-line
+                //      block body — indent one level deeper.
+                //
+                //   2. Native is a plain statement (`self.x = 0;`,
+                //      `f();`, `x = y`). The Frame token is a successor
+                //      statement — same indent as the native.
+                //
+                // We pick between the two by looking at the last non-
+                // whitespace byte of the native text: `:` and `{` open a
+                // block in every target language we support; anything else
+                // (`;`, `)`, identifier char, `=`, …) is a statement
+                // terminator or value continuation.
                 let mut line_start = i;
                 while line_start > open_brace_index + 1 && bytes[line_start - 1] != b'\n' {
                     line_start -= 1;
@@ -175,10 +189,21 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     .take_while(|&&b| b == b' ' || b == b'\t')
                     .count();
                 let frame_at_sol = leading_ws == (i - line_start);
+                // Find last non-whitespace byte between line_start and i.
+                let mut last_non_ws: Option<u8> = None;
+                for b in bytes[line_start..i].iter().rev() {
+                    if *b != b' ' && *b != b'\t' {
+                        last_non_ws = Some(*b);
+                        break;
+                    }
+                }
+                let native_opens_block = matches!(last_non_ws, Some(b':') | Some(b'{'));
                 let indent = if frame_at_sol {
                     i - line_start // Frame token starts the line
+                } else if native_opens_block {
+                    leading_ws + 4 // Frame is the block body — one level deeper
                 } else {
-                    leading_ws + 4 // Frame token follows native code — indent one level deeper
+                    leading_ws // Frame is a successor statement — same indent
                 };
 
                 // Emit any preceding native text
