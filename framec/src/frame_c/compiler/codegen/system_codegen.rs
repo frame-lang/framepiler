@@ -2721,12 +2721,23 @@ _context_stack.removeAt(_context_stack.size - 1)"#,
                     system.name, system.name
                 ),
                 TargetLanguage::Swift => format!(
-                    r#"let __frame_event = {}FrameEvent(message: "$>")
-let __ctx = {}FrameContext(event: __frame_event)
-_context_stack.append(__ctx)
-__kernel(_context_stack[_context_stack.count - 1]._event)
-_context_stack.removeLast()"#,
-                    system.name, system.name
+                    // `__skipInitialEnter` is a class-level static flag that
+                    // restoreState sets to true before invoking init() so the
+                    // initial-state `$>()` enter handler does not fire on a
+                    // restored instance. Without this, every Swift @@persist
+                    // system would leak enter side effects from state `$A`
+                    // on top of its restored compartment. The flag is always
+                    // emitted (false by default for non-persist systems too)
+                    // so the class has one init signature regardless of
+                    // whether @@persist is declared — simplifies call sites.
+                    r#"if !{0}.__skipInitialEnter {{
+    let __frame_event = {0}FrameEvent(message: "$>")
+    let __ctx = {0}FrameContext(event: __frame_event)
+    _context_stack.append(__ctx)
+    __kernel(_context_stack[_context_stack.count - 1]._event)
+    _context_stack.removeLast()
+}}"#,
+                    system.name
                 ),
                 TargetLanguage::Php => format!(
                     r#"$__frame_event = new {}("$>", $this->__compartment->enter_args);
@@ -3653,6 +3664,16 @@ fn generate_swift_machinery(
     compartment_class: &str,
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+
+    // Class-level static flag: restoreState sets this before calling init
+    // to suppress the initial-state $>() dispatch. Default false means all
+    // non-restore instantiations fire ENTER as before. Always emitted so
+    // init()'s generated body can reference it regardless of @@persist.
+    methods.push(CodegenNode::NativeBlock {
+        code: "static var __skipInitialEnter: Bool = false".to_string(),
+        span: None,
+    });
+
     let states: Vec<&str> = system
         .machine
         .as_ref()

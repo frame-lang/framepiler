@@ -1931,14 +1931,25 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state($json) — static
+            // restore_state($json) — static.
+            //
+            // Uses ReflectionClass::newInstanceWithoutConstructor so the
+            // generated class's __construct does NOT run. __construct
+            // dispatches the initial state's $>() enter handler; a
+            // restored instance must not re-fire that. Instance props
+            // that __construct would normally set up are populated here
+            // from the saved blob.
             let mut restore_body = String::new();
             restore_body.push_str("$j = json_decode($json, true);\n");
-            restore_body.push_str(&format!("$instance = new {}();\n", sys));
+            restore_body.push_str(&format!(
+                "$instance = (new \\ReflectionClass({}::class))->newInstanceWithoutConstructor();\n",
+                sys
+            ));
+            restore_body.push_str("$instance->_state_stack = [];\n");
+            restore_body.push_str("$instance->_context_stack = [];\n");
             restore_body
                 .push_str("$instance->__compartment = self::__deserComp($j['_compartment']);\n");
             restore_body.push_str("if (isset($j['_state_stack'])) {\n");
-            restore_body.push_str("    $instance->_state_stack = [];\n");
             restore_body.push_str("    foreach ($j['_state_stack'] as $sc) { $instance->_state_stack[] = self::__deserComp($sc); }\n");
             restore_body.push_str("}\n");
             for var in &system.domain {
@@ -2204,13 +2215,23 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restoreState — static method
+            // restoreState — static method.
+            //
+            // Sets `__skipInitialEnter` before calling init so the
+            // initial-state $>() enter handler does NOT fire on a
+            // restored instance. The flag is a class-level static;
+            // it's reset immediately after init to keep the default
+            // (fire-ENTER-on-construct) behavior for subsequent
+            // `Canary()` calls. Matches Python's pickle semantics
+            // where restore does not invoke __init__.
             let mut restore_body = String::new();
             restore_body.push_str("let data = json.data(using: .utf8)!\n");
             restore_body.push_str(
                 "let j = try! JSONSerialization.jsonObject(with: data) as! [String: Any]\n",
             );
+            restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
             restore_body.push_str(&format!("let instance = {}()\n", sys));
+            restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
             restore_body.push_str("instance.__compartment = instance.__deserComp(j[\"_compartment\"] as? [String: Any])!\n");
             restore_body.push_str("if let stack = j[\"_state_stack\"] as? [[String: Any]] {\n");
             restore_body.push_str("    instance._state_stack = []\n");
