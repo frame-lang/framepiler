@@ -1006,9 +1006,15 @@ pub(crate) fn rust_expand_state_var_write(
 }
 
 /// Rust return-value boxing — wraps expression in Box<dyn Any>, handles
-/// string literal conversion (&str → String).
-pub(crate) fn rust_expand_box_return(indent_str: &str, expanded_expr: &str) -> String {
-    let boxed_expr = rust_wrap_string_literal(expanded_expr);
+/// string literal conversion (&str → String) and integer/float literal
+/// casts (i32 → i64, f32 → f64) to match the interface method's declared
+/// Rust return type.
+pub(crate) fn rust_expand_box_return(
+    indent_str: &str,
+    expanded_expr: &str,
+    return_type: &Option<String>,
+) -> String {
+    let boxed_expr = rust_wrap_for_boxing(expanded_expr, return_type);
     format!(
         "{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n\
          {}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}",
@@ -1018,8 +1024,12 @@ pub(crate) fn rust_expand_box_return(indent_str: &str, expanded_expr: &str) -> S
 
 /// Rust return-value boxing (no leading indent on first line — used in
 /// ReturnCall/ContextReturnExpr where the caller provides the indent).
-pub(crate) fn rust_expand_box_return_bare(indent_str: &str, expanded_expr: &str) -> String {
-    let boxed_expr = rust_wrap_string_literal(expanded_expr);
+pub(crate) fn rust_expand_box_return_bare(
+    indent_str: &str,
+    expanded_expr: &str,
+    return_type: &Option<String>,
+) -> String {
+    let boxed_expr = rust_wrap_for_boxing(expanded_expr, return_type);
     format!(
         "let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n\
          {}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}",
@@ -1040,13 +1050,40 @@ pub(crate) fn rust_expand_context_data_write(
     )
 }
 
-/// Convert &str literal to String::from() for Box<dyn Any> downcasting.
-fn rust_wrap_string_literal(expr: &str) -> String {
-    if expr.trim().starts_with('"') && expr.trim().ends_with('"') {
-        format!("String::from({})", expr.trim())
-    } else {
-        expr.to_string()
+/// Wrap a value expression so the `Box<dyn Any>` it ends up in can be
+/// downcast to exactly the type the enclosing Frame method's return
+/// signature resolves to on Rust.
+///
+/// Three cases matter:
+///   1. Frame type `str` (or a `"..."` literal with no declared type):
+///      wrap as `String::from("...")`. The downcast expects `String`,
+///      not `&'static str`.
+///   2. Frame type `int`: add `as i64`. Integer literals in Rust default
+///      to `i32`; the interface signature emits `-> i64`, so without
+///      this cast the box contains `i32` and the downcast panics.
+///   3. Frame type `float`: add `as f64` for the same reason.
+///
+/// Non-literal expressions that are already the correct type get a
+/// redundant cast, which the compiler elides.
+fn rust_wrap_for_boxing(expr: &str, return_type: &Option<String>) -> String {
+    let trimmed = expr.trim();
+    let is_string_literal = trimmed.starts_with('"') && trimmed.ends_with('"');
+    match return_type.as_deref() {
+        Some("int") => format!("({}) as i64", trimmed),
+        Some("float") => format!("({}) as f64", trimmed),
+        Some("str") | Some("string") | Some("String") | Some("Any") if is_string_literal => {
+            format!("String::from({})", trimmed)
+        }
+        _ if is_string_literal => format!("String::from({})", trimmed),
+        _ => expr.to_string(),
     }
+}
+
+/// Back-compat shim retained for callers that haven't been threaded with
+/// the return-type context yet. Equivalent to passing `None`.
+#[allow(dead_code)]
+fn rust_wrap_string_literal(expr: &str) -> String {
+    rust_wrap_for_boxing(expr, &None)
 }
 
 // ─── Inline Expression Delegates ─────────────────────────────────────

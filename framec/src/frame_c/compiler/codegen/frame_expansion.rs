@@ -2322,9 +2322,11 @@ pub(crate) fn generate_frame_expansion(
                         indent_str,
                         c_return_assign(&ctx.system_name, &expanded_expr, &ctx.current_return_type),
                     ),
-                    TargetLanguage::Rust => {
-                        super::rust_system::rust_expand_box_return(&indent_str, &expanded_expr)
-                    }
+                    TargetLanguage::Rust => super::rust_system::rust_expand_box_return(
+                        &indent_str,
+                        &expanded_expr,
+                        &ctx.current_return_type,
+                    ),
                     TargetLanguage::Cpp => {
                         let wrapped = cpp_wrap_string_literal(&expanded_expr);
                         format!(
@@ -2497,9 +2499,11 @@ pub(crate) fn generate_frame_expansion(
                     &expanded_expr,
                     &ctx.current_return_type,
                 ),
-                TargetLanguage::Rust => {
-                    super::rust_system::rust_expand_box_return_bare(&indent_str, &expanded_expr)
-                }
+                TargetLanguage::Rust => super::rust_system::rust_expand_box_return_bare(
+                    &indent_str,
+                    &expanded_expr,
+                    &ctx.current_return_type,
+                ),
                 TargetLanguage::Cpp => {
                     let wrapped = cpp_wrap_string_literal(&expanded_expr);
                     format!("_context_stack.back()._return = std::any({});", wrapped)
@@ -2921,9 +2925,11 @@ pub(crate) fn generate_frame_expansion(
                     &expanded_expr,
                     &ctx.current_return_type,
                 ),
-                TargetLanguage::Rust => {
-                    super::rust_system::rust_expand_box_return_bare(&indent_str, &expanded_expr)
-                }
+                TargetLanguage::Rust => super::rust_system::rust_expand_box_return_bare(
+                    &indent_str,
+                    &expanded_expr,
+                    &ctx.current_return_type,
+                ),
                 TargetLanguage::Cpp => {
                     let wrapped = cpp_wrap_string_literal(&expanded_expr);
                     format!("_context_stack.back()._return = std::any({});", wrapped)

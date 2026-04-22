@@ -2372,13 +2372,25 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state(json) — class method (static)
+            // restore_state(json) — class method (static).
+            //
+            // Uses `allocate` instead of `new` so the constructor does NOT
+            // run. This matters because the generated `initialize` dispatches
+            // the initial state's `$>()` enter handler; a restored instance
+            // must not re-fire that (it would leak side effects of a state
+            // the caller never logically entered from). Instance variables
+            // that `initialize` would normally set up are populated here
+            // explicitly from the saved blob.
             let mut restore_body = String::new();
             restore_body.push_str("j = JSON.parse(json)\n");
-            restore_body.push_str(&format!("instance = {}.new\n", sys));
+            restore_body.push_str(&format!("instance = {}.allocate\n", sys));
+            restore_body.push_str("instance.instance_variable_set(:@_context_stack, [])\n");
+            restore_body.push_str("instance.instance_variable_set(:@__next_compartment, nil)\n");
             restore_body.push_str("instance.instance_variable_set(:@__compartment, instance.send(:__deser_comp, j[\"_compartment\"]))\n");
             restore_body.push_str("if j[\"_state_stack\"]\n");
             restore_body.push_str("  instance.instance_variable_set(:@_state_stack, j[\"_state_stack\"].map { |sc| instance.send(:__deser_comp, sc) })\n");
+            restore_body.push_str("else\n");
+            restore_body.push_str("  instance.instance_variable_set(:@_state_stack, [])\n");
             restore_body.push_str("end\n");
             for var in &system.domain {
                 restore_body.push_str(&format!(
