@@ -8421,7 +8421,7 @@ if __name__ == '__main__':
 
 ## 71. SMTP Conversation
 
-[↑ up](#70-http11-connection) · [top](#table-of-contents)
+[↑ up](#70-http11-connection) · [top](#table-of-contents) · [↓ down](#72-phases-of-matter)
 
 ![71 state diagram](images/cookbook/71.svg)
 
@@ -8678,6 +8678,10 @@ State machines fit physical sciences, biology, chemistry, and medicine naturally
 
 ## 72. Phases of Matter
 
+[↑ up](#71-smtp-conversation) · [top](#table-of-contents) · [↓ down](#73-water-with-supercooling)
+
+![72 state diagram](images/cookbook/72.svg)
+
 **Problem:** Model a substance moving through solid, liquid, gas, and plasma, including the latent-heat plateaus where the temperature holds steady while phase-change energy is absorbed.
 
 ```frame
@@ -8801,11 +8805,17 @@ if __name__ == '__main__':
         print(f"{water.phase():10s} {water.temperature():7.1f}")
 ```
 
+**How it works:** The plateau states (`$Melting`, `$Boiling`) track *absorbed latent heat* rather than temperature — that's the point of modelling them separately. Temperature is pinned at the transition point until enough energy accumulates to flip phase; removing heat before the plateau completes drops the substance back into the lower phase. The symmetry between `add_heat` and `remove_heat` captures the thermodynamic reversibility of phase changes, and the substance's physical constants (heat capacity, latent energies) travel as domain variables set at construction time.
+
 **Features used:** system parameters, domain variables for conserved quantities, symmetric transitions for reversible processes, latent-heat plateau as a state with its own physics.
 
 -----
 
 ## 73. Water with Supercooling
+
+[↑ up](#72-phases-of-matter) · [top](#table-of-contents) · [↓ down](#74-radioactive-decay-chain)
+
+![73 state diagram](images/cookbook/73.svg)
 
 **Problem:** Water can be cooled below 0 C without freezing if pure and undisturbed. A disturbance triggers crystallization. A supercooled droplet and ice at the same temperature respond to `shake()` differently — that's a state distinction.
 
@@ -8873,11 +8883,17 @@ if __name__ == '__main__':
     print(w.phase(), w.temperature())
 ```
 
+**How it works:** `$Supercooled` and `$Ice` can sit at the same temperature yet behave differently — that's what makes them distinct states, not distinct numeric ranges. `shake()` and `nucleate()` only fire a transition out of `$Supercooled`; in `$Liquid` and `$Ice` those handlers aren't declared, so the events are silently ignored. Metastability is structural: two macrostates occupying the same parameter value, distinguishable only by history.
+
 **Features used:** shared domain variable across states, multiple trigger events for the same transition, handler absence as behavioral distinction.
 
 -----
 
 ## 74. Radioactive Decay Chain
+
+[↑ up](#73-water-with-supercooling) · [top](#table-of-contents) · [↓ down](#75-cell-cycle-with-checkpoints)
+
+![74 state diagram](images/cookbook/74.svg)
 
 **Problem:** U-238 decay chain with probabilistic transitions per tick. Each nuclide owns its decay probability locally.
 
@@ -8947,11 +8963,17 @@ if __name__ == '__main__':
             break
 ```
 
+**How it works:** Each nuclide is its own state, and each state owns its decay probability in its own `tick()` handler. The cascade is baked into the state graph — `$U238` only transitions to `$Th234`, which only transitions to `$Pa234`, and so on down to the stable endpoint `$Pb206`. No central decay table, no rate coefficients scattered through branch logic; each half-life lives next to the nuclide that obeys it.
+
 **Features used:** terminal state, stochastic transitions, each state owns its decay law locally.
 
 -----
 
 ## 75. Cell Cycle with Checkpoints
+
+[↑ up](#74-radioactive-decay-chain) · [top](#table-of-contents) · [↓ down](#76-enzyme-kinetics-michaelismenten)
+
+![75 state diagram](images/cookbook/75.svg)
 
 **Problem:** G1/S/G2/M cycle with checkpoint arrest states. DNA damage, nutrient depletion, and spindle misalignment halt the cycle; repair or apoptosis resolve the arrest.
 
@@ -9060,11 +9082,17 @@ if __name__ == '__main__':
         print(f"t={i}: {c.phase()}")
 ```
 
+**How it works:** `$Cycling` is an HSM parent that handles DNA damage, nutrient loss, and apoptosis signals — any of the four cycle phases (`$G1`, `$S`, `$G2`, `$M`) can be interrupted from above via `=> $^`. The arrest states are structural stop-signs: the cycle cannot advance out of `$G1_Arrested` except through repair or apoptosis. This matches how the p53 pathway and DNA damage checkpoint actually work in biology — they don't let the cycle proceed, full stop.
+
 **Features used:** HSM parent for shared checkpoint signaling, default forward `=> $^`, arrest states as distinct dispatch contexts, apoptosis as terminal state.
 
 -----
 
 ## 76. Enzyme Kinetics (Michaelis-Menten)
+
+[↑ up](#75-cell-cycle-with-checkpoints) · [top](#table-of-contents) · [↓ down](#77-neuron-action-potential)
+
+![76 state diagram](images/cookbook/76.svg)
 
 **Problem:** Single enzyme molecule: E + S ⇌ ES → E + P. Steady-state distribution reproduces Michaelis-Menten saturation.
 
@@ -9113,11 +9141,17 @@ if __name__ == '__main__':
         print(f"[S] = {s:5.1f}:  {e.products_made()} products")
 ```
 
+**How it works:** The enzyme is either free or bound to substrate. From `$Bound` it can either catalyze (incrementing the product count and returning to `$Free`) or dissociate without reaction (also returning to `$Free`). Run many ticks and the steady-state fraction of time spent in each state reproduces the hyperbolic saturation curve of Michaelis-Menten kinetics — no differential equations, just the stationary distribution of a two-state machine.
+
 **Features used:** system parameter, stochastic transitions, emergent kinetics from state distribution.
 
 -----
 
 ## 77. Neuron Action Potential
+
+[↑ up](#76-enzyme-kinetics-michaelismenten) · [top](#table-of-contents) · [↓ down](#78-virus-infection-lifecycle-sir)
+
+![77 state diagram](images/cookbook/77.svg)
 
 **Problem:** Resting → depolarizing → repolarizing → refractory. Absolute refractory cannot fire; relative refractory needs stronger input.
 
@@ -9189,11 +9223,17 @@ if __name__ == '__main__':
         print(f"{n.phase():15s} V = {n.voltage():+.1f} mV")
 ```
 
+**How it works:** Four states model the voltage cycle. `$Resting` accepts stimulation and transitions to `$Depolarizing` once the accumulated input crosses threshold. The subsequent phases are automatic — `tick()`-driven: depolarization peaks at `v_peak`, repolarization undershoots to `v_hyper`, and a timed refractory period must expire before the neuron can fire again. In `$Refractory`, `stimulate()` is an explicit empty handler — that's the absolute refractory period, encoded as structural silence rather than a guard flag.
+
 **Features used:** state-dependent event handling, empty handler as no-op, enter handler side effects, timed sub-phases.
 
 -----
 
 ## 78. Virus Infection Lifecycle (SIR)
+
+[↑ up](#77-neuron-action-potential) · [top](#table-of-contents) · [↓ down](#79-titration-protocol)
+
+![78 state diagram](images/cookbook/78.svg)
 
 **Problem:** Individual person: Susceptible → Infected → Recovered. Run N of them to simulate an epidemic.
 
@@ -9255,11 +9295,17 @@ if __name__ == '__main__':
         print(f"day {day:2d}: S={s:3d} I={i:3d} R={r:3d}")
 ```
 
+**How it works:** Each person is a tiny three-state machine. The epidemic is not programmed anywhere — it emerges from 200 of them interacting, where each infected person exposes one random other per tick. Classical SIR curves are a downstream property of the individual state logic, not a separate simulation layer. Compositional modelling at its simplest: one tiny state machine, repeated.
+
 **Features used:** system parameters, compositional simulation (200 independent state machines), no-op handlers, epidemic as emergent property of FSM interaction.
 
 -----
 
 ## 79. Titration Protocol
+
+[↑ up](#78-virus-infection-lifecycle-sir) · [top](#table-of-contents) · [↓ down](#80-pcr-thermal-cycler)
+
+![79 state diagram](images/cookbook/79.svg)
 
 **Problem:** Add titrant drop by drop. Endpoint locks the result — no more titrant after declaring endpoint.
 
@@ -9328,11 +9374,17 @@ if __name__ == '__main__':
     print(f"endpoint: {t.result_mL():.3f} mL")
 ```
 
+**How it works:** The endpoint is a structural gate, not a flag. Once in `$Complete`, there is no `add_drop` handler — calling it does nothing, and no guard code has to say so. The recorded volume is frozen by the state graph itself, not by a boolean check living inside each handler. `new_trial()` is the only way back, which wipes the volume and returns to `$Setup`.
+
 **Features used:** events ignored in wrong state, terminal state with explicit reset, state as protocol phase.
 
 -----
 
 ## 80. PCR Thermal Cycler
+
+[↑ up](#79-titration-protocol) · [top](#table-of-contents) · [↓ down](#81-infusion-pump)
+
+![80 state diagram](images/cookbook/80.svg)
 
 **Problem:** Denature at 95 C, anneal at 55 C, extend at 72 C. Repeat N times. Hold at 4 C.
 
@@ -9418,11 +9470,17 @@ if __name__ == '__main__':
         p.tick_minute()
 ```
 
+**How it works:** Three thermal phases — `$Denature`, `$Anneal`, `$Extend` — are children of `$Running`, cycling in sequence. `$Extend` checks the cycle counter on completion and either loops back to `$Denature` for another cycle or transitions to the terminal `$FinalHold`. The cycle count persists across transitions as a domain variable; each phase's time-in-state lives in its local compartment — the classic divide between state-preserved and state-local data.
+
 **Features used:** HSM parent declared before children, per-phase enter handlers, cycle counting, conditional branch to terminal vs continuation.
 
 -----
 
 ## 81. Infusion Pump
+
+[↑ up](#80-pcr-thermal-cycler) · [top](#table-of-contents) · [↓ down](#82-ventilator-breath-cycle)
+
+![81 state diagram](images/cookbook/81.svg)
 
 **Problem:** Safety-critical delivery. Cannot infuse without priming. Alarm state has no infusion handlers — impossible by construction.
 
@@ -9502,11 +9560,17 @@ if __name__ == '__main__':
     print(p.status())
 ```
 
+**How it works:** `start_infusion()` is only declared in `$Primed`, so there's no path to `$Running` except through priming. Priming is not a soft check but a structural gate. Similarly, `$Alarm` has no `start_infusion()` handler at all — occlusions cannot resume delivery until explicitly acknowledged. `$Operational` is the HSM parent that catches `occlusion_detected()` from any operational state and routes to `$Alarm` with the reason stashed as enter args on the alarm compartment.
+
 **Features used:** HSM parent for safety signals, alarm as structural gate with enter args, events ignored in wrong state, impossible-by-construction safety.
 
 -----
 
 ## 82. Ventilator Breath Cycle
+
+[↑ up](#81-infusion-pump) · [top](#table-of-contents) · [↓ down](#83-defibrillator--aed)
+
+![82 state diagram](images/cookbook/82.svg)
 
 **Problem:** Inspiration/expiration/pause cycle. Patient effort triggers next breath only during pause — not mid-inspiration.
 
@@ -9581,11 +9645,17 @@ if __name__ == '__main__':
     print(f"breaths: {v.breath_count()}")
 ```
 
+**How it works:** Three timed phases cycle continuously, but only `$Pause` treats `patient_effort_detected()` as a transition trigger. In `$Inspiration` and `$Expiration`, patient effort is an explicit empty handler — the ventilator won't cut short a breath mid-delivery, which is a real clinical safety requirement. `$Ventilating` is the HSM parent that handles `stop()` for all three breath phases uniformly.
+
 **Features used:** timed phases with enter handlers, state-dependent event handling, HSM parent for shared stop.
 
 -----
 
 ## 83. Defibrillator / AED
+
+[↑ up](#82-ventilator-breath-cycle) · [top](#table-of-contents) · [↓ down](#84-acls-cardiac-arrest-algorithm)
+
+![83 state diagram](images/cookbook/83.svg)
 
 **Problem:** Rigid safety sequence: analyze → charge → confirm clear → shock. Cannot shock without completing the chain.
 
@@ -9672,11 +9742,17 @@ if __name__ == '__main__':
     print(a.status())
 ```
 
+**How it works:** `press_shock()` is only a handler in `$ReadyToShock` — everywhere else it's silently ignored. The sequence `$Analyzing → $Charging → $AwaitingClear → $ReadyToShock` cannot be skipped, because each transition is driven by a distinct event and no shortcut exists. This is the canonical *impossible by construction* pattern for high-consequence workflows: the protocol is enforced by the state graph itself, not by reviewers reading handler code.
+
 **Features used:** linear mandatory state sequence, missing handlers as structural safety, `tick_ms` for charging progress.
 
 -----
 
 ## 84. ACLS Cardiac Arrest Algorithm
+
+[↑ up](#83-defibrillator--aed) · [top](#table-of-contents) · [↓ down](#85-sepsis-hour-1-bundle)
+
+![84 state diagram](images/cookbook/84.svg)
 
 **Problem:** AHA ACLS algorithm. Branches on shockable vs non-shockable rhythm. CPR cycles, epinephrine, amiodarone, ROSC.
 
@@ -9767,11 +9843,17 @@ if __name__ == '__main__':
     print(f"{code.phase()}, shocks: {code.shocks_given()}")
 ```
 
+**How it works:** `$Coding` is the HSM parent that handles `rosc_achieved()` and `pronounce()` — both are universal exits from any active coding state. Rhythm analysis branches into `$CPR_Shockable` or `$CPR_NonShockable` based on the detected rhythm, and each CPR cycle loops back through `$Analyzing` for reassessment. The branch structure maps directly onto the AHA flowchart — no flag-driven substitutes for what the state graph already expresses.
+
 **Features used:** HSM parent for cross-cutting ROSC/pronounce, rhythm-based branching, per-branch CPR cycling.
 
 -----
 
 ## 85. Sepsis Hour-1 Bundle
+
+[↑ up](#84-acls-cardiac-arrest-algorithm) · [top](#table-of-contents)
+
+![85 state diagram](images/cookbook/85.svg)
 
 **Problem:** Timed checklist: lactate, cultures, antibiotics, fluids, reassess MAP, pressors if needed. On-time vs late as distinct terminal states.
 
@@ -9906,6 +9988,8 @@ if __name__ == '__main__':
     print(b.status())
     print(f"complete: {b.bundle_complete()}")
 ```
+
+**How it works:** Each bundle step sets its own flag on the domain, then asks the `is_complete()` action whether all required items are done. Completion splits into `$OnTime` or `$Late` depending on whether `self.elapsed` is at or under 60 minutes — the quality metric is encoded structurally in *which* terminal the machine reaches. "Did we meet the time window?" is answered by inspecting the final state, not by a post-hoc audit query.
 
 **Features used:** action returning bool (`is_complete()`), terminal states distinguishing on-time vs late, domain variables for bundle tracking, protocol timing.
 
