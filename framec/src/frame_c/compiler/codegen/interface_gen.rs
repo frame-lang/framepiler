@@ -1788,11 +1788,29 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // RestoreState(json) — static method
+            // RestoreState(json) — static method.
+            //
+            // Uses `RuntimeHelpers.GetUninitializedObject` to create the
+            // instance WITHOUT running the constructor. The constructor
+            // would otherwise dispatch the initial-state $>() enter
+            // handler, leaking side effects on every restore. Instance
+            // fields that the ctor would have populated (_state_stack,
+            // _context_stack) are set up explicitly below.
             let mut restore_body = String::new();
             restore_body.push_str("var __doc = System.Text.Json.JsonDocument.Parse(json);\n");
             restore_body.push_str("var __root = __doc.RootElement;\n");
-            restore_body.push_str(&format!("var __instance = new {}();\n", sys));
+            restore_body.push_str(&format!(
+                "var __instance = ({0})System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({0}));\n",
+                sys,
+            ));
+            restore_body.push_str(&format!(
+                "__instance._state_stack = new List<{}>();\n",
+                compartment_class,
+            ));
+            restore_body.push_str(&format!(
+                "__instance._context_stack = new List<{}FrameContext>();\n",
+                sys,
+            ));
             restore_body.push_str(
                 "__instance.__compartment = __DeserComp(__root.GetProperty(\"_compartment\"));\n",
             );
