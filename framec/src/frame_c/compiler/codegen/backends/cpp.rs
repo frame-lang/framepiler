@@ -217,6 +217,12 @@ impl LanguageBackend for CppBackend {
                                     ..
                                 }
                             )
+                            // NativeBlock at class scope is used for class-
+                            // static declarations (e.g. the `@@persist`
+                            // __skipInitialEnter flag) that don't fit the
+                            // Method/Field/Constructor node shapes. Emit
+                            // them alongside public members.
+                            || matches!(m, CodegenNode::NativeBlock { .. })
                     })
                     .collect();
 

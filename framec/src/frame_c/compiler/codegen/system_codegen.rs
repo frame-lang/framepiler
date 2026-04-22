@@ -3596,14 +3596,13 @@ fn generate_kotlin_machinery(
     let mut methods = Vec::new();
 
     // Companion-object flag gating the ctor's ENTER dispatch. restore_state
-    // sets it true, calls Canary(), resets false. Kotlin companion members
-    // are effectively static (JVM `Canary.Companion.__skipInitialEnter`);
-    // the ctor reads them via the bare name due to companion-member
-    // promotion inside the enclosing class scope. See Swift comment for
-    // the overall rationale.
+    // sets it true, calls Canary(), resets false. The raw `@JvmStatic var`
+    // declaration below is emitted inside the class's sole companion
+    // object — the Kotlin backend recognizes NativeBlock items in the
+    // methods vec and places them alongside static methods so only one
+    // companion object is produced (Kotlin permits at most one per class).
     methods.push(CodegenNode::NativeBlock {
-        code: "companion object { @JvmStatic var __skipInitialEnter: Boolean = false }"
-            .to_string(),
+        code: "@JvmStatic var __skipInitialEnter: Boolean = false".to_string(),
         span: None,
     });
 

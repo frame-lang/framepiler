@@ -140,8 +140,24 @@ impl LanguageBackend for KotlinBackend {
                     result.push('\n');
                 }
 
-                // Partition methods: emit non-static first, then group
-                // all static methods inside a single `companion object`.
+                // Partition methods: emit non-static first, then group all
+                // static methods (and any NativeBlock declarations marked
+                // for companion placement, e.g. the @@persist
+                // `__skipInitialEnter` flag) inside a single `companion
+                // object`. Kotlin permits at most one companion object per
+                // class, so every static-like declaration must funnel into
+                // the same block.
+                let is_companion_native = |n: &CodegenNode| -> bool {
+                    if let CodegenNode::NativeBlock { code, .. } = n {
+                        // Heuristic: any NativeBlock whose text opens with
+                        // `@JvmStatic` is meant for the companion object.
+                        // Other NativeBlocks (e.g. Frame-expanded code) stay
+                        // at their original position in the class body.
+                        code.trim_start().starts_with("@JvmStatic")
+                    } else {
+                        false
+                    }
+                };
                 let (statics, non_statics): (Vec<_>, Vec<_>) =
                     methods.iter().enumerate().partition(|(_, m)| {
                         matches!(
@@ -150,7 +166,7 @@ impl LanguageBackend for KotlinBackend {
                                 is_static: true,
                                 ..
                             }
-                        )
+                        ) || is_companion_native(m)
                     });
 
                 for (i, (_, method)) in non_statics.iter().enumerate() {
