@@ -1666,6 +1666,15 @@ fn rust_auto_clone_in_code(
     call_targets: &[String],
     non_copy_fields: &[String],
 ) -> String {
+    // Two-pass:
+    //   1. Rewrite `self.<field>` args of Frame calls (the original pass).
+    //   2. Rewrite `Box::new(self.<field>)` for non-Copy fields — this is
+    //      how `@@:(self.s)` return-value boxing shows up in NativeBlocks
+    //      and without `.clone()` rustc rejects it with E0507 (move out
+    //      of borrowed ref). Targeted text rewrite is safe: `Box::new(...)`
+    //      only appears in generated return-boxing code, and we only
+    //      clone when the argument is exactly `self.<non_copy_field>`.
+    let code = rust_rewrite_box_self_field(code, non_copy_fields);
     let bytes = code.as_bytes();
     let mut out = String::with_capacity(code.len());
     let mut i = 0;
@@ -1740,6 +1749,22 @@ fn rust_auto_clone_in_code(
         }
         out.push(bytes[i] as char);
         i += 1;
+    }
+    out
+}
+
+/// Rewrite `Box::new(self.<field>)` → `Box::new(self.<field>.clone())` for
+/// each `field` that is non-Copy. Called before the Frame-call auto-clone
+/// pass so its text changes flow through unchanged.
+fn rust_rewrite_box_self_field(code: &str, non_copy_fields: &[String]) -> String {
+    if non_copy_fields.is_empty() {
+        return code.to_string();
+    }
+    let mut out = code.to_string();
+    for field in non_copy_fields {
+        let needle = format!("Box::new(self.{})", field);
+        let replacement = format!("Box::new(self.{}.clone())", field);
+        out = out.replace(&needle, &replacement);
     }
     out
 }
