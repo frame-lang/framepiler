@@ -166,6 +166,10 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 
 [Cross-references to existing cookbook patterns](#cross-references-to-existing-cookbook-patterns)
 
+**Parser Specialists (110)**
+
+110. [Statement Disambiguator](#110-statement-disambiguator--bounded-lookahead-oracle) — bounded-lookahead oracle, kernel-loop chain returning a verdict
+
 -----
 
 ## 1. Traffic Light
@@ -14121,7 +14125,7 @@ if __name__ == '__main__':
 
 ## 109. Fleet Dispatcher — N Robots, Competing Consumers for Tasks
 
-[↑ up](#108-drone-flight-modes--failsafe-from-any-phase) · [top](#table-of-contents) · [↓ down](#cross-references-to-existing-cookbook-patterns)
+[↑ up](#108-drone-flight-modes--failsafe-from-any-phase) · [top](#table-of-contents) · [↓ down](#110-statement-disambiguator--bounded-lookahead-oracle)
 
 ![109 state diagram](images/cookbook/109.svg)
 
@@ -14316,6 +14320,148 @@ These robotics recipes are deliberately structural echoes of existing cookbook e
 - **109** ↔ Recipe 43 (Competing Consumers) + Recipe 21 (Worker Pool) — N workers, 1 queue, runtime parameterization
 
 The lesson these cross-references encode is the same one the cookbook argues throughout: the same structural patterns recur whether the substrate is a protocol handler, an agent workflow, an OS internal, or a physical robot. Frame's job is to let the same pattern be written the same way, regardless of what it's controlling.
+
+-----
+
+## Parser Specialists
+
+The companion essay [Parsers as Composed State Machines](articles/research/Parsers_as_Composed_State_Machines.md) argues for a parser architecture in which a coordinator state machine consults specialist state machines as oracles for bounded sub-problems. Recipe 110 is the worked example referenced by that essay: a small disambiguator that consumes lookahead tokens, walks through a chain of enter handlers inside a single interface call, and returns a classification verdict to the caller.
+
+-----
+
+## 110. Statement Disambiguator — Bounded-Lookahead Oracle
+
+[↑ up](#109-fleet-dispatcher--n-robots-competing-consumers-for-tasks) · [top](#table-of-contents)
+
+![110 state diagram](images/cookbook/110.svg)
+
+**Problem:** Many real grammars contain local ambiguities that require bounded lookahead to resolve. The classic case in C-family languages: `foo * bar;` could be a multiplication statement (if `foo` is a variable) or a pointer-variable declaration (if `foo` is a type name). The parser has to consume a few tokens, decide which interpretation applies, and tell its caller. This recipe isolates that disambiguation as a dedicated state machine the coordinator consults like an oracle: tokens in, verdict out, internal walk hidden.
+
+```frame
+@@target python_3
+
+@@system StatementDisambiguator {
+    interface:
+        classify(tokens: list, start: int): str = ""
+        tokens_consumed(): int = 0
+
+    machine:
+        $Ready {
+            classify(tokens: list, start: int): str {
+                self.tokens = tokens
+                self.pos = start
+                self.consumed = 0
+                -> $SeenNothing
+            }
+            tokens_consumed(): int { @@:(self.consumed) }
+        }
+
+        $SeenNothing {
+            $>() {
+                tok = self.peek()
+                self.consumed = self.consumed + 1
+                if tok["kind"] == "IDENT" and self.is_type_name(tok["value"]):
+                    -> $SeenTypeIdent
+                elif tok["kind"] == "IDENT":
+                    -> $SeenPlainIdent
+                else:
+                    -> ("expr") $Verdict
+            }
+        }
+
+        $SeenTypeIdent {
+            $>() {
+                tok = self.peek()
+                self.consumed = self.consumed + 1
+                if tok["value"] == "*":
+                    -> $SeenTypeStar
+                elif tok["kind"] == "IDENT":
+                    -> ("decl") $Verdict    # `foo bar` — value decl
+                else:
+                    -> ("expr") $Verdict    # `foo;` — bare expression
+            }
+        }
+
+        $SeenTypeStar {
+            $>() {
+                tok = self.peek()
+                self.consumed = self.consumed + 1
+                if tok["kind"] == "IDENT":
+                    -> ("decl") $Verdict    # `foo * bar` — pointer decl
+                else:
+                    -> ("expr") $Verdict    # `foo *` — error or expr
+            }
+        }
+
+        $SeenPlainIdent {
+            $>() {
+                tok = self.peek()
+                self.consumed = self.consumed + 1
+                if tok["value"] == "(":
+                    -> ("call") $Verdict    # `foo(` — function call
+                else:
+                    -> ("expr") $Verdict    # any other continuation
+            }
+        }
+
+        $Verdict {
+            $.result: str = ""
+            $>(r: str) {
+                $.result = r
+                @@:($.result)
+                -> $Ready
+            }
+        }
+
+    actions:
+        peek() {
+            idx = self.pos + self.consumed
+            if idx >= len(self.tokens):
+                return { "kind": "EOF", "value": "" }
+            return self.tokens[idx]
+        }
+        is_type_name(name: str): bool {
+            return name in self.known_types
+        }
+
+    domain:
+        tokens: list = []
+        pos: int = 0
+        consumed: int = 0
+        known_types: set = set()
+}
+
+if __name__ == '__main__':
+    d = @@StatementDisambiguator()
+    d.known_types = {"int", "float", "MyType"}
+
+    cases = [
+        ([{"kind": "IDENT", "value": "int"},    {"kind": "IDENT", "value": "x"},   {"kind": "PUNCT", "value": ";"}], "decl"),
+        ([{"kind": "IDENT", "value": "MyType"}, {"kind": "PUNCT", "value": "*"},   {"kind": "IDENT", "value": "bar"}], "decl"),
+        ([{"kind": "IDENT", "value": "MyType"}, {"kind": "PUNCT", "value": "*"},   {"kind": "PUNCT", "value": ";"}], "expr"),
+        ([{"kind": "IDENT", "value": "foo"},    {"kind": "PUNCT", "value": "("},   {"kind": "IDENT", "value": "x"}], "call"),
+        ([{"kind": "IDENT", "value": "x"},      {"kind": "PUNCT", "value": "+"},   {"kind": "IDENT", "value": "y"}], "expr"),
+        ([{"kind": "PUNCT", "value": "{"}],                                                                          "expr"),
+    ]
+
+    for tokens, expected in cases:
+        verdict = d.classify(tokens, 0)
+        label = " ".join(t["value"] for t in tokens)
+        status = "ok " if verdict == expected else "FAIL"
+        print(f"  {status}  {label:25s} -> {verdict} (expected {expected}) consumed={d.tokens_consumed()}")
+```
+
+**How it works:**
+
+**One interface call drives a chain of enter handlers.** `classify(tokens, start)` lands in `$Ready.classify`, which seeds the domain variables and queues a transition to `$SeenNothing`. Frame’s kernel processes that transition before the call returns: it switches state and runs `$SeenNothing.$>`, which reads the first token, advances `consumed`, and queues the next transition. The kernel processes that one too. The chain continues through `$SeenTypeIdent` / `$SeenPlainIdent` / `$SeenTypeStar` until a transition with an enter argument lands on `$Verdict`. The whole walk happens inside the single original `classify` dispatch — no asynchronous events, no external driver. This is the kernel-loop pattern from Recipe 31 (Pipeline Processor) applied to lookahead classification.
+
+**The verdict is set on the still-live caller context.** `$Verdict.$>(r: str)` receives the classification (`"decl"`, `"call"`, or `"expr"`) as an enter argument. It stores it locally and then sets `@@:($.result)`, which writes the value into the top of the context stack. The classify call’s context is still on top throughout the entire enter-handler chain, so this writes the return value the original caller will receive. The trailing `-> $Ready` resets the disambiguator so subsequent `classify()` calls find their handler.
+
+**Bounded scope is the structural property.** Five states, three tokens of lookahead, one question. The disambiguator does not know about statements, expressions, or anything beyond its own classification. A C parser and a C++ parser can share it. A language’s LSP and compiler can share it. The internal state machine is an implementation detail behind the `tokens → verdict` interface contract.
+
+**Real-world disambiguators will be larger.** Rust’s path-vs-expression classifier, TypeScript’s `<` disambiguator, and similar non-trivial lookahead problems can easily reach a dozen states. The claim isn’t that every disambiguator is tiny — it’s that each one’s state count scales with the complexity of the question it answers, not with the complexity of the whole grammar.
+
+**Features stressed:** kernel-loop pattern (per-state `$>` enter handlers driving the next transition), `@@:return` set on a still-live caller context across a transition chain, enter args (`-> ("decl") $Verdict`) carrying classification results into the terminal state, oracle-specialist composition pattern, terminal state self-reset for re-use across multiple calls
 
 -----
 
