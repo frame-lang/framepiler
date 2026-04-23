@@ -427,10 +427,15 @@ struct CaseFrame {
     saved_var: String,
     /// data_gen at case entry (paired with `saved_var`).
     saved_gen: usize,
-    /// Closed arms' `(last_result_idx, final_data_gen)`. Populated at
-    /// `; false ->` / `; _ ->` / `end`. Used at `end` to compute the
-    /// join-point gen and splice padding rebinds into shorter arms.
-    arms: Vec<(usize, usize)>,
+    /// Closed arms' `(start_idx, last_result_idx, final_data_gen)`.
+    /// Populated at `; false ->` / `; _ ->` / `end`. Used at `end` to
+    /// compute the join-point gen and splice padding rebinds into
+    /// shorter arms. `start_idx` is the first line of the arm in
+    /// `result` — used to scan that arm's lines for `__FwdNextN`
+    /// bindings so absent vars can be padded with `= undefined`.
+    arms: Vec<(usize, usize, usize)>,
+    /// First line index of the currently-accumulating arm.
+    current_arm_start: usize,
 }
 
 fn erlang_process_body_lines_full(
@@ -541,20 +546,35 @@ fn erlang_process_body_lines_full(
                     saved_var: data_var.clone(),
                     saved_gen: data_gen,
                     arms: Vec::new(),
+                    // The `true ->` header goes into `result` below;
+                    // the arm body starts on the NEXT line. Defer the
+                    // start_idx assignment to right after the push —
+                    // but we need the index *after* the `true ->`
+                    // header lands in result, which is result.len() + 1
+                    // at this point (since the header hasn't been
+                    // pushed yet). The next line added to result will
+                    // be `    true ->` (with an indent prefix). Use
+                    // result.len() + 1 to account for it.
+                    current_arm_start: result.len() + 1,
                 });
             } else if l.starts_with("; false") || l.starts_with("; _") {
                 if let Some(frame) = case_data_stack.last_mut() {
                     // Record the true arm's final position: index of last
                     // emitted line (which came before this `; false ->`).
                     let last_idx = result.len().saturating_sub(1);
-                    frame.arms.push((last_idx, data_gen));
+                    let start = frame.current_arm_start;
+                    frame.arms.push((start, last_idx, data_gen));
+                    // The separator itself lands on the next push; the
+                    // new arm's body begins after that.
+                    frame.current_arm_start = result.len() + 1;
                     data_var = frame.saved_var.clone();
                     data_gen = frame.saved_gen;
                 }
             } else if l == "end" || l == "end," {
                 if let Some(frame) = case_data_stack.last_mut() {
                     let last_idx = result.len().saturating_sub(1);
-                    frame.arms.push((last_idx, data_gen));
+                    let start = frame.current_arm_start;
+                    frame.arms.push((start, last_idx, data_gen));
                 }
                 if let Some(frame) = case_data_stack.pop() {
                     // Compute max gen across *non-terminal* arms only.
@@ -577,27 +597,91 @@ fn erlang_process_body_lines_full(
                     let max_gen = frame
                         .arms
                         .iter()
-                        .filter(|(idx, _)| !arm_is_terminal(*idx))
-                        .map(|a| a.1)
+                        .filter(|(_, last, _)| !arm_is_terminal(*last))
+                        .map(|a| a.2)
                         .max()
                         .unwrap_or(frame.saved_gen);
-                    if max_gen > frame.saved_gen {
-                        let max_name = format!("Data{}", max_gen);
-                        let mut pads: Vec<(usize, String)> = Vec::new();
-                        for (idx, gen) in frame.arms.iter().rev() {
-                            if arm_is_terminal(*idx) {
-                                continue; // don't pad arms with explicit return
+
+                    // Scan each arm for `__FwdNextN` bindings so we can
+                    // pad arms that don't bind them (Erlang rejects an
+                    // "unsafe" var in subsequent code if any arm fails
+                    // to bind it). Forward binds look like
+                    // `{DataK, __FwdNextK} = frame_unwrap_forward__(...)`.
+                    let extract_fwd_vars_from_arm = |start: usize, last: usize| -> Vec<String> {
+                        let mut vars = Vec::new();
+                        if start > last || start >= result.len() {
+                            return vars;
+                        }
+                        let upper = last.min(result.len().saturating_sub(1));
+                        for i in start..=upper {
+                            if let Some(idx) = result[i].find("__FwdNext") {
+                                // Must be a bind (not a bare read). The bind shape
+                                // is `... __FwdNextN} = frame_unwrap_forward__`.
+                                if result[i].contains("frame_unwrap_forward__(") {
+                                    let rest = &result[i][idx..];
+                                    let name: String = rest
+                                        .chars()
+                                        .take_while(|c| {
+                                            c.is_ascii_alphanumeric() || *c == '_'
+                                        })
+                                        .collect();
+                                    if !name.is_empty() && !vars.contains(&name) {
+                                        vars.push(name);
+                                    }
+                                }
                             }
-                            if *gen < max_gen {
+                        }
+                        vars
+                    };
+                    let per_arm_fwds: Vec<Vec<String>> = frame
+                        .arms
+                        .iter()
+                        .map(|(s, e, _)| extract_fwd_vars_from_arm(*s, *e))
+                        .collect();
+                    let all_fwds: Vec<String> = {
+                        let mut seen = Vec::new();
+                        for arm_fwds in &per_arm_fwds {
+                            for v in arm_fwds {
+                                if !seen.contains(v) {
+                                    seen.push(v.clone());
+                                }
+                            }
+                        }
+                        seen
+                    };
+
+                    let need_data_pad = max_gen > frame.saved_gen;
+                    let need_fwd_pad = !all_fwds.is_empty();
+                    if need_data_pad || need_fwd_pad {
+                        let max_name = format!("Data{}", max_gen);
+                        let mut pads: Vec<(usize, Vec<String>)> = Vec::new();
+                        for ((_, last_idx, gen), arm_fwds) in
+                            frame.arms.iter().rev().zip(per_arm_fwds.iter().rev())
+                        {
+                            if arm_is_terminal(*last_idx) {
+                                continue;
+                            }
+                            let mut arm_pads: Vec<String> = Vec::new();
+                            if need_data_pad && *gen < max_gen {
                                 let src = if *gen == frame.saved_gen {
                                     frame.saved_var.clone()
                                 } else {
                                     format!("Data{}", gen)
                                 };
-                                pads.push((*idx, format!("    {} = {}", max_name, src)));
+                                arm_pads.push(format!("    {} = {}", max_name, src));
+                            }
+                            if need_fwd_pad {
+                                for v in &all_fwds {
+                                    if !arm_fwds.contains(v) {
+                                        arm_pads.push(format!("    {} = undefined", v));
+                                    }
+                                }
+                            }
+                            if !arm_pads.is_empty() {
+                                pads.push((*last_idx, arm_pads));
                             }
                         }
-                        for (idx, pad) in pads {
+                        for (idx, arm_pads) in pads {
                             if idx < result.len() {
                                 let trimmed = result[idx].trim_end();
                                 if !trimmed.ends_with(',')
@@ -606,14 +690,28 @@ fn erlang_process_body_lines_full(
                                     result[idx] = format!("{},", result[idx]);
                                 }
                             }
-                            if idx < result.len() {
-                                result.insert(idx + 1, pad);
-                            } else {
-                                result.push(pad);
+                            // Insert arm_pads in sequence. Each but the last
+                            // needs a trailing `,` comma to chain into the
+                            // next statement / the post-case line.
+                            let insert_at = idx + 1;
+                            let n = arm_pads.len();
+                            for (k, pad_line) in arm_pads.into_iter().enumerate() {
+                                let line = if k + 1 < n {
+                                    format!("{},", pad_line)
+                                } else {
+                                    pad_line
+                                };
+                                if insert_at + k <= result.len() {
+                                    result.insert(insert_at + k, line);
+                                } else {
+                                    result.push(line);
+                                }
                             }
                         }
-                        data_var = max_name;
-                        data_gen = max_gen;
+                        if need_data_pad {
+                            data_var = max_name;
+                            data_gen = max_gen;
+                        }
                     }
                 }
             }
@@ -2195,9 +2293,48 @@ pub(crate) fn generate_erlang_system(
                                     erlang_smart_join(&rewritten, &mut code);
                                 }
                                 CaseBlockClassification::NoTerminal => {
-                                    // No transitions in case — shouldn't be in has_return_tuple branch
-                                    // but handle gracefully: emit all lines
+                                    // Case arms have no transitions of their own, but the body
+                                    // leading into the case DID contain a forward (otherwise we
+                                    // wouldn't be in has_return_tuple). The forward bind produces
+                                    // `__FwdNextN`; the case arms only thread Data. Emit the
+                                    // case block as-is, then append a conditional terminal tuple
+                                    // that honors whichever transition (if any) the parent
+                                    // performed — mirroring the no-case-block path below.
                                     erlang_smart_join(&processed, &mut code);
+                                    let last_fwd_var: Option<String> = processed
+                                        .iter()
+                                        .rev()
+                                        .find_map(|line| {
+                                            line.find("__FwdNext").map(|i| {
+                                                let rest = &line[i..];
+                                                rest.chars()
+                                                    .take_while(|c| {
+                                                        c.is_ascii_alphanumeric() || *c == '_'
+                                                    })
+                                                    .collect::<String>()
+                                            })
+                                        });
+                                    let reply_val = if processed
+                                        .iter()
+                                        .any(|l| l.contains("__ReturnVal"))
+                                    {
+                                        "__ReturnVal"
+                                    } else {
+                                        "ok"
+                                    };
+                                    if let Some(fwd) = last_fwd_var {
+                                        code.push_str(",\n");
+                                        code.push_str(&format!(
+                                            "    case {} of\n        undefined -> {{keep_state, {}, [{{reply, From, {}}}]}};\n        _ -> {{next_state, {}, {}, [{{reply, From, {}}}]}}\n    end",
+                                            fwd, _final_data, reply_val, fwd, _final_data, reply_val
+                                        ));
+                                    } else {
+                                        code.push_str(",\n");
+                                        code.push_str(&format!(
+                                            "    {{keep_state, {}, [{{reply, From, {}}}]}}",
+                                            _final_data, reply_val
+                                        ));
+                                    }
                                 }
                             }
                         } else {
