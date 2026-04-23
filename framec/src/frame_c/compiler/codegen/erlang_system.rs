@@ -29,6 +29,16 @@ enum ErlangRewrite {
     /// update and action-bind composable when the action returns a
     /// value the caller wants stored in domain.
     ActionCallWithBind { field: String, call: String },
+    /// Source pattern: `self.<field> = self.<interface>(args)`. Emits
+    /// the interface dispatch as a two-tuple bind and then writes the
+    /// result into the record field. Parallel to `ActionCallWithBind`
+    /// but for interface calls (which go through `frame_dispatch__`
+    /// rather than a direct action function).
+    InterfaceCallWithBind {
+        field: String,
+        method: String,
+        args: String,
+    },
     /// A Data record update: needs `DataN = DataPrev#data{field = value}`
     RecordUpdate { field: String, value: String },
     /// An interface dispatch call: `{DataN, Result} = frame_dispatch__(method, [args], DataPrev)`
@@ -59,6 +69,40 @@ fn erlang_rewrite_native_classified_full(
     data_var: &str,
 ) -> ErlangRewrite {
     let l = line.trim();
+
+    // `self.<field> = self.<iface>(args)` — StateVar/domain write whose
+    // RHS is an interface call. Must be checked BEFORE the bare
+    // InterfaceCall branch, otherwise the generic path captures
+    // `result_var = "self.<field>"` which emits as an invalid Erlang
+    // pattern (`Self.<field>`). Splits into the dispatch bind + a
+    // record update chained through DataN.
+    for iface in interface_names {
+        let call_pat = format!("self.{}(", iface);
+        if l.starts_with("self.") && l.contains(" = ") && l.contains(&call_pat) {
+            if let Some(eq_pos) = l.find(" = ") {
+                let lhs = l[..eq_pos].trim();
+                let rhs = l[eq_pos + 3..].trim().trim_end_matches(';').trim();
+                // Only match when the LHS is a bare `self.<field>` (no
+                // further dots / calls) — a domain or state-var write.
+                let lhs_field = lhs.strip_prefix("self.").unwrap_or("");
+                let lhs_is_simple_field = !lhs_field.is_empty()
+                    && !lhs_field.contains('.')
+                    && !lhs_field.contains('(');
+                if lhs_is_simple_field && rhs.starts_with(&call_pat) {
+                    // rhs = `self.<iface>(<args>)` — strip the wrapper
+                    // to get just `<args>`.
+                    let inner_start = call_pat.len();
+                    let inner_end = rhs.rfind(')').unwrap_or(rhs.len());
+                    let args = rhs[inner_start..inner_end].trim().to_string();
+                    return ErlangRewrite::InterfaceCallWithBind {
+                        field: lhs_field.to_string(),
+                        method: to_snake_case(iface),
+                        args,
+                    };
+                }
+            }
+        }
+    }
 
     // self.method(args) → interface dispatch (for interface methods)
     for iface in interface_names {
@@ -885,18 +929,118 @@ fn erlang_process_body_lines_full(
                 ));
                 data_var = new_var;
             }
+            ErlangRewrite::InterfaceCallWithBind {
+                field,
+                method,
+                args,
+            } => {
+                // `self.<field> = self.<iface>(args)` — emit the
+                // dispatch bind, then a record update that writes the
+                // dispatch's return value into the field. Two
+                // data_gen bumps: one for the dispatch's returned
+                // Data, one for the record-update's.
+                data_gen += 1;
+                let call_data = format!("Data{}", data_gen);
+                let result_name = format!("__IfaceResult{}", data_gen);
+                let args_list = if args.is_empty() {
+                    "[]".to_string()
+                } else {
+                    format!("[{}]", args)
+                };
+                result.push(format!(
+                    "    {{{}, {}}} = frame_dispatch__({}, {}, {})",
+                    call_data, result_name, method, args_list, data_var
+                ));
+                data_gen += 1;
+                let new_var = format!("Data{}", data_gen);
+                result.push(format!(
+                    "    {} = {}#data{{{} = {}}}",
+                    new_var, call_data, field, result_name
+                ));
+                data_var = new_var;
+            }
             ErlangRewrite::InterfaceCall {
                 method,
                 args,
                 result_var,
             } => {
                 // Internal dispatch: {DataN, Result} = frame_dispatch__(method, [args], DataPrev)
+                //
+                // If `args` contains nested `self.<iface>(…)` patterns
+                // (Erlang expansion of nested `@@:self.method(…)`),
+                // classify each as its own dispatch call FIRST, emit
+                // its bind, and rewrite the outer arg to reference the
+                // nested bind's result var. Without this the outer
+                // dispatch would pass raw `self.echo(X)` text through
+                // to Erlang, which parses it as invalid dot-access on
+                // the atom `self`.
+                let mut args_rewritten = args.clone();
+                let mut iter_guard = 0;
+                while iter_guard < 8 {
+                    iter_guard += 1;
+                    let mut matched = None;
+                    for iface in interface_names {
+                        let pat = format!("self.{}(", iface);
+                        if let Some(start) = args_rewritten.find(&pat) {
+                            // Find matching close paren for this call.
+                            let open = start + pat.len() - 1;
+                            let bytes = args_rewritten.as_bytes();
+                            let mut depth = 0i32;
+                            let mut end = open;
+                            for i in open..bytes.len() {
+                                match bytes[i] {
+                                    b'(' => depth += 1,
+                                    b')' => {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            end = i;
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if end > open {
+                                let inner_args =
+                                    args_rewritten[open + 1..end].to_string();
+                                matched = Some((iface.clone(), start, end + 1, inner_args));
+                                break;
+                            }
+                        }
+                    }
+                    match matched {
+                        None => break,
+                        Some((iface, start, after_end, inner_args)) => {
+                            data_gen += 1;
+                            let bind_data = format!("Data{}", data_gen);
+                            let nested_result = format!("__NestedResult{}", data_gen);
+                            let nested_args = if inner_args.trim().is_empty() {
+                                "[]".to_string()
+                            } else {
+                                format!("[{}]", inner_args.trim())
+                            };
+                            let nested_method = to_snake_case(&iface);
+                            result.push(format!(
+                                "    {{{}, {}}} = frame_dispatch__({}, {}, {})",
+                                bind_data, nested_result, nested_method, nested_args, data_var
+                            ));
+                            data_var = bind_data;
+                            args_rewritten = format!(
+                                "{}{}{}",
+                                &args_rewritten[..start],
+                                nested_result,
+                                &args_rewritten[after_end..]
+                            );
+                        }
+                    }
+                }
+
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
-                let args_list = if args.is_empty() {
+                let args_list = if args_rewritten.is_empty() {
                     "[]".to_string()
                 } else {
-                    format!("[{}]", args)
+                    format!("[{}]", args_rewritten)
                 };
                 let result_name = if result_var == "_" {
                     "_".to_string()

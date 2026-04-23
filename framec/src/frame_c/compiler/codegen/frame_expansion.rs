@@ -2077,9 +2077,16 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Erlang => {
-                    // State vars stored as sv_StateName_VarName in Data record
+                    // State vars stored as sv_<state>_<var> in the Data
+                    // record. Emit via the `self.` placeholder so the
+                    // body processor's classifier substitutes it with
+                    // the live `DataN#data.` prefix — matching the live
+                    // data_gen in the handler. Hardcoding `Data#data.`
+                    // here would read the pre-handler snapshot and miss
+                    // any updates (`$.v = ...` lines earlier in the
+                    // same body).
                     let state_prefix = to_snake_case(&ctx.state_name);
-                    format!("Data#data.sv_{}_{}", state_prefix, var_name)
+                    format!("self.sv_{}_{}", state_prefix, var_name)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -2286,16 +2293,16 @@ pub(crate) fn generate_frame_expansion(
                 }
                 TargetLanguage::Erlang => {
                     // State var assignment: $.var = expr → record update.
-                    // Rewrite `self.` in the RHS — string-literal-aware
-                    // so a `self.` inside a quoted string is preserved.
+                    // Leave `self.` intact so the body processor's
+                    // classifier gets first crack at `self.<iface>(…)`
+                    // patterns in the RHS (they should become
+                    // `frame_dispatch__(…)` binds, not dot-accesses on
+                    // the current Data record). Any bare domain
+                    // `self.<field>` reads fall through to the Plain
+                    // path's substitution with the live `data_var`.
                     let state_prefix = to_snake_case(&ctx.state_name);
                     let field_name = format!("sv_{}_{}", state_prefix, var_name);
-                    let erl_expr = replace_outside_strings_and_comments(
-                        &expanded_expr,
-                        TargetLanguage::Erlang,
-                        &[("self.", "Data#data.")],
-                    );
-                    format!("{}self.{} = {}", indent_str, field_name, erl_expr)
+                    format!("{}self.{} = {}", indent_str, field_name, expanded_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -3063,7 +3070,28 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
                     format!("this.{}{}", method_name, args_with_parens)
                 }
-                TargetLanguage::Rust | TargetLanguage::Swift => {
+                TargetLanguage::Rust => {
+                    // Rust's borrow checker rejects `self.foo(self.bar(x))`
+                    // because both calls take `&mut self` at the same time.
+                    // When the already-expanded args contain another
+                    // `self.<method>(` pattern, hoist the inner call into
+                    // a let-binding inside a block expression:
+                    //   { let __rs_tmpN = self.bar(x); self.foo(__rs_tmpN) }
+                    // Sequential `let` bindings in a block are two
+                    // separate borrows — not simultaneous — so the
+                    // checker accepts.
+                    if args_with_parens.contains("self.") {
+                        let inner =
+                            &args_with_parens[1..args_with_parens.len() - 1];
+                        format!(
+                            "{{ let __rs_tmp_arg = {}; self.{}(__rs_tmp_arg) }}",
+                            inner, method_name
+                        )
+                    } else {
+                        format!("self.{}{}", method_name, args_with_parens)
+                    }
+                }
+                TargetLanguage::Swift => {
                     format!("self.{}{}", method_name, args_with_parens)
                 }
                 TargetLanguage::Cpp => format!("this->{}{}", method_name, args_with_parens),
@@ -3599,8 +3627,12 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     }
                 }
                 TargetLanguage::Erlang => {
+                    // Leave `self.` placeholder so the body processor's
+                    // classifier substitutes with the live `DataN#data.`
+                    // — matches the live data_gen. See sibling fix in
+                    // `FrameSegmentKind::StateVarRead` above.
                     let state_prefix = to_snake_case(&ctx.state_name);
-                    result.push_str(&format!("Data#data.sv_{}_{}", state_prefix, var_name))
+                    result.push_str(&format!("self.sv_{}_{}", state_prefix, var_name))
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             }
