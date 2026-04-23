@@ -23,6 +23,12 @@ use crate::frame_c::visitors::TargetLanguage;
 enum ErlangRewrite {
     /// A Data-modifying action call: needs `DataN = action(DataPrev)`
     ActionCall(String), // The action call expression
+    /// Source pattern: `self.<field> = self.<action>(args)`. Emits two
+    /// statements — `{DataN, __ActionResultN} = <call>` then
+    /// `DataN+1 = DataN#data{<field> = __ActionResultN}`. Keeps record-
+    /// update and action-bind composable when the action returns a
+    /// value the caller wants stored in domain.
+    ActionCallWithBind { field: String, call: String },
     /// A Data record update: needs `DataN = DataPrev#data{field = value}`
     RecordUpdate { field: String, value: String },
     /// An interface dispatch call: `{DataN, Result} = frame_dispatch__(method, [args], DataPrev)`
@@ -84,12 +90,58 @@ fn erlang_rewrite_native_classified_full(
         }
     }
 
-    // self.method(args) → action call that modifies Data
+    // self.field = self.method(args) — record-update whose RHS is an
+    // action/op call. Split into two statements:
+    //   1. {DataN, __ActionResultN} = <action>(Data, args)
+    //   2. DataN+1 = DataN#data{field = __ActionResultN}
+    // Done here rather than in the body-processor dispatch because
+    // the classifier sees the full original line and can decide in
+    // one pass without re-parsing. Without this branch the prior
+    // `ActionCall` path would prepend its destructure to the whole
+    // line including the `self.field =` prefix — emitting invalid
+    // Erlang like `{Data1, __ActionResult1} = self.field = op(Data)`.
+    //
+    // Erlang function names must be lowercase atoms, so the emitted
+    // call uses `to_snake_case(action)` not the source-side name.
+    for action in action_names {
+        let call_pattern = format!("self.{}(", action);
+        if l.starts_with("self.") && l.contains('=') && l.contains(&call_pattern) {
+            if let Some(eq_pos) = l[5..].find('=') {
+                let field = l[5..5 + eq_pos].trim().to_string();
+                let rhs = l[5 + eq_pos + 1..]
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim();
+                if rhs.contains(&call_pattern) {
+                    let action_lc = erlang_op_name(action);
+                    let rewritten_call = rhs
+                        .replace(&call_pattern, &format!("{}({}, ", action_lc, data_var))
+                        .replace(
+                            &format!("({}, )", data_var),
+                            &format!("({})", data_var),
+                        );
+                    return ErlangRewrite::ActionCallWithBind {
+                        field,
+                        call: rewritten_call,
+                    };
+                }
+            }
+        }
+    }
+
+    // self.method(args) → action call that modifies Data. Strip any
+    // trailing C-family `;` terminator — Erlang uses `,` between
+    // statements in a body and the ActionCall wrapper supplies it.
     for action in action_names {
         let pattern = format!("self.{}(", action);
         if l.contains(&pattern) {
-            let replaced = l.replace(&pattern, &format!("{}({}, ", action, data_var));
-            let fixed = replaced.replace(&format!("({}, )", data_var), &format!("({})", data_var));
+            let action_lc = erlang_op_name(action);
+            let replaced = l.replace(&pattern, &format!("{}({}, ", action_lc, data_var));
+            let fixed = replaced
+                .replace(&format!("({}, )", data_var), &format!("({})", data_var))
+                .trim_end_matches(';')
+                .trim()
+                .to_string();
             return ErlangRewrite::ActionCall(fixed);
         }
     }
@@ -159,6 +211,25 @@ fn replace_word(haystack: &str, needle: &str, replacement: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// Rewrite an operation/action name to a valid Erlang function atom.
+/// Erlang function names MUST start with a lowercase letter. Names
+/// already starting lowercase pass through unchanged — preserving
+/// idioms like `addOffset`, `my_action` that hand-authored Erlang
+/// Frame sources use. PascalCase names (`Op`, `OpOuter`, `Bump`)
+/// have their leading capital lowercased to satisfy Erlang's atom
+/// rules without snake-casing the interior (which would be more
+/// disruptive than necessary).
+fn erlang_op_name(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) if c.is_ascii_uppercase() => {
+            c.to_ascii_lowercase().to_string() + chars.as_str()
+        }
+        Some(_) => name.to_string(),
+    }
 }
 
 /// Word-boundary substring search. Returns true iff `needle` appears in
@@ -624,7 +695,29 @@ fn erlang_process_body_lines_full(
                     ],
                 );
             }
-            result.push(format!("    {}", rewritten));
+            if is_forward_call {
+                // Rewrite forward call into a bind so post-forward statements
+                // can run. Parent's handler may transition; frame_unwrap_forward__
+                // extracts the updated Data and either `undefined` (parent
+                // kept state) or the next-state atom (parent transitioned).
+                // The caller's final clause then emits a conditional tuple
+                // that honors whichever the parent returned — matching the
+                // 16-backend consensus that post-forward code always runs.
+                let stripped = rewritten
+                    .trim_end_matches([',', ';'])
+                    .trim()
+                    .to_string();
+                data_gen += 1;
+                let new_var = format!("Data{}", data_gen);
+                let fwd_var = format!("__FwdNext{}", data_gen);
+                result.push(format!(
+                    "    {{{}, {}}} = frame_unwrap_forward__({})",
+                    new_var, fwd_var, stripped
+                ));
+                data_var = new_var;
+            } else {
+                result.push(format!("    {}", rewritten));
+            }
             continue;
         }
 
@@ -634,6 +727,16 @@ fn erlang_process_body_lines_full(
             continue;
         }
 
+        // `return <expr>;` from portable C-family Frame source: Erlang
+        // has no `return` keyword, and the last expression in an action
+        // or operation body IS the returned value. Strip the prefix so
+        // the rest of the line flows through the classifier normally.
+        let l = if l.starts_with("return ") {
+            l.trim_start_matches("return ").trim().to_string()
+        } else {
+            l.clone()
+        };
+
         match erlang_rewrite_native_classified_full(&l, action_names, interface_names, &data_var) {
             ErlangRewrite::ActionCall(call) => {
                 data_gen += 1;
@@ -642,6 +745,25 @@ fn erlang_process_body_lines_full(
                 result.push(format!(
                     "    {{{}, __ActionResult{}}} = {}",
                     new_var, data_gen, call
+                ));
+                data_var = new_var;
+            }
+            ErlangRewrite::ActionCallWithBind { field, call } => {
+                // `self.<field> = self.<action>(args)` — emit the call-
+                // bind first, then apply the result to the record field
+                // in a follow-on DataN+1 binding. Two data_gen bumps.
+                data_gen += 1;
+                let call_var = format!("Data{}", data_gen);
+                let result_name = format!("__ActionResult{}", data_gen);
+                result.push(format!(
+                    "    {{{}, {}}} = {}",
+                    call_var, result_name, call
+                ));
+                data_gen += 1;
+                let new_var = format!("Data{}", data_gen);
+                result.push(format!(
+                    "    {} = {}#data{{{} = {}}}",
+                    new_var, call_var, field, result_name
                 ));
                 data_var = new_var;
             }
@@ -1592,6 +1714,19 @@ pub(crate) fn generate_erlang_system(
         let arity = method.params.len() + 1; // +1 for Pid
         api_exports.push(format!("{}/{}", to_snake_case(&method.name), arity));
     }
+    // Non-static operations are callable externally (Pid-based) AND
+    // internally (Data-based). Each non-static op emits a two-clause
+    // function guarded by `is_pid/1`: if the first arg is a Pid the
+    // external clause dispatches through gen_statem; otherwise the
+    // internal clause runs the body. Same arity in both clauses, so
+    // one export covers both. See the op-function emitter below.
+    for op in &system.operations {
+        if op.is_static {
+            continue;
+        }
+        let arity = op.params.len() + 1; // +1 for Pid (external) / Data (internal)
+        api_exports.push(format!("{}/{}", erlang_op_name(&op.name), arity));
+    }
     code.push_str(&format!("-export([{}]).\n", api_exports.join(", ")));
 
     // Exports — gen_statem callbacks
@@ -2066,10 +2201,14 @@ pub(crate) fn generate_erlang_system(
                                 }
                             }
                         } else {
-                            // No case block — use existing terminal detection for linear handlers
+                            // No case block — use existing terminal detection for linear handlers.
+                            // A raw forward tail-call (`p({call,From},...)`) IS terminal. A forward
+                            // *bind* emitted by the body processor (`{Data1, __FwdNext1} = frame_unwrap_forward__(...)`)
+                            // is not — post-forward code follows and must run. The leading `{` guard
+                            // distinguishes them.
                             let is_terminal = |l: &str| -> bool {
                                 let t = l.trim();
-                                t.contains("({call, From},")
+                                (t.contains("({call, From},") && !t.starts_with("{"))
                                     || t.starts_with("frame_transition__(")
                                     || t.starts_with("{next_state,")
                                     || t.starts_with("{keep_state,")
@@ -2081,12 +2220,48 @@ pub(crate) fn generate_erlang_system(
                                     break;
                                 }
                             }
-                            let emit_lines = if let Some(tidx) = terminal_idx {
-                                &processed[..=tidx]
+                            if let Some(tidx) = terminal_idx {
+                                erlang_smart_join(&processed[..=tidx], &mut code);
                             } else {
-                                &processed[..]
-                            };
-                            erlang_smart_join(emit_lines, &mut code);
+                                // No inline terminal. If a forward was rewritten to a bind, emit
+                                // a conditional tuple that propagates the parent's transition
+                                // (if any) after post-forward statements have run.
+                                erlang_smart_join(&processed, &mut code);
+                                let last_fwd_var: Option<String> = processed
+                                    .iter()
+                                    .rev()
+                                    .find_map(|line| {
+                                        line.find("__FwdNext").map(|i| {
+                                            let rest = &line[i..];
+                                            rest.chars()
+                                                .take_while(|c| {
+                                                    c.is_ascii_alphanumeric() || *c == '_'
+                                                })
+                                                .collect::<String>()
+                                        })
+                                    });
+                                let reply_val = if processed
+                                    .iter()
+                                    .any(|l| l.contains("__ReturnVal"))
+                                {
+                                    "__ReturnVal"
+                                } else {
+                                    "ok"
+                                };
+                                if let Some(fwd) = last_fwd_var {
+                                    code.push_str(",\n");
+                                    code.push_str(&format!(
+                                        "    case {} of\n        undefined -> {{keep_state, {}, [{{reply, From, {}}}]}};\n        _ -> {{next_state, {}, {}, [{{reply, From, {}}}]}}\n    end",
+                                        fwd, _final_data, reply_val, fwd, _final_data, reply_val
+                                    ));
+                                } else {
+                                    code.push_str(",\n");
+                                    code.push_str(&format!(
+                                        "    {{keep_state, {}, [{{reply, From, {}}}]}}",
+                                        _final_data, reply_val
+                                    ));
+                                }
+                            }
                         }
                     }
                     // Ensure clause terminator is on its own line (not hidden by % comment)
@@ -2244,6 +2419,39 @@ pub(crate) fn generate_erlang_system(
                 }
             }
 
+            // `frame_op_call` dispatch — routes external op calls into
+            // the server process. Each non-static op's external wrapper
+            // emits `gen_statem:call(Pid, {frame_op_call, <op>, [Args]})`;
+            // here we match that message, invoke the internal op (same
+            // function name, arity-1 Data clause), destructure the
+            // `{UpdatedData, Result}` tuple, and reply with Result while
+            // keeping the updated Data in the gen_statem state. This
+            // clause is emitted in every state so ops are callable
+            // regardless of the machine's current state.
+            for op in &system.operations {
+                if op.is_static {
+                    continue;
+                }
+                let op_lc = erlang_op_name(&op.name);
+                let n = op.params.len();
+                let arg_vars: Vec<String> =
+                    (0..n).map(|i| format!("A{}", i + 1)).collect();
+                let pattern_args = if arg_vars.is_empty() {
+                    "[]".to_string()
+                } else {
+                    format!("[{}]", arg_vars.join(", "))
+                };
+                let call_args = if arg_vars.is_empty() {
+                    "Data".to_string()
+                } else {
+                    format!("Data, {}", arg_vars.join(", "))
+                };
+                code.push_str(&format!(
+                    "{}({{call, From}}, {{frame_op_call, {}, {}}}, Data) ->\n    {{NewData, __Result}} = {}({}),\n    {{keep_state, NewData, [{{reply, From, __Result}}]}};\n",
+                    state_name, op_lc, pattern_args, op_lc, call_args
+                ));
+            }
+
             // State-timeout handler for deferred enter-handler transitions.
             // When an enter handler calls -> $State, we defer via:
             //   {keep_state, Data, [{state_timeout, 0, {frame_enter_transition, Target}}]}
@@ -2281,6 +2489,20 @@ pub(crate) fn generate_erlang_system(
     code.push_str("    Data2 = frame_exit_dispatch__(Data1),\n");
     code.push_str("    Data3 = Data2#data{frame_enter_args = EnterArgs, frame_state_args = StateArgs, frame_current_state = TargetState},\n");
     code.push_str("    {next_state, TargetState, Data3, [{reply, From, ok}]}.\n\n");
+
+    // HSM parent-forward unwrap. When a child's `=> $^` has post-forward code
+    // (e.g., `=> $^; self.x = self.x + 1`), we can't emit the parent call as
+    // a tail call — the post-forward statements would be lost. The body
+    // processor instead binds: `{DataN, __FwdNextN} = frame_unwrap_forward__(ParentCall)`.
+    // This helper flattens the parent's gen_statem return tuple into
+    // `{UpdatedData, NextStateOrUndefined}` so the child can continue threading
+    // Data through its remaining statements and finally emit a single return
+    // tuple that honors whatever transition (if any) the parent performed.
+    // Matches the 16-backend consensus that post-forward code always runs.
+    code.push_str("frame_unwrap_forward__({keep_state, D, _}) -> {D, undefined};\n");
+    code.push_str("frame_unwrap_forward__({keep_state, D}) -> {D, undefined};\n");
+    code.push_str("frame_unwrap_forward__({next_state, NS, D, _}) -> {D, NS};\n");
+    code.push_str("frame_unwrap_forward__({next_state, NS, D}) -> {D, NS}.\n\n");
 
     // Exit handler dispatch — routes to per-state exit function
     code.push_str("frame_exit_dispatch__(Data) ->\n");
@@ -2404,9 +2626,10 @@ pub(crate) fn generate_erlang_system(
     code.push_str("            {Data3, undefined}\n");
     code.push_str("    end.\n\n");
 
-    // Action functions
+    // Action functions. Same naming rule as operations — Erlang
+    // function names must be lowercase-leading atoms.
     for action in &system.actions {
-        code.push_str(&format!("{}(", action.name));
+        code.push_str(&format!("{}(", erlang_op_name(&action.name)));
         let params: Vec<String> = action
             .params
             .iter()
@@ -2469,7 +2692,30 @@ pub(crate) fn generate_erlang_system(
                     .last()
                     .map(|l| l.trim().to_string())
                     .unwrap_or_default();
-                let last_is_value = !last_line.starts_with("Data")
+                // `Data#data.<field>` is a domain READ (a value);
+                // `Data<N> = ...` is a rebind (not a value). The
+                // prior `starts_with("Data")` check lumped both
+                // together and silently dropped legitimate value
+                // returns shaped as field reads.
+                let is_data_rebind = {
+                    let t = last_line.as_str();
+                    if t.starts_with("Data") {
+                        let rest = &t[4..];
+                        let num_end = rest
+                            .char_indices()
+                            .take_while(|(_, c)| c.is_ascii_digit())
+                            .last()
+                            .map(|(i, _)| i + 1)
+                            .unwrap_or(0);
+                        num_end > 0
+                            && rest[num_end..]
+                                .trim_start()
+                                .starts_with('=')
+                    } else {
+                        false
+                    }
+                };
+                let last_is_value = !is_data_rebind
                     && !last_line.starts_with("__")
                     && !last_line.is_empty()
                     && !last_line.starts_with("{")
@@ -2484,6 +2730,26 @@ pub(crate) fn generate_erlang_system(
                     && !last_line.starts_with("; _")
                     && !last_line.starts_with("true ->");
 
+                // If the last line is an ActionCall binding shaped
+                // `{DataN, __ActionResultN} = ...`, the action's return
+                // value IS `__ActionResultN`. Extract it so the tuple
+                // wrap returns the called op's result instead of `ok`.
+                // Without this, `return self.Op();` at the action's tail
+                // resolves to `{Data, ok}` — dropping the op's value.
+                let action_result_var: Option<String> = {
+                    let t = last_line.trim();
+                    if t.starts_with('{') && t.contains("__ActionResult") {
+                        t.find("__ActionResult").map(|i| {
+                            let rest = &t[i..];
+                            rest.chars()
+                                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                                .collect::<String>()
+                        })
+                    } else {
+                        None
+                    }
+                };
+
                 if last_is_value && processed.len() > 0 {
                     // Last expression is the return value — emit body up to last line,
                     // then return {FinalData, LastExpr}
@@ -2493,6 +2759,12 @@ pub(crate) fn generate_erlang_system(
                         code.push_str(",\n");
                     }
                     code.push_str(&format!("    {{{}, {}}}", final_data, last_line));
+                } else if let Some(result_var) = action_result_var {
+                    // Tail action-call: preserve its result as the action's
+                    // return value.
+                    erlang_smart_join(&processed, &mut code);
+                    code.push_str(",\n");
+                    code.push_str(&format!("    {{{}, {}}}", final_data, result_var));
                 } else {
                     erlang_smart_join(&processed, &mut code);
                     code.push_str(",\n");
@@ -2503,9 +2775,43 @@ pub(crate) fn generate_erlang_system(
         code.push_str(".\n\n");
     }
 
-    // Operations
+    // Operations. Erlang function names must be lowercase atoms;
+    // Frame source names (which may be PascalCase for portability
+    // across targets) are snake_cased at declaration and at all
+    // call sites (see classifier in `erlang_rewrite_native_classified_full`).
+    //
+    // Non-static ops get a two-clause shape:
+    //   op(Pid, Args...) when is_pid(Pid) -> gen_statem:call(Pid, {frame_op_call, op, [Args...]});
+    //   op(Data, Args...) -> <body>.
+    // First clause routes external callers through gen_statem so the
+    // op runs in the server process with the live Data. Second clause
+    // is the same body internal callers (from action/handler rewrites)
+    // already use. `is_pid/1` is a guard — safe, builtin, compile-time
+    // verified.
     for op in &system.operations {
-        code.push_str(&format!("{}(", op.name));
+        if !op.is_static {
+            let op_snake = erlang_op_name(&op.name);
+            let param_vars: Vec<String> = op
+                .params
+                .iter()
+                .map(|p| erlang_safe_capitalize(&p.name))
+                .collect();
+            let args_list = if param_vars.is_empty() {
+                "[]".to_string()
+            } else {
+                format!("[{}]", param_vars.join(", "))
+            };
+            let head_params_ext = if param_vars.is_empty() {
+                "Pid".to_string()
+            } else {
+                format!("Pid, {}", param_vars.join(", "))
+            };
+            code.push_str(&format!(
+                "{}({}) when is_pid(Pid) ->\n    gen_statem:call(Pid, {{frame_op_call, {}, {}}});\n",
+                op_snake, head_params_ext, op_snake, args_list
+            ));
+        }
+        code.push_str(&format!("{}(", erlang_op_name(&op.name)));
         let params: Vec<String> = op
             .params
             .iter()
@@ -2559,6 +2865,11 @@ pub(crate) fn generate_erlang_system(
                 } else {
                     l.to_string()
                 };
+                // C-family `;` terminators from portable Frame source
+                // are not valid inside an Erlang return-expression slot.
+                // Strip a trailing `;` so the last-expression emitter
+                // can wrap the value cleanly (e.g., `42` not `42;`).
+                let l = l.trim_end_matches(';').trim().to_string();
                 // `@@:self.method(args)` inside a non-static operation body
                 // expands (in frame_expansion.rs) to bare `self.method(args)`.
                 // Catch that shape BEFORE the blanket `self. → Data#data.`
@@ -2611,6 +2922,30 @@ pub(crate) fn generate_erlang_system(
                 } else {
                     l
                 };
+                // `self.<action_or_op>(args)` — direct call into a
+                // sibling operation or action. Rewrite to lowercase
+                // function call with Data threaded as first arg BEFORE
+                // the blanket `self. → Data#data.` step below (which
+                // would otherwise collapse it to a record-field read).
+                // Non-static ops only — static ops have no Data.
+                let l = if !op.is_static {
+                    let mut out = l.clone();
+                    for action in &action_names {
+                        let pattern = format!("self.{}(", action);
+                        if out.contains(&pattern) {
+                            let action_lc = erlang_op_name(action.as_str());
+                            let rep = format!("{}(Data, ", action_lc);
+                            out = out.replace(&pattern, &rep);
+                            out = out.replace(
+                                &format!("{}(Data, )", action_lc),
+                                &format!("{}(Data)", action_lc),
+                            );
+                        }
+                    }
+                    out
+                } else {
+                    l
+                };
                 let l = replace_outside_strings_and_comments(
                     &l,
                     TargetLanguage::Erlang,
@@ -2660,7 +2995,123 @@ pub(crate) fn generate_erlang_system(
             }
             if processed_lines.is_empty() {
                 code.push_str("    ok");
+            } else if !op.is_static && data_bind_counter > 0 {
+                // Non-static op that mutated Data (`self.x = ...` emitted
+                // record updates into Data1, Data2, ...). Callers expect
+                // a `{UpdatedData, Value}` tuple so updates are visible
+                // at the call site. Wrap the body's last value expression
+                // with the latest Data binding — mirroring the action-
+                // body tuple-wrap at line ~2625.
+                let last_line = processed_lines
+                    .last()
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_default();
+                // A `Data#data.<field>` READ is a value; a `DataN = ...`
+                // REBIND is not. Distinguish precisely.
+                let is_data_rebind = {
+                    let t = last_line.as_str();
+                    if t.starts_with("Data") {
+                        let rest = &t[4..];
+                        let num_end = rest
+                            .char_indices()
+                            .take_while(|(_, c)| c.is_ascii_digit())
+                            .last()
+                            .map(|(i, _)| i + 1)
+                            .unwrap_or(0);
+                        num_end > 0
+                            && rest[num_end..]
+                                .trim_start()
+                                .starts_with('=')
+                    } else {
+                        false
+                    }
+                };
+                let last_is_value = !is_data_rebind
+                    && !last_line.starts_with("__")
+                    && !last_line.is_empty()
+                    && !last_line.starts_with("{")
+                    && last_line != "ok"
+                    && last_line != "end"
+                    && last_line != "end,"
+                    && last_line != "end;";
+                let final_data = format!("Data{}", data_bind_counter);
+                if last_is_value {
+                    let body_lines = &processed_lines[..processed_lines.len() - 1];
+                    if !body_lines.is_empty() {
+                        erlang_smart_join(body_lines, &mut code);
+                        code.push_str(",\n");
+                    }
+                    code.push_str(&format!("    {{{}, {}}}", final_data, last_line));
+                } else {
+                    erlang_smart_join(&processed_lines, &mut code);
+                    code.push_str(",\n");
+                    code.push_str(&format!("    {{{}, ok}}", final_data));
+                }
+            } else if !op.is_static {
+                // Non-static op with no Data mutations — Data passes
+                // through unchanged; wrap the last expression as
+                // `{Data, Value}`. An expression using `Data#data.<f>`
+                // is a domain READ (still a value), not a Data rebind.
+                // A line starting with `Data<digit> = ` IS a rebind
+                // and must not be wrapped. A tail call to ANOTHER
+                // non-static op/action — recognizable as `<name>(Data)`
+                // or `<name>(Data, …)` for a name in `action_names` —
+                // already returns a `{Data, Value}` tuple and must
+                // pass through verbatim (otherwise we double-wrap).
+                let last_line = processed_lines
+                    .last()
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_default();
+                let is_data_rebind = {
+                    let t = last_line.as_str();
+                    if t.starts_with("Data") {
+                        let rest = &t[4..];
+                        let num_end = rest
+                            .char_indices()
+                            .take_while(|(_, c)| c.is_ascii_digit())
+                            .last()
+                            .map(|(i, _)| i + 1)
+                            .unwrap_or(0);
+                        num_end > 0
+                            && rest[num_end..]
+                                .trim_start()
+                                .starts_with('=')
+                    } else {
+                        false
+                    }
+                };
+                let is_tail_tuple_call = action_names.iter().any(|a| {
+                    let lc = erlang_op_name(a.as_str());
+                    let pat_no_args = format!("{}(Data)", lc);
+                    let pat_with_args = format!("{}(Data,", lc);
+                    last_line == pat_no_args
+                        || last_line.starts_with(&pat_with_args)
+                });
+                let last_is_value = !is_data_rebind
+                    && !is_tail_tuple_call
+                    && !last_line.starts_with("__")
+                    && !last_line.is_empty()
+                    && !last_line.starts_with("{")
+                    && last_line != "ok"
+                    && last_line != "end"
+                    && last_line != "end,"
+                    && last_line != "end;";
+                if last_is_value && processed_lines.len() >= 1 {
+                    let body_lines = &processed_lines[..processed_lines.len() - 1];
+                    if !body_lines.is_empty() {
+                        erlang_smart_join(body_lines, &mut code);
+                        code.push_str(",\n");
+                    }
+                    code.push_str(&format!("    {{Data, {}}}", last_line));
+                } else if is_tail_tuple_call {
+                    // Forward another tuple-returning call's result
+                    // straight through — preserves Data threading.
+                    erlang_smart_join(&processed_lines, &mut code);
+                } else {
+                    erlang_smart_join(&processed_lines, &mut code);
+                }
             } else {
+                // Static op: pure function, no Data threading.
                 erlang_smart_join(&processed_lines, &mut code);
             }
         }
