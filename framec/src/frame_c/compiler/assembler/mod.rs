@@ -113,7 +113,23 @@ pub fn assemble(
             Segment::System { name, .. } => {
                 // Look up generated code for this system
                 if let Some(code) = system_code.get(name.as_str()) {
-                    output.push_str(code);
+                    // Codegen passes handler-body native regions through
+                    // verbatim (Oceans Model). If a handler body contains
+                    // `@@OtherSystem($(arg))` that sigil form isn't
+                    // expanded by codegen — the handler-body path only
+                    // sees the surrounding text as a NativeBlock and
+                    // doesn't run the tagged-instantiation expansion.
+                    // Re-running the same expansion over the emitted
+                    // system code catches those leaks. Idempotent: if
+                    // codegen already stripped every `@@Name(...)`, this
+                    // pass finds nothing to rewrite.
+                    let expanded = expand_tagged_instantiations(
+                        code,
+                        &defined_system_names,
+                        &params_by_name,
+                        lang,
+                    )?;
+                    output.push_str(&expanded);
                 } else {
                     return Err(AssemblyError {
                         message: format!(

@@ -2775,148 +2775,26 @@ pub(crate) fn generate_frame_expansion(
             }
         }
         FrameSegmentKind::TaggedInstantiation => {
-            // @@SystemName(args) - validated system instantiation
-            // Strip @@ prefix and validate system name exists
-            let native_call = segment_text.strip_prefix("@@").unwrap_or(&segment_text);
-
-            // Extract system name (before the parenthesis)
-            let tagged_system_name = if let Some(paren_pos) = native_call.find('(') {
-                &native_call[..paren_pos]
-            } else {
-                native_call
-            };
-
-            // Validate that the system name exists in defined_systems
-            if !ctx.defined_systems.contains(tagged_system_name) {
-                // System not found - generate an error that will fail compilation
-                match lang {
-                    TargetLanguage::Python3 => {
-                        format!("raise NameError(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}. Did you mean one of: {:?}?\")",
-                            tagged_system_name, tagged_system_name, ctx.defined_systems)
-                    }
-                    TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-                        format!("throw new Error(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}. Did you mean one of: {:?}?\");",
-                            tagged_system_name, tagged_system_name, ctx.defined_systems)
-                    }
-                    TargetLanguage::Rust => {
-                        super::rust_system::rust_tagged_instantiation_error(tagged_system_name)
-                    }
-                    TargetLanguage::C => {
-                        format!("#error \"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\"",
-                            tagged_system_name, tagged_system_name)
-                    }
-                    TargetLanguage::Cpp => {
-                        format!("static_assert(false, \"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\");",
-                            tagged_system_name, tagged_system_name)
-                    }
-                    TargetLanguage::Java | TargetLanguage::CSharp => {
-                        format!("throw new RuntimeException(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\");",
-                            tagged_system_name, tagged_system_name)
-                    }
-                    TargetLanguage::Kotlin => {
-                        format!("throw RuntimeException(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\")",
-                            tagged_system_name, tagged_system_name)
-                    }
-                    TargetLanguage::Swift => {
-                        format!("fatalError(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\")",
-                            tagged_system_name, tagged_system_name)
-                    }
-                    TargetLanguage::Go => {
-                        format!("panic(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\")",
-                            tagged_system_name, tagged_system_name)
-                    }
-                    TargetLanguage::Ruby => {
-                        format!("raise \"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\"",
-                            tagged_system_name, tagged_system_name)
-                    }
-                    _ => {
-                        format!("/* Frame Error E421: Undefined system '{}' in tagged instantiation @@{} */",
-                            tagged_system_name, tagged_system_name)
-                    }
-                }
-            } else {
-                // System found - generate valid constructor call
-                match lang {
-                    TargetLanguage::C => {
-                        // C: @@System() becomes System_new()
-                        if let Some(paren_pos) = native_call.find('(') {
-                            let args = &native_call[paren_pos..];
-                            format!("{}_new{}", tagged_system_name, args)
-                        } else {
-                            native_call.to_string()
-                        }
-                    }
-                    TargetLanguage::Cpp => {
-                        // C++: @@System() becomes System() (stack allocation)
-                        native_call.to_string()
-                    }
-                    TargetLanguage::Java | TargetLanguage::CSharp | TargetLanguage::Php => {
-                        // Java/C#/PHP: @@System() becomes new System()
-                        format!("new {}", native_call)
-                    }
-                    TargetLanguage::Kotlin | TargetLanguage::Swift => {
-                        // Kotlin/Swift: @@System() becomes System() (no new keyword)
-                        native_call.to_string()
-                    }
-                    TargetLanguage::Go => {
-                        // Go: @@System() becomes NewSystem()
-                        if let Some(paren_pos) = native_call.find('(') {
-                            let args = &native_call[paren_pos..];
-                            format!("New{}{}", tagged_system_name, args)
-                        } else {
-                            format!("New{}", native_call)
-                        }
-                    }
-                    TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
-                        // JS/TS: @@System() becomes new System()
-                        format!("new {}", native_call)
-                    }
-                    TargetLanguage::Dart => {
-                        // Dart: @@System() becomes System()
-                        native_call.to_string()
-                    }
-                    TargetLanguage::Ruby => {
-                        // Ruby: @@System() becomes System.new()
-                        if let Some(paren_pos) = native_call.find('(') {
-                            let args = &native_call[paren_pos..];
-                            format!("{}.new{}", tagged_system_name, args)
-                        } else {
-                            format!("{}.new", native_call)
-                        }
-                    }
-                    TargetLanguage::Rust => {
-                        // Rust: @@System() becomes System::new()
-                        if let Some(paren_pos) = native_call.find('(') {
-                            let args = &native_call[paren_pos..];
-                            format!("{}::new{}", tagged_system_name, args)
-                        } else {
-                            format!("{}::new()", tagged_system_name)
-                        }
-                    }
-                    TargetLanguage::GDScript => {
-                        // GDScript: @@System() becomes System.new()
-                        if let Some(paren_pos) = native_call.find('(') {
-                            let args = &native_call[paren_pos..];
-                            format!("{}.new{}", tagged_system_name, args)
-                        } else {
-                            format!("{}.new()", tagged_system_name)
-                        }
-                    }
-                    TargetLanguage::Lua => {
-                        // Lua: @@System() becomes System:new()
-                        if let Some(paren_pos) = native_call.find('(') {
-                            let args = &native_call[paren_pos..];
-                            format!("{}:new{}", tagged_system_name, args)
-                        } else {
-                            format!("{}:new()", tagged_system_name)
-                        }
-                    }
-                    _ => {
-                        // Python/TypeScript/Dart/Erlang: @@System() becomes System()
-                        native_call.to_string()
-                    }
-                }
-            }
+            // `@@SystemName(args)` is emitted VERBATIM here so the
+            // assembler's `expand_tagged_instantiations` pass handles
+            // it uniformly alongside top-level native segments. The
+            // assembler:
+            //   - Validates the system name against defined systems
+            //     (replacing the error-gen this arm used to do).
+            //   - Calls `parse_call_args` / `resolve_call`, which
+            //     expand the `$(arg)` sigil form into positional
+            //     values (handler-body codegen used to strip `@@` and
+            //     wrap per-language but skipped that expansion,
+            //     producing `Worker($(name))` — a Python syntax error
+            //     — when a handler body created a parameterized child
+            //     system).
+            //   - Applies the per-language constructor wrap
+            //     (`new Foo(…)`, `Foo::new(…)`, `NewFoo(…)`, etc.)
+            //     via `generate_constructor`.
+            // Consolidating all of that in the assembler removes the
+            // duplicate per-language logic this arm carried and fixes
+            // the sigil-not-expanded bug.
+            segment_text.to_string()
         }
         FrameSegmentKind::ReturnCall => {
             // @@:return(expr) — set context return value AND exit handler.
