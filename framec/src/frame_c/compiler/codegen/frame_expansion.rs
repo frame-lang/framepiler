@@ -2395,14 +2395,15 @@ pub(crate) fn generate_frame_expansion(
                         indent_str, expanded_expr
                     ),
                     TargetLanguage::Erlang => {
-                        // String-literal-aware: `self.` inside a string
-                        // literal or `%` comment stays intact.
-                        let erl_expr = replace_outside_strings_and_comments(
-                            &expanded_expr,
-                            TargetLanguage::Erlang,
-                            &[("self.", "Data#data.")],
-                        );
-                        format!("{}__ReturnVal = {}", indent_str, erl_expr)
+                        // Leave `self.` in the expression untouched —
+                        // the Erlang body processor classifies this as
+                        // Plain and substitutes `self.` with the CURRENT
+                        // `DataN#data.` using the live data_gen. A
+                        // hardcoded `Data#data.` here would bind to the
+                        // pre-handler Data and miss updates made earlier
+                        // in the handler body (e.g., by `self.x = ...`
+                        // or a preceding `@@:self` dispatch).
+                        format!("{}__ReturnVal = {}", indent_str, expanded_expr)
                     }
                     TargetLanguage::Graphviz => unreachable!(),
                 }
@@ -2584,12 +2585,10 @@ pub(crate) fn generate_frame_expansion(
                     expanded_expr
                 ),
                 TargetLanguage::Erlang => {
-                    let erl_expr = replace_outside_strings_and_comments(
-                        &expanded_expr,
-                        TargetLanguage::Erlang,
-                        &[("self.", "Data#data.")],
-                    );
-                    format!("__ReturnVal = {}", erl_expr)
+                    // Leave `self.` intact so the body processor binds
+                    // it to the live data_gen — see the sibling fix in
+                    // `FrameSegmentKind::ContextReturn` above.
+                    format!("__ReturnVal = {}", expanded_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             };
@@ -2901,12 +2900,10 @@ pub(crate) fn generate_frame_expansion(
                     expanded_expr
                 ),
                 TargetLanguage::Erlang => {
-                    let erl_expr = replace_outside_strings_and_comments(
-                        &expanded_expr,
-                        TargetLanguage::Erlang,
-                        &[("self.", "Data#data.")],
-                    );
-                    format!("__ReturnVal = {}", erl_expr)
+                    // Leave `self.` intact so the body processor binds
+                    // it to the live data_gen — see the sibling fix in
+                    // `FrameSegmentKind::ContextReturn` above.
+                    format!("__ReturnVal = {}", expanded_expr)
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             };
