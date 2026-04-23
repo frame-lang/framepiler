@@ -147,6 +147,25 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 
 [Why state machines fit security](#why-state-machines-fit-security)
 
+**Robotics and Control (96-109)**
+
+96. [Stepper Motor Driver](#96-stepper-motor-driver--trapezoidal-motion-profile) — trapezoidal motion profile
+97. [Servo Homing Sequence](#97-servo-homing-sequence--enter-handler-chain-with-retry) — enter-handler chain with retry
+98. [Quadrature Encoder Decoder](#98-quadrature-encoder-decoder--mealy-machine-with-direction) — Mealy machine with direction
+99. [PID Loop Supervisor](#99-pid-loop-supervisor--mode-control-around-a-native-control-loop) — mode control around a native control loop
+100. [Mobile Base — Teleop/Autonomy with Safety](#100-mobile-base--teleopautonomy-with-safety-bumper) — bumper/cliff as safety overlay
+101. [Go-To-Goal with Obstacle Avoidance](#101-go-to-goal-with-obstacle-avoidance--deliberative--reactive-split) — deliberative + reactive split
+102. [Dock-and-Charge](#102-dock-and-charge--negotiated-resource-lifecycle) — negotiated resource lifecycle
+103. [Multi-Floor Delivery Robot](#103-multi-floor-delivery-robot--elevator-user) — elevator user, multi-system composition
+104. [Pick-and-Place with Vision Retry](#104-pick-and-place-with-vision-retry) — capstone manipulation workflow
+105. [Tool Changer](#105-tool-changer--interlocked-coupling-sequence) — interlocked coupling sequence
+106. [Force-Controlled Insertion](#106-force-controlled-insertion--peg-in-hole) — peg-in-hole with jam detection
+107. [Mission Controller (BT Alternative)](#107-mission-controller--bt-alternative-with-persistence) — with `@@persist` for resume
+108. [Drone Flight Modes](#108-drone-flight-modes--failsafe-from-any-phase) — failsafe from any phase
+109. [Fleet Dispatcher](#109-fleet-dispatcher--n-robots-competing-consumers-for-tasks) — N robots, competing consumers for tasks
+
+[Cross-references to existing cookbook patterns](#cross-references-to-existing-cookbook-patterns)
+
 -----
 
 ## 1. Traffic Light
@@ -11344,7 +11363,7 @@ Uses an HSM parent `$LiveSession` to centralize channel-binding checks, heartbea
 
 ## 95. Secure Boot / Measured Boot Chain
 
-[↑ up](#94-zero-trust-session-with-continuous-verification) · [top](#table-of-contents) · [↓ down](#why-state-machines-fit-security)
+[↑ up](#94-zero-trust-session-with-continuous-verification) · [top](#table-of-contents) · [↓ down](#96-stepper-motor-driver--trapezoidal-motion-profile)
 
 ![95 state diagram](images/cookbook/95.svg)
 
@@ -11525,6 +11544,2778 @@ Most security protocols are already state machines in prose form. RFC 8446 (TLS 
 Implemented as imperative code with booleans and guards, these protocols produce scattered `if`-checks, invisible safety properties, and transitions that reviewers must trace by hand. Implemented as Frame systems, the security property *is* the shape of the graph: missing a gate is a visible missing node, adding a bypass is a visible new edge, and impossible states are impossible because they have no handler — not because a check rejects them.
 
 The authoritative statement of each protocol above is the Frame source, diffed in version control, diagrammed with `framec system.fpy -l graphviz | dot -Tsvg`, and compiled to the same class the production system runs.
+
+-----
+
+## Robotics and Control
+
+Recipes 96-109 extend the cookbook into physical systems: motors, sensors, mobile bases, manipulators, and multi-robot fleets. The structural patterns are the same ones used elsewhere in the cookbook — HSM safety overlays, enter-handler chains, managed children, deferred events — applied to substrates where the cost of an incorrect transition is a bent fixture or a broken gripper rather than a stale cache entry.
+
+These recipes complement Recipe 49 (Robot Arm Controller), which established the 3-level safety overlay pattern, and Recipe 48 (Launch Sequence Controller), which showed abort-from-any-phase across multiple coordinating systems. Where those recipes focus on a single fixed-base arm and a rocket, the recipes below fan out across the robotics stack: driver-level FSMs (96-99), mobile navigation (100-103), manipulation workflows (104-106), and mission/fleet coordination (107-109).
+
+**Note on physical coupling.** A Frame system controlling a motor doesn't *run* the PWM loop or integrate the kinematics — that's native code on the other side of the interface boundary. Frame carries the *mode logic*: when to accelerate, when to abort, when to retry. The hot path stays in hardware-appropriate code (C, Rust, firmware); the supervisory FSM stays in Frame.
+
+-----
+
+## 96. Stepper Motor Driver — Trapezoidal Motion Profile
+
+[↑ up](#95-secure-boot--measured-boot-chain) · [top](#table-of-contents) · [↓ down](#97-servo-homing-sequence--enter-handler-chain-with-retry)
+
+![96 state diagram](images/cookbook/96.svg)
+
+**Problem:** A stepper motor needs to move a commanded number of steps without stalling or overshoot. The classic solution is a trapezoidal velocity profile: accelerate up to a cruise speed, cruise until the deceleration distance is reached, then decelerate to zero. A `stop()` command from any motion state must decelerate cleanly rather than halt instantly (which would stall or lose position).
+
+```frame
+@@target python_3
+
+@@system StepperDriver {
+    interface:
+        move_to(target_steps: int)
+        tick()
+        stop()
+        stall_detected()
+        status(): str
+
+    machine:
+        $Idle {
+            move_to(target_steps: int) {
+                self.target = target_steps
+                self.position = 0
+                self.velocity = 0
+                self.accel_steps = 0
+                -> $Accelerating
+            }
+            tick() { }
+            status(): str { @@:("idle") }
+        }
+
+        $Motion => $Active {
+            stop() {
+                print(f"  [step] stop requested at step {self.position}")
+                -> $Decelerating
+            }
+            stall_detected() {
+                print(f"  [step] STALL at step {self.position}")
+                self.velocity = 0
+                -> $Stalled
+            }
+            => $^
+        }
+
+        $Accelerating => $Motion {
+            $>() { print(f"  [step] accel: v={self.velocity} target={self.target}") }
+
+            tick() {
+                self.velocity = self.velocity + self.accel_rate
+                self.position = self.position + self.velocity
+                self.accel_steps = self.accel_steps + self.velocity
+
+                if self.velocity >= self.v_max:
+                    self.velocity = self.v_max
+                    -> "at cruise" $Cruising
+
+                remaining = self.target - self.position
+                if remaining <= self.accel_steps:
+                    -> "short move" $Decelerating
+            }
+            status(): str { @@:(f"accelerating v={self.velocity}") }
+            => $^
+        }
+
+        $Cruising => $Motion {
+            $>() { print(f"  [step] cruise at v={self.velocity}") }
+
+            tick() {
+                self.position = self.position + self.velocity
+                remaining = self.target - self.position
+                if remaining <= self.accel_steps:
+                    -> "begin decel" $Decelerating
+            }
+            status(): str { @@:(f"cruising v={self.velocity}") }
+            => $^
+        }
+
+        $Decelerating => $Motion {
+            $>() { print(f"  [step] decel: v={self.velocity}") }
+
+            tick() {
+                self.velocity = self.velocity - self.accel_rate
+                if self.velocity <= 0:
+                    self.velocity = 0
+                    print(f"  [step] arrived at step {self.position}")
+                    -> $Idle
+                else:
+                    self.position = self.position + self.velocity
+            }
+            status(): str { @@:(f"decelerating v={self.velocity}") }
+            => $^
+        }
+
+        $Stalled {
+            move_to(target_steps: int) {
+                print("  [step] clearing stall")
+                self.target = target_steps
+                self.position = 0
+                self.velocity = 0
+                self.accel_steps = 0
+                -> $Accelerating
+            }
+            status(): str { @@:("stalled") }
+        }
+
+        $Active {
+            # Top-level parent for all motion states. Empty by default;
+            # future safety events (e_stop, thermal) land here.
+        }
+
+    domain:
+        target: int = 0
+        position: int = 0
+        velocity: int = 0
+        accel_steps: int = 0
+        v_max: int = 20
+        accel_rate: int = 2
+}
+
+if __name__ == '__main__':
+    m = @@StepperDriver()
+    m.move_to(300)
+    for _ in range(40):
+        m.tick()
+        if m.status().startswith("idle"):
+            break
+    print(m.status())
+
+    # Short move — decel begins before reaching v_max
+    m2 = @@StepperDriver()
+    m2.move_to(40)
+    for _ in range(20):
+        m2.tick()
+    print(m2.status())
+
+    # Stop mid-cruise
+    m3 = @@StepperDriver()
+    m3.move_to(1000)
+    for _ in range(15): m3.tick()
+    m3.stop()
+    for _ in range(15): m3.tick()
+    print(m3.status())
+```
+
+**How it works:**
+
+**Trapezoidal profile as four states.** `$Accelerating`, `$Cruising`, `$Decelerating`, and `$Idle` model the profile directly. Each `tick()` advances position and velocity; the state transition happens when a threshold crosses (velocity reaches `v_max`, or remaining distance equals the number of steps already spent accelerating). A short move transitions `$Accelerating → $Decelerating` without passing through `$Cruising` — the guard `remaining <= self.accel_steps` fires before `v_max`.
+
+**`$Motion` parent for shared events.** `stop()` and `stall_detected()` are handled once in `$Motion` and inherited by all three motion states via `=> $^`. Adding a new motion-phase state (for example `$Jerking` for S-curve profiles) automatically inherits the safety handlers without touching existing code.
+
+**`stop()` doesn't halt — it decelerates.** The handler transitions to `$Decelerating` rather than `$Idle`. This is the correct behavior: an immediate halt at cruise speed would stall the motor or lose position. The state graph makes the clean-stop property structural rather than a convention the caller must remember.
+
+**Synthesis-friendly shape.** The handlers contain arithmetic, comparisons, and assignments only — no I/O or allocations. This is the subset `Frame_and_Hardware.md` identifies as synthesizable. The same `.fpy` source would generate a Python class for desktop simulation and (with a future Verilog backend) a synthesizable module for an FPGA stepper controller.
+
+**Features stressed:** HSM parent for shared motion events, state transitions triggered by computed thresholds, conditional skip transitions (short-move path), synthesizable handler subset
+
+-----
+
+## 97. Servo Homing Sequence — Enter-Handler Chain with Retry
+
+[↑ up](#96-stepper-motor-driver--trapezoidal-motion-profile) · [top](#table-of-contents) · [↓ down](#98-quadrature-encoder-decoder--mealy-machine-with-direction)
+
+![97 state diagram](images/cookbook/97.svg)
+
+**Problem:** An absolute servo axis powers on with unknown position. Homing establishes the reference: drive slowly toward a hard limit until the limit switch trips, back off, then find the encoder index pulse for fine alignment. If the limit switch doesn't trip within the expected distance, retry up to a bounded number of times before faulting. This is a mechanical version of USB enumeration (Recipe 58) — a mandatory startup pipeline with retry and compensation.
+
+```frame
+@@target python_3
+
+@@system ServoHoming {
+    interface:
+        home()
+        tick()
+        limit_hit()
+        index_pulse()
+        fault(reason: str)
+        status(): str
+
+    machine:
+        $Unhomed {
+            home() {
+                self.attempts = 0
+                -> $SeekingLimit
+            }
+            status(): str { @@:("unhomed") }
+        }
+
+        $Homing => $Active {
+            fault(reason: str) {
+                self.fault_reason = reason
+                print(f"  [home] FAULT: {reason}")
+                -> $Fault
+            }
+            => $^
+        }
+
+        $SeekingLimit => $Homing {
+            $>() {
+                self.attempts = self.attempts + 1
+                self.travel = 0
+                self.set_velocity(-self.seek_speed)
+                print(f"  [home] seeking limit (attempt {self.attempts})")
+            }
+
+            tick() {
+                self.travel = self.travel + self.seek_speed
+                if self.travel > self.max_travel:
+                    if self.attempts >= self.max_attempts:
+                        @@:self.fault("limit not found")
+                    else:
+                        print("  [home] overtraveled, retrying")
+                        -> $SeekingLimit
+            }
+
+            limit_hit() {
+                print(f"  [home] limit hit at travel={self.travel}")
+                self.set_velocity(0)
+                -> $BackingOff
+            }
+
+            status(): str { @@:("seeking limit") }
+            => $^
+        }
+
+        $BackingOff => $Homing {
+            $>() {
+                self.backoff_remaining = self.backoff_distance
+                self.set_velocity(self.seek_speed)
+                print("  [home] backing off")
+            }
+
+            tick() {
+                self.backoff_remaining = self.backoff_remaining - self.seek_speed
+                if self.backoff_remaining <= 0:
+                    self.set_velocity(self.index_speed)
+                    -> $FindingIndex
+            }
+
+            status(): str { @@:("backing off") }
+            => $^
+        }
+
+        $FindingIndex => $Homing {
+            $>() {
+                self.index_travel = 0
+                print("  [home] searching for index pulse")
+            }
+
+            tick() {
+                self.index_travel = self.index_travel + self.index_speed
+                if self.index_travel > self.index_window:
+                    @@:self.fault("index pulse missing")
+            }
+
+            index_pulse() {
+                print("  [home] index found — homed")
+                self.set_velocity(0)
+                self.position = 0
+                -> $Homed
+            }
+
+            status(): str { @@:("finding index") }
+            => $^
+        }
+
+        $Homed {
+            home() {
+                self.attempts = 0
+                -> $SeekingLimit
+            }
+            status(): str { @@:("homed") }
+        }
+
+        $Fault {
+            home() {
+                print("  [home] clearing fault, retrying")
+                self.attempts = 0
+                self.fault_reason = ""
+                -> $SeekingLimit
+            }
+            status(): str { @@:(f"fault: {self.fault_reason}") }
+        }
+
+        $Active {
+            # Top-level parent. Empty by default; e-stop and safety
+            # events attach here.
+        }
+
+    actions:
+        set_velocity(v) { print(f"    -> set_velocity({v})") }
+
+    domain:
+        attempts: int = 0
+        max_attempts: int = 3
+        travel: int = 0
+        max_travel: int = 100
+        backoff_remaining: int = 0
+        backoff_distance: int = 10
+        index_travel: int = 0
+        index_window: int = 30
+        seek_speed: int = 5
+        index_speed: int = 1
+        position: int = 0
+        fault_reason: str = ""
+}
+
+if __name__ == '__main__':
+    s = @@ServoHoming()
+    s.home()
+    for i in range(5): s.tick()
+    s.limit_hit()
+    for i in range(3): s.tick()
+    for i in range(5): s.tick()
+    s.index_pulse()
+    print(s.status())
+```
+
+**How it works:**
+
+**Pipeline as a chain of states.** `$SeekingLimit → $BackingOff → $FindingIndex → $Homed` is the happy path. Each stage has an enter handler that sets up the motion and a `tick()` handler that advances the state. The transition between stages is triggered either by an external event (`limit_hit()`, `index_pulse()`) or by an internal completion condition (`backoff_remaining <= 0`).
+
+**Retry via state re-entry.** If `$SeekingLimit` overtravels, it transitions to itself. The enter handler runs again, incrementing `self.attempts` and resetting `self.travel`. This is the same re-entry pattern used by Recipe 24 (Circuit Breaker) for resetting state-scoped counters, applied to mechanical retry.
+
+**`fault()` handled at the `$Homing` parent.** Every homing stage can call `@@:self.fault(reason)` to short-circuit to `$Fault`. The handler lives in the parent state, so adding a new homing stage (for example `$CalibratingOffset`) inherits fault routing automatically.
+
+**Compare with Recipe 58.** USB enumeration has the same shape: a linear forward pipeline with an HSM parent for shared failure handling. The structural pattern travels — plug it into a robotics axis, a protocol negotiation, or a deployment pipeline, and the Frame code looks the same.
+
+**Features stressed:** enter-handler chain, state re-entry for bounded retry, HSM parent for shared fault handling, `@@:self.method()` for reentrant fault dispatch
+
+-----
+
+## 98. Quadrature Encoder Decoder — Mealy Machine with Direction
+
+[↑ up](#97-servo-homing-sequence--enter-handler-chain-with-retry) · [top](#table-of-contents) · [↓ down](#99-pid-loop-supervisor--mode-control-around-a-native-control-loop)
+
+![98 state diagram](images/cookbook/98.svg)
+
+**Problem:** A quadrature encoder outputs two square waves (A and B) 90° out of phase. Decoding direction requires remembering the previous (A,B) pair: the transition from one pair to the next uniquely identifies forward or reverse motion. This is a Mealy machine — the output (tick count delta) depends on both current state and input — and it's the same structural shape as Recipe 16 but wired to physical quadrature signals.
+
+```frame
+@@target python_3
+
+@@system QuadratureDecoder {
+    operations:
+        count(): int { return self.count_val }
+        direction(): str { return self.last_dir }
+        reset() {
+            self.count_val = 0
+            self.errors = 0
+            self.last_dir = "none"
+        }
+
+    interface:
+        signal(a: int, b: int): int
+
+    machine:
+        $S00 {
+            signal(a: int, b: int): int {
+                if a == 0 and b == 0: @@:(0)
+                elif a == 1 and b == 0:
+                    self.count_val = self.count_val + 1
+                    self.last_dir = "fwd"
+                    @@:(1)
+                    -> $S10
+                elif a == 0 and b == 1:
+                    self.count_val = self.count_val - 1
+                    self.last_dir = "rev"
+                    @@:(-1)
+                    -> $S01
+                else:
+                    self.errors = self.errors + 1
+                    @@:(0)
+            }
+        }
+
+        $S10 {
+            signal(a: int, b: int): int {
+                if a == 1 and b == 0: @@:(0)
+                elif a == 1 and b == 1:
+                    self.count_val = self.count_val + 1
+                    self.last_dir = "fwd"
+                    @@:(1)
+                    -> $S11
+                elif a == 0 and b == 0:
+                    self.count_val = self.count_val - 1
+                    self.last_dir = "rev"
+                    @@:(-1)
+                    -> $S00
+                else:
+                    self.errors = self.errors + 1
+                    @@:(0)
+            }
+        }
+
+        $S11 {
+            signal(a: int, b: int): int {
+                if a == 1 and b == 1: @@:(0)
+                elif a == 0 and b == 1:
+                    self.count_val = self.count_val + 1
+                    self.last_dir = "fwd"
+                    @@:(1)
+                    -> $S01
+                elif a == 1 and b == 0:
+                    self.count_val = self.count_val - 1
+                    self.last_dir = "rev"
+                    @@:(-1)
+                    -> $S10
+                else:
+                    self.errors = self.errors + 1
+                    @@:(0)
+            }
+        }
+
+        $S01 {
+            signal(a: int, b: int): int {
+                if a == 0 and b == 1: @@:(0)
+                elif a == 0 and b == 0:
+                    self.count_val = self.count_val + 1
+                    self.last_dir = "fwd"
+                    @@:(1)
+                    -> $S00
+                elif a == 1 and b == 1:
+                    self.count_val = self.count_val - 1
+                    self.last_dir = "rev"
+                    @@:(-1)
+                    -> $S11
+                else:
+                    self.errors = self.errors + 1
+                    @@:(0)
+            }
+        }
+
+    domain:
+        count_val: int = 0
+        errors: int = 0
+        last_dir: str = "none"
+}
+
+if __name__ == '__main__':
+    q = @@QuadratureDecoder()
+    # Forward rotation: 00 -> 10 -> 11 -> 01 -> 00
+    q.signal(1, 0)
+    q.signal(1, 1)
+    q.signal(0, 1)
+    q.signal(0, 0)
+    print(q.count())     # 4
+    print(q.direction()) # fwd
+
+    # Reverse rotation: 00 -> 01 -> 11 -> 10 -> 00
+    q.signal(0, 1)
+    q.signal(1, 1)
+    q.signal(1, 0)
+    q.signal(0, 0)
+    print(q.count())     # 4 - 4 = 0
+    print(q.direction()) # rev
+
+    # Illegal transition (00 -> 11 — missed an edge)
+    q.reset()
+    q.signal(1, 1)
+    print(q.count())     # 0, error logged
+```
+
+**How it works:**
+
+**Four states for four physical levels.** `$S00`, `$S10`, `$S11`, `$S01` correspond directly to the four possible `(A,B)` voltage levels. Each state's `signal()` handler knows exactly which three transitions are valid (no-change, forward-one-quadrant, reverse-one-quadrant) and which one is an error (the diagonal — a missed edge indicating too-slow sampling).
+
+**Output per (state, input) pair.** The return value (`+1`, `0`, `-1`) is computed from the current state *and* the incoming signal, which is the definition of a Mealy machine. Recipe 16 shows the minimal abstract form; this recipe shows it in its canonical real-world application.
+
+**Operations for read-only access.** `count()` and `direction()` are operations, not interface methods. They don't transition or affect the state machine — they just expose domain variables. Same pattern as Recipe 23 (Vending Machine) admin ops.
+
+**Why not lookup table.** A hardware quadrature decoder often uses a 4×4 lookup table indexed by `(prev_state, curr_state)`. Frame expresses the same logic as a state machine. The two forms are equivalent; the Frame form documents the valid transitions explicitly and makes the error cases visible (the `else` branches that increment `self.errors`).
+
+**Features stressed:** Mealy machine (output per state+input), operations for read-only queries, exhaustive transition handling, error counting via else-branch
+
+-----
+
+## 99. PID Loop Supervisor — Mode Control Around a Native Control Loop
+
+[↑ up](#98-quadrature-encoder-decoder--mealy-machine-with-direction) · [top](#table-of-contents) · [↓ down](#100-mobile-base--teleopautonomy-with-safety-bumper)
+
+![99 state diagram](images/cookbook/99.svg)
+
+**Problem:** A PID controller has tight numerical requirements — millisecond-scale update periods, deterministic math, minimal allocation. That hot loop belongs in native code (C, Rust, or firmware). But the *mode* around the loop — disabled, tuning, holding setpoint, tracking a trajectory, saturated and winding up — is workflow logic that fragments when written as boolean flags. This recipe shows Frame as the supervisor, calling into a native PID as an action.
+
+```frame
+@@target python_3
+
+@@system PidSupervisor {
+    interface:
+        enable()
+        disable()
+        set_setpoint(sp: float)
+        set_trajectory(traj: list)
+        tune(kp: float, ki: float, kd: float)
+        start_autotune()
+        tick(measurement: float): float
+        saturate_detected()
+        clear_saturation()
+        status(): str
+
+    machine:
+        $Disabled {
+            enable() { -> $Holding }
+            tune(kp: float, ki: float, kd: float) {
+                self.kp = kp
+                self.ki = ki
+                self.kd = kd
+                print(f"  [pid] gains set kp={kp} ki={ki} kd={kd}")
+            }
+            tick(measurement: float): float { @@:(0.0) }
+            status(): str { @@:("disabled") }
+        }
+
+        $Enabled {
+            disable() {
+                self.reset_integrator()
+                -> $Disabled
+            }
+            saturate_detected() {
+                print("  [pid] saturation — freezing integrator")
+                -> $Saturated
+            }
+            => $^
+        }
+
+        $Tuning => $Enabled {
+            $>() { print("  [pid] auto-tuning active") }
+            tick(measurement: float): float {
+                output = self.run_tune_step(measurement)
+                if self.tune_complete():
+                    print(f"  [pid] tuned: kp={self.kp} ki={self.ki} kd={self.kd}")
+                    -> $Holding
+                @@:(output)
+            }
+            status(): str { @@:("tuning") }
+            => $^
+        }
+
+        $Holding => $Enabled {
+            $>() { print(f"  [pid] holding setpoint={self.setpoint}") }
+            set_setpoint(sp: float) {
+                self.setpoint = sp
+            }
+            set_trajectory(traj: list) {
+                self.trajectory = traj
+                self.traj_index = 0
+                -> $Tracking
+            }
+            start_autotune() {
+                print("  [pid] starting autotune")
+                -> $Tuning
+            }
+            tick(measurement: float): float {
+                @@:(self.pid_step(self.setpoint, measurement))
+            }
+            status(): str { @@:(f"holding sp={self.setpoint}") }
+            => $^
+        }
+
+        $Tracking => $Enabled {
+            $>() { print(f"  [pid] tracking trajectory ({len(self.trajectory)} points)") }
+            tick(measurement: float): float {
+                if self.traj_index >= len(self.trajectory):
+                    print("  [pid] trajectory complete")
+                    @@:(0.0)
+                    -> $Holding
+                sp = self.trajectory[self.traj_index]
+                self.traj_index = self.traj_index + 1
+                @@:(self.pid_step(sp, measurement))
+            }
+            set_setpoint(sp: float) {
+                self.setpoint = sp
+                self.trajectory = []
+                -> $Holding
+            }
+            status(): str { @@:(f"tracking step {self.traj_index}/{len(self.trajectory)}") }
+            => $^
+        }
+
+        $Saturated => $Enabled {
+            $>() { print("  [pid] integrator frozen") }
+            <$() { print("  [pid] integrator thawed") }
+            tick(measurement: float): float {
+                # Integrator frozen — P and D still compute
+                @@:(self.pid_step_no_integral(self.setpoint, measurement))
+            }
+            clear_saturation() { -> $Holding }
+            status(): str { @@:("saturated (I-frozen)") }
+            => $^
+        }
+
+    actions:
+        pid_step(setpoint, measurement) {
+            # Native implementation — called, not modeled
+            error = setpoint - measurement
+            self.integrator = self.integrator + error
+            derivative = error - self.last_error
+            self.last_error = error
+            return self.kp * error + self.ki * self.integrator + self.kd * derivative
+        }
+        pid_step_no_integral(setpoint, measurement) {
+            error = setpoint - measurement
+            derivative = error - self.last_error
+            self.last_error = error
+            return self.kp * error + self.kd * derivative
+        }
+        run_tune_step(measurement) { return 0.0 }
+        tune_complete() { return True }
+        reset_integrator() { self.integrator = 0.0; self.last_error = 0.0 }
+
+    domain:
+        kp: float = 1.0
+        ki: float = 0.1
+        kd: float = 0.01
+        setpoint: float = 0.0
+        integrator: float = 0.0
+        last_error: float = 0.0
+        trajectory: list = []
+        traj_index: int = 0
+}
+
+if __name__ == '__main__':
+    pid = @@PidSupervisor()
+    pid.tune(2.0, 0.5, 0.1)
+    pid.enable()
+    pid.set_setpoint(100.0)
+    print(pid.tick(90.0))
+    pid.saturate_detected()
+    print(pid.tick(95.0))        # no integrator growth
+    pid.clear_saturation()
+    pid.start_autotune()
+    print(pid.tick(99.0))        # tunes then returns to holding
+    pid.set_trajectory([95.0, 97.0, 99.0, 100.0])
+    for m in [94.0, 96.5, 98.5, 99.8]:
+        print(pid.tick(m))
+    print(pid.status())
+```
+
+**How it works:**
+
+**Frame owns the mode, native code owns the math.** The `pid_step()` action is a thin wrapper — in production it would call into a native C function via FFI, or dispatch to a vectorized implementation in Eigen, or evaluate a fixed-point integer form on a microcontroller. Frame contains *which* step function to call (with integrator, without, none) based on the current state. The state graph is the supervisory policy; the native function is the real-time kernel.
+
+**Integrator windup prevention as a state.** The classic PID bug is integrator windup during actuator saturation: while the output is clipped, the integrator keeps growing and the system overshoots badly when unsaturated. The standard fix is "freeze the integrator when saturated." Frame makes this a state (`$Saturated`) whose `tick()` calls `pid_step_no_integral()` instead of `pid_step()`. The structural property: the only way to reach the integrator-updating `tick` path is to be in a state that uses `pid_step()`. `$Saturated` is not one of those states, so there is no code path where a saturated loop accumulates integrator growth.
+
+**Tuning as a reachable mode.** `$Tuning` is entered from `$Holding` via `start_autotune()`. While tuning, `tick()` runs the autotune step function rather than the normal PID step; when `tune_complete()` reports true, the state machine transitions back to `$Holding` with the new gains in place. The classic alternative — a `bool tuning_active` flag queried inside a single `tick()` function — spreads the tuning logic across every mode. Here it's localized to a dedicated state.
+
+**Compare with agent state machines.** The structure is identical to the agent Patterns in `AGENTS_README.md`: an `$Enabled` parent with shared failure handling, child states for each operational mode. The difference is the domain. Frame doesn't care whether the children are `$Planning`/`$Executing`/`$Synthesizing` or `$Holding`/`$Tracking`/`$Saturated`.
+
+**Features stressed:** mode supervision over a native hot loop, state as integrator-windup guard, HSM parent for shared disable/saturate handling, enter/exit handlers for integrator freeze/thaw
+
+-----
+
+## 100. Mobile Base — Teleop/Autonomy with Safety Bumper
+
+[↑ up](#99-pid-loop-supervisor--mode-control-around-a-native-control-loop) · [top](#table-of-contents) · [↓ down](#101-go-to-goal-with-obstacle-avoidance--deliberative--reactive-split)
+
+![100 state diagram](images/cookbook/100.svg)
+
+**Problem:** A differential-drive mobile base needs two operational modes (teleop and autonomous waypoint following) and an overriding safety layer that triggers on bumper strikes, cliff sensor events, or emergency stop. Recipe 49 showed this pattern for a fixed-base industrial arm; a mobile platform has different events (velocity commands, waypoint lists, bumper strikes rather than move-to and gripper commands) but the same structural skeleton.
+
+```frame
+@@target python_3
+
+@@system MobileBase {
+    operations:
+        get_pose(): dict {
+            return {"x": self.pos_x, "y": self.pos_y, "theta": self.heading}
+        }
+        get_velocity(): dict {
+            return {"linear": self.v_linear, "angular": self.v_angular}
+        }
+
+    interface:
+        # Mode control
+        set_teleop()
+        set_autonomous()
+
+        # Teleop commands
+        drive(linear: float, angular: float)
+
+        # Autonomous commands
+        follow_waypoints(waypoints: list)
+        waypoint_reached()
+
+        # Safety
+        e_stop()
+        clear_e_stop()
+        bumper_hit(side: str)
+        cliff_detected()
+        clear_safety()
+
+        # Telemetry
+        tick()
+        status(): str
+
+    machine:
+        # --- Safety overlay (top of HSM) ---
+        $Operational => $Safety {
+            e_stop() {
+                print("  [base] E-STOP")
+                self.v_linear = 0
+                self.v_angular = 0
+                -> $EStopped
+            }
+            bumper_hit(side: str) {
+                print(f"  [base] bumper hit: {side}")
+                self.v_linear = 0
+                self.v_angular = 0
+                self.safety_reason = f"bumper {side}"
+                -> $ProtectiveStop
+            }
+            cliff_detected() {
+                print("  [base] cliff detected")
+                self.v_linear = 0
+                self.v_angular = 0
+                self.safety_reason = "cliff"
+                -> $ProtectiveStop
+            }
+            => $^
+        }
+
+        $EStopped {
+            $>() { print("  [base] e-stop active — all motion disabled") }
+            clear_e_stop() { -> $TeleopIdle }
+            status(): str { @@:("E-STOP") }
+        }
+
+        $ProtectiveStop {
+            $>() { print(f"  [base] protective stop: {self.safety_reason}") }
+            clear_safety() {
+                print("  [base] safety cleared — returning to teleop idle")
+                self.safety_reason = ""
+                -> $TeleopIdle
+            }
+            status(): str { @@:(f"protective stop: {self.safety_reason}") }
+        }
+
+        $Safety {
+            # Top parent — empty placeholder.
+        }
+
+        # --- Teleop mode ---
+        $TeleopIdle => $Teleop {
+            drive(linear: float, angular: float) {
+                self.v_linear = linear
+                self.v_angular = angular
+                -> $TeleopDriving
+            }
+            set_autonomous() { -> $AutoIdle }
+            status(): str { @@:("teleop idle") }
+            => $^
+        }
+
+        $TeleopDriving => $Teleop {
+            $>() {
+                if self.v_linear > self.teleop_speed_limit:
+                    self.v_linear = self.teleop_speed_limit
+                print(f"  [base] driving v={self.v_linear} w={self.v_angular}")
+            }
+            drive(linear: float, angular: float) {
+                if linear == 0 and angular == 0:
+                    print("  [base] stop")
+                    self.v_linear = 0
+                    self.v_angular = 0
+                    -> $TeleopIdle
+                else:
+                    self.v_linear = linear
+                    self.v_angular = angular
+            }
+            tick() { self.integrate_pose() }
+            status(): str { @@:(f"teleop v={self.v_linear}") }
+            => $^
+        }
+
+        $Teleop => $Operational {
+            # Shared teleop behavior
+            follow_waypoints(waypoints: list) {
+                print("  [base] waypoints rejected in teleop mode")
+            }
+            => $^
+        }
+
+        # --- Autonomous mode ---
+        $AutoIdle => $Auto {
+            follow_waypoints(waypoints: list) {
+                self.waypoints = waypoints
+                self.wp_index = 0
+                print(f"  [base] following {len(waypoints)} waypoints")
+                -> $AutoDriving
+            }
+            set_teleop() { -> $TeleopIdle }
+            status(): str { @@:("auto idle") }
+            => $^
+        }
+
+        $AutoDriving => $Auto {
+            $>() {
+                if self.wp_index >= len(self.waypoints):
+                    print("  [base] all waypoints reached")
+                    -> "complete" $AutoIdle
+                    return
+                wp = self.waypoints[self.wp_index]
+                self.target_x = wp["x"]
+                self.target_y = wp["y"]
+                print(f"  [base] heading to waypoint {self.wp_index + 1}: ({self.target_x},{self.target_y})")
+                self.v_linear = self.auto_speed_limit
+            }
+            tick() {
+                self.integrate_pose()
+                if self.at_waypoint():
+                    @@:self.waypoint_reached()
+            }
+            waypoint_reached() {
+                print(f"  [base] waypoint {self.wp_index + 1} reached")
+                self.wp_index = self.wp_index + 1
+                -> $AutoDriving
+            }
+            status(): str { @@:(f"auto waypoint {self.wp_index + 1}/{len(self.waypoints)}") }
+            => $^
+        }
+
+        $Auto => $Operational {
+            drive(linear: float, angular: float) {
+                print("  [base] drive rejected in auto mode")
+            }
+            set_teleop() { -> $TeleopIdle }
+            => $^
+        }
+
+    actions:
+        integrate_pose() {
+            self.pos_x = self.pos_x + self.v_linear * 0.1
+            self.heading = self.heading + self.v_angular * 0.1
+        }
+        at_waypoint() {
+            dx = self.target_x - self.pos_x
+            return abs(dx) < 0.5
+        }
+
+    domain:
+        pos_x: float = 0.0
+        pos_y: float = 0.0
+        heading: float = 0.0
+        v_linear: float = 0.0
+        v_angular: float = 0.0
+        target_x: float = 0.0
+        target_y: float = 0.0
+        teleop_speed_limit: float = 0.5
+        auto_speed_limit: float = 1.0
+        waypoints: list = []
+        wp_index: int = 0
+        safety_reason: str = ""
+}
+
+if __name__ == '__main__':
+    base = @@MobileBase()
+    base.drive(0.3, 0.0)
+    for _ in range(5): base.tick()
+    print(base.get_pose())
+
+    base.bumper_hit("front")
+    print(base.status())
+    base.clear_safety()
+
+    base.set_autonomous()
+    base.follow_waypoints([{"x": 5.0, "y": 0}, {"x": 10.0, "y": 0}])
+    for _ in range(200):
+        base.tick()
+        if base.status().startswith("auto idle"): break
+    print(base.status())
+```
+
+**How it works:**
+
+**Safety overlay identical to Recipe 49.** `$Operational => $Safety` with e-stop, bumper, and cliff events handled once at the `$Operational` level. The specific events differ from the industrial arm (bumpers and cliffs instead of safety-fault codes), but the pattern is identical: safety events are inherited by every operational state and route to protective states that can only be cleared by explicit events.
+
+**Mode-mutual rejection.** `$Auto.drive()` and `$Teleop.follow_waypoints()` both print rejection messages and stay in their current state. This is the state-enforced equivalent of runtime `if mode == AUTO: reject(...)` guards — except the enforcement is in the dispatch, not in a conditional inside each handler.
+
+**Waypoint stepping via self-reentry.** `$AutoDriving.waypoint_reached()` transitions to `$AutoDriving` again. The enter handler increments the index and reads the next waypoint, or completes if the list is exhausted. Same pattern as Recipe 49's `$AutoExecuting`, but with a waypoint list instead of a command list.
+
+**Operations for telemetry.** `get_pose()` and `get_velocity()` bypass the state machine. A ROS publisher or a navigation stack can read pose every tick regardless of what state the base is in — including during a protective stop, where having access to position is essential for logging the stop location.
+
+**Features stressed:** 3-level HSM safety overlay (`$Safety → $Operational → {$Teleop, $Auto}`), mode-mutual command rejection, waypoint stepping via state re-entry, operations for real-time telemetry
+
+-----
+
+## 101. Go-To-Goal with Obstacle Avoidance — Deliberative + Reactive Split
+
+[↑ up](#100-mobile-base--teleopautonomy-with-safety-bumper) · [top](#table-of-contents) · [↓ down](#102-dock-and-charge--negotiated-resource-lifecycle)
+
+![101 state diagram](images/cookbook/101.svg)
+
+**Problem:** A mobile robot must navigate to a goal pose. A global planner (deliberative, slow) produces a waypoint path; a local controller (reactive, fast) follows the path while avoiding obstacles not in the map. On obstacle detection, the robot pauses, replans from the current pose, and resumes. After a bounded number of failed replans, it gives up. This is the classic hybrid-architecture problem that robotics has debated for decades — and it's structurally identical to the AI Coding Agent capstone (Recipe 33), with `$Planning`/`$Executing`/`$Replanning` relabeled for physical navigation.
+
+```frame
+@@target python_3
+
+@@system Navigator {
+    interface:
+        navigate_to(goal_x: float, goal_y: float)
+        tick(obstacle_distance: float, at_goal: bool)
+        plan_ready(path: list)
+        plan_failed()
+        abort()
+        status(): str
+
+    machine:
+        $Idle {
+            navigate_to(goal_x: float, goal_y: float) {
+                self.goal_x = goal_x
+                self.goal_y = goal_y
+                self.replan_count = 0
+                print(f"  [nav] target ({goal_x},{goal_y})")
+                -> $Planning
+            }
+            status(): str { @@:("idle") }
+        }
+
+        $Mission => $Active {
+            abort() {
+                print("  [nav] mission aborted")
+                self.path = []
+                -> $Idle
+            }
+            => $^
+        }
+
+        $Planning => $Mission {
+            $>() {
+                print(f"  [nav] planning (attempt {self.replan_count + 1})")
+                path = self.request_plan(self.goal_x, self.goal_y)
+                @@:self.plan_ready(path)
+            }
+            plan_ready(path: list) {
+                if len(path) == 0:
+                    @@:self.plan_failed()
+                else:
+                    self.path = path
+                    self.path_index = 0
+                    -> $Driving
+            }
+            plan_failed() {
+                self.replan_count = self.replan_count + 1
+                if self.replan_count >= self.max_replans:
+                    print("  [nav] plan failed — giving up")
+                    -> $Failed
+                else:
+                    print("  [nav] plan failed — retrying")
+                    -> $Planning
+            }
+            status(): str { @@:("planning") }
+            => $^
+        }
+
+        $Driving => $Mission {
+            $>() { print(f"  [nav] driving path segment {self.path_index + 1}/{len(self.path)}") }
+
+            tick(obstacle_distance: float, at_goal: bool) {
+                if at_goal:
+                    -> $Arrived
+                    return
+                if obstacle_distance < self.obstacle_threshold:
+                    print(f"  [nav] obstacle at {obstacle_distance}m — avoiding")
+                    -> $Avoiding
+                    return
+                self.path_index = self.path_index + 1
+                if self.path_index >= len(self.path):
+                    print("  [nav] path exhausted but not at goal — replanning")
+                    -> $Planning
+            }
+            status(): str { @@:(f"driving segment {self.path_index + 1}") }
+            => $^
+        }
+
+        $Avoiding => $Mission {
+            $>() {
+                print("  [nav] reactive avoidance")
+                self.avoid_ticks = 0
+            }
+            tick(obstacle_distance: float, at_goal: bool) {
+                self.avoid_ticks = self.avoid_ticks + 1
+                if obstacle_distance >= self.obstacle_threshold:
+                    print("  [nav] obstacle cleared — replanning from current pose")
+                    -> $Planning
+                elif self.avoid_ticks > self.max_avoid_ticks:
+                    print("  [nav] trapped — giving up")
+                    -> $Failed
+            }
+            status(): str { @@:("avoiding") }
+            => $^
+        }
+
+        $Arrived {
+            $>() { print("  [nav] at goal") }
+            navigate_to(goal_x: float, goal_y: float) {
+                self.goal_x = goal_x
+                self.goal_y = goal_y
+                self.replan_count = 0
+                -> $Planning
+            }
+            status(): str { @@:("arrived") }
+        }
+
+        $Failed {
+            $>() { print("  [nav] FAILED") }
+            navigate_to(goal_x: float, goal_y: float) {
+                self.goal_x = goal_x
+                self.goal_y = goal_y
+                self.replan_count = 0
+                -> $Planning
+            }
+            status(): str { @@:("failed") }
+        }
+
+        $Active {
+            # Top parent — safety and e-stop attach here.
+        }
+
+    actions:
+        request_plan(gx, gy) {
+            # Stub: return a path of intermediate points
+            return [(1.0, 0), (2.0, 0), (gx, gy)]
+        }
+
+    domain:
+        goal_x: float = 0.0
+        goal_y: float = 0.0
+        path: list = []
+        path_index: int = 0
+        replan_count: int = 0
+        max_replans: int = 3
+        obstacle_threshold: float = 0.5
+        avoid_ticks: int = 0
+        max_avoid_ticks: int = 30
+}
+
+if __name__ == '__main__':
+    n = @@Navigator()
+    n.navigate_to(5.0, 0.0)
+
+    # No obstacles
+    for _ in range(5): n.tick(10.0, False)
+    n.tick(10.0, True)
+    print(n.status())
+
+    # Obstacle mid-path
+    n2 = @@Navigator()
+    n2.navigate_to(5.0, 0.0)
+    n2.tick(10.0, False)
+    n2.tick(0.3, False)    # obstacle
+    n2.tick(10.0, False)   # cleared, replanning
+    print(n2.status())
+```
+
+**How it works:**
+
+**Deliberative and reactive as sibling states.** `$Planning` is deliberative (request a plan, wait for it). `$Driving` is nominally reactive but just follows precomputed waypoints. `$Avoiding` is fully reactive — no planner involvement, just wait for the obstacle to clear or time out. The three-way split is the classic hybrid architecture, and each layer is its own state with its own event set.
+
+**Replan-then-resume via transition to `$Planning`.** When `$Avoiding` detects the obstacle has cleared, it transitions back to `$Planning` — not to `$Driving`. This discards the stale path and requests a fresh one from the current pose. The structural guarantee: you cannot return to `$Driving` without passing through `$Planning`. There is no code path where the robot resumes following a path that no longer makes sense from its current position.
+
+**Replan budget.** `self.replan_count` is a domain variable incremented on plan failure. After `max_replans` failures, the state machine transitions to `$Failed`. This is Recipe 6 (Retry with Backoff) applied to planning attempts, layered under the navigation state graph.
+
+**Direct parallel to Recipe 33.** Compare the state names: Recipe 33 has `$Planning → $Coding → $Testing → $Complete`/`$Failed`; this recipe has `$Planning → $Driving → $Arrived`/`$Failed`. The AI coding agent and the mobile navigator have the same structural shape because they're both iterative plan-execute-verify loops with bounded retry. Swap `request_plan()` for `llm_plan()` and they become each other.
+
+**Features stressed:** deliberative + reactive architecture as sibling states, replan budget via state-scoped counter, structural guarantee of plan freshness, parallel to agent workflow patterns
+
+-----
+
+## 102. Dock-and-Charge — Negotiated Resource Lifecycle
+
+[↑ up](#101-go-to-goal-with-obstacle-avoidance--deliberative--reactive-split) · [top](#table-of-contents) · [↓ down](#103-multi-floor-delivery-robot--elevator-user)
+
+![102 state diagram](images/cookbook/102.svg)
+
+**Problem:** A robot with a finite battery must seek a charging dock, align precisely with the contacts, verify the charging connection, charge until full, then undock. Each stage has its own failure modes: dock beacon lost, misalignment on approach, charging fault. This is a negotiated resource lifecycle — structurally the same as DHCP (Recipe 64) or TLS (Recipe 65), but with physical docking instead of protocol messages.
+
+```frame
+@@target python_3
+
+@@system DockController {
+    interface:
+        battery_low()
+        dock_visible(bearing: float, range: float)
+        dock_lost()
+        contact_made()
+        charging_started(current_amps: float)
+        charging_fault(reason: str)
+        fully_charged()
+        undock_complete()
+        tick()
+        status(): str
+
+    machine:
+        $Discharging {
+            battery_low() {
+                print("  [dock] battery low, seeking dock")
+                self.align_attempts = 0
+                -> $SeekingDock
+            }
+            status(): str { @@:(f"discharging ({self.battery_pct}%)") }
+        }
+
+        $DockingFlow => $Active {
+            dock_lost() {
+                print("  [dock] lost beacon, returning to discharge")
+                -> $Discharging
+            }
+            => $^
+        }
+
+        $SeekingDock => $DockingFlow {
+            $>() { print("  [dock] seeking beacon") }
+            dock_visible(bearing: float, range: float) {
+                self.dock_bearing = bearing
+                self.dock_range = range
+                if range < self.approach_range:
+                    -> $Aligning
+            }
+            tick() { }
+            status(): str { @@:("seeking dock") }
+            => $^
+        }
+
+        $Aligning => $DockingFlow {
+            $>() {
+                self.align_attempts = self.align_attempts + 1
+                self.align_ticks = 0
+                print(f"  [dock] aligning (attempt {self.align_attempts})")
+            }
+
+            dock_visible(bearing: float, range: float) {
+                self.dock_bearing = bearing
+                self.dock_range = range
+            }
+
+            tick() {
+                self.align_ticks = self.align_ticks + 1
+                if self.align_ticks > self.align_timeout:
+                    if self.align_attempts >= self.max_align_attempts:
+                        print("  [dock] alignment timeout, abandoning")
+                        -> $Failed
+                    else:
+                        print("  [dock] alignment timeout, retrying")
+                        -> $Aligning
+                elif abs(self.dock_bearing) > self.align_tolerance:
+                    if self.align_attempts >= self.max_align_attempts:
+                        print("  [dock] alignment failed, abandoning")
+                        -> $Failed
+                    # else keep adjusting
+                elif self.dock_range < 0.05:
+                    print("  [dock] aligned, approaching contacts")
+                    -> $MakingContact
+            }
+            status(): str { @@:("aligning") }
+            => $^
+        }
+
+        $MakingContact => $DockingFlow {
+            $>() {
+                self.contact_ticks = 0
+                print("  [dock] final approach")
+            }
+            tick() {
+                self.contact_ticks = self.contact_ticks + 1
+                if self.contact_ticks > self.contact_timeout:
+                    print("  [dock] no contact, backing off")
+                    -> $Aligning
+            }
+            contact_made() {
+                print("  [dock] contact detected")
+                -> $VerifyingCharge
+            }
+            status(): str { @@:("making contact") }
+            => $^
+        }
+
+        $VerifyingCharge => $DockingFlow {
+            $>() {
+                self.verify_ticks = 0
+                print("  [dock] verifying charge path")
+            }
+            tick() {
+                self.verify_ticks = self.verify_ticks + 1
+                if self.verify_ticks > self.verify_timeout:
+                    print("  [dock] no current detected")
+                    -> $Aligning
+            }
+            charging_started(current_amps: float) {
+                self.charge_current = current_amps
+                print(f"  [dock] charging at {current_amps}A")
+                -> $Charging
+            }
+            charging_fault(reason: str) {
+                self.fault_reason = reason
+                -> $Failed
+            }
+            status(): str { @@:("verifying charge") }
+            => $^
+        }
+
+        $Charging {
+            $>() { print("  [dock] charging") }
+
+            tick() {
+                self.battery_pct = self.battery_pct + 1
+                if self.battery_pct >= 100:
+                    self.battery_pct = 100
+                    @@:self.fully_charged()
+            }
+
+            charging_fault(reason: str) {
+                self.fault_reason = reason
+                print(f"  [dock] fault while charging: {reason}")
+                -> $Failed
+            }
+
+            fully_charged() {
+                print("  [dock] fully charged")
+                -> $Undocking
+            }
+
+            status(): str { @@:(f"charging ({self.battery_pct}%)") }
+        }
+
+        $Undocking {
+            $>() { print("  [dock] undocking") }
+            undock_complete() {
+                print("  [dock] undocked")
+                -> $Discharging
+            }
+            tick() { }
+            status(): str { @@:("undocking") }
+        }
+
+        $Failed {
+            $>() { print(f"  [dock] FAILED: {self.fault_reason}") }
+            battery_low() {
+                self.fault_reason = ""
+                self.align_attempts = 0
+                -> $SeekingDock
+            }
+            status(): str { @@:(f"failed: {self.fault_reason}") }
+        }
+
+        $Active {
+            # Safety parent.
+        }
+
+    domain:
+        battery_pct: int = 20
+        dock_bearing: float = 0.0
+        dock_range: float = 10.0
+        approach_range: float = 1.0
+        align_tolerance: float = 0.1
+        align_attempts: int = 0
+        max_align_attempts: int = 3
+        align_ticks: int = 0
+        align_timeout: int = 30
+        contact_ticks: int = 0
+        contact_timeout: int = 20
+        verify_ticks: int = 0
+        verify_timeout: int = 10
+        charge_current: float = 0.0
+        fault_reason: str = ""
+}
+
+if __name__ == '__main__':
+    d = @@DockController()
+    d.battery_low()
+    d.dock_visible(0.5, 3.0)
+    d.dock_visible(0.05, 0.8)      # close, switches to aligning
+    d.tick()
+    d.dock_visible(0.05, 0.03)     # aligned
+    d.tick()
+    d.contact_made()
+    d.charging_started(2.0)
+    for _ in range(85): d.tick()
+    print(d.status())
+    d.undock_complete()
+    print(d.status())
+```
+
+**How it works:**
+
+**Seven stages as a linear pipeline with fallback arcs.** `$SeekingDock → $Aligning → $MakingContact → $VerifyingCharge → $Charging → $Undocking → $Discharging` is the happy path. Each intermediate state has a backoff transition — `$MakingContact` and `$VerifyingCharge` both fall back to `$Aligning` on timeout, which retries up to `max_align_attempts` before failing.
+
+**`dock_lost()` handled in `$DockingFlow` parent.** Any docking-stage state can receive `dock_lost()` and cleanly return to `$Discharging`. Without HSM, this handler would be duplicated in every docking stage. The parent makes it a single declaration inherited by all children.
+
+**Structural guarantee of the verification step.** The robot cannot transition from `$MakingContact` directly to `$Charging`. It must pass through `$VerifyingCharge`, which waits for a `charging_started()` event carrying a non-zero current reading. This prevents a common failure mode: assuming charge just because mechanical contact was made. If the charger is off or the contacts are corroded, `$VerifyingCharge` times out and backs off for realignment.
+
+**Compare with DHCP (Recipe 64).** DHCP has `$Init → $Selecting → $Requesting → $Bound → $Renewing → $Rebinding → $Init` with timer-driven fallbacks. This recipe has the same structural shape: a negotiated acquisition, a held state during active use, and timeout-driven failure paths back to the start. The physical layer is different; the state graph is nearly identical.
+
+**Features stressed:** linear pipeline with intermediate fallback transitions, HSM parent for shared beacon-loss handling, structural enforcement of verification step, parallel to network protocol lifecycles
+
+-----
+
+## 103. Multi-Floor Delivery Robot — Elevator User
+
+[↑ up](#102-dock-and-charge--negotiated-resource-lifecycle) · [top](#table-of-contents) · [↓ down](#104-pick-and-place-with-vision-retry)
+
+![103 state diagram](images/cookbook/103.svg)
+
+**Problem:** A delivery robot needs to use an elevator to move between floors. The robot must approach the elevator, request a car, wait for one, board when doors open, ride, disembark when doors open at the destination. The elevator itself is Recipe 52 — this recipe shows the *user* side of the same problem: the robot's state during its interaction with an external shared resource.
+
+```frame
+@@target python_3
+
+# Simplified elevator stub (the real one is Recipe 52)
+@@system Elevator {
+    interface:
+        request(from_floor: int)
+        board(dest_floor: int)
+        tick()
+        car_state(): str
+        current_floor(): int
+
+    machine:
+        $Idle {
+            request(from_floor: int) {
+                self.target_floor = from_floor
+                self.arriving_at = from_floor
+                -> $MovingToRequester
+            }
+            car_state(): str { @@:("idle") }
+            current_floor(): int { @@:(self.floor) }
+        }
+        $MovingToRequester {
+            tick() {
+                if self.floor < self.target_floor: self.floor = self.floor + 1
+                elif self.floor > self.target_floor: self.floor = self.floor - 1
+                if self.floor == self.target_floor: -> $DoorsOpen
+            }
+            car_state(): str { @@:("moving") }
+            current_floor(): int { @@:(self.floor) }
+        }
+        $DoorsOpen {
+            $>() { print(f"  [elev] doors open at floor {self.floor}") }
+            board(dest_floor: int) {
+                self.target_floor = dest_floor
+                -> $Riding
+            }
+            tick() { }
+            car_state(): str { @@:("doors open") }
+            current_floor(): int { @@:(self.floor) }
+        }
+        $Riding {
+            tick() {
+                if self.floor < self.target_floor: self.floor = self.floor + 1
+                elif self.floor > self.target_floor: self.floor = self.floor - 1
+                if self.floor == self.target_floor: -> $DoorsOpen
+            }
+            car_state(): str { @@:("riding") }
+            current_floor(): int { @@:(self.floor) }
+        }
+
+    domain:
+        floor: int = 1
+        target_floor: int = 1
+        arriving_at: int = 1
+}
+
+@@system DeliveryRobot {
+    interface:
+        deliver(from_floor: int, to_floor: int)
+        at_elevator()
+        tick()
+        status(): str
+
+    machine:
+        $Idle {
+            deliver(from_floor: int, to_floor: int) {
+                self.pickup_floor = from_floor
+                self.drop_floor = to_floor
+                self.current_floor = from_floor
+                print(f"  [bot] deliver {from_floor} -> {to_floor}")
+                -> $Approaching
+            }
+            status(): str { @@:("idle") }
+        }
+
+        $Mission => $Active {
+            # Future: add cancel, emergency stop, etc.
+            => $^
+        }
+
+        $Approaching => $Mission {
+            $>() { print("  [bot] approaching elevator") }
+            at_elevator() { -> $RequestingCar }
+            tick() { }
+            status(): str { @@:("approaching elevator") }
+            => $^
+        }
+
+        $RequestingCar => $Mission {
+            $>() {
+                print(f"  [bot] requesting elevator to floor {self.current_floor}")
+                self.elevator.request(self.current_floor)
+                -> $WaitingForCar
+            }
+            status(): str { @@:("requesting car") }
+            => $^
+        }
+
+        $WaitingForCar => $Mission {
+            $>() {
+                self.wait_ticks = 0
+                print("  [bot] waiting for car")
+            }
+            tick() {
+                self.elevator.tick()
+                self.wait_ticks = self.wait_ticks + 1
+                if self.elevator.car_state() == "doors open" and self.elevator.current_floor() == self.current_floor:
+                    -> $Boarding
+                elif self.wait_ticks > self.wait_timeout:
+                    print("  [bot] elevator timeout, retrying")
+                    -> $RequestingCar
+            }
+            status(): str { @@:("waiting for car") }
+            => $^
+        }
+
+        $Boarding => $Mission {
+            $>() {
+                print("  [bot] boarding")
+                self.elevator.board(self.drop_floor)
+                -> $Riding
+            }
+            status(): str { @@:("boarding") }
+            => $^
+        }
+
+        $Riding => $Mission {
+            $>() { print("  [bot] riding") }
+            tick() {
+                self.elevator.tick()
+                if self.elevator.car_state() == "doors open" and self.elevator.current_floor() == self.drop_floor:
+                    self.current_floor = self.drop_floor
+                    -> $Disembarking
+            }
+            status(): str { @@:(f"riding toward floor {self.drop_floor}") }
+            => $^
+        }
+
+        $Disembarking => $Mission {
+            $>() {
+                print(f"  [bot] disembarking at floor {self.drop_floor}")
+                -> $Delivered
+            }
+            status(): str { @@:("disembarking") }
+            => $^
+        }
+
+        $Delivered {
+            $>() { print("  [bot] delivery complete") }
+            deliver(from_floor: int, to_floor: int) {
+                self.pickup_floor = from_floor
+                self.drop_floor = to_floor
+                self.current_floor = from_floor
+                -> $Approaching
+            }
+            status(): str { @@:("delivered") }
+        }
+
+        $Active {
+            # Safety parent.
+        }
+
+    domain:
+        pickup_floor: int = 1
+        drop_floor: int = 1
+        current_floor: int = 1
+        wait_ticks: int = 0
+        wait_timeout: int = 50
+        elevator = @@Elevator()
+}
+
+if __name__ == '__main__':
+    r = @@DeliveryRobot()
+    r.deliver(1, 5)
+    r.at_elevator()
+    for _ in range(30):
+        r.tick()
+        if r.status() == "delivered": break
+    print(r.status())
+```
+
+**How it works:**
+
+**Two systems, both state machines.** The robot is one Frame system; the elevator is another. The robot holds an `Elevator` reference in a domain variable, calls its interface methods (`request`, `board`), and queries its operations (`car_state`, `current_floor`) to decide when to transition. This is the multi-system composition pattern (Recipe 20, Recipe 48) applied to the robot-uses-infrastructure case.
+
+**Waiting as a distinct state.** `$WaitingForCar` is not a passive sleep — it's an active state with a tick handler that polls the elevator and a timeout that retries the request if the car never arrives. If the elevator ignores or loses requests, the robot notices and re-requests.
+
+**Boarding gate is structural.** The robot can only transition from `$WaitingForCar` to `$Boarding` when the elevator reports `"doors open"` *and* the correct floor. There is no code path where the robot steps forward because it got impatient, because it confused the current floor with the target, or because a buggy elevator reported doors-open for the wrong floor. Each condition is a guard on the transition; failure of either condition leaves the robot in `$WaitingForCar`.
+
+**Retry via state self-transition.** Timeout in `$WaitingForCar` transitions back to `$RequestingCar`, whose enter handler re-sends the request. This is the same bounded-retry idiom used by the Servo Homing and Dock-and-Charge recipes earlier in this section — it appears often enough in the cookbook that it's worth recognizing as a reusable pattern: failed-interaction-with-external-system handled as a transition back to the request state, which re-enters.
+
+**Compare with Recipe 52.** Recipe 52 models the elevator's internal SCAN algorithm: how it decides which floor to serve next when multiple requests are pending. This recipe models one requester's view of that same elevator. Running the two recipes side by side — elevator scheduling from one, robot using it from the other — is a realistic multi-agent building simulation.
+
+**Features stressed:** multi-system composition, polling an external system's operations from a tick handler, structural boarding gate, retry via state-re-entry pattern
+
+-----
+
+## 104. Pick-and-Place with Vision Retry
+
+[↑ up](#103-multi-floor-delivery-robot--elevator-user) · [top](#table-of-contents) · [↓ down](#105-tool-changer--interlocked-coupling-sequence)
+
+![104 state diagram](images/cookbook/104.svg)
+
+**Problem:** A vision-guided manipulator must locate an object, plan a grasp, approach, grip, verify the grip held, transport, place, and release. Each stage can fail: vision returns no detection, grasp planning fails, the gripper closes on air, the object slips during transport. Failures at early stages retry vision; failures after grasping drop the object safely and restart. This recipe is the manipulation capstone — it pulls together the pipeline, retry, HSM safety, and multi-system composition patterns introduced earlier in this section.
+
+```frame
+@@target python_3
+
+@@system PickPlace {
+    operations:
+        get_retries(): int { return self.vision_retries }
+
+    interface:
+        start_task(place_x: float, place_y: float)
+        vision_result(detections: list)
+        grasp_plan_ready(plan: dict)
+        grasp_plan_failed()
+        gripper_closed(force: float)
+        gripper_released()
+        at_waypoint()
+        slip_detected()
+        abort()
+        tick()
+        status(): str
+
+    machine:
+        $Idle {
+            start_task(place_x: float, place_y: float) {
+                self.place_x = place_x
+                self.place_y = place_y
+                self.vision_retries = 0
+                self.grasp_retries = 0
+                print(f"  [pnp] task: pick -> place at ({place_x},{place_y})")
+                -> $Scanning
+            }
+            status(): str { @@:("idle") }
+        }
+
+        $Task => $Active {
+            abort() {
+                print("  [pnp] aborted — opening gripper, returning home")
+                -> $ReleasingForAbort
+            }
+            => $^
+        }
+
+        $Scanning => $Task {
+            $>() {
+                self.vision_retries = self.vision_retries + 1
+                print(f"  [pnp] scanning (attempt {self.vision_retries})")
+                self.request_vision()
+            }
+            vision_result(detections: list) {
+                if len(detections) == 0:
+                    if self.vision_retries >= self.max_vision_retries:
+                        print("  [pnp] no detections, giving up")
+                        -> $Failed
+                    else:
+                        print("  [pnp] no detections, retrying")
+                        -> $Scanning
+                else:
+                    self.target_object = detections[0]
+                    -> $PlanningGrasp
+            }
+            status(): str { @@:("scanning") }
+            => $^
+        }
+
+        $PlanningGrasp => $Task {
+            $>() {
+                self.grasp_retries = self.grasp_retries + 1
+                print(f"  [pnp] planning grasp (attempt {self.grasp_retries})")
+                self.request_grasp_plan(self.target_object)
+            }
+            grasp_plan_ready(plan: dict) {
+                self.grasp_plan = plan
+                -> $Approaching
+            }
+            grasp_plan_failed() {
+                if self.grasp_retries >= self.max_grasp_retries:
+                    print("  [pnp] grasp unplannable, rescanning")
+                    self.grasp_retries = 0
+                    -> $Scanning
+                else:
+                    -> $PlanningGrasp
+            }
+            status(): str { @@:("planning grasp") }
+            => $^
+        }
+
+        $Approaching => $Task {
+            $>() {
+                print("  [pnp] approaching object")
+                self.move_to(self.grasp_plan["approach"])
+            }
+            at_waypoint() { -> $Grasping }
+            tick() { }
+            status(): str { @@:("approaching") }
+            => $^
+        }
+
+        $Grasping => $Task {
+            $>() {
+                print("  [pnp] closing gripper")
+                self.close_gripper()
+            }
+            gripper_closed(force: float) {
+                self.grip_force = force
+                -> $VerifyingGrasp
+            }
+            status(): str { @@:("grasping") }
+            => $^
+        }
+
+        $VerifyingGrasp => $Task {
+            $>() {
+                if self.grip_force < self.min_grasp_force:
+                    print(f"  [pnp] grip too weak ({self.grip_force}N) — empty gripper")
+                    @@:self.gripper_released()
+                else:
+                    print(f"  [pnp] grip confirmed ({self.grip_force}N)")
+                    -> $Transporting
+            }
+            gripper_released() {
+                self.vision_retries = 0
+                self.grasp_retries = 0
+                -> $Scanning
+            }
+            status(): str { @@:("verifying grasp") }
+            => $^
+        }
+
+        $Transporting => $Task {
+            $>() {
+                print(f"  [pnp] transporting to ({self.place_x},{self.place_y})")
+                self.move_to({"x": self.place_x, "y": self.place_y, "z": 0.2})
+            }
+            at_waypoint() { -> $Placing }
+            slip_detected() {
+                print("  [pnp] SLIP during transport")
+                -> $RecoverFromSlip
+            }
+            tick() { }
+            status(): str { @@:("transporting") }
+            => $^
+        }
+
+        $Placing => $Task {
+            $>() {
+                print("  [pnp] placing")
+                self.move_to({"x": self.place_x, "y": self.place_y, "z": 0.0})
+            }
+            at_waypoint() { -> $Releasing }
+            tick() { }
+            status(): str { @@:("placing") }
+            => $^
+        }
+
+        $Releasing => $Task {
+            $>() {
+                print("  [pnp] releasing")
+                self.open_gripper()
+            }
+            gripper_released() { -> $Complete }
+            status(): str { @@:("releasing") }
+            => $^
+        }
+
+        $RecoverFromSlip => $Task {
+            $>() {
+                print("  [pnp] dropping object safely, rescanning")
+                self.open_gripper()
+            }
+            gripper_released() {
+                self.vision_retries = 0
+                self.grasp_retries = 0
+                -> $Scanning
+            }
+            status(): str { @@:("slip recovery") }
+            => $^
+        }
+
+        $ReleasingForAbort {
+            $>() { self.open_gripper() }
+            gripper_released() { -> $Idle }
+            status(): str { @@:("aborting") }
+        }
+
+        $Complete {
+            $>() { print("  [pnp] task complete") }
+            start_task(place_x: float, place_y: float) {
+                self.place_x = place_x
+                self.place_y = place_y
+                self.vision_retries = 0
+                self.grasp_retries = 0
+                -> $Scanning
+            }
+            status(): str { @@:("complete") }
+        }
+
+        $Failed {
+            $>() { print("  [pnp] FAILED") }
+            start_task(place_x: float, place_y: float) {
+                self.place_x = place_x
+                self.place_y = place_y
+                self.vision_retries = 0
+                self.grasp_retries = 0
+                -> $Scanning
+            }
+            status(): str { @@:("failed") }
+        }
+
+        $Active {
+            # Safety parent — e_stop, safety_fault attach here.
+        }
+
+    actions:
+        request_vision() {
+            # Native: publish a request to vision pipeline
+            print("    -> request_vision()")
+        }
+        request_grasp_plan(obj) { print(f"    -> plan_grasp({obj})") }
+        move_to(target) { print(f"    -> move_to({target})") }
+        close_gripper() { print("    -> close_gripper()") }
+        open_gripper() { print("    -> open_gripper()") }
+
+    domain:
+        place_x: float = 0.0
+        place_y: float = 0.0
+        target_object: dict = {}
+        grasp_plan: dict = {}
+        grip_force: float = 0.0
+        min_grasp_force: float = 2.0
+        vision_retries: int = 0
+        grasp_retries: int = 0
+        max_vision_retries: int = 3
+        max_grasp_retries: int = 2
+}
+
+if __name__ == '__main__':
+    p = @@PickPlace()
+    p.start_task(1.0, 0.5)
+    p.vision_result([{"id": "obj_A", "x": 0.2, "y": 0.1}])
+    p.grasp_plan_ready({"approach": {"x": 0.2, "y": 0.1, "z": 0.1}})
+    p.at_waypoint()
+    p.gripper_closed(5.0)
+    p.at_waypoint()
+    p.at_waypoint()
+    p.gripper_released()
+    print(p.status())
+```
+
+**How it works:**
+
+**Pipeline with failure-specific fallbacks.** The happy path is `$Scanning → $PlanningGrasp → $Approaching → $Grasping → $VerifyingGrasp → $Transporting → $Placing → $Releasing → $Complete`. Failures route to different states depending on *when* they occur. Vision failure rescans. Grasp plan failure retries, then rescans. Empty-gripper detection rescans (the object moved since the vision read). Slip during transport drops the object and rescans. The state graph encodes the recovery policy.
+
+**Two retry budgets.** `vision_retries` is incremented in `$Scanning` and reset when a successful grasp is confirmed. `grasp_retries` is incremented in `$PlanningGrasp` and reset when `$Scanning` is re-entered after a grasp-plan exhaustion. This gives independent bounds: at most `max_vision_retries` vision scans per object, and at most `max_grasp_retries` grasp attempts per detection. The state machine enforces both.
+
+**`$VerifyingGrasp` is an enter-handler-only state.** It has no tick handler and no external events besides `gripper_released()` (the self-sent event for the empty-gripper case). Its entire logic runs in the enter handler: read the force, branch. This is the transient-state pattern — a state whose only purpose is to make a decision based on data captured on entry.
+
+**Safety sits above task.** `$Active` is the top-level safety parent (empty here but ready for e_stop, collision detection, force/torque limits). `$Task` is the mission parent handling task-level abort. Recipe 49's 3-level HSM extends naturally: `$Safety → $Operational → {$Task, $Manual, ...}`.
+
+**Structural guarantee: the object can't be placed without verification.** There is no transition from `$Grasping` to `$Transporting`. The only path out of `$Grasping` goes through `$VerifyingGrasp`, which either continues to `$Transporting` (if grip force is sufficient) or returns to `$Scanning`. A code path that skips verification cannot exist because the transition doesn't exist.
+
+**Features stressed:** multi-stage pipeline with per-stage recovery routing, two independent retry budgets, transient state for decision logic, `@@:self.method()` for in-handler self-dispatch, structural enforcement of grasp verification
+
+-----
+
+## 105. Tool Changer — Interlocked Coupling Sequence
+
+[↑ up](#104-pick-and-place-with-vision-retry) · [top](#table-of-contents) · [↓ down](#106-force-controlled-insertion--peg-in-hole)
+
+![105 state diagram](images/cookbook/105.svg)
+
+**Problem:** A robot with a tool changer must couple to a tool, verify the mechanical lock, perform work, uncouple on completion, and return to a no-tool state. The coupling sequence has safety interlocks: cannot uncouple while the tool is energized, cannot couple with a tool already attached, cannot move with a partially-coupled tool. Each interlock is a missing transition in the state graph.
+
+```frame
+@@target python_3
+
+@@system ToolChanger {
+    operations:
+        attached_tool(): str { return self.tool_id }
+        is_energized(): bool { return self.energized }
+
+    interface:
+        request_couple(tool_id: str)
+        request_uncouple()
+        lock_confirmed()
+        lock_lost()
+        tool_energized()
+        tool_deenergized()
+        abort()
+        status(): str
+
+    machine:
+        $NoTool {
+            request_couple(tool_id: str) {
+                self.tool_id = tool_id
+                print(f"  [tc] couple request: {tool_id}")
+                -> $Approaching
+            }
+            request_uncouple() {
+                print("  [tc] no tool attached")
+            }
+            status(): str { @@:("no tool") }
+        }
+
+        $Coupling => $Transitioning {
+            lock_lost() {
+                print("  [tc] lock lost during coupling")
+                self.tool_id = ""
+                -> $NoTool
+            }
+            => $^
+        }
+
+        $Approaching => $Coupling {
+            $>() { print("  [tc] approaching tool stand") }
+            lock_confirmed() { -> $Coupled }
+            abort() {
+                self.tool_id = ""
+                -> $NoTool
+            }
+            status(): str { @@:(f"approaching {self.tool_id}") }
+            => $^
+        }
+
+        $Coupled {
+            $>() { print(f"  [tc] coupled to {self.tool_id}") }
+            tool_energized() {
+                self.energized = True
+                print(f"  [tc] {self.tool_id} energized")
+                -> $Working
+            }
+            request_uncouple() { -> $Uncoupling }
+            lock_lost() {
+                print("  [tc] UNEXPECTED LOCK LOSS — FAULT")
+                -> $Fault
+            }
+            status(): str { @@:(f"coupled to {self.tool_id}") }
+        }
+
+        $Working {
+            $>() { print(f"  [tc] {self.tool_id} working") }
+            tool_deenergized() {
+                self.energized = False
+                -> $Coupled
+            }
+            # request_uncouple NOT handled here — interlock
+            lock_lost() {
+                print("  [tc] LOCK LOSS WHILE ENERGIZED — EMERGENCY")
+                self.energized = False
+                -> $Fault
+            }
+            status(): str { @@:(f"working with {self.tool_id}") }
+        }
+
+        $Uncoupling => $Transitioning {
+            $>() { print(f"  [tc] uncoupling {self.tool_id}") }
+            lock_lost() {
+                print("  [tc] uncoupled")
+                self.tool_id = ""
+                -> $NoTool
+            }
+            status(): str { @@:(f"uncoupling {self.tool_id}") }
+            => $^
+        }
+
+        $Transitioning {
+            # Parent for coupling/uncoupling transient states.
+        }
+
+        $Fault {
+            $>() { print("  [tc] FAULT — manual recovery required") }
+            abort() {
+                self.tool_id = ""
+                self.energized = False
+                -> $NoTool
+            }
+            status(): str { @@:("fault") }
+        }
+
+    domain:
+        tool_id: str = ""
+        energized: bool = False
+}
+
+if __name__ == '__main__':
+    tc = @@ToolChanger()
+    tc.request_couple("drill_8mm")
+    tc.lock_confirmed()
+    print(tc.status())
+
+    # Energize, try to uncouple (interlock rejects silently)
+    tc.tool_energized()
+    tc.request_uncouple()   # ignored — not handled in $Working
+    print(tc.status())      # still "working with drill_8mm"
+
+    # De-energize, then uncouple
+    tc.tool_deenergized()
+    tc.request_uncouple()
+    tc.lock_lost()
+    print(tc.status())      # no tool
+```
+
+**How it works:**
+
+**Interlocks as missing handlers.** `$Working` does not handle `request_uncouple()`. An uncouple request while the tool is energized doesn't trigger a check that rejects it — there is no handler, so the event is silently ignored. This is the `Impossible_by_Construction.md` pattern applied to a mechanical interlock: the capability to uncouple does not exist in the energized state. A programmer cannot forget to add a safety check because there is no check to write; the safety property is the shape of the state graph.
+
+**`$Coupled` vs `$Working` distinguish energized and de-energized.** The tool is mechanically attached in both states, but only `$Working` allows the tool to do work (and forbids uncoupling). `$Coupled` allows uncoupling but not work. Two states, two capability sets, no boolean flag to check.
+
+**Lock-lost severity depends on state.** In `$Approaching` and `$Uncoupling`, lock-lost is normal (the final transition). In `$Coupled`, it's an unexpected fault. In `$Working`, it's an emergency because the tool is energized. Same event, three different responses — because the event's meaning depends on context, and the state graph encodes that context.
+
+**Operations for real-time query.** `attached_tool()` and `is_energized()` let a supervising system or UI read current status without affecting state. A robot arm controller (Recipe 49) could query `is_energized()` before planning a fast motion to decide whether the tool-tip inertia is safe to accelerate.
+
+**Compare with the next recipe.** Force-controlled insertion is a compatible module: pick a tool with this recipe, use it with the insertion logic that follows, release it with this recipe's uncouple sequence. The cookbook composes.
+
+**Features stressed:** safety interlocks as missing handlers, state-dependent event semantics (lock-lost means different things in different states), operations exposing hardware status, HSM parent for transient coupling states
+
+-----
+
+## 106. Force-Controlled Insertion — Peg-in-Hole
+
+[↑ up](#105-tool-changer--interlocked-coupling-sequence) · [top](#table-of-contents) · [↓ down](#107-mission-controller--bt-alternative-with-persistence)
+
+![106 state diagram](images/cookbook/106.svg)
+
+**Problem:** Peg-in-hole insertion is the canonical benchmark for force-controlled manipulation. The peg descends toward the hole, makes contact, searches laterally to find the hole entrance (the "spiral search" or "tilt search"), inserts when alignment is detected, and seats when the bottom is reached. If the peg jams — stuck with neither motion nor seating — the operation backs off and retries. This recipe shows Frame orchestrating a force-feedback loop while the native controller handles the compliant-motion math.
+
+```frame
+@@target python_3
+
+@@system PegInsertion {
+    interface:
+        start(target_depth: float)
+        force_reading(fx: float, fy: float, fz: float)
+        tick()
+        abort()
+        status(): str
+
+    machine:
+        $Idle {
+            start(target_depth: float) {
+                self.target_depth = target_depth
+                self.current_depth = 0.0
+                self.retry_count = 0
+                print(f"  [insert] target depth {target_depth}mm")
+                -> $Approaching
+            }
+            status(): str { @@:("idle") }
+        }
+
+        $Operation => $Active {
+            abort() {
+                print("  [insert] aborted, retracting")
+                -> $Retracting
+            }
+            => $^
+        }
+
+        $Approaching => $Operation {
+            $>() {
+                print("  [insert] descending toward surface")
+                self.descend(self.approach_velocity)
+            }
+            force_reading(fx: float, fy: float, fz: float) {
+                if fz > self.contact_threshold:
+                    print(f"  [insert] contact at Fz={fz}N")
+                    -> $Searching
+            }
+            tick() { }
+            status(): str { @@:("approaching") }
+            => $^
+        }
+
+        $Searching => $Operation {
+            $>() {
+                self.search_ticks = 0
+                print("  [insert] spiral search for hole")
+                self.start_spiral_search()
+            }
+            force_reading(fx: float, fy: float, fz: float) {
+                self.current_fx = fx
+                self.current_fy = fy
+                self.current_fz = fz
+                if fz < self.hole_threshold:
+                    print(f"  [insert] found hole (Fz dropped to {fz}N)")
+                    self.stop_spiral_search()
+                    -> $Inserting
+            }
+            tick() {
+                self.search_ticks = self.search_ticks + 1
+                if self.search_ticks > self.search_timeout:
+                    print("  [insert] search timeout")
+                    self.stop_spiral_search()
+                    -> $Retreating
+            }
+            status(): str { @@:("searching") }
+            => $^
+        }
+
+        $Inserting => $Operation {
+            $>() {
+                print("  [insert] inserting")
+                self.descend(self.insert_velocity)
+                self.last_depth = self.current_depth
+                self.stall_ticks = 0
+            }
+            force_reading(fx: float, fy: float, fz: float) {
+                self.current_fz = fz
+                if fz > self.jam_threshold:
+                    print(f"  [insert] JAM detected (Fz={fz}N)")
+                    -> $Jammed
+            }
+            tick() {
+                self.current_depth = self.current_depth + self.insert_velocity * 0.01
+                if self.current_depth >= self.target_depth:
+                    print(f"  [insert] SEATED at depth {self.current_depth}mm")
+                    -> $Seated
+                elif abs(self.current_depth - self.last_depth) < 0.001:
+                    self.stall_ticks = self.stall_ticks + 1
+                    if self.stall_ticks > self.stall_tolerance:
+                        print("  [insert] stalled (no motion)")
+                        -> $Jammed
+                else:
+                    self.stall_ticks = 0
+                    self.last_depth = self.current_depth
+            }
+            status(): str { @@:(f"inserting depth={self.current_depth:.2f}") }
+            => $^
+        }
+
+        $Jammed => $Operation {
+            $>() {
+                self.retry_count = self.retry_count + 1
+                if self.retry_count > self.max_retries:
+                    print("  [insert] too many jams, aborting")
+                    -> $Failed
+                else:
+                    print(f"  [insert] backing off (retry {self.retry_count})")
+                    -> $Retreating
+            }
+            status(): str { @@:("jammed") }
+            => $^
+        }
+
+        $Retreating => $Operation {
+            $>() {
+                print("  [insert] retreating to retry")
+                self.retreat_ticks = 0
+                self.ascend(self.approach_velocity)
+            }
+            tick() {
+                self.retreat_ticks = self.retreat_ticks + 1
+                if self.retreat_ticks >= self.retreat_duration:
+                    self.current_depth = 0.0
+                    -> $Approaching
+            }
+            status(): str { @@:("retreating") }
+            => $^
+        }
+
+        $Retracting {
+            $>() {
+                print("  [insert] retracting to safe pose")
+                self.ascend(self.approach_velocity * 2)
+            }
+            tick() {
+                -> $Idle
+            }
+            status(): str { @@:("retracting") }
+        }
+
+        $Seated {
+            $>() { print("  [insert] operation complete") }
+            start(target_depth: float) {
+                self.target_depth = target_depth
+                self.current_depth = 0.0
+                self.retry_count = 0
+                -> $Approaching
+            }
+            status(): str { @@:(f"seated at {self.current_depth:.2f}mm") }
+        }
+
+        $Failed {
+            $>() { print("  [insert] FAILED") }
+            start(target_depth: float) {
+                self.target_depth = target_depth
+                self.current_depth = 0.0
+                self.retry_count = 0
+                -> $Approaching
+            }
+            status(): str { @@:("failed") }
+        }
+
+        $Active {
+            # Safety parent.
+        }
+
+    actions:
+        descend(v) { print(f"    -> descend({v})") }
+        ascend(v) { print(f"    -> ascend({v})") }
+        start_spiral_search() { print("    -> spiral_search ON") }
+        stop_spiral_search() { print("    -> spiral_search OFF") }
+
+    domain:
+        target_depth: float = 0.0
+        current_depth: float = 0.0
+        last_depth: float = 0.0
+        contact_threshold: float = 3.0
+        hole_threshold: float = 1.0
+        jam_threshold: float = 15.0
+        approach_velocity: float = 10.0
+        insert_velocity: float = 2.0
+        search_ticks: int = 0
+        search_timeout: int = 100
+        stall_ticks: int = 0
+        stall_tolerance: int = 10
+        retreat_ticks: int = 0
+        retreat_duration: int = 5
+        retry_count: int = 0
+        max_retries: int = 3
+        current_fx: float = 0.0
+        current_fy: float = 0.0
+        current_fz: float = 0.0
+}
+
+if __name__ == '__main__':
+    p = @@PegInsertion()
+    p.start(20.0)
+    p.force_reading(0.0, 0.0, 5.0)     # contact
+    p.force_reading(0.0, 0.0, 0.5)     # found hole
+    for _ in range(2500):
+        p.tick()
+        p.force_reading(0.1, 0.1, 2.0)
+        if p.status().startswith("seated") or p.status().startswith("failed"):
+            break
+    print(p.status())
+```
+
+**How it works:**
+
+**Force thresholds as transition guards.** `$Approaching → $Searching` when `Fz > contact_threshold`. `$Searching → $Inserting` when `Fz < hole_threshold` (the peg fell into the hole and lost surface contact). `$Inserting → $Jammed` when `Fz > jam_threshold`. The transitions are driven by sensor readings crossing thresholds — the same pattern as Recipe 26 (Thermostat), applied to force rather than temperature.
+
+**Two failure modes in `$Inserting`.** The peg can jam (excessive force) or stall (no motion despite commanded velocity). Both lead to `$Jammed`, but they're detected differently: jam by threshold crossing on an external event, stall by a tick-counter incremented when depth isn't changing. Two independent detectors feeding one recovery state.
+
+**Retry budget.** `retry_count` is incremented on each jam and checked in `$Jammed.$>()`. After `max_retries`, the machine gives up. This is the same bounded-retry pattern used by the Servo Homing and Pick-and-Place recipes earlier in this section, applied to mechanical insertion.
+
+**Native code does the compliance.** The `descend()` and `ascend()` actions are stubs here; in production they'd dispatch to a Cartesian impedance controller or an admittance loop running on a real-time thread. Frame doesn't care. The state machine decides *when* to descend, at what velocity, and with what search pattern; the native controller decides *how* to descend while staying compliant to lateral forces. This is the same supervision-vs-hot-loop split the PID Supervisor recipe established earlier in this section: supervision in Frame, hot loop in native code.
+
+**Reset-on-reentry for timers.** `self.search_ticks`, `self.stall_ticks`, and `self.retreat_ticks` are reset in the enter handlers of `$Searching`, `$Inserting`, and `$Retreating` respectively. Each state gets a fresh counter every time it's entered — whether from the normal flow or from a retry. This is Recipe 24's state-variable-reset-on-reentry pattern at work.
+
+**Features stressed:** sensor threshold transitions, dual failure detection in one state, retry-with-backoff for physical operations, supervision of a native compliant-motion controller
+
+-----
+
+## 107. Mission Controller — BT Alternative with Persistence
+
+[↑ up](#106-force-controlled-insertion--peg-in-hole) · [top](#table-of-contents) · [↓ down](#108-drone-flight-modes--failsafe-from-any-phase)
+
+![107 state diagram](images/cookbook/107.svg)
+
+**Problem:** A robot executes a multi-phase mission: go to inspection site, inspect the asset, report findings, return to dock. Inspections that fail trigger a retry. The mission must survive power interruptions — if the robot reboots mid-inspection, it resumes where it left off, not from the beginning. This is the workflow that robotics typically solves with behavior trees; this recipe shows the HSM-and-persistence equivalent in Frame.
+
+```frame
+@@target python_3
+
+@@persist(domain=["mission_id", "site_list", "site_index", "findings", "inspection_retries"])
+@@system MissionController {
+    operations:
+        progress(): dict {
+            return {
+                "mission": self.mission_id,
+                "site": self.site_index,
+                "total": len(self.site_list),
+                "findings_count": len(self.findings)
+            }
+        }
+
+    interface:
+        start_mission(mission_id: str, sites: list)
+        arrived_at_site()
+        inspection_complete(findings: str)
+        inspection_failed(reason: str)
+        report_sent()
+        docked()
+        abort()
+        tick()
+        status(): str
+
+    machine:
+        $Idle {
+            start_mission(mission_id: str, sites: list) {
+                self.mission_id = mission_id
+                self.site_list = sites
+                self.site_index = 0
+                self.findings = []
+                self.inspection_retries = 0
+                print(f"  [mis] start mission {mission_id} ({len(sites)} sites)")
+                -> $TravelingToSite
+            }
+            status(): str { @@:("idle") }
+        }
+
+        $Mission => $Active {
+            abort() {
+                print("  [mis] mission aborted, returning to dock")
+                -> $ReturningToDock
+            }
+            => $^
+        }
+
+        $TravelingToSite => $Mission {
+            $>() {
+                if self.site_index >= len(self.site_list):
+                    print("  [mis] all sites done, returning to dock")
+                    -> "sites done" $ReturningToDock
+                    return
+                site = self.site_list[self.site_index]
+                print(f"  [mis] traveling to site {self.site_index + 1}: {site}")
+            }
+            arrived_at_site() { -> $Inspecting }
+            tick() { }
+            status(): str { @@:(f"traveling to site {self.site_index + 1}") }
+            => $^
+        }
+
+        $Inspecting => $Mission {
+            $>() {
+                self.inspection_retries = self.inspection_retries + 1
+                print(f"  [mis] inspecting (attempt {self.inspection_retries})")
+            }
+            inspection_complete(findings: str) {
+                print(f"  [mis] findings: {findings}")
+                self.findings.append({
+                    "site": self.site_list[self.site_index],
+                    "data": findings
+                })
+                self.inspection_retries = 0
+                self.site_index = self.site_index + 1
+                -> $TravelingToSite
+            }
+            inspection_failed(reason: str) {
+                print(f"  [mis] inspection failed: {reason}")
+                if self.inspection_retries >= self.max_retries:
+                    print("  [mis] too many failures, marking site as skipped")
+                    self.findings.append({
+                        "site": self.site_list[self.site_index],
+                        "data": f"skipped: {reason}"
+                    })
+                    self.inspection_retries = 0
+                    self.site_index = self.site_index + 1
+                    -> $TravelingToSite
+                else:
+                    -> $Inspecting
+            }
+            status(): str { @@:(f"inspecting site {self.site_index + 1}") }
+            => $^
+        }
+
+        $ReturningToDock => $Mission {
+            $>() { print("  [mis] returning to dock") }
+            docked() { -> $Reporting }
+            tick() { }
+            status(): str { @@:("returning to dock") }
+            => $^
+        }
+
+        $Reporting => $Mission {
+            $>() {
+                print(f"  [mis] sending report ({len(self.findings)} findings)")
+                self.send_report(self.mission_id, self.findings)
+            }
+            report_sent() {
+                print("  [mis] mission complete")
+                -> $Complete
+            }
+            status(): str { @@:("reporting") }
+            => $^
+        }
+
+        $Complete {
+            start_mission(mission_id: str, sites: list) {
+                self.mission_id = mission_id
+                self.site_list = sites
+                self.site_index = 0
+                self.findings = []
+                self.inspection_retries = 0
+                -> $TravelingToSite
+            }
+            status(): str { @@:(f"complete ({len(self.findings)} findings)") }
+        }
+
+        $Active {
+            # Safety parent.
+        }
+
+    actions:
+        send_report(mid, findings) { print(f"    -> send_report({mid}, {len(findings)} items)") }
+
+    domain:
+        mission_id: str = ""
+        site_list: list = []
+        site_index: int = 0
+        findings: list = []
+        inspection_retries: int = 0
+        max_retries: int = 2
+}
+
+if __name__ == '__main__':
+    m = @@MissionController()
+    m.start_mission("inspection_route_A", ["valve_3", "pump_7", "tank_2"])
+    m.arrived_at_site()
+    m.inspection_complete("valve normal")
+    m.arrived_at_site()
+    m.inspection_failed("sensor timeout")
+
+    # Simulate power loss mid-mission: snapshot, destroy, restore
+    snapshot = m.save_state()
+    print("--- simulated reboot ---")
+    m2 = MissionController.restore_state(snapshot)
+    print(m2.progress())
+
+    # Resume from the restored state — inspection retry for site 2
+    m2.inspection_complete("pump OK after retry")
+    m2.arrived_at_site()
+    m2.inspection_complete("tank nominal")
+    m2.docked()
+    m2.report_sent()
+    print(m2.progress())
+```
+
+**How it works:**
+
+**Behavior trees as HSM.** BTs express sequence, fallback, and parallelism through tree structure. HSMs express the same concepts through state hierarchy and transitions. This mission has a linear sequence (`TravelingToSite → Inspecting → TravelingToSite → ... → ReturningToDock → Reporting`) with retry-on-failure at each site. In BT terms: a Sequence of (Retry-decorated Sub-sequences). In Frame: a linear transition graph with a retry loop in `$Inspecting`. The Frame version has the same execution semantics, with the added benefit that the entire state is a single dispatchable object rather than a tree of nodes with traversal state.
+
+**`@@persist(domain=[...])` selects the persistent fields.** The mission ID, site list, progress index, accumulated findings, and retry count are persisted. The current state is persisted by the Frame runtime automatically. On restart, the system resumes in whatever state it was in — mid-travel, mid-inspection, mid-report — with all counters and accumulated data intact. This is Recipe 18 (Session Persistence) applied to mission execution.
+
+**Why persistence matters for robotics.** A long-running inspection mission may take hours. A battery swap, a network outage, or a controlled restart shouldn't force the operator to re-run sites 1–7 because the robot was on site 8 when it was interrupted. The findings accumulated so far are valuable and must survive. Frame's persistence model gives you this property for free once the domain variables are declared persistent.
+
+**Operations expose progress.** `progress()` is an operation — a dashboard or supervisor can poll it at any time without affecting the mission. Operators watching 20 robots can see at a glance which one is on site 3 of 8 and which has drifted onto site 1's retry #2.
+
+**Features stressed:** `@@persist` for mission-level resume, HSM linear-with-retry pattern, operations for real-time progress visibility, behavior-tree-equivalent control flow expressed as a flat state graph
+
+-----
+
+## 108. Drone Flight Modes — Failsafe from Any Phase
+
+[↑ up](#107-mission-controller--bt-alternative-with-persistence) · [top](#table-of-contents) · [↓ down](#109-fleet-dispatcher--n-robots-competing-consumers-for-tasks)
+
+![108 state diagram](images/cookbook/108.svg)
+
+**Problem:** A multirotor drone has a canonical flight-mode sequence: disarmed → armed → takeoff → hover → mission → return-home → land → disarmed. From any in-flight mode, a failsafe event (battery critical, GPS lost, RC link lost, geofence breach) must route to an appropriate recovery behavior — some land in place, some return home, some fail open. This is the avionic analog of Recipe 48's launch sequence and Recipe 49's safety overlay, combined.
+
+```frame
+@@target python_3
+
+@@system DroneFlightMode {
+    operations:
+        altitude(): float { return self.current_altitude }
+        flight_mode(): str { return @@:system.state }
+
+    interface:
+        arm()
+        takeoff(altitude: float)
+        set_mission(waypoints: list)
+        return_to_home()
+        land()
+        disarm()
+        takeoff_complete()
+        mission_complete()
+        home_reached()
+        touchdown()
+        battery_critical()
+        gps_lost()
+        rc_lost()
+        geofence_breach()
+        tick()
+        status(): str
+
+    machine:
+        # --- Failsafe layer (top of HSM) ---
+        $InFlight => $Flying {
+            battery_critical() {
+                print("  [drone] BATTERY CRITICAL — land in place")
+                self.failsafe_reason = "battery"
+                -> $EmergencyLand
+            }
+            rc_lost() {
+                print("  [drone] RC LINK LOST — return home")
+                self.failsafe_reason = "rc_lost"
+                -> $ReturningHome
+            }
+            gps_lost() {
+                print("  [drone] GPS LOST — altitude hold + RC only")
+                self.failsafe_reason = "gps_lost"
+                -> $AltitudeHold
+            }
+            geofence_breach() {
+                print("  [drone] GEOFENCE BREACH — return home")
+                self.failsafe_reason = "geofence"
+                -> $ReturningHome
+            }
+            => $^
+        }
+
+        $Flying {
+            # Top parent — empty placeholder.
+        }
+
+        # --- Ground states ---
+        $Disarmed {
+            arm() {
+                if self.preflight_check():
+                    print("  [drone] armed")
+                    -> $Armed
+                else:
+                    print("  [drone] preflight failed, remaining disarmed")
+            }
+            status(): str { @@:("disarmed") }
+        }
+
+        $Armed {
+            takeoff(altitude: float) {
+                self.target_altitude = altitude
+                -> $TakingOff
+            }
+            disarm() { -> $Disarmed }
+            status(): str { @@:("armed") }
+        }
+
+        # --- In-flight states ---
+        $TakingOff => $InFlight {
+            $>() {
+                print(f"  [drone] takeoff to {self.target_altitude}m")
+                self.current_altitude = 0
+            }
+            tick() {
+                self.current_altitude = self.current_altitude + 1
+                if self.current_altitude >= self.target_altitude:
+                    self.current_altitude = self.target_altitude
+                    @@:self.takeoff_complete()
+            }
+            takeoff_complete() { -> $Hovering }
+            status(): str { @@:(f"takeoff alt={self.current_altitude}") }
+            => $^
+        }
+
+        $Hovering => $InFlight {
+            $>() { print(f"  [drone] hovering at {self.current_altitude}m") }
+            set_mission(waypoints: list) {
+                self.waypoints = waypoints
+                -> $OnMission
+            }
+            return_to_home() { -> $ReturningHome }
+            land() { -> $Landing }
+            tick() { }
+            status(): str { @@:(f"hovering alt={self.current_altitude}") }
+            => $^
+        }
+
+        $OnMission => $InFlight {
+            $>() { print(f"  [drone] mission ({len(self.waypoints)} waypoints)") }
+            tick() { }
+            mission_complete() {
+                print("  [drone] mission done, returning home")
+                -> $ReturningHome
+            }
+            return_to_home() { -> $ReturningHome }
+            status(): str { @@:(f"on mission ({len(self.waypoints)} wp)") }
+            => $^
+        }
+
+        $ReturningHome => $InFlight {
+            $>() { print("  [drone] return to home") }
+            tick() { }
+            home_reached() { -> $Landing }
+            status(): str { @@:("returning to home") }
+            => $^
+        }
+
+        $AltitudeHold => $InFlight {
+            # GPS-degraded mode: hold altitude, manual-only horizontal
+            $>() { print("  [drone] altitude hold — manual horizontal only") }
+            land() { -> $Landing }
+            tick() { }
+            status(): str { @@:(f"altitude hold ({self.failsafe_reason})") }
+            => $^
+        }
+
+        $Landing => $InFlight {
+            $>() { print("  [drone] landing") }
+            tick() { }
+            touchdown() {
+                self.current_altitude = 0
+                print("  [drone] touchdown")
+                -> $Armed
+            }
+            status(): str { @@:("landing") }
+            => $^
+        }
+
+        $EmergencyLand => $InFlight {
+            $>() { print("  [drone] EMERGENCY LAND — descending fastest safe rate") }
+            tick() {
+                self.current_altitude = self.current_altitude - 3
+                if self.current_altitude <= 0:
+                    self.current_altitude = 0
+                    @@:self.touchdown()
+            }
+            touchdown() {
+                print("  [drone] emergency landed")
+                -> $Armed
+            }
+            status(): str { @@:(f"emergency land ({self.failsafe_reason})") }
+            => $^
+        }
+
+    actions:
+        preflight_check() { return True }
+
+    domain:
+        target_altitude: float = 0.0
+        current_altitude: float = 0.0
+        waypoints: list = []
+        failsafe_reason: str = ""
+}
+
+if __name__ == '__main__':
+    d = @@DroneFlightMode()
+    d.arm()
+    d.takeoff(10.0)
+    for _ in range(12): d.tick()
+    print(d.status())
+    d.set_mission([{"x": 100, "y": 0}, {"x": 200, "y": 100}])
+    d.battery_critical()
+    for _ in range(10): d.tick()
+    print(d.status())
+```
+
+**How it works:**
+
+**HSM: in-flight failsafes inherited by all flight modes.** All flying states (`$TakingOff`, `$Hovering`, `$OnMission`, `$ReturningHome`, `$Landing`, `$AltitudeHold`, `$EmergencyLand`) are children of `$InFlight`. Failsafe events — battery critical, RC lost, GPS lost, geofence breach — are declared once in `$InFlight` and handled in every flying state via `=> $^` forwarding. Same pattern as Recipe 48's abort-from-any-phase, extended with multiple failsafe *types* routing to different recovery states.
+
+**Failsafe routing differs by cause.** Battery critical → emergency descent (the drone might not make it home). RC lost → return home (autonomous mode continues, just without human input). GPS lost → altitude hold with manual control only (can't navigate without GPS, but human pilot can fly). Geofence breach → return home (go back to where you came from). Four different failsafes, four different target states, one declaration site each.
+
+**Ground states outside `$InFlight`.** `$Disarmed` and `$Armed` are not children of `$InFlight`, so they don't receive failsafe handlers. A disarmed drone on the bench shouldn't start descending just because battery voltage dropped — it's not flying. The HSM hierarchy makes this correct structurally: failsafes are scoped to flight.
+
+**Compare with Recipe 48.** The launch sequence has altitude-dependent abort modes (<30km pad escape, 30–100km downrange, >100km abort-to-orbit) — same *event* (`abort()`), different handler logic based on state. This drone recipe uses the inverse: different *events* (battery vs GPS vs RC), different target states, handler logic stays simple. Both are valid HSM patterns; the choice depends on whether the triggering conditions are distinguishable at the event layer or need to be discriminated inside a handler.
+
+**`flight_mode()` operation.** Returns the current state name directly. A ground station subscribing to drone status needs exactly this — no handler logic, no transitions, just "what state are you in right now." Same pattern as Recipe 22 (`@@:system.state`).
+
+**Features stressed:** HSM failsafe overlay with multiple distinct failsafes, state-scoped failsafe handling (ground states opt out), `@@:system.state` via operation, parallel to launch-sequence abort pattern
+
+-----
+
+## 109. Fleet Dispatcher — N Robots, Competing Consumers for Tasks
+
+[↑ up](#108-drone-flight-modes--failsafe-from-any-phase) · [top](#table-of-contents) · [↓ down](#cross-references-to-existing-cookbook-patterns)
+
+![109 state diagram](images/cookbook/109.svg)
+
+**Problem:** A warehouse has a pool of mobile robots and a continuously arriving stream of tasks. A central dispatcher holds the task queue; robots pull tasks when idle. When a robot completes a task, it becomes available for the next one. New tasks arriving while all robots are busy queue up. This is Recipe 43 (Competing Consumers) specialized for robotics: the dispatcher is the work queue, the robots are workers, and operations expose fleet-wide status for dashboards.
+
+```frame
+@@target python_3
+
+@@system FleetRobot(robot_id: str) {
+    operations:
+        robot_state(): str { return @@:system.state }
+        get_id(): str { return self.rid }
+
+    interface:
+        assign_task(task_id: str, task_data: dict)
+        task_complete()
+        task_failed(reason: str)
+        tick()
+
+    machine:
+        $Available {
+            $>() {
+                print(f"  [bot:{self.rid}] available")
+            }
+            assign_task(task_id: str, task_data: dict) {
+                self.current_task = task_id
+                self.task_data = task_data
+                print(f"  [bot:{self.rid}] assigned {task_id}")
+                -> $Busy
+            }
+        }
+
+        $Busy {
+            $>() {
+                self.work_ticks = 0
+                print(f"  [bot:{self.rid}] working on {self.current_task}")
+            }
+            tick() {
+                self.work_ticks = self.work_ticks + 1
+                if self.work_ticks >= self.task_duration:
+                    @@:self.task_complete()
+            }
+            task_complete() {
+                print(f"  [bot:{self.rid}] completed {self.current_task}")
+                self.parent.robot_done(self.rid, self.current_task, True)
+                self.current_task = ""
+                -> $Available
+            }
+            task_failed(reason: str) {
+                print(f"  [bot:{self.rid}] failed {self.current_task}: {reason}")
+                self.parent.robot_done(self.rid, self.current_task, False)
+                self.current_task = ""
+                -> $Available
+            }
+        }
+
+    domain:
+        rid: str = robot_id
+        parent = None
+        current_task: str = ""
+        task_data: dict = {}
+        work_ticks: int = 0
+        task_duration: int = 5
+}
+
+@@system FleetDispatcher {
+    operations:
+        fleet_status(): dict {
+            counts = {"available": 0, "busy": 0}
+            for r in self.robots:
+                s = r.robot_state()
+                if s in counts:
+                    counts[s.lower()] = counts[s.lower()] + 1
+            return {
+                "robots": len(self.robots),
+                "by_state": counts,
+                "queued_tasks": len(self.task_queue),
+                "completed": self.completed_count,
+                "failed": self.failed_count
+            }
+        }
+
+    interface:
+        add_robot(robot_id: str)
+        submit_task(task_id: str, task_data: dict)
+        robot_done(robot_id: str, task_id: str, success: bool)
+        tick()
+        status(): str
+
+    machine:
+        $Running {
+            $>() { print("  [disp] dispatcher running") }
+
+            add_robot(robot_id: str) {
+                r = @@FleetRobot(robot_id)
+                r.parent = self
+                self.robots.append(r)
+                print(f"  [disp] registered {robot_id} (fleet size: {len(self.robots)})")
+                self.try_dispatch()
+            }
+
+            submit_task(task_id: str, task_data: dict) {
+                self.task_queue.append({"id": task_id, "data": task_data})
+                print(f"  [disp] queued {task_id} (queue depth: {len(self.task_queue)})")
+                self.try_dispatch()
+            }
+
+            robot_done(robot_id: str, task_id: str, success: bool) {
+                if success:
+                    self.completed_count = self.completed_count + 1
+                else:
+                    self.failed_count = self.failed_count + 1
+                self.try_dispatch()
+            }
+
+            tick() {
+                for r in self.robots:
+                    r.tick()
+            }
+
+            status(): str {
+                @@:(f"fleet={len(self.robots)} queue={len(self.task_queue)} done={self.completed_count}")
+            }
+        }
+
+    actions:
+        try_dispatch() {
+            if len(self.task_queue) == 0:
+                return
+            for r in self.robots:
+                if r.robot_state() == "Available" and len(self.task_queue) > 0:
+                    t = self.task_queue.pop(0)
+                    r.assign_task(t["id"], t["data"])
+        }
+
+    domain:
+        robots: list = []
+        task_queue: list = []
+        completed_count: int = 0
+        failed_count: int = 0
+}
+
+if __name__ == '__main__':
+    d = @@FleetDispatcher()
+    d.add_robot("bot_01")
+    d.add_robot("bot_02")
+    d.add_robot("bot_03")
+
+    for i in range(7):
+        d.submit_task(f"task_{i:02d}", {"pickup": f"zone_{i}", "drop": "dock"})
+
+    for _ in range(50):
+        d.tick()
+        if d.status().split()[-1] == "done=7":
+            break
+
+    print(d.fleet_status())
+```
+
+**How it works:**
+
+**One dispatcher, N parameterized robot systems.** The dispatcher creates `FleetRobot` instances via `@@FleetRobot(robot_id)`, passing the robot's ID as a constructor parameter that initializes the `rid` domain field. Each robot is an independent Frame system with its own state. The dispatcher holds references to all of them in a `list` domain variable. This is Recipe 21 (Configurable Worker Pool) generalized: one parent managing a dynamic list of children created at runtime via `add_robot()`.
+
+**`try_dispatch()` as the matching action.** The core scheduling decision — "which tasks go to which robots" — lives in `actions:`, not in the state machine. Actions are native helpers callable from any handler, which is the right fit: `try_dispatch()` isn't an event the dispatcher receives, it's a native routine that runs at the three moments when a new match might become possible (new robot registered, new task submitted, a robot finished). Each of those three interface handlers calls `self.try_dispatch()` as plain native code.
+
+**Robots report completion via `self.parent`.** `FleetRobot.task_complete()` calls `self.parent.robot_done(...)`. The dispatcher is set as `r.parent = self` after construction. This is the parent-callback pattern used throughout the cookbook (Recipe 28 auth flow, Recipe 48 launch sequence). The robot doesn't know anything about dispatching; it just reports completion. The dispatcher reacts.
+
+**Operations for fleet dashboards.** `fleet_status()` walks the robot list, queries each one's `robot_state()` operation, and aggregates into a summary dict. A monitoring system can poll this operation every second to build a real-time fleet map: "7 available, 13 busy, 22 tasks queued." No additional instrumentation code needed — the state machines already track what the dashboard needs to show.
+
+**Compare with Recipe 43.** Recipe 43 uses in-memory lists for the queue and a fixed worker pool. This recipe adds runtime robot registration (fleet size changes as robots come online or go offline) and robot-specific state queries. The workflow is the same competing-consumers pattern; the difference is that the workers are persistent entities with identities and hardware behind them, not anonymous consumers.
+
+**Features stressed:** runtime-parameterized child systems, dynamic list of managed children, operations for fleet-wide aggregation, parent-callback pattern, action dispatched from multiple triggering events
+
+-----
+
+## Cross-References to Existing Cookbook Patterns
+
+These robotics recipes are deliberately structural echoes of existing cookbook entries. Knowing the mapping makes it easier to see what's the same and what's different.
+
+- **96, 97** ↔ Recipe 58 (USB Enumeration) — staged pipelines with retry
+- **98** ↔ Recipe 16 (Mealy Machine) — output depends on state + input
+- **99, 106** ↔ Recipe 33 (AI Coding Agent) — supervising something whose hot path lives elsewhere
+- **100** ↔ Recipe 49 (Robot Arm) — safety overlay, mobile instead of fixed
+- **101** ↔ Recipe 33 (AI Coding Agent) — plan/execute/replan structure, physical instead of digital
+- **102** ↔ Recipe 64 (DHCP Client) — negotiated resource acquisition with timeout-driven fallback
+- **103** ↔ Recipe 52 (Elevator) + Recipe 20 (Multi-System) — the same elevator, viewed from the requester
+- **104** ↔ Recipe 33 (AI Coding Agent) — multi-stage pipeline with per-stage recovery
+- **105** ↔ Recipe 60 (OOM Killer) — safety by construction via missing handlers
+- **106** ↔ Recipe 26 (Thermostat) + Recipe 4 (Login Flow) — sensor-threshold transitions, mandatory pipeline
+- **107** ↔ Recipe 18 (Session Persistence) — resumable long-running workflows
+- **108** ↔ Recipe 48 (Launch Sequence) — abort/failsafe from any phase
+- **109** ↔ Recipe 43 (Competing Consumers) + Recipe 21 (Worker Pool) — N workers, 1 queue, runtime parameterization
+
+The lesson these cross-references encode is the same one the cookbook argues throughout: the same structural patterns recur whether the substrate is a protocol handler, an agent workflow, an OS internal, or a physical robot. Frame's job is to let the same pattern be written the same way, regardless of what it's controlling.
 
 -----
 
