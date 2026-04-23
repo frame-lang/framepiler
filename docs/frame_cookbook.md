@@ -121,7 +121,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 73. [Water with Supercooling](#73-water-with-supercooling) — metastable states
 74. [Radioactive Decay Chain](#74-radioactive-decay-chain) — U-238 → Pb-206 sequential states
 75. [Cell Cycle with Checkpoints](#75-cell-cycle-with-checkpoints) — G1/S/G2/M with arrest states
-76. [Enzyme Kinetics](#76-enzyme-kinetics-michaelismenten) — E + S ⇌ ES → E + P
+76. [Enzyme Kinetics](#76-enzyme-kinetics-michaelis-menten) — E + S ⇌ ES → E + P
 77. [Neuron Action Potential](#77-neuron-action-potential) — resting/depolarizing/repolarizing/refractory
 78. [Virus Infection Lifecycle (SIR)](#78-virus-infection-lifecycle-sir) — susceptible/infected/recovered
 79. [Titration Protocol](#79-titration-protocol) — lab procedure with endpoint as structural gate
@@ -131,6 +131,21 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 83. [Defibrillator / AED](#83-defibrillator--aed) — analyze → charge → shock, impossible-by-construction
 84. [ACLS Cardiac Arrest Algorithm](#84-acls-cardiac-arrest-algorithm) — shockable vs non-shockable branches
 85. [Sepsis Hour-1 Bundle](#85-sepsis-hour-1-bundle) — time-boxed treatment protocol
+
+**Security Protocols (86-95)**
+
+86. [TLS 1.3 Handshake (Client Side)](#86-tls-13-handshake-client-side) — single round-trip with downgrade sentinel detection
+87. [OAuth 2.0 Authorization Code + PKCE](#87-oauth-20-authorization-code--pkce) — public-client auth with CSRF + code-stealing defense
+88. [WebAuthn / FIDO2 Registration + Authentication](#88-webauthn--fido2-registration--authentication) — passwordless, origin-bound credentials
+89. [Multi-Factor Authentication with Lockout](#89-multi-factor-authentication-with-lockout) — password + 2FA + structural lockout
+90. [Kerberos Ticket Lifecycle](#90-kerberos-ticket-lifecycle) — TGT/ST issuance with HSM expiry handling
+91. [Noise Protocol (XX Handshake)](#91-noise-protocol-xx-handshake) — three-message mutual auth without prior keys
+92. [Signal / Double Ratchet Session](#92-signal--double-ratchet-session) — DH + symmetric ratchet with inline rekey
+93. [Capability Token (Macaroon-Style)](#93-capability-token-macaroon-style) — bearer token with caveats and discharges
+94. [Zero-Trust Session with Continuous Verification](#94-zero-trust-session-with-continuous-verification) — risk-driven session with channel binding
+95. [Secure Boot / Measured Boot Chain](#95-secure-boot--measured-boot-chain) — verify-measure-antirollback chain from CRTM
+
+[Why state machines fit security](#why-state-machines-fit-security)
 
 -----
 
@@ -8971,7 +8986,7 @@ if __name__ == '__main__':
 
 ## 75. Cell Cycle with Checkpoints
 
-[↑ up](#74-radioactive-decay-chain) · [top](#table-of-contents) · [↓ down](#76-enzyme-kinetics-michaelismenten)
+[↑ up](#74-radioactive-decay-chain) · [top](#table-of-contents) · [↓ down](#76-enzyme-kinetics-michaelis-menten)
 
 ![75 state diagram](images/cookbook/75.svg)
 
@@ -9149,7 +9164,7 @@ if __name__ == '__main__':
 
 ## 77. Neuron Action Potential
 
-[↑ up](#76-enzyme-kinetics-michaelismenten) · [top](#table-of-contents) · [↓ down](#78-virus-infection-lifecycle-sir)
+[↑ up](#76-enzyme-kinetics-michaelis-menten) · [top](#table-of-contents) · [↓ down](#78-virus-infection-lifecycle-sir)
 
 ![77 state diagram](images/cookbook/77.svg)
 
@@ -9851,7 +9866,7 @@ if __name__ == '__main__':
 
 ## 85. Sepsis Hour-1 Bundle
 
-[↑ up](#84-acls-cardiac-arrest-algorithm) · [top](#table-of-contents)
+[↑ up](#84-acls-cardiac-arrest-algorithm) · [top](#table-of-contents) · [↓ down](#86-tls-13-handshake-client-side)
 
 ![85 state diagram](images/cookbook/85.svg)
 
@@ -9992,6 +10007,1524 @@ if __name__ == '__main__':
 **How it works:** Each bundle step sets its own flag on the domain, then asks the `is_complete()` action whether all required items are done. Completion splits into `$OnTime` or `$Late` depending on whether `self.elapsed` is at or under 60 minutes — the quality metric is encoded structurally in *which* terminal the machine reaches. "Did we meet the time window?" is answered by inspecting the final state, not by a post-hoc audit query.
 
 **Features used:** action returning bool (`is_complete()`), terminal states distinguishing on-time vs late, domain variables for bundle tracking, protocol timing.
+
+-----
+
+## Security Protocols
+
+A collection of real security protocols modeled as Frame state machines. Each one shows the protocol's state structure, security-critical transitions, and which attacks are made impossible by construction.
+
+For each demo:
+- **The protocol** — a short explanation
+- **Threat model** — what we're defending against
+- **Frame system** — the specification
+- **Security properties by construction** — what the transition graph structurally guarantees
+- **What Frame does not protect** — honest scope limits
+
+-----
+
+## 86. TLS 1.3 Handshake (Client Side)
+
+[↑ up](#85-sepsis-hour-1-bundle) · [top](#table-of-contents) · [↓ down](#87-oauth-20-authorization-code--pkce)
+
+![86 state diagram](images/cookbook/86.svg)
+
+### The protocol
+
+TLS 1.3 reduces the handshake to a single round trip. The client sends `ClientHello` with a key share, receives `ServerHello` + `EncryptedExtensions` + `Certificate` + `CertificateVerify` + `Finished`, validates everything, sends its own `Finished`, and application data begins.
+
+### Threat model
+
+- **Downgrade to TLS 1.2 or weaker ciphers.** RFC 8446 detects this via a sentinel embedded in `server_random` (the last 8 bytes equal `44 4F 57 4E 47 52 44 01` for TLS 1.2 negotiation or `...00` for earlier) and via the `supported_versions` extension in `ServerHello`.
+- **Sending application data before the handshake is authenticated.**
+- **Accepting a certificate without verifying the `CertificateVerify` signature over the transcript.**
+- **Completing the handshake without transcript authentication** (the `Finished` MAC).
+
+### Frame system
+
+Note on the downgrade check: `ServerHello.legacy_version` is frozen at `0x0303` for middlebox compatibility — checking it tells you nothing. The real version is read from the `supported_versions` extension, and the `server_random` downgrade sentinel is checked independently.
+
+```frame
+@@target python_3
+
+@@system TlsClient {
+    interface:
+        connect(server_name: str)
+        server_hello_received(key_share: str, server_random: bytes, supported_versions_ext: int, cipher: str)
+        encrypted_extensions_received(data: str)
+        certificate_received(cert_chain: str)
+        cert_verify_received(sig: str)
+        server_finished_received(mac: str)
+        send_app_data(data: str): str = "not_ready"
+        close()
+        timeout()
+        get_status(): str = "idle"
+
+    machine:
+        $Idle {
+            connect(server_name: str) {
+                self.server_name = server_name
+                self.generate_key_share()
+                self.send_client_hello()
+                -> $WaitingServerHello
+            }
+            get_status(): str { @@:("idle") }
+        }
+
+        $WaitingServerHello {
+            $>() { self.start_timer(10) }
+            <$() { self.cancel_timer() }
+
+            server_hello_received(key_share: str, server_random: bytes, supported_versions_ext: int, cipher: str) {
+                if supported_versions_ext != 0x0304:
+                    self.audit("version_not_tls13", supported_versions_ext)
+                    -> $Aborted
+                elif self.has_downgrade_sentinel(server_random):
+                    self.audit("downgrade_sentinel_detected", "")
+                    -> $Aborted
+                elif not self.cipher_allowed(cipher):
+                    self.audit("weak_cipher", cipher)
+                    -> $Aborted
+                else:
+                    self.derive_handshake_secret(key_share)
+                    -> $WaitingEncryptedExtensions
+            }
+            timeout() { -> $Aborted }
+            get_status(): str { @@:("waiting server_hello") }
+        }
+
+        $WaitingEncryptedExtensions {
+            $>() { self.start_timer(10) }
+            <$() { self.cancel_timer() }
+            encrypted_extensions_received(data: str) {
+                self.process_extensions(data)
+                -> $WaitingCertificate
+            }
+            timeout() { -> $Aborted }
+            get_status(): str { @@:("waiting ee") }
+        }
+
+        $WaitingCertificate {
+            $>() { self.start_timer(10) }
+            <$() { self.cancel_timer() }
+            certificate_received(cert_chain: str) {
+                if self.validate_chain(cert_chain, self.server_name):
+                    self.server_cert = cert_chain
+                    -> $WaitingCertVerify
+                else:
+                    self.audit("cert_invalid", self.server_name)
+                    -> $Aborted
+            }
+            timeout() { -> $Aborted }
+            get_status(): str { @@:("waiting cert") }
+        }
+
+        $WaitingCertVerify {
+            $>() { self.start_timer(10) }
+            <$() { self.cancel_timer() }
+            cert_verify_received(sig: str) {
+                if self.verify_transcript_signature(self.server_cert, sig):
+                    -> $WaitingServerFinished
+                else:
+                    self.audit("cert_verify_failed", self.server_name)
+                    -> $Aborted
+            }
+            timeout() { -> $Aborted }
+            get_status(): str { @@:("waiting cert_verify") }
+        }
+
+        $WaitingServerFinished {
+            $>() { self.start_timer(10) }
+            <$() { self.cancel_timer() }
+            server_finished_received(mac: str) {
+                if self.verify_finished_mac(mac):
+                    self.derive_traffic_keys()
+                    self.send_client_finished()
+                    -> $Established
+                else:
+                    self.audit("finished_mac_failed", self.server_name)
+                    -> $Aborted
+            }
+            timeout() { -> $Aborted }
+            get_status(): str { @@:("waiting server_finished") }
+        }
+
+        $Established {
+            send_app_data(data: str): str {
+                self.encrypt_and_send(data)
+                @@:("sent")
+            }
+            close() { -> $Closed }
+            get_status(): str { @@:("established") }
+        }
+
+        $Aborted {
+            get_status(): str { @@:("aborted") }
+        }
+        $Closed {
+            get_status(): str { @@:("closed") }
+        }
+
+    actions:
+        generate_key_share() { pass }
+        send_client_hello() { pass }
+        derive_handshake_secret(ks) { pass }
+        process_extensions(d) { pass }
+        validate_chain(chain, sni) { return True }
+        verify_transcript_signature(cert, sig) { return True }
+        verify_finished_mac(mac) { return True }
+        derive_traffic_keys() { pass }
+        send_client_finished() { pass }
+        encrypt_and_send(d) { pass }
+        cipher_allowed(c) { return True }
+        has_downgrade_sentinel(sr) {
+            # RFC 8446 §4.1.3: check last 8 bytes of server_random for
+            # 44 4F 57 4E 47 52 44 01 (TLS 1.2) or ...00 (earlier)
+            if len(sr) < 8: return False
+            tail = sr[-8:]
+            return tail == b"\x44\x4F\x57\x4E\x47\x52\x44\x01" or \
+                   tail == b"\x44\x4F\x57\x4E\x47\x52\x44\x00"
+        }
+        start_timer(s) { pass }
+        cancel_timer() { pass }
+        audit(event, detail) { pass }
+
+    domain:
+        server_name: str = ""
+        server_cert: str = ""
+}
+```
+
+### Security properties by construction
+
+- **No application data before handshake completion.** `send_app_data()` has a real handler only in `$Established`. In every other state the default return `"not_ready"` applies. There is no branch that "just sends" — the capability does not exist.
+- **Downgrade protection on the gate.** `$WaitingServerHello` reads the actual negotiated version from the `supported_versions` extension and checks the `server_random` sentinel independently. A ServerHello forged by a man-in-the-middle trying to roll back to TLS 1.2 hits `$Aborted` before any handshake secret is derived.
+- **Certificate verification is mandatory.** The only path to `$Established` passes through `$WaitingCertificate` → `$WaitingCertVerify` → `$WaitingServerFinished`. You cannot reach `$Established` without all three having run their validation logic.
+- **Transcript binding.** `verify_finished_mac` in `$WaitingServerFinished` is the last gate; failure transitions to `$Aborted` with no app-data exposure possible.
+- **Timeout on every waiting state.** A stalled handshake cannot leave the client hanging with partial secrets derived.
+
+### What Frame does not protect
+
+- Cryptographic primitives themselves (AEAD, HKDF, signature algorithms) — Frame guarantees the call order, not the math.
+- Padding oracle / timing side channels in the encryption layer.
+- Clock skew in certificate validity.
+
+-----
+
+## 87. OAuth 2.0 Authorization Code + PKCE
+
+[↑ up](#86-tls-13-handshake-client-side) · [top](#table-of-contents) · [↓ down](#88-webauthn--fido2-registration--authentication)
+
+![87 state diagram](images/cookbook/87.svg)
+
+### The protocol
+
+A public client (mobile app, SPA) obtains an authorization code and exchanges it for a token. PKCE (RFC 7636) binds the code to a `code_verifier` so a stolen code is useless without the verifier. The `state` parameter prevents CSRF.
+
+### Threat model
+
+- **Authorization code interception.**
+- **CSRF** — attacker initiates a flow and tricks the user's browser into completing it.
+- **Replay** — attacker re-uses a valid code.
+- **Token leakage via improper redirect URI validation.**
+
+### Frame system
+
+```frame
+@@target python_3
+
+@@system OAuthPkceFlow {
+    interface:
+        start(client_id: str, redirect_uri: str, scope: str)
+        authorization_redirect(code: str, state: str)
+        exchange_response(access_token: str, refresh_token: str)
+        exchange_error(reason: str)
+        use_token(): str = "no_token"
+        refresh()
+        revoke()
+        timeout()
+        get_status(): str = "idle"
+
+    machine:
+        $Idle {
+            start(client_id: str, redirect_uri: str, scope: str) {
+                self.client_id = client_id
+                self.redirect_uri = redirect_uri
+                self.scope = scope
+                self.code_verifier = self.gen_verifier()
+                self.code_challenge = self.sha256_b64url(self.code_verifier)
+                self.state_nonce = self.gen_nonce()
+                self.build_auth_url()
+                -> $AwaitingRedirect
+            }
+            get_status(): str { @@:("idle") }
+        }
+
+        $AwaitingRedirect {
+            $>() { self.start_timer(300) }
+            <$() { self.cancel_timer() }
+
+            authorization_redirect(code: str, state: str) {
+                if state != self.state_nonce:
+                    self.audit("csrf_state_mismatch", state)
+                    -> $Failed
+                else:
+                    self.auth_code = code
+                    -> $ExchangingCode
+            }
+            timeout() {
+                self.audit("auth_redirect_timeout", self.state_nonce)
+                -> $Failed
+            }
+            get_status(): str { @@:("awaiting_redirect") }
+        }
+
+        $ExchangingCode {
+            $>() {
+                self.start_timer(30)
+                self.post_token_request(self.auth_code, self.code_verifier)
+            }
+            <$() {
+                self.cancel_timer()
+                self.auth_code = ""
+                self.code_verifier = ""
+            }
+
+            exchange_response(access_token: str, refresh_token: str) {
+                self.access_token = access_token
+                self.refresh_token = refresh_token
+                -> $Authorized
+            }
+            exchange_error(reason: str) {
+                self.audit("token_exchange_failed", reason)
+                -> $Failed
+            }
+            timeout() { -> $Failed }
+            get_status(): str { @@:("exchanging") }
+        }
+
+        $Authorized {
+            use_token(): str { @@:(self.access_token) }
+            refresh() { -> $Refreshing }
+            revoke() {
+                self.revoke_tokens()
+                -> $Revoked
+            }
+            get_status(): str { @@:("authorized") }
+        }
+
+        $Refreshing {
+            $>() {
+                self.start_timer(30)
+                self.post_refresh(self.refresh_token)
+            }
+            <$() { self.cancel_timer() }
+
+            exchange_response(access_token: str, refresh_token: str) {
+                self.access_token = access_token
+                self.refresh_token = refresh_token
+                -> $Authorized
+            }
+            exchange_error(reason: str) {
+                self.audit("refresh_failed", reason)
+                -> $Failed
+            }
+            timeout() { -> $Failed }
+            get_status(): str { @@:("refreshing") }
+        }
+
+        $Failed {
+            get_status(): str { @@:("failed") }
+        }
+        $Revoked {
+            get_status(): str { @@:("revoked") }
+        }
+
+    actions:
+        gen_verifier() { return "" }
+        sha256_b64url(v) { return "" }
+        gen_nonce() { return "" }
+        build_auth_url() { pass }
+        post_token_request(code, verifier) { pass }
+        post_refresh(rt) { pass }
+        revoke_tokens() { pass }
+        start_timer(s) { pass }
+        cancel_timer() { pass }
+        audit(e, d) { pass }
+
+    domain:
+        client_id: str = ""
+        redirect_uri: str = ""
+        scope: str = ""
+        code_verifier: str = ""
+        code_challenge: str = ""
+        state_nonce: str = ""
+        auth_code: str = ""
+        access_token: str = ""
+        refresh_token: str = ""
+}
+```
+
+### Security properties by construction
+
+- **CSRF protection is mandatory.** `$AwaitingRedirect` rejects any redirect whose `state` parameter does not match `state_nonce`. There is no path from `$AwaitingRedirect` to `$ExchangingCode` that skips the state check.
+- **PKCE binding is not optional.** `$Idle` always generates `code_verifier` and `code_challenge`. `$ExchangingCode` always sends the verifier. No handler in `$Idle` starts a flow without PKCE.
+- **Code is zeroed after exchange.** `$ExchangingCode`'s exit handler clears `auth_code` and `code_verifier`. A stolen memory dump after reaching `$Authorized` reveals no exchangeable code.
+- **`use_token()` is only valid in `$Authorized`.** Before exchange completes, the default return `"no_token"` applies — no partial-state token leak.
+- **Replay is structurally blocked.** Once `$Authorized` is reached, `authorization_redirect()` is no longer handled. A replayed redirect goes nowhere.
+
+### What Frame does not protect
+
+- The redirect URI allowlist on the authorization server — that's server-side.
+- TLS for the token endpoint — that's the TLS system.
+- Token scope reduction at the resource server.
+
+-----
+
+## 88. WebAuthn / FIDO2 Registration + Authentication
+
+[↑ up](#87-oauth-20-authorization-code--pkce) · [top](#table-of-contents) · [↓ down](#89-multi-factor-authentication-with-lockout)
+
+![88 state diagram](images/cookbook/88.svg)
+
+### The protocol
+
+WebAuthn replaces passwords with public-key credentials bound to a specific origin. Registration: server generates a challenge, authenticator creates a keypair, client sends the public key + attestation. Authentication: server sends a challenge, authenticator signs it, client sends the assertion.
+
+### Threat model
+
+- **Challenge reuse / replay.**
+- **Origin confusion** — credential created for `example.com` used against `evil.com`.
+- **Skipping user verification (UV) for high-assurance actions.**
+- **Accepting an assertion without verifying the signature.**
+- **Accepting an authenticator whose signature counter did not increase** (clone detection).
+
+### Frame system
+
+```frame
+@@target python_3
+
+@@system WebAuthnCeremony {
+    interface:
+        begin_registration(user_id: str, rp_id: str)
+        registration_response(attestation: str, client_data: str)
+        begin_authentication(user_id: str, rp_id: str, uv_required: bool)
+        assertion_response(assertion: str, client_data: str, sig: str)
+        timeout()
+        get_status(): str = "idle"
+
+    machine:
+        $Idle {
+            begin_registration(user_id: str, rp_id: str) {
+                self.user_id = user_id
+                self.rp_id = rp_id
+                self.challenge = self.gen_challenge()
+                self.uv_required = True
+                -> $AwaitingRegistration
+            }
+            begin_authentication(user_id: str, rp_id: str, uv_required: bool) {
+                self.user_id = user_id
+                self.rp_id = rp_id
+                self.uv_required = uv_required
+                self.challenge = self.gen_challenge()
+                -> $AwaitingAssertion
+            }
+            get_status(): str { @@:("idle") }
+        }
+
+        $AwaitingRegistration {
+            $>() { self.start_timer(120) }
+            <$() { self.cancel_timer() }
+
+            registration_response(attestation: str, client_data: str) {
+                if not self.check_challenge_matches(client_data, self.challenge):
+                    self.audit("challenge_mismatch_reg", self.user_id)
+                    -> $Failed
+                elif not self.check_origin(client_data, self.rp_id):
+                    self.audit("origin_mismatch_reg", self.rp_id)
+                    -> $Failed
+                elif not self.verify_attestation(attestation, self.challenge):
+                    self.audit("attestation_failed", self.user_id)
+                    -> $Failed
+                else:
+                    self.store_credential(self.user_id, attestation)
+                    -> $Registered
+            }
+            timeout() { -> $Failed }
+            get_status(): str { @@:("awaiting_registration") }
+        }
+
+        $AwaitingAssertion {
+            $>() { self.start_timer(60) }
+            <$() { self.cancel_timer() }
+
+            assertion_response(assertion: str, client_data: str, sig: str) {
+                if not self.check_challenge_matches(client_data, self.challenge):
+                    self.audit("challenge_mismatch_auth", self.user_id)
+                    -> $Failed
+                elif not self.check_origin(client_data, self.rp_id):
+                    self.audit("origin_mismatch_auth", self.rp_id)
+                    -> $Failed
+                elif self.uv_required and not self.user_verified(assertion):
+                    self.audit("uv_not_satisfied", self.user_id)
+                    -> $Failed
+                elif not self.verify_signature(assertion, sig, self.challenge):
+                    self.audit("signature_failed", self.user_id)
+                    -> $Failed
+                elif not self.check_counter_increased(assertion):
+                    self.audit("counter_regression", self.user_id)
+                    -> $Failed
+                else:
+                    -> $Authenticated
+            }
+            timeout() { -> $Failed }
+            get_status(): str { @@:("awaiting_assertion") }
+        }
+
+        $Registered {
+            get_status(): str { @@:("registered") }
+        }
+        $Authenticated {
+            get_status(): str { @@:("authenticated") }
+        }
+        $Failed {
+            get_status(): str { @@:("failed") }
+        }
+
+    actions:
+        gen_challenge() { return "" }
+        check_challenge_matches(cd, ch) { return True }
+        check_origin(cd, rp) { return True }
+        verify_attestation(a, c) { return True }
+        verify_signature(a, s, c) { return True }
+        user_verified(a) { return True }
+        check_counter_increased(a) { return True }
+        store_credential(u, a) { pass }
+        start_timer(s) { pass }
+        cancel_timer() { pass }
+        audit(e, d) { pass }
+
+    domain:
+        user_id: str = ""
+        rp_id: str = ""
+        challenge: str = ""
+        uv_required: bool = False
+}
+```
+
+### Security properties by construction
+
+- **Challenges are generated server-side at `begin_*`.** The client cannot inject its own challenge; the state machine only accepts assertions matching the challenge it just issued.
+- **Single-use challenges.** Entering `$AwaitingAssertion` generates a fresh `challenge`. Entering a terminal state abandons it. A replayed assertion arrives when the state is `$Authenticated` or `$Failed`, where `assertion_response()` is not handled.
+- **UV is a structural gate when required.** When `uv_required=True` is set at `begin_authentication`, no path advances without `user_verified(assertion)` returning true.
+- **Counter regression is rejected.** Cloned authenticator detection is checked before `$Authenticated` is reachable.
+- **Origin binding.** `check_origin(client_data, rp_id)` is on the only path forward. Cross-origin credentials cannot authenticate.
+
+### What Frame does not protect
+
+- Browser-level origin enforcement of the WebAuthn API itself.
+- TPM / secure element integrity on the authenticator.
+- Credential ID enumeration via timing attacks in `store_credential`.
+
+-----
+
+## 89. Multi-Factor Authentication with Lockout
+
+[↑ up](#88-webauthn--fido2-registration--authentication) · [top](#table-of-contents) · [↓ down](#90-kerberos-ticket-lifecycle)
+
+![89 state diagram](images/cookbook/89.svg)
+
+### The protocol
+
+User enters username, then password, then a second factor (TOTP / push / hardware key). Failed attempts against an account are tracked in domain state; after N failures the account locks. After a cooldown, retry is allowed. A successful login resets the counter.
+
+### Threat model
+
+- **Online brute force** of password or second factor.
+- **Skipping the second factor entirely.**
+- **Credential stuffing across many accounts.**
+- **Locked accounts being unlockable by repeated attempts.**
+
+### Frame system
+
+```frame
+@@target python_3
+
+@@system MfaAuth {
+    interface:
+        submit_username(u: str)
+        submit_password(p: str)
+        submit_second_factor(code: str)
+        cooldown_elapsed()
+        logout()
+        get_status(): str = ""
+
+    machine:
+        $Idle {
+            submit_username(u: str) {
+                self.username = u
+                -> $AwaitingPassword
+            }
+            get_status(): str { @@:("idle") }
+        }
+
+        $AwaitingPassword {
+            submit_password(p: str) {
+                if self.verify_password(self.username, p):
+                    -> $AwaitingSecondFactor
+                else:
+                    self.bump_failures(self.username)
+                    if self.failure_count(self.username) >= self.lockout_threshold:
+                        -> $Locked
+                    else:
+                        -> $AwaitingPassword
+            }
+            get_status(): str { @@:("awaiting_password") }
+        }
+
+        $AwaitingSecondFactor {
+            $.attempts: int = 0
+
+            submit_second_factor(code: str) {
+                $.attempts = $.attempts + 1
+                if self.verify_second_factor(self.username, code):
+                    self.reset_failures(self.username)
+                    -> $Authenticated
+                elif $.attempts >= 3:
+                    self.bump_failures(self.username)
+                    if self.failure_count(self.username) >= self.lockout_threshold:
+                        -> $Locked
+                    else:
+                        -> $AwaitingPassword
+            }
+            get_status(): str { @@:("awaiting_2fa") }
+        }
+
+        $Authenticated {
+            logout() { -> $Idle }
+            get_status(): str { @@:("authenticated") }
+        }
+
+        $Locked {
+            $>() {
+                self.start_cooldown(self.cooldown_seconds)
+                self.notify_user(self.username)
+            }
+            cooldown_elapsed() {
+                self.half_reset_failures(self.username)
+                -> $Idle
+            }
+            get_status(): str { @@:("locked") }
+        }
+
+    actions:
+        verify_password(u, p) { return u == "alice" and p == "hunter2" }
+        verify_second_factor(u, c) { return c == "123456" }
+        bump_failures(u) { pass }
+        failure_count(u) { return 0 }
+        reset_failures(u) { pass }
+        half_reset_failures(u) { pass }
+        start_cooldown(s) { pass }
+        notify_user(u) { pass }
+
+    domain:
+        username: str = ""
+        lockout_threshold: int = 5
+        cooldown_seconds: int = 900
+}
+```
+
+### Security properties by construction
+
+- **Password cannot be skipped.** `submit_second_factor()` is not handled in `$Idle` or `$AwaitingPassword`. There is no path to `$Authenticated` that bypasses `$AwaitingPassword`.
+- **Second factor cannot be skipped.** `$AwaitingPassword` can only transition to `$AwaitingSecondFactor` or back to itself. The only way into `$Authenticated` is through `verify_second_factor()` returning true.
+- **Per-session 2FA attempt limit.** `$.attempts` is a state variable — it resets on re-entry. Three wrong codes force back to `$AwaitingPassword`, bumping the account-level failure counter.
+- **Lockout is a terminal state during cooldown.** In `$Locked`, only `cooldown_elapsed()` advances. No credential-submitting event is handled.
+- **Counter reset only on success.** `reset_failures()` is called only in the successful branch of `$AwaitingSecondFactor`. A partial success (password only) does not clear the counter.
+
+### What Frame does not protect
+
+- Password hash strength — `verify_password` is a black box.
+- TOTP secret storage security.
+- Account enumeration via `submit_username` timing.
+
+-----
+
+## 90. Kerberos Ticket Lifecycle
+
+[↑ up](#89-multi-factor-authentication-with-lockout) · [top](#table-of-contents) · [↓ down](#91-noise-protocol-xx-handshake)
+
+![90 state diagram](images/cookbook/90.svg)
+
+### The protocol
+
+Client authenticates to the Authentication Server (AS) and receives a Ticket-Granting Ticket (TGT). Using the TGT, the client requests service tickets from the Ticket-Granting Server (TGS). Tickets have an expiry. Pre-authentication (PA-ENC-TIMESTAMP) defends against offline dictionary attacks by requiring the client to prove knowledge of the password before the KDC issues an encrypted TGT.
+
+### Threat model
+
+- **Using an expired ticket.**
+- **Obtaining a service ticket without a valid TGT.**
+- **Reusing a service ticket after it should have been refreshed.**
+- **Offline password attacks** — mitigated (not eliminated) by pre-auth. Note: AS-REP roasting is an *attacker* technique against server-side misconfiguration (accounts flagged `DONT_REQUIRE_PREAUTH`); a well-behaved client that always sends pre-auth is good hygiene but is not the defense against AS-REP roasting itself — that defense is the KDC's policy configuration.
+
+### Frame system
+
+This version uses an HSM parent `$HasValidTgt` to hoist `tick()` and `logout()` out of three child states, matching cookbook style (recipes 9, 26, etc.).
+
+**A note on the validator:** `$HasValidTgt` is an abstract handler collection — nothing transitions to it directly. This is explicitly legal per the language reference ("Parent states don't need to be a state the system ever transitions *to* — it can be an abstract handler collection"), but the validator may emit `W414` unreachable-state. That warning is expected and benign for this pattern.
+
+```frame
+@@target python_3
+
+@@system KerberosClient {
+    interface:
+        authenticate(user: str, password: str)
+        preauth_accepted(tgt: str, session_key: str, expiry: int)
+        preauth_rejected(reason: str)
+        request_service(spn: str)
+        service_ticket_received(st: str, expiry: int)
+        service_ticket_rejected(reason: str)
+        tick(now: int)
+        logout()
+        get_status(): str = ""
+
+    machine:
+        $Idle {
+            authenticate(user: str, password: str) {
+                self.user = user
+                self.preauth_token = self.make_preauth(user, password)
+                self.send_as_req(user, self.preauth_token)
+                -> $AwaitingTgt
+            }
+            get_status(): str { @@:("idle") }
+        }
+
+        $AwaitingTgt {
+            preauth_accepted(tgt: str, session_key: str, expiry: int) {
+                self.tgt = tgt
+                self.session_key = session_key
+                self.tgt_expiry = expiry
+                -> $HasTgt
+            }
+            preauth_rejected(reason: str) {
+                self.audit("preauth_rejected", reason)
+                -> $Failed
+            }
+            get_status(): str { @@:("awaiting_tgt") }
+        }
+
+        # Abstract parent: centralizes TGT-expiry handling and logout.
+        # Never transitioned *to* directly — reached only via children's => $^.
+        $HasValidTgt {
+            tick(now: int) {
+                if now >= self.tgt_expiry:
+                    self.clear_tgt()
+                    -> $Idle
+            }
+            logout() {
+                self.clear_tgt()
+                -> $Idle
+            }
+        }
+
+        $HasTgt => $HasValidTgt {
+            request_service(spn: str) {
+                self.send_tgs_req(self.tgt, spn, self.session_key)
+                -> $AwaitingServiceTicket
+            }
+            get_status(): str { @@:("has_tgt") }
+            => $^
+        }
+
+        $AwaitingServiceTicket => $HasValidTgt {
+            service_ticket_received(st: str, expiry: int) {
+                self.service_ticket = st
+                self.st_expiry = expiry
+                -> $HasServiceTicket
+            }
+            service_ticket_rejected(reason: str) {
+                self.audit("st_rejected", reason)
+                -> $HasTgt
+            }
+            get_status(): str { @@:("awaiting_st") }
+            => $^
+        }
+
+        $HasServiceTicket => $HasValidTgt {
+            tick(now: int) {
+                if now >= self.tgt_expiry:
+                    self.clear_tgt()
+                    -> $Idle
+                elif now >= self.st_expiry:
+                    self.service_ticket = ""
+                    -> $HasTgt
+            }
+            request_service(spn: str) {
+                self.send_tgs_req(self.tgt, spn, self.session_key)
+                -> $AwaitingServiceTicket
+            }
+            get_status(): str { @@:("has_st") }
+            => $^
+        }
+
+        $Failed {
+            get_status(): str { @@:("failed") }
+        }
+
+    actions:
+        make_preauth(u, p) { return "" }
+        send_as_req(u, pa) { pass }
+        send_tgs_req(tgt, spn, k) { pass }
+        clear_tgt() {
+            self.tgt = ""
+            self.session_key = ""
+            self.tgt_expiry = 0
+            self.service_ticket = ""
+            self.st_expiry = 0
+        }
+        audit(e, d) { pass }
+
+    domain:
+        user: str = ""
+        preauth_token: str = ""
+        tgt: str = ""
+        session_key: str = ""
+        tgt_expiry: int = 0
+        service_ticket: str = ""
+        st_expiry: int = 0
+}
+```
+
+### Security properties by construction
+
+- **Pre-auth is structurally required for the client.** `$Idle`'s `authenticate()` always calls `make_preauth` before `send_as_req`. There is no client-side code path that omits it. (The corresponding server-side defense — refusing `DONT_REQUIRE_PREAUTH` on accounts — is a KDC policy concern, not a client one.)
+- **A service ticket is not obtainable without a TGT.** `request_service()` is only handled in `$HasTgt` and `$HasServiceTicket`. Calling it in `$Idle` does nothing.
+- **Expiry is centralized.** The `$HasValidTgt` parent holds the TGT-expiry check once. All three TGT-holding children inherit it via `=> $^`. `$HasServiceTicket` overrides `tick()` to additionally check the shorter ST expiry before falling back to the parent's TGT check.
+- **Service ticket expiry falls back to TGT, not unauthenticated.** `$HasServiceTicket`'s `tick()` transitions to `$HasTgt` when only the ST expires — the client must request a new ST.
+- **Terminal logout clears secrets.** `clear_tgt()` zeroes the session key and both tickets.
+
+### What Frame does not protect
+
+- Kerberos cryptography (DES/RC4 are broken; only AES should be enabled at the KDC).
+- Clock skew attacks — `tick()` is only as accurate as the time source.
+- Golden ticket attacks (compromised KDC `krbtgt` key).
+
+-----
+
+## 91. Noise Protocol (XX Handshake)
+
+[↑ up](#90-kerberos-ticket-lifecycle) · [top](#table-of-contents) · [↓ down](#92-signal--double-ratchet-session)
+
+![91 state diagram](images/cookbook/91.svg)
+
+### The protocol
+
+Noise XX is a three-message mutual authentication handshake from the [Noise Protocol Framework](https://noiseprotocol.org/noise.html). Neither party knows the other's static key ahead of time; both are transmitted and authenticated during the handshake. XX is used in custom deployments and in protocols like WhatsApp's original end-to-end rollout and some mesh networking systems. (For reference: WireGuard uses the `Noise_IKpsk2` pattern, and Lightning BOLT #8 uses `Noise_XK` — both are different patterns with different trust assumptions.)
+
+### Threat model
+
+- **Using the transport layer before the handshake is complete** — sending plaintext thinking it's encrypted.
+- **Accepting a mis-ordered handshake message** — Noise is strictly sequential.
+- **Reusing ephemeral keys** — catastrophic for forward secrecy.
+
+### Frame system
+
+```frame
+@@target python_3
+
+@@system NoiseXxInitiator {
+    interface:
+        start(remote_endpoint: str)
+        msg2_received(payload: bytes)
+        msg3_ack()
+        send(plaintext: bytes): str = "not_ready"
+        recv(ciphertext: bytes): bytes = b""
+        timeout()
+        get_status(): str = "idle"
+
+    machine:
+        $Idle {
+            start(remote_endpoint: str) {
+                self.remote = remote_endpoint
+                self.gen_ephemeral()
+                self.send_msg1()
+                -> $AwaitingMsg2
+            }
+            get_status(): str { @@:("idle") }
+        }
+
+        $AwaitingMsg2 {
+            $>() { self.start_timer(5) }
+            <$() { self.cancel_timer() }
+
+            msg2_received(payload: bytes) {
+                if self.process_msg2(payload):
+                    self.send_msg3()
+                    -> $AwaitingAck
+                else:
+                    self.audit_fail("msg2_invalid")
+                    -> $Aborted
+            }
+            timeout() { -> $Aborted }
+            get_status(): str { @@:("awaiting_msg2") }
+        }
+
+        $AwaitingAck {
+            $>() { self.start_timer(5) }
+            <$() { self.cancel_timer() }
+
+            msg3_ack() {
+                self.split_transport_keys()
+                -> $Transport
+            }
+            timeout() { -> $Aborted }
+            get_status(): str { @@:("awaiting_ack") }
+        }
+
+        $Transport {
+            send(plaintext: bytes): str {
+                self.encrypt_send(plaintext)
+                @@:("sent")
+            }
+            recv(ciphertext: bytes): bytes {
+                @@:(self.decrypt(ciphertext))
+            }
+            get_status(): str { @@:("transport") }
+        }
+
+        $Aborted {
+            get_status(): str { @@:("aborted") }
+        }
+
+    actions:
+        gen_ephemeral() { pass }
+        send_msg1() { pass }
+        process_msg2(p) { return True }
+        send_msg3() { pass }
+        split_transport_keys() { pass }
+        encrypt_send(pt) { pass }
+        decrypt(ct) { return b"" }
+        start_timer(s) { pass }
+        cancel_timer() { pass }
+        audit_fail(e) { pass }
+
+    domain:
+        remote: str = ""
+}
+```
+
+### Security properties by construction
+
+- **No transport data before handshake completion.** `send()` and `recv()` have real handlers only in `$Transport`. Calls in any earlier state hit the defaults (`"not_ready"`, empty bytes) — the handshake state is unaware of plaintext "send" intent.
+- **Strict handshake ordering.** `msg2_received` is only accepted in `$AwaitingMsg2`, `msg3_ack` only in `$AwaitingAck`. A message arriving out of order is silently dropped.
+- **Ephemeral key generated exactly once per handshake.** `gen_ephemeral()` is called in `$Idle.start` only. Re-starting requires re-entering `$Idle` via abort, which creates a fresh keypair.
+- **Abort is terminal.** `$Aborted` has no transitions out. A partially-completed handshake cannot "recover" and leak a half-derived key.
+
+### What Frame does not protect
+
+- The cryptographic primitives (Curve25519, ChaCha20-Poly1305, BLAKE2s).
+- Nonce reuse within `$Transport` (the AEAD layer must enforce this).
+- Key compromise impersonation — that's a protocol-design concern addressed at the cryptographic layer of Noise XX itself.
+
+-----
+
+## 92. Signal / Double Ratchet Session
+
+[↑ up](#91-noise-protocol-xx-handshake) · [top](#table-of-contents) · [↓ down](#93-capability-token-macaroon-style)
+
+![92 state diagram](images/cookbook/92.svg)
+
+### The protocol
+
+The Double Ratchet (Signal) combines a Diffie-Hellman ratchet (new DH shared secret per round trip) with a symmetric-key ratchet (new message keys per message). It provides forward secrecy (past messages safe if current key compromised) and post-compromise security (future messages safe after a round trip).
+
+### Threat model
+
+- **Using the same message key twice.**
+- **Accepting out-of-order messages incorrectly** — Signal *does* accept OOO, storing skipped keys for use at most once.
+- **Failing to ratchet after a DH key exchange** — loses post-compromise security.
+- **Dropping a message that triggered a DH ratchet** — the sender expects the recipient to see that message.
+
+### Frame system
+
+The DH ratchet and decryption happen in the same handler. Frame's `forward_event` is single-hop and cannot be relayed through an intermediate state's `$>` — attempting that would drop the triggering ciphertext. The correct model is a single state with inline ratchet-then-decrypt logic. The state machine doesn't owe you a state for every conceptual phase of a handler.
+
+```frame
+@@target python_3
+
+@@system DoubleRatchetSession {
+    interface:
+        initialize(shared_secret: str, remote_pub: str)
+        send_plaintext(m: str): str = ""
+        receive_ciphertext(header: str, ct: str): str = ""
+        close()
+        get_status(): str = "uninit"
+
+    machine:
+        $Uninit {
+            initialize(shared_secret: str, remote_pub: str) {
+                self.root_key = shared_secret
+                self.remote_pub = remote_pub
+                self.local_keypair = self.gen_dh_keypair()
+                self.kdf_rk_and_chain()
+                -> $Active
+            }
+            get_status(): str { @@:("uninit") }
+        }
+
+        $Active {
+            send_plaintext(m: str): str {
+                mk = self.advance_send_chain()
+                ct = self.encrypt(mk, m, self.local_keypair["public"])
+                self.zeroize(mk)
+                @@:(ct)
+            }
+
+            receive_ciphertext(header: str, ct: str): str {
+                # DH ratchet (inline) happens BEFORE decrypt, so the message
+                # key comes from the freshly-derived receiving chain.
+                if self.is_new_remote_pub(header):
+                    self.remote_pub = self.extract_remote_pub(header)
+                    self.kdf_rk_and_chain()
+                    self.local_keypair = self.gen_dh_keypair()
+                    self.kdf_rk_and_chain()
+                mk = self.advance_or_skip_recv_chain(header)
+                if mk == "":
+                    @@:("decryption_failed")
+                else:
+                    pt = self.decrypt(mk, ct, header)
+                    self.zeroize(mk)
+                    @@:(pt)
+            }
+
+            close() { -> $Closed }
+            get_status(): str { @@:("active") }
+        }
+
+        $Closed {
+            get_status(): str { @@:("closed") }
+        }
+
+    actions:
+        gen_dh_keypair() { return {"public": "", "private": ""} }
+        kdf_rk_and_chain() { pass }
+        advance_send_chain() { return "" }
+        advance_or_skip_recv_chain(h) { return "" }
+        is_new_remote_pub(h) { return False }
+        extract_remote_pub(h) { return "" }
+        encrypt(mk, m, pub) { return "" }
+        decrypt(mk, ct, h) { return "" }
+        zeroize(k) { pass }
+
+    domain:
+        root_key: str = ""
+        remote_pub: str = ""
+        local_keypair: dict = {"public": "", "private": ""}
+}
+```
+
+### Security properties by construction
+
+- **No message traffic before initialization.** `send_plaintext` and `receive_ciphertext` are empty-default in `$Uninit`. The session cannot encrypt before a root key exists.
+- **DH ratchet executes before decryption, inline, in a single handler.** When `is_new_remote_pub(header)` is true, the two `kdf_rk_and_chain()` calls and new keypair generation all complete before `advance_or_skip_recv_chain(header)` runs. The message key is drawn from the updated chain. This property is verifiable from the handler body — there's no cross-state sequencing for a reviewer to mentally simulate.
+- **Zeroization on every message-key use.** `send_plaintext` and the decrypt branch of `receive_ciphertext` both call `zeroize(mk)` after use. The message key cannot live past its one use because the handler structure explicitly erases it.
+- **Close is terminal.** After `close()`, neither send nor receive is handled.
+
+### What Frame does not protect
+
+- The KDF, DH, and AEAD primitives.
+- Header parsing vulnerabilities.
+- Correct implementation of the skipped-keys dictionary (that's inside `advance_or_skip_recv_chain`).
+- Replay within a chain if `advance_or_skip_recv_chain` fails to enforce single-use on the keys it returns.
+
+-----
+
+## 93. Capability Token (Macaroon-Style)
+
+[↑ up](#92-signal--double-ratchet-session) · [top](#table-of-contents) · [↓ down](#94-zero-trust-session-with-continuous-verification)
+
+![93 state diagram](images/cookbook/93.svg)
+
+### The protocol
+
+A macaroon is a bearer token with attached caveats — first-party caveats (expiry, action constraints) and third-party caveats (must be discharged by another service). The verifier iterates through caveats; all must pass for the token to authorize the action.
+
+### Threat model
+
+- **Acting on a token without verifying it.**
+- **Ignoring a caveat** (expiry, scope restriction).
+- **Using a token before obtaining discharges for third-party caveats.**
+- **Replaying a discharge after it was meant to be consumed.**
+
+### Frame system
+
+```frame
+@@target python_3
+
+@@system MacaroonVerifier {
+    interface:
+        present(token: str, discharges: list)
+        caveat_verified(passed: bool, caveat_index: int)
+        sig_verified(passed: bool)
+        perform(action: str, resource: str): str = "denied"
+        get_status(): str = ""
+
+    machine:
+        $Idle {
+            present(token: str, discharges: list) {
+                self.token = token
+                self.discharges = discharges
+                self.caveats = self.parse_caveats(token)
+                self.caveat_index = 0
+                -> $CheckingSignature
+            }
+            get_status(): str { @@:("idle") }
+        }
+
+        $CheckingSignature {
+            $>() { self.verify_hmac_chain(self.token, self.discharges) }
+
+            sig_verified(passed: bool) {
+                if passed:
+                    -> $CheckingCaveats
+                else:
+                    self.audit("sig_failed", self.token_id())
+                    -> $Rejected
+            }
+            get_status(): str { @@:("checking_sig") }
+        }
+
+        $CheckingCaveats {
+            $>() {
+                if self.caveat_index >= len(self.caveats):
+                    -> $Authorized
+                else:
+                    self.dispatch_caveat(self.caveats[self.caveat_index])
+            }
+
+            caveat_verified(passed: bool, caveat_index: int) {
+                if caveat_index != self.caveat_index:
+                    self.audit("caveat_reorder", caveat_index)
+                    -> $Rejected
+                elif not passed:
+                    self.audit("caveat_failed", caveat_index)
+                    -> $Rejected
+                else:
+                    self.caveat_index = self.caveat_index + 1
+                    -> $CheckingCaveats
+            }
+            get_status(): str { @@:(f"checking_caveat_{self.caveat_index}") }
+        }
+
+        $Authorized {
+            perform(action: str, resource: str): str {
+                if self.action_allowed_by_caveats(action, resource):
+                    self.do_action(action, resource)
+                    @@:("allowed")
+                else:
+                    self.audit("action_not_in_scope", action)
+                    @@:("denied")
+            }
+            get_status(): str { @@:("authorized") }
+        }
+
+        $Rejected {
+            get_status(): str { @@:("rejected") }
+        }
+
+    actions:
+        parse_caveats(t) { return [] }
+        verify_hmac_chain(t, d) { pass }
+        dispatch_caveat(c) { pass }
+        action_allowed_by_caveats(a, r) { return True }
+        do_action(a, r) { pass }
+        audit(e, d) { pass }
+        token_id() { return "" }
+
+    domain:
+        token: str = ""
+        discharges: list = []
+        caveats: list = []
+        caveat_index: int = 0
+}
+```
+
+### Security properties by construction
+
+- **Signature is checked before any caveat.** `$CheckingCaveats` is unreachable without passing through `$CheckingSignature` with a successful verification.
+- **Caveats cannot be skipped.** `$CheckingCaveats` re-enters itself per caveat, incrementing `caveat_index`. Only when `caveat_index` has reached the end does it transition to `$Authorized`.
+- **Caveats are checked in order.** A mis-indexed caveat result triggers `$Rejected` — an attacker cannot submit discharges out of order to confuse the verifier.
+- **`perform()` is only available in `$Authorized`.** In every other state the default `"denied"` applies.
+- **Terminal rejection.** Once in `$Rejected`, no handler advances.
+
+### What Frame does not protect
+
+- The HMAC primitive itself.
+- Token confidentiality in transit.
+- The discharge issuer's correctness.
+
+-----
+
+## 94. Zero-Trust Session with Continuous Verification
+
+[↑ up](#93-capability-token-macaroon-style) · [top](#table-of-contents) · [↓ down](#95-secure-boot--measured-boot-chain)
+
+![94 state diagram](images/cookbook/94.svg)
+
+### The protocol
+
+Zero Trust Architecture (NIST SP 800-207) rejects the perimeter model. Every request is authenticated, authorized, and evaluated against current signals: device posture, user risk score, anomaly detection. A session that degrades in trust is downgraded or terminated. Session integrity is additionally defended by **binding the session to a specific device/channel identifier** — a stolen session token used from a different channel is detected.
+
+### Threat model
+
+- **Session hijacking after initial authentication** — defended by explicit channel binding.
+- **Privilege persistence after user risk signal changes.**
+- **Failing to re-evaluate on policy change.**
+
+### Frame system
+
+Uses an HSM parent `$LiveSession` to centralize channel-binding checks, heartbeat, logout, and the `channel_binding_mismatch` hijack event across both `$FullAccess` and `$Degraded`. Return values are set with `@@:()` *before* transitions — code after a transition is unreachable per the language reference.
+
+```frame
+@@target python_3
+
+@@system ZeroTrustSession {
+    interface:
+        authenticate(user_id: str, device_id: str, channel_id: str, mfa_factor: str)
+        auth_result(passed: bool, risk_score: int)
+        request_resource(resource: str, channel_id: str): str = "denied"
+        posture_update(score: int)
+        risk_signal_update(score: int)
+        channel_binding_mismatch()
+        session_heartbeat()
+        logout()
+        get_status(): str = ""
+
+    machine:
+        $Anonymous {
+            authenticate(user_id: str, device_id: str, channel_id: str, mfa_factor: str) {
+                self.user_id = user_id
+                self.device_id = device_id
+                self.bound_channel = channel_id
+                self.send_auth(user_id, device_id, mfa_factor)
+                -> $Authenticating
+            }
+            get_status(): str { @@:("anonymous") }
+        }
+
+        $Authenticating {
+            auth_result(passed: bool, risk_score: int) {
+                if not passed:
+                    self.audit("auth_failed", self.user_id)
+                    -> $Anonymous
+                elif risk_score > self.high_risk_threshold:
+                    -> $StepUpRequired
+                else:
+                    self.current_risk = risk_score
+                    -> $FullAccess
+            }
+            get_status(): str { @@:("authenticating") }
+        }
+
+        $StepUpRequired {
+            authenticate(user_id: str, device_id: str, channel_id: str, mfa_factor: str) {
+                self.send_auth(user_id, device_id, mfa_factor)
+                -> $Authenticating
+            }
+            request_resource(resource: str, channel_id: str): str { @@:("denied_stepup") }
+            logout() { -> $Anonymous }
+            get_status(): str { @@:("step_up_required") }
+        }
+
+        # Abstract parent: common cross-cutting behavior for active sessions.
+        # Channel-binding check, heartbeat, logout, and hijack detection
+        # live here once rather than being duplicated in each child state.
+        $LiveSession {
+            channel_binding_mismatch() {
+                self.audit("hijack_detected", self.user_id)
+                -> $Terminated
+            }
+            session_heartbeat() { pass }
+            logout() { -> $Anonymous }
+        }
+
+        $FullAccess => $LiveSession {
+            request_resource(resource: str, channel_id: str): str {
+                if channel_id != self.bound_channel:
+                    self.audit("channel_mismatch", resource)
+                    @@:("denied_channel")
+                    -> $Terminated
+                elif self.policy_allows(self.user_id, resource, self.current_risk):
+                    self.audit("access_granted", resource)
+                    @@:("allowed")
+                else:
+                    self.audit("policy_denied", resource)
+                    @@:("denied_policy")
+            }
+            posture_update(score: int) {
+                if score < self.min_posture:
+                    self.audit("posture_degraded", score)
+                    -> $Degraded
+            }
+            risk_signal_update(score: int) {
+                self.current_risk = score
+                if score > self.block_threshold:
+                    self.audit("risk_blocked", score)
+                    -> $Terminated
+                elif score > self.high_risk_threshold:
+                    -> $Degraded
+            }
+            get_status(): str { @@:("full_access") }
+            => $^
+        }
+
+        $Degraded => $LiveSession {
+            request_resource(resource: str, channel_id: str): str {
+                if channel_id != self.bound_channel:
+                    self.audit("channel_mismatch", resource)
+                    @@:("denied_channel")
+                    -> $Terminated
+                elif self.policy_allows_low_trust(self.user_id, resource):
+                    @@:("allowed_low_trust")
+                else:
+                    @@:("denied_low_trust")
+            }
+            risk_signal_update(score: int) {
+                self.current_risk = score
+                if score > self.block_threshold:
+                    -> $Terminated
+            }
+            posture_update(score: int) {
+                if score >= self.min_posture:
+                    -> $FullAccess
+            }
+            get_status(): str { @@:("degraded") }
+            => $^
+        }
+
+        $Terminated {
+            get_status(): str { @@:("terminated") }
+        }
+
+    actions:
+        send_auth(u, d, f) { pass }
+        policy_allows(u, r, risk) { return True }
+        policy_allows_low_trust(u, r) { return False }
+        audit(e, d) { pass }
+
+    domain:
+        user_id: str = ""
+        device_id: str = ""
+        bound_channel: str = ""
+        current_risk: int = 0
+        high_risk_threshold: int = 70
+        block_threshold: int = 90
+        min_posture: int = 60
+}
+```
+
+### Security properties by construction
+
+- **Resource access requires authentication.** `request_resource` in `$Anonymous` and `$Authenticating` returns the default `"denied"`. No handler shortcuts to the resource layer.
+- **Session is bound to a channel.** The `channel_id` parameter on `authenticate()` is recorded as `bound_channel`. Every `request_resource` call re-checks the caller's `channel_id` against it and terminates on mismatch. Stolen session tokens replayed from a different channel are structurally rejected.
+- **Hijack-detection event is centralized.** `channel_binding_mismatch()` lives on `$LiveSession` once and is inherited by `$FullAccess` and `$Degraded` via `=> $^`. An out-of-band detection of a compromised session terminates regardless of which active state the session is in.
+- **Risk signals cannot be ignored.** `risk_signal_update` in `$FullAccess` and `$Degraded` evaluates against thresholds and transitions the session automatically.
+- **Step-up required for high-risk initial auth.** The only path to `$FullAccess` on a high-risk score is via `$StepUpRequired` → re-authenticate → `$Authenticating` → `$FullAccess`.
+- **Terminated is terminal.** Once risk crosses the block threshold or a hijack is detected, no request is served.
+- **Posture degradation is a structural downgrade.** A device posture drop in `$FullAccess` moves to `$Degraded`, where `request_resource` is restricted by a stricter policy.
+
+### What Frame does not protect
+
+- Correctness of `policy_allows` logic itself.
+- The risk-scoring model.
+- Signal-injection attacks (poisoning the risk inputs).
+- The cryptographic mechanism that derives `channel_id` (mTLS channel binding, token binding per RFC 8473, etc.).
+
+-----
+
+## 95. Secure Boot / Measured Boot Chain
+
+[↑ up](#94-zero-trust-session-with-continuous-verification) · [top](#table-of-contents) · [↓ down](#why-state-machines-fit-security)
+
+![95 state diagram](images/cookbook/95.svg)
+
+### The protocol
+
+A secure boot chain proceeds through immutable ROM (the Core Root of Trust for Measurement, or CRTM), boot loader, kernel, and init. Each stage verifies the signature of the next before transferring control. A measured boot additionally extends each measurement into a TPM PCR. If any stage fails verification or an unexpected measurement is observed, boot halts or enters recovery.
+
+### Threat model
+
+- **Loading an unsigned next stage.**
+- **Skipping measurement extension** (compromises later attestation).
+- **Continuing boot after a verification failure.**
+- **Rolling back to a vulnerable prior version.**
+
+### Frame system
+
+Per the TCG PC Client spec, the CRTM measures itself into PCR[0] before measuring the bootloader into PCR[1]. This version includes the CRTM self-measurement. The init stage has no antirollback gate in this demo — real systems typically hand off to IMA or dm-verity at that point for runtime file-integrity enforcement. That choice is flagged inline.
+
+```frame
+@@target python_3
+
+@@system SecureBoot {
+    interface:
+        power_on()
+        verify_result(stage: int, passed: int)
+        measurement_extended(stage: int)
+        antirollback_check(passed: int)
+        get_stage(): int = -1
+
+    machine:
+        # $Rom measures ITSELF into PCR[0] first (CRTM self-measurement
+        # per TCG PC Client spec), then verifies the bootloader signature.
+        $Rom {
+            $>() {
+                self.current_stage = 0
+                self.extend_pcr(0)
+            }
+            measurement_extended(stage: int) {
+                if stage == 0:
+                    self.verify_next(1)
+            }
+            verify_result(stage: int, passed: int) {
+                if stage == 1 and passed != 0:
+                    -> $VerifyingBootloader
+                else:
+                    self.halt("bootloader_sig_bad")
+                    -> $Halted
+            }
+            get_stage(): int { @@:(0) }
+        }
+
+        $VerifyingBootloader {
+            $>() { self.extend_pcr(1) }
+            measurement_extended(stage: int) {
+                if stage == 1:
+                    -> $AntirollbackBootloader
+            }
+            get_stage(): int { @@:(1) }
+        }
+
+        $AntirollbackBootloader {
+            $>() { self.check_version(1) }
+            antirollback_check(passed: int) {
+                if passed != 0:
+                    self.load_and_jump(1)
+                    -> $BootloaderRunning
+                else:
+                    self.halt("bootloader_rollback")
+                    -> $Halted
+            }
+            get_stage(): int { @@:(1) }
+        }
+
+        $BootloaderRunning {
+            $>() { self.verify_next(2) }
+            verify_result(stage: int, passed: int) {
+                if stage == 2 and passed != 0:
+                    -> $VerifyingKernel
+                else:
+                    self.halt("kernel_sig_bad")
+                    -> $Recovery
+            }
+            get_stage(): int { @@:(2) }
+        }
+
+        $VerifyingKernel {
+            $>() { self.extend_pcr(2) }
+            measurement_extended(stage: int) {
+                if stage == 2:
+                    -> $AntirollbackKernel
+            }
+            get_stage(): int { @@:(2) }
+        }
+
+        $AntirollbackKernel {
+            $>() { self.check_version(2) }
+            antirollback_check(passed: int) {
+                if passed != 0:
+                    self.load_and_jump(2)
+                    -> $KernelRunning
+                else:
+                    self.halt("kernel_rollback")
+                    -> $Recovery
+            }
+            get_stage(): int { @@:(2) }
+        }
+
+        $KernelRunning {
+            $>() { self.verify_next(3) }
+            verify_result(stage: int, passed: int) {
+                if stage == 3 and passed != 0:
+                    -> $VerifyingInit
+                else:
+                    self.halt("init_sig_bad")
+                    -> $Recovery
+            }
+            get_stage(): int { @@:(3) }
+        }
+
+        # NOTE: No antirollback gate for init in this model — runtime
+        # file integrity is typically delegated to IMA/dm-verity after
+        # kernel takeover. If your threat model requires init rollback
+        # protection, add $AntirollbackInit between $VerifyingInit and $Booted.
+        $VerifyingInit {
+            $>() { self.extend_pcr(3) }
+            measurement_extended(stage: int) {
+                if stage == 3:
+                    self.load_and_jump(3)
+                    -> $Booted
+            }
+            get_stage(): int { @@:(3) }
+        }
+
+        $Booted {
+            get_stage(): int { @@:(4) }
+        }
+        $Recovery {
+            get_stage(): int { @@:(-2) }
+        }
+        $Halted {
+            get_stage(): int { @@:(-1) }
+        }
+
+    actions:
+        verify_next(stage) { pass }
+        extend_pcr(stage) { pass }
+        check_version(stage) { pass }
+        load_and_jump(stage) { pass }
+        halt(reason) { pass }
+
+    domain:
+        current_stage: int = 0
+}
+```
+
+### Security properties by construction
+
+- **CRTM self-measurement comes first.** `$Rom.$>` extends PCR[0] before anything else. Attestation quotes from any later stage include the CRTM's own measurement as the root of the chain.
+- **Verify-then-measure-then-antirollback-then-jump.** Each stage from the bootloader onward is reached only after the previous stage's signature check, measurement extension, and antirollback check have all completed. There is no handler that jumps to the next stage without all three.
+- **CRTM verification failure is terminal.** `$Rom` can only transition to `$VerifyingBootloader` (success) or `$Halted` (failure). There is no recovery branch at the root of trust — a compromised bootloader signature means the device does not boot.
+- **Later stages have a recovery branch.** From the bootloader onward, signature failure transitions to `$Recovery` rather than `$Halted`. This matches typical real-world designs where the ROM is the immutable trust anchor and post-ROM failures can fall back to a signed recovery image.
+- **Measurement extension is mandatory.** `load_and_jump` is never called before `extend_pcr` has fired `measurement_extended`. Attestation reports based on PCR values will reflect every stage.
+- **Antirollback is mandatory at stages with a gate.** Each `$Antirollback*` state must return `passed=1` before the load-and-jump action runs. The init stage's omission of this gate is an intentional design choice documented inline.
+
+### What Frame does not protect
+
+- The cryptographic primitives (RSA, ECDSA).
+- TPM hardware integrity.
+- Fault-injection attacks at the silicon level (voltage glitching, EM injection).
+- Runtime file-integrity after `$Booted` — that's IMA / dm-verity / equivalent.
+
+-----
+
+## Why state machines fit security
+
+Most security protocols are already state machines in prose form. RFC 8446 (TLS 1.3) includes a state machine diagram. RFC 6749 (OAuth) describes states and transitions. Signal's specification is explicit about the ratchet state. NIST SP 800-207 reasons about session state. Secure boot is literally a sequence of states.
+
+Implemented as imperative code with booleans and guards, these protocols produce scattered `if`-checks, invisible safety properties, and transitions that reviewers must trace by hand. Implemented as Frame systems, the security property *is* the shape of the graph: missing a gate is a visible missing node, adding a bypass is a visible new edge, and impossible states are impossible because they have no handler — not because a check rejects them.
+
+The authoritative statement of each protocol above is the Frame source, diffed in version control, diagrammed with `framec system.fpy -l graphviz | dot -Tsvg`, and compiled to the same class the production system runs.
 
 -----
 
