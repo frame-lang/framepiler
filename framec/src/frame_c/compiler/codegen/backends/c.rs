@@ -257,8 +257,13 @@ impl LanguageBackend for CBackend {
                     params_str
                 );
                 ctx.push_indent();
+                // calloc, not malloc: zero-initializes every field so
+                // domain/state primitives without an explicit default
+                // start at 0/false/NULL instead of holding uninitialized
+                // memory. Frame's author-visible contract is "a declared
+                // var is usable after construction"; malloc breaks it.
                 result.push_str(&format!(
-                    "{}{}* self = malloc(sizeof({}));\n",
+                    "{}{}* self = calloc(1, sizeof({}));\n",
                     ctx.get_indent(),
                     class_name,
                     class_name

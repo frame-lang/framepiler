@@ -1919,7 +1919,13 @@ pub(crate) fn generate_frame_expansion(
                     super::rust_system::rust_expand_state_var_read(ctx, &var_name)
                 }
                 TargetLanguage::C => {
-                    // For C, access via FrameDict_get with type-aware cast
+                    // For C, access via FrameDict_get with type-aware cast.
+                    // When we're inside an HSM-forwarded parent handler,
+                    // `use_sv_comp` is set: read from the local
+                    // `__sv_comp` pointer (walked up to the owning state
+                    // at dispatch entry by fmt_hsm_nav) instead of the
+                    // currently-active compartment, which is still the
+                    // child's at this point.
                     let c_type = ctx
                         .state_var_types
                         .get(var_name.as_str())
@@ -1929,9 +1935,14 @@ pub(crate) fn generate_frame_expansion(
                         "char*" | "const char*" | "str" | "string" | "String" => "(const char*)",
                         _ => "(int)(intptr_t)",
                     };
+                    let comp = if ctx.use_sv_comp {
+                        "__sv_comp"
+                    } else {
+                        "self->__compartment"
+                    };
                     format!(
-                        "{}{}_FrameDict_get(self->__compartment->state_vars, \"{}\")",
-                        cast, ctx.system_name, var_name
+                        "{}{}_FrameDict_get({}->state_vars, \"{}\")",
+                        cast, ctx.system_name, comp, var_name
                     )
                 }
                 TargetLanguage::Cpp => {
