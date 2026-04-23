@@ -14351,7 +14351,7 @@ The companion essay [Parsers as Composed State Machines](articles/research/Parse
                 self.tokens = tokens
                 self.pos = start
                 self.consumed = 0
-                -> $SeenNothing
+                -> "begin" $SeenNothing
             }
             tokens_consumed(): int { @@:(self.consumed) }
         }
@@ -14361,11 +14361,11 @@ The companion essay [Parsers as Composed State Machines](articles/research/Parse
                 tok = self.peek()
                 self.consumed = self.consumed + 1
                 if tok["kind"] == "IDENT" and self.is_type_name(tok["value"]):
-                    -> $SeenTypeIdent
+                    -> "type-name" $SeenTypeIdent
                 elif tok["kind"] == "IDENT":
-                    -> $SeenPlainIdent
+                    -> "ident" $SeenPlainIdent
                 else:
-                    -> ("expr") $Verdict
+                    -> ("expr") "non-ident" $Verdict
             }
         }
 
@@ -14374,11 +14374,11 @@ The companion essay [Parsers as Composed State Machines](articles/research/Parse
                 tok = self.peek()
                 self.consumed = self.consumed + 1
                 if tok["value"] == "*":
-                    -> $SeenTypeStar
+                    -> "*" $SeenTypeStar
                 elif tok["kind"] == "IDENT":
-                    -> ("decl") $Verdict    # `foo bar` — value decl
+                    -> ("decl") "ident" $Verdict    # `foo bar` — value decl
                 else:
-                    -> ("expr") $Verdict    # `foo;` — bare expression
+                    -> ("expr") "other" $Verdict    # `foo;` — bare expression
             }
         }
 
@@ -14387,9 +14387,9 @@ The companion essay [Parsers as Composed State Machines](articles/research/Parse
                 tok = self.peek()
                 self.consumed = self.consumed + 1
                 if tok["kind"] == "IDENT":
-                    -> ("decl") $Verdict    # `foo * bar` — pointer decl
+                    -> ("decl") "ident" $Verdict    # `foo * bar` — pointer decl
                 else:
-                    -> ("expr") $Verdict    # `foo *` — error or expr
+                    -> ("expr") "non-ident" $Verdict    # `foo *` — error or expr
             }
         }
 
@@ -14398,9 +14398,9 @@ The companion essay [Parsers as Composed State Machines](articles/research/Parse
                 tok = self.peek()
                 self.consumed = self.consumed + 1
                 if tok["value"] == "(":
-                    -> ("call") $Verdict    # `foo(` — function call
+                    -> ("call") "(" $Verdict    # `foo(` — function call
                 else:
-                    -> ("expr") $Verdict    # any other continuation
+                    -> ("expr") "non-paren" $Verdict    # any other continuation
             }
         }
 
@@ -14409,7 +14409,7 @@ The companion essay [Parsers as Composed State Machines](articles/research/Parse
             $>(r: str) {
                 $.result = r
                 @@:($.result)
-                -> $Ready
+                -> "reset" $Ready
             }
         }
 
