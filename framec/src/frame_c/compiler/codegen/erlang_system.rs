@@ -980,6 +980,15 @@ fn erlang_wrap_self_call_guards(
 
     // Recursion: wrap from the first dispatch onward in a case, then
     // recurse on the tail so nested dispatches get nested cases.
+    //
+    // CRITICAL: if the dispatch sits inside an arm of an enclosing
+    // case block (e.g., the `; false ->` arm of an `if/else`), the
+    // tail we wrap must NOT extend past the arm's closing delimiter
+    // — otherwise we'd suck the outer case's `end` or sibling arm
+    // header into the guard case's atom arm, producing malformed
+    // nested-case output. Scan for the first boundary (`; false ->`,
+    // `; _ ->`, or a standalone `end` / `end,` / `end;` at shallow
+    // depth) and cap the tail there.
     for (idx, line) in lines.iter().enumerate() {
         if !is_dispatch_call(line) {
             continue;
@@ -989,7 +998,35 @@ fn erlang_wrap_self_call_guards(
             None => continue,
         };
 
-        let inner_wrapped = erlang_wrap_self_call_guards(&lines[idx + 1..], state_atom);
+        // Find the tail's upper bound. Track case depth from the
+        // dispatch onward: opens on `case … of`, closes on `end`.
+        // The first arm-separator (`; false` / `; _`) OR the first
+        // `end` at depth 0 signals the tail ends.
+        let mut depth: i32 = 0;
+        let mut tail_end = lines.len();
+        for (j, l) in lines.iter().enumerate().skip(idx + 1) {
+            let t = l.trim();
+            let opens = (t.starts_with("case ") || t.starts_with("case("))
+                && (t.ends_with(" of") || t.ends_with(" of,"));
+            let closes = t == "end" || t == "end," || t == "end;";
+            if opens {
+                depth += 1;
+                continue;
+            }
+            if depth == 0 && (t.starts_with("; false") || t.starts_with("; _")) {
+                tail_end = j;
+                break;
+            }
+            if closes {
+                if depth == 0 {
+                    tail_end = j;
+                    break;
+                }
+                depth -= 1;
+            }
+        }
+        let tail_slice = &lines[idx + 1..tail_end];
+        let inner_wrapped = erlang_wrap_self_call_guards(tail_slice, state_atom);
         if inner_wrapped.is_empty() {
             // No tail — the dispatch was the last statement. No guard
             // needed because there's nothing to suppress; the outer
@@ -1010,11 +1047,64 @@ fn erlang_wrap_self_call_guards(
         // inner lines that ALREADY contain deeper structure must preserve
         // their relative indent. So re-indent by prefixing 8 spaces rather
         // than resetting.
+        //
+        // Atom-arm terminal: if the inner body does NOT end with a
+        // gen_statem-shaped tuple (`{keep_state,…}`/`{next_state,…}` or
+        // a `frame_transition__(…)` call), the arm's final expression
+        // is something like `__ReturnVal = …` or a bare value. gen_statem
+        // requires a tuple. Inject `{keep_state, <final_data>, [{reply,
+        // From, __ReturnVal|ok}]}` as the arm's terminator.
+        let last_expr_is_terminal = inner_wrapped
+            .last()
+            .map(|l| {
+                let t = l.trim();
+                t.starts_with("{keep_state,")
+                    || t.starts_with("{next_state,")
+                    || t.starts_with("frame_transition__(")
+                    || t == "end"
+                    || t == "end,"
+                    || t == "end;"
+            })
+            .unwrap_or(false);
+        let arm_has_terminal_tuple = inner_wrapped.iter().any(|l| {
+            let t = l.trim();
+            t.starts_with("{keep_state,")
+                || t.starts_with("{next_state,")
+                || t.starts_with("frame_transition__(")
+        });
+        let arm_final_data: String = inner_wrapped
+            .iter()
+            .rev()
+            .find_map(|l| {
+                let t = l.trim();
+                if t.starts_with("Data") {
+                    let rest = &t[4..];
+                    let n: usize = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit())
+                        .count();
+                    if n > 0 && rest[n..].trim_start().starts_with('=') {
+                        return Some(t[..4 + n].to_string());
+                    }
+                }
+                None
+            })
+            .unwrap_or_else(|| data_var.clone());
+        let arm_reply = if inner_wrapped
+            .iter()
+            .any(|l| l.trim().starts_with("__ReturnVal = "))
+        {
+            "__ReturnVal".to_string()
+        } else {
+            "ok".to_string()
+        };
+        let inject_terminal = !last_expr_is_terminal && !arm_has_terminal_tuple;
+
         let last = inner_wrapped.len().saturating_sub(1);
         for (i, l) in inner_wrapped.iter().enumerate() {
             // Prepend 8 spaces to whatever relative indent the line has.
             let re_indent = format!("        {}", l);
-            if i == last {
+            if i == last && !inject_terminal {
                 // Arms are separated by `;`. The last statement of the
                 // `atom ->` arm needs a trailing `;` (not `,`); strip any
                 // pre-existing comma first.
@@ -1026,6 +1116,12 @@ fn erlang_wrap_self_call_guards(
                 result.push(re_indent);
             }
         }
+        if inject_terminal {
+            result.push(format!(
+                "        {{keep_state, {}, [{{reply, From, {}}}]}};",
+                arm_final_data, arm_reply
+            ));
+        }
 
         result.push(format!("{ind}    _ ->", ind = ind));
         result.push(format!(
@@ -1033,6 +1129,13 @@ fn erlang_wrap_self_call_guards(
             ind = ind, dv = data_var
         ));
         result.push(format!("{ind}end", ind = ind));
+        // Anything past tail_end (the enclosing case's arm boundary or
+        // `end`) belongs to the outer structure, not the guard. Append
+        // it verbatim so the outer case's closing delimiter and sibling
+        // arms are preserved.
+        for l in &lines[tail_end..] {
+            result.push(l.clone());
+        }
         return result;
     }
     lines.to_vec()
@@ -1472,7 +1575,7 @@ fn analyze_case_arms(
             continue;
         }
 
-        if t == "end" || t == "end," {
+        if t == "end" || t == "end," || t == "end;" {
             if depth == 1 {
                 // Close current arm
                 if let Some(mut arm) = current_arm.take() {
