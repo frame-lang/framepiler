@@ -2408,7 +2408,20 @@ pub(crate) fn generate_frame_expansion(
                     TargetLanguage::Graphviz => unreachable!(),
                 }
             } else {
-                // Read: @@:return
+                // Read: @@:return.
+                //
+                // The context-stack slot is an untyped `Any` / `Object`
+                // / `void*` / `std::any` / `Option<Box<dyn Any>>` in
+                // every typed target. Reading `@@:return` as that raw
+                // slot fails as soon as the value hits an arithmetic
+                // operator or a typed-method argument. Emit a
+                // target-native downcast based on the handler's
+                // declared return type (`ctx.current_return_type`)
+                // so the read evaluates to a typed rvalue.
+                //
+                // Dynamic-typed targets (Python, JS, Ruby, Lua, PHP,
+                // Dart, GDScript) need no cast.
+                let rt = ctx.current_return_type.as_deref().unwrap_or("");
                 match lang {
                     TargetLanguage::Python3 | TargetLanguage::GDScript => {
                         "self._context_stack[-1]._return".to_string()
@@ -2418,25 +2431,78 @@ pub(crate) fn generate_frame_expansion(
                     | TargetLanguage::JavaScript => {
                         "this._context_stack[this._context_stack.length - 1]._return".to_string()
                     }
-                    TargetLanguage::C => format!("{}_RETURN(self)", ctx.system_name),
-                    TargetLanguage::Rust => super::rust_system::rust_context_return_read(),
+                    TargetLanguage::C => {
+                        // `<Sys>_RETURN(self)` macro yields `void*`. When the
+                        // handler's declared return type is a primitive, cast
+                        // the read via `(int)(intptr_t)` (for int/bool — C's
+                        // bool is int) or `(const char*)` for strings so the
+                        // rvalue is usable in typed expression positions.
+                        let raw = format!("{}_RETURN(self)", ctx.system_name);
+                        match rt {
+                            "int" | "bool" => {
+                                format!("((int)(intptr_t){})", raw)
+                            }
+                            "str" => format!("((const char*){})", raw),
+                            _ => raw,
+                        }
+                    }
+                    TargetLanguage::Rust => super::rust_system::rust_context_return_read_typed(rt),
                     TargetLanguage::Cpp => {
-                        "std::any_cast<std::string>(_context_stack.back()._return)".to_string()
+                        let cpp_type = match rt {
+                            "int" => "int",
+                            "str" => "std::string",
+                            "bool" => "bool",
+                            _ => "std::string", // legacy default
+                        };
+                        format!(
+                            "std::any_cast<{}>(_context_stack.back()._return)",
+                            cpp_type
+                        )
                     }
                     TargetLanguage::Java => {
-                        "_context_stack.get(_context_stack.size() - 1)._return".to_string()
+                        let raw = "_context_stack.get(_context_stack.size() - 1)._return";
+                        match rt {
+                            "int"  => format!("((Integer) {}).intValue()", raw),
+                            "bool" => format!("((Boolean) {}).booleanValue()", raw),
+                            "str"  => format!("((String) {})", raw),
+                            _      => raw.to_string(),
+                        }
                     }
                     TargetLanguage::Kotlin => {
-                        "_context_stack[_context_stack.size - 1]._return".to_string()
+                        let raw = "_context_stack[_context_stack.size - 1]._return";
+                        match rt {
+                            "int"  => format!("({} as Int)", raw),
+                            "bool" => format!("({} as Boolean)", raw),
+                            "str"  => format!("({} as String)", raw),
+                            _      => raw.to_string(),
+                        }
                     }
                     TargetLanguage::Swift => {
-                        "_context_stack[_context_stack.count - 1]._return".to_string()
+                        let raw = "_context_stack[_context_stack.count - 1]._return";
+                        match rt {
+                            "int"  => format!("({} as! Int)", raw),
+                            "bool" => format!("({} as! Bool)", raw),
+                            "str"  => format!("({} as! String)", raw),
+                            _      => raw.to_string(),
+                        }
                     }
                     TargetLanguage::CSharp => {
-                        "_context_stack[_context_stack.Count - 1]._return".to_string()
+                        let raw = "_context_stack[_context_stack.Count - 1]._return";
+                        match rt {
+                            "int"  => format!("((int) {})", raw),
+                            "bool" => format!("((bool) {})", raw),
+                            "str"  => format!("((string) {})", raw),
+                            _      => raw.to_string(),
+                        }
                     }
                     TargetLanguage::Go => {
-                        "s._context_stack[len(s._context_stack)-1]._return".to_string()
+                        let raw = "s._context_stack[len(s._context_stack)-1]._return";
+                        match rt {
+                            "int"  => format!("{}.(int)", raw),
+                            "bool" => format!("{}.(bool)", raw),
+                            "str"  => format!("{}.(string)", raw),
+                            _      => raw.to_string(),
+                        }
                     }
                     TargetLanguage::Php => {
                         "$this->_context_stack[count($this->_context_stack) - 1]->_return"
@@ -2750,38 +2816,47 @@ pub(crate) fn generate_frame_expansion(
             }
         }
         FrameSegmentKind::ContextParams => {
-            // @@:params.key - dot-accessor for interface parameter (positional)
+            // @@:params.<key> — handler-interface parameter access.
+            //
+            // Every target's state-dispatch prologue binds the declared
+            // params as TYPED locals at the top of the handler body
+            // (e.g., `x := __e._parameters[0].(int)` for Go,
+            // `let x = __e.parameters[0] as! Int` for Swift, etc.).
+            // Emitting `@@:params.x` as the raw `_parameters[idx]`
+            // access (what this branch used to do) dropped the type
+            // info and failed in typed targets as soon as the value
+            // hit an arithmetic operator or a typed-method arg —
+            // especially when nested inside another Frame construct
+            // like `@@:self.typed_method(@@:params.x)`.
+            //
+            // The correct translation is the declared param name
+            // itself: it is the already-typed local the prologue
+            // bound. Dynamic targets (Python, JS, Ruby, …) see the
+            // same name — just an ordinary local variable.
+            //
+            // Erlang's handler dispatch binds params with the
+            // capitalized variant (`X` = the param `x`), matching
+            // Erlang's variable-identifier rule.
             let key = if let SegmentMetadata::ContextParams { key } = metadata {
                 key.clone()
             } else {
                 extract_dot_key(&segment_text, "@@:params") // fallback
             };
-            // Resolve param name to positional index
-            let index = ctx.event_param_names
-                .get(&ctx.event_name)
-                .and_then(|names| names.iter().position(|n| n == &key))
-                .unwrap_or(0);
-            let lua_index = index + 1; // Lua is 1-indexed
             match lang {
-                TargetLanguage::Python3 | TargetLanguage::GDScript => format!("self._context_stack[-1].event._parameters[{}]", index),
-                TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", index),
-                TargetLanguage::Dart => format!("this._context_stack[this._context_stack.length - 1].event._parameters[{}]", index),
-                TargetLanguage::C => format!(
-                    "((({}_FrameContext*){}_FrameVec_last(self->_context_stack))->event->_parameters->items[{}])",
-                    ctx.system_name, ctx.system_name, index
-                ),
-                TargetLanguage::Rust => super::rust_system::rust_context_param(&key),
-                TargetLanguage::Cpp => format!("_context_stack.back()._event._parameters[{}]", index),
-                TargetLanguage::Java => format!("_context_stack.get(_context_stack.size() - 1)._event._parameters.get({})", index),
-                TargetLanguage::Kotlin => format!("_context_stack[_context_stack.size - 1]._event._parameters[{}]", index),
-                TargetLanguage::Swift => format!("_context_stack[_context_stack.count - 1]._event._parameters[{}]", index),
-                TargetLanguage::CSharp => format!("_context_stack[_context_stack.Count - 1]._event._parameters[{}]", index),
-                TargetLanguage::Go => format!("s._context_stack[len(s._context_stack)-1]._event._parameters[{}]", index),
-                TargetLanguage::Php => format!("$this->_context_stack[count($this->_context_stack) - 1]->_event->_parameters[{}]", index),
-                TargetLanguage::Ruby => format!("@_context_stack[@_context_stack.length - 1]._event._parameters[{}]", index),
-                TargetLanguage::Lua => format!("self._context_stack[#self._context_stack]._event._parameters[{}]", lua_index),
-                TargetLanguage::Erlang => "undefined".to_string(), // params accessed as variables directly
+                TargetLanguage::Erlang => {
+                    // Erlang bindings use the capitalized form (framec's
+                    // dispatch prologue rebinds `x` as `X = maps:get(...)`).
+                    let mut chars = key.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                    }
+                }
+                // PHP identifies locals with a `$` prefix. The handler
+                // prologue binds the param as `$x = $__e->_parameters[0]`.
+                TargetLanguage::Php => format!("${}", key),
                 TargetLanguage::Graphviz => unreachable!(),
+                _ => key,
             }
         }
         FrameSegmentKind::TaggedInstantiation => {

@@ -1151,6 +1151,31 @@ pub(crate) fn rust_context_return_read() -> String {
     "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())".to_string()
 }
 
+/// `@@:return` read with a declared return type — downcasts the
+/// boxed `Any` to the Frame type's native Rust representation so
+/// the read is usable as an rvalue in expressions and as a typed
+/// arg to a self-call. Falls back to the untyped `Option<&Box>`
+/// form when the handler's return type is unknown/unsupported.
+pub(crate) fn rust_context_return_read_typed(frame_type: &str) -> String {
+    let base =
+        "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())";
+    match frame_type {
+        "int" => format!(
+            "({}.and_then(|b| b.downcast_ref::<i64>()).copied().unwrap_or(0))",
+            base
+        ),
+        "bool" => format!(
+            "({}.and_then(|b| b.downcast_ref::<bool>()).copied().unwrap_or(false))",
+            base
+        ),
+        "str" => format!(
+            "({}.and_then(|b| b.downcast_ref::<String>()).cloned().unwrap_or_default())",
+            base
+        ),
+        _ => base.to_string(),
+    }
+}
+
 /// `@@:system.state` — current state name
 pub(crate) fn rust_system_state() -> String {
     "self.__compartment.state.clone()".to_string()
