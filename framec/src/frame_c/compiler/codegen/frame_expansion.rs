@@ -2952,7 +2952,7 @@ pub(crate) fn generate_frame_expansion(
             // @@:self.method(args) — reentrant interface call with transition guard
             // Extract method name and args from segment text: @@:self.method(args)
             let trimmed = segment_text.trim();
-            let (method_name, args_with_parens) =
+            let (method_name, raw_args_with_parens) =
                 if let SegmentMetadata::SelfCall { method, args } = metadata {
                     (method.as_str(), args.as_str())
                 } else {
@@ -2960,6 +2960,25 @@ pub(crate) fn generate_frame_expansion(
                     let paren_pos = after_self.find('(').unwrap_or(after_self.len());
                     (&after_self[..paren_pos], &after_self[paren_pos..])
                 };
+            // Recursively expand Frame syntax nested inside the args —
+            // e.g. `@@:self.foo(@@:return)`, `@@:self.foo(@@:params.x)`,
+            // `@@:self.foo(self.op())`, etc. Without this the inner
+            // segment would leak verbatim into target source and fail
+            // to parse (e.g. literal `@@:return` in Python output).
+            let expanded_args = if raw_args_with_parens.len() >= 2
+                && raw_args_with_parens.starts_with('(')
+                && raw_args_with_parens.ends_with(')')
+            {
+                let inner = &raw_args_with_parens[1..raw_args_with_parens.len() - 1];
+                if inner.is_empty() {
+                    raw_args_with_parens.to_string()
+                } else {
+                    format!("({})", expand_expression(inner, lang, ctx))
+                }
+            } else {
+                raw_args_with_parens.to_string()
+            };
+            let args_with_parens = expanded_args.as_str();
 
             // Generate the native self-call
             let call_expr = match lang {
