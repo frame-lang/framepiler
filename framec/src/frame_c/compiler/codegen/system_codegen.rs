@@ -4186,12 +4186,16 @@ while (__next_compartment != null) {{
         decorators: vec![],
     });
 
-    // __router method — use switch dispatch on state name
+    // __router method — per-handler dispatch passes __compartment as
+    // second arg (docs/frame_runtime.md § "Dispatch Model").
     let mut router_code = String::from("switch (__compartment.state) {\n");
     if let Some(ref machine) = system.machine {
         for state in &machine.states {
             router_code.push_str(&format!("    case \"{}\":\n", state.name));
-            router_code.push_str(&format!("        _state_{}(__e);\n", state.name));
+            router_code.push_str(&format!(
+                "        _state_{}(__e, __compartment);\n",
+                state.name
+            ));
             router_code.push_str("        break;\n");
         }
     }

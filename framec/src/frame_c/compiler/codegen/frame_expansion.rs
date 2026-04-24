@@ -664,11 +664,22 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Dart => {
-                        // Dart is still on monolithic dispatch; keep the
-                        // legacy `.copy()` for transition-source until it
-                        // migrates to per-handler.
+                        // Eager HSM chain — no compartment duplication.
                         let mut code = String::new();
-                        code.push_str(&format!("{}final __compartment = {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!(
+                            "{}{}Compartment? __compartment = null;\n",
+                            indent_str, ctx.system_name
+                        ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment(\"{}\", __compartment);\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment = {}Compartment(\"{}\", __compartment);\n",
+                            indent_str, ctx.system_name, target
+                        ));
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e;\n",
                             indent_str
@@ -1151,8 +1162,28 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}final __compartment = {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
+                        // Eager HSM chain — no compartment duplication.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        code.push_str(&format!(
+                            "{}{}Compartment? __compartment = null;\n",
+                            indent_str, ctx.system_name
+                        ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment(\"{}\", __compartment);\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment = {}Compartment(\"{}\", __compartment);\n",
+                            indent_str, ctx.system_name, target
+                        ));
 
                         // Set state_args if present (positional add)
                         if let Some(ref state) = state_str {
@@ -1847,15 +1878,19 @@ pub(crate) fn generate_frame_expansion(
                     TargetLanguage::TypeScript
                     | TargetLanguage::Dart
                     | TargetLanguage::JavaScript => {
-                        if ctx.per_handler
-                            && matches!(
-                                lang,
-                                TargetLanguage::TypeScript | TargetLanguage::JavaScript
-                            )
-                        {
+                        if ctx.per_handler {
+                            // Dart is null-safe; assert non-null with `!`.
+                            // TS/JS accept the same postfix operator but
+                            // it's unnecessary — keep parity via the
+                            // Dart-specific branch.
+                            let bang = if matches!(lang, TargetLanguage::Dart) {
+                                "!"
+                            } else {
+                                ""
+                            };
                             format!(
-                                "{}this._state_{}(__e, compartment.parent_compartment);",
-                                indent_str, parent
+                                "{}this._state_{}(__e, compartment.parent_compartment{});",
+                                indent_str, parent, bang
                             )
                         } else {
                             format!("{}this._state_{}(__e);", indent_str, parent)
@@ -2490,9 +2525,7 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
-                    if ctx.per_handler
-                        && matches!(lang, TargetLanguage::TypeScript | TargetLanguage::JavaScript)
-                    {
+                    if ctx.per_handler {
                         format!(
                             "{}compartment.state_vars[\"{}\"] = {};",
                             indent_str, var_name, expanded_expr
@@ -3897,7 +3930,9 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     }
                 }
                 TargetLanguage::Dart => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!("compartment.state_vars[\"{}\"]", var_name))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("__sv_comp.state_vars[\"{}\"]", var_name))
                     } else {
                         result.push_str(&format!("this.__compartment.state_vars[\"{}\"]", var_name))
