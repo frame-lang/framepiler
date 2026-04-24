@@ -836,13 +836,27 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Go => {
                         let mut code = String::new();
+                        // Eager HSM chain construction — no compartment duplication.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}__compartment := new{}Compartment(\"{}\")\n",
-                            indent_str, ctx.system_name, target
+                            "{}var __compartment *{}Compartment = nil\n",
+                            indent_str, ctx.system_name
                         ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ __new_c := new{}Compartment(\"{}\"); __new_c.parentCompartment = __compartment; __compartment = __new_c }}\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__compartment.parentCompartment = s.__compartment.copy()\n",
-                            indent_str
+                            "{}{{ __new_c := new{}Compartment(\"{}\"); __new_c.parentCompartment = __compartment; __compartment = __new_c }}\n",
+                            indent_str, ctx.system_name, target
                         ));
                         code.push_str(&format!("{}__compartment.forwardEvent = __e\n", indent_str));
                         code.push_str(&format!("{}s.__transition(__compartment)\n", indent_str));
@@ -1575,14 +1589,28 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        // Create new compartment with parent_compartment for HSM support
+                        // Eager HSM chain construction — no compartment
+                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}__compartment := new{}Compartment(\"{}\")\n",
-                            indent_str, ctx.system_name, target
+                            "{}var __compartment *{}Compartment = nil\n",
+                            indent_str, ctx.system_name
                         ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ __new_c := new{}Compartment(\"{}\"); __new_c.parentCompartment = __compartment; __compartment = __new_c }}\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__compartment.parentCompartment = s.__compartment.copy()\n",
-                            indent_str
+                            "{}{{ __new_c := new{}Compartment(\"{}\"); __new_c.parentCompartment = __compartment; __compartment = __new_c }}\n",
+                            indent_str, ctx.system_name, target
                         ));
 
                         // Set state_args if present (positional append)
@@ -1944,7 +1972,16 @@ pub(crate) fn generate_frame_expansion(
                         format!("{}_state_{}(__e)", indent_str, parent)
                     }
                     // Go: call s._state_Parent(__e) — forward is not terminal, no return
-                    TargetLanguage::Go => format!("{}s._state_{}(__e)", indent_str, parent),
+                    TargetLanguage::Go => {
+                        if ctx.per_handler {
+                            format!(
+                                "{}s._state_{}(__e, compartment.parentCompartment)",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}s._state_{}(__e)", indent_str, parent)
+                        }
+                    }
                     TargetLanguage::Php => {
                         if ctx.per_handler {
                             format!(
@@ -2449,7 +2486,9 @@ pub(crate) fn generate_frame_expansion(
                     } else {
                         format!(".({})", go_type)
                     };
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("compartment.stateVars[{}{}{}]{}", q, var_name, q, assertion)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.stateVars[{}{}{}]{}", q, var_name, q, assertion)
                     } else {
                         format!("s.__compartment.stateVars[{}{}{}]{}", q, var_name, q, assertion)
@@ -2697,7 +2736,12 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Go => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!(
+                            "{}compartment.stateVars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp.stateVars[\"{}\"] = {}",
                             indent_str, var_name, expanded_expr
@@ -3934,7 +3978,12 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         .get(&var_name)
                         .map(|t| go_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!(
+                            "compartment.stateVars[\"{}\"].({})",
+                            var_name, go_type
+                        ))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!(
                             "__sv_comp.stateVars[\"{}\"].({})",
                             var_name, go_type

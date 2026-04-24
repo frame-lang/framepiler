@@ -4003,12 +4003,18 @@ fn generate_go_machinery(system: &SystemAst) -> Vec<CodegenNode> {
         decorators: vec![],
     });
 
-    // __router - switch on state string
+    // __router - switch on state string. Per-handler architecture: pass
+    // s.__compartment as second arg so dispatcher + handler methods see
+    // the owning state's compartment as a named local (see
+    // docs/frame_runtime.md § "Dispatch Model").
     let mut router_code = String::new();
     router_code.push_str("switch s.__compartment.state {\n");
     for state in &states {
         router_code.push_str(&format!("case \"{}\":\n", state));
-        router_code.push_str(&format!("    s._state_{}(__e)\n", state));
+        router_code.push_str(&format!(
+            "    s._state_{}(__e, s.__compartment)\n",
+            state
+        ));
     }
     router_code.push_str("}");
 
