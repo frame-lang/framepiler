@@ -736,13 +736,27 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Java => {
                         let mut code = String::new();
+                        // Eager HSM chain — no compartment duplication.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}var __compartment = new {}Compartment(\"{}\");\n",
-                            indent_str, ctx.system_name, target
+                            "{}{}Compartment __compartment = null;\n",
+                            indent_str, ctx.system_name
                         ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ var __new_c = new {}Compartment(\"{}\"); __new_c.parent_compartment = __compartment; __compartment = __new_c; }}\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__compartment.parent_compartment = this.__compartment;\n",
-                            indent_str
+                            "{}{{ var __new_c = new {}Compartment(\"{}\"); __new_c.parent_compartment = __compartment; __compartment = __new_c; }}\n",
+                            indent_str, ctx.system_name, target
                         ));
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e;\n",
@@ -1369,14 +1383,28 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        // Create new compartment with parent_compartment for HSM support
+                        // Eager HSM chain construction — no compartment
+                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}var __compartment = new {}Compartment(\"{}\");\n",
-                            indent_str, ctx.system_name, target
+                            "{}{}Compartment __compartment = null;\n",
+                            indent_str, ctx.system_name
                         ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ var __new_c = new {}Compartment(\"{}\"); __new_c.parent_compartment = __compartment; __compartment = __new_c; }}\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__compartment.parent_compartment = this.__compartment;\n",
-                            indent_str
+                            "{}{{ var __new_c = new {}Compartment(\"{}\"); __new_c.parent_compartment = __compartment; __compartment = __new_c; }}\n",
+                            indent_str, ctx.system_name, target
                         ));
 
                         // Set state_args if present (positional add)
@@ -1964,8 +1992,19 @@ pub(crate) fn generate_frame_expansion(
                     ),
                     // C++: call _state_Parent(__e) — forward is not terminal, no return
                     TargetLanguage::Cpp => format!("{}_state_{}(__e);", indent_str, parent),
-                    // Java/C#: call _state_Parent(__e) — forward is not terminal, no return
-                    TargetLanguage::Java | TargetLanguage::CSharp => {
+                    // Java: per-handler architecture passes compartment as
+                    // second arg; shift up one level at the forward site.
+                    TargetLanguage::Java => {
+                        if ctx.per_handler {
+                            format!(
+                                "{}_state_{}(__e, compartment.parent_compartment);",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}_state_{}(__e);", indent_str, parent)
+                        }
+                    }
+                    TargetLanguage::CSharp => {
                         format!("{}_state_{}(__e);", indent_str, parent)
                     }
                     TargetLanguage::Kotlin | TargetLanguage::Swift => {
@@ -2423,7 +2462,9 @@ pub(crate) fn generate_frame_expansion(
                         .get(var_name.as_str())
                         .map(|t| java_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let accessor = if ctx.use_sv_comp {
+                    let accessor = if ctx.per_handler {
+                        format!("compartment.state_vars.get(\"{}\")", var_name)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars.get(\"{}\")", var_name)
                     } else {
                         format!("__compartment.state_vars.get(\"{}\")", var_name)
@@ -2710,7 +2751,12 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Java => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!(
+                            "{}compartment.state_vars.put(\"{}\", {});",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp.state_vars.put(\"{}\", {});",
                             indent_str, var_name, expanded_expr
@@ -3895,7 +3941,9 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         .get(&var_name)
                         .map(|t| java_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    let accessor = if ctx.use_sv_comp {
+                    let accessor = if ctx.per_handler {
+                        format!("compartment.state_vars.get(\"{}\")", var_name)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars.get(\"{}\")", var_name)
                     } else {
                         format!("__compartment.state_vars.get(\"{}\")", var_name)

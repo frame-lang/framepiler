@@ -3556,7 +3556,10 @@ fn generate_java_machinery(
         decorators: vec![],
     });
 
-    // __router - if/else if chain with .equals()
+    // __router - if/else if chain with .equals(). Per-handler architecture:
+    // pass __compartment as second arg so dispatcher + handler methods see
+    // the owning state's compartment as a named local (see
+    // docs/frame_runtime.md § "Dispatch Model").
     let mut router_code = String::new();
     router_code.push_str("String state_name = __compartment.state;\n");
     for (i, state) in states.iter().enumerate() {
@@ -3565,7 +3568,7 @@ fn generate_java_machinery(
             "{} (state_name.equals(\"{}\")) {{\n",
             prefix, state
         ));
-        router_code.push_str(&format!("    _state_{}(__e);\n", state));
+        router_code.push_str(&format!("    _state_{}(__e, __compartment);\n", state));
     }
     if !states.is_empty() {
         router_code.push_str("}");
