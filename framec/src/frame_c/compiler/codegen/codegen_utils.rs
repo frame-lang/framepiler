@@ -17,6 +17,16 @@ pub(crate) struct HandlerContext {
     pub defined_systems: std::collections::HashSet<String>,
     /// True if we're in a state handler that has __sv_comp available for HSM state var access
     pub use_sv_comp: bool,
+    /// True when emitting the body of a per-handler method (new architecture
+    /// — see docs/frame_runtime.md § "Dispatch Model"). In this mode, the
+    /// handler receives a `compartment` parameter that already points at its
+    /// own state's compartment (HSM forwards pre-shift it via
+    /// `compartment.parent_compartment` at each `=> $^` site). State-var
+    /// access therefore emits `compartment.state_vars[…]` directly — no
+    /// `__sv_comp` local, no HSM walk preamble. When false, legacy
+    /// monolithic dispatch semantics apply (the dispatcher computes
+    /// `__sv_comp` once and handler bodies reference it).
+    pub per_handler: bool,
     /// State variable types for type-aware expansion (e.g., C++ std::any_cast<Type>)
     pub state_var_types: std::collections::HashMap<String, String>,
     /// Map from state name to its declared param names (in declaration order).

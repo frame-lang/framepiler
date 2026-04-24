@@ -8,6 +8,7 @@ How Frame's language features are implemented in generated code. For the languag
 
 - [Overview](#overview)
 - [Core Data Structures](#core-data-structures)
+- [Dispatch Model](#dispatch-model)
 - [Runtime Methods](#runtime-methods)
 - [Transitions](#transitions)
 - [State Stack Operations](#state-stack-operations)
@@ -93,6 +94,53 @@ _context_stack: list[FrameContext]   # Interface call context stack
 
 ---
 
+## Dispatch Model
+
+Frame's event dispatch is structured as a **three-layer pipeline**, with each layer holding a single responsibility:
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│ Layer 1 — Router                                                  │
+│   __router(e)                                                     │
+│   • Reads the active state name off self.__compartment.           │
+│   • Looks up the matching state dispatcher.                       │
+│   • Calls dispatcher(e, self.__compartment).                      │
+│                                                                   │
+│   One router per system. Routes to N state dispatchers.           │
+└──────────────────────────────┬────────────────────────────────────┘
+                               │
+                               ▼
+┌───────────────────────────────────────────────────────────────────┐
+│ Layer 2 — State dispatcher                                        │
+│   _state_<State>(e, compartment)                                  │
+│   • Thin switch on e._message.                                    │
+│   • Each match calls its handler method and returns.              │
+│   • Optional trailing call to parent dispatcher when => $^.       │
+│                                                                   │
+│   One dispatcher per state. Routes to K handler methods.          │
+└──────────────────────────────┬────────────────────────────────────┘
+                               │
+                               ▼
+┌───────────────────────────────────────────────────────────────────┐
+│ Layer 3 — Handler method                                          │
+│   _s_<State>_hdl_<kind>_<event>(e, compartment)                   │
+│   • Binds handler params from e._parameters / enter_args / exit_args. │
+│   • compartment ALWAYS belongs to this handler's own state — HSM  │
+│     forwards pre-shift it at each `=> $^` via                     │
+│     compartment.parent_compartment, so no walk inside the handler. │
+│   • Executes the user-written handler body verbatim, with `$.x`,  │
+│     `@@:return`, `@@:self.foo()`, etc. expanded by the codegen.   │
+│                                                                   │
+│   One method per (state, event). Contains only this handler's logic. │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+**Why layered?** Each layer does one thing. The router knows nothing about event kinds, the dispatcher knows nothing about handler bodies, and the handler knows nothing about routing. Adding a new event form (system params, async handlers, future sigils) changes only the mangler and the handler emitter — not the dispatcher template or the router. This is deliberately unlike a monolithic "state as one function with a 50-line if/elif chain" design.
+
+**Lifecycle events travel through the same pipeline.** The kernel synthesizes `$>` and `<$` `FrameEvent`s during transitions and hands them to the router exactly like user events. They are routed to `_s_<State>_hdl_frame_enter` / `_s_<State>_hdl_frame_exit` through the normal dispatcher switch. There is no separate lifecycle fast-path.
+
+---
+
 ## Runtime Methods
 
 ### `__kernel`
@@ -134,15 +182,15 @@ The "send enter first, then forward" behavior ensures the target state is initia
 
 ### `__router`
 
-Dispatches events to state-specific handler methods:
+Dispatches events to state-specific **state dispatcher** methods. The router passes `self.__compartment` explicitly as a third argument so dispatchers and their handler methods see the active compartment as a named local:
 
 ```python
 def __router(self, __e):
     state_name = self.__compartment.state
     if state_name == "Idle":
-        self._state_Idle(__e)
+        self._state_Idle(__e, self.__compartment)
     elif state_name == "Working":
-        self._state_Working(__e)
+        self._state_Working(__e, self.__compartment)
 ```
 
 ### `__transition`
@@ -158,20 +206,171 @@ This does NOT execute immediately. The kernel processes it after the handler ret
 
 ### State Methods
 
-Each state generates a dispatch method:
+**Each state is implemented as two tiers:** a *thin dispatcher* (`_state_<Name>`) that routes wire messages to dedicated *handler methods* (`_s_<Name>_hdl_<kind>_<event>`). The handler body for each event lives in its own named method — **not inlined into a monolithic if/elif**. This design moves Frame's runtime model closer to the Elements of Programming ideal of "one symbol, one concept, one function," and makes stack traces, breakpoints, and profilers point at the specific handler that ran rather than a giant switch arm with a line number.
+
+#### Dispatcher shape
+
+The dispatcher is a flat series of guarded calls — each branch terminates on match with `return`, so exclusivity is explicit in control flow rather than implied by `elif` binding:
 
 ```python
-def _state_MyState(self, __e):
-    if __e._message == "$>":
-        # Initialize state variables
-        self.__compartment.state_vars["count"] = 0
-        # Execute enter handler body
-    elif __e._message == "<$":
-        # Execute exit handler body
-    elif __e._message == "process":
-        # Execute event handler body
-    # Unhandled events: do nothing (no auto-forward)
+def _state_MyState(self, __e, compartment):
+    if __e._message == "$>":          self._s_MyState_hdl_frame_enter(__e, compartment); return
+    if __e._message == "<$":          self._s_MyState_hdl_frame_exit(__e, compartment); return
+    if __e._message == "process":     self._s_MyState_hdl_user_process(__e, compartment); return
+    if __e._message == "reset":       self._s_MyState_hdl_user_reset(__e, compartment); return
+    # The parent forward below is emitted ONLY when the state declares `=> $^`.
+    # When absent, unhandled events fall off the end silently — matching V4
+    # semantics (no auto-forward).
+    self._state_ParentName(__e, compartment)
 ```
+
+#### Handler method shape
+
+Each handler is a standalone method. Parameters carry the event and the compartment that was active when the router ran:
+
+```python
+def _s_MyState_hdl_frame_enter(self, __e, compartment):
+    # state-var initialization (only the lifecycle enter does this)
+    if "count" not in compartment.state_vars:
+        compartment.state_vars["count"] = 0
+    # user-written body
+    ...
+
+def _s_MyState_hdl_user_process(self, __e, compartment):
+    # typed-param binding from event
+    data = __e._parameters[0]
+    # user body
+    compartment.state_vars["count"] = compartment.state_vars["count"] + 1
+    ...
+```
+
+#### Name mangling scheme
+
+| Handler kind | Method name | Rationale |
+|---|---|---|
+| Lifecycle `$>` | `_s_<State>_hdl_frame_enter` | `frame_` prefix reserves the lifecycle namespace |
+| Lifecycle `<$` | `_s_<State>_hdl_frame_exit` | same |
+| User interface method `probe` | `_s_<State>_hdl_user_probe` | `user_` prefix prevents collision with lifecycle names |
+
+A user method named `enter` or `exit` cannot collide with a lifecycle handler because the prefixes put them in disjoint namespaces (`hdl_frame_*` vs `hdl_user_*`). This is a compile-time guarantee of the mangler, not a runtime check.
+
+Single-underscore prefix (`_s_…`) avoids Python's double-underscore name mangling (`__name` → `_ClassName__name`), which would break dynamic lookups in the router. Target languages that don't have that concern (Java, C, Rust) still use the same naming for uniformity.
+
+#### Why two tiers?
+
+A single "monolithic" `_state_A` function with inlined handler bodies in if/elif arms is simpler to generate but has three problems the split form solves:
+
+1. **Debuggability.** `_s_A_hdl_user_process` on a stack trace tells you exactly which handler fired. A monolithic function tells you only the state; you have to read line numbers against the source to find the handler.
+2. **No name-space collisions.** Under the monolithic design, user interface methods named `enter` or `exit` had to be manually handled against the lifecycle wire messages `$>` / `<$`. The per-handler form puts them in different method namespaces entirely.
+3. **Uniform codegen contract.** Every handler is a function with the same signature `(self, __e, compartment)`. Adding a new Frame event form (system params, persistence hooks, future sigils) registers one mangled name with the mangler and flows through every backend identically, instead of being threaded through 15 hand-maintained `fmt_if` / `fmt_elif` templates.
+
+#### Worked example — end-to-end generated shape
+
+Frame source:
+
+```frame
+@@target python_3
+
+@@system Counter {
+    interface:
+        tick(step: int): int
+        reset()
+
+    machine:
+        $A {
+            $.n: int = 0
+
+            $>() {
+                # lifecycle enter — initialized lazily by the `if not in` guard
+            }
+
+            tick(step: int): int {
+                $.n = $.n + step
+                @@:($.n)
+            }
+
+            reset() {
+                $.n = 0
+            }
+        }
+}
+```
+
+Generated Python (abbreviated — shows the dispatch pipeline, elides FrameEvent/Compartment class boilerplate):
+
+```python
+class Counter:
+    def __init__(self):
+        self.__compartment = CounterCompartment("A")
+        self.__next_compartment = None
+        self._state_stack = []
+        self._context_stack = []
+        # Fire the start state's $>
+        __frame_event = CounterFrameEvent("$>", self.__compartment.enter_args)
+        self.__kernel(__frame_event)
+
+    # ── interface wrappers ────────────────────────────────
+    def tick(self, step: int) -> int:
+        __e = CounterFrameEvent("tick", [step])
+        __ctx = CounterFrameContext(__e, None)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop()._return
+
+    def reset(self):
+        __e = CounterFrameEvent("reset", [])
+        __ctx = CounterFrameContext(__e, None)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        self._context_stack.pop()
+
+    # ── router ─────────────────────────────────────────────
+    def __router(self, __e):
+        state_name = self.__compartment.state
+        if state_name == "A":
+            self._state_A(__e, self.__compartment)
+
+    # ── state dispatcher (Layer 2) ─────────────────────────
+    def _state_A(self, __e, compartment):
+        if __e._message == "$>":    self._s_A_hdl_frame_enter(__e, compartment); return
+        if __e._message == "tick":  self._s_A_hdl_user_tick(__e, compartment); return
+        if __e._message == "reset": self._s_A_hdl_user_reset(__e, compartment); return
+
+    # ── handler methods (Layer 3) ──────────────────────────
+    def _s_A_hdl_frame_enter(self, __e, compartment):
+        # $.n = 0 initialization, guarded so pop$ restore doesn't clobber.
+        if "n" not in compartment.state_vars:
+            compartment.state_vars["n"] = 0
+
+    def _s_A_hdl_user_tick(self, __e, compartment):
+        step = __e._parameters[0]
+        compartment.state_vars["n"] = compartment.state_vars["n"] + step
+        self._context_stack[-1]._return = compartment.state_vars["n"]
+
+    def _s_A_hdl_user_reset(self, __e, compartment):
+        compartment.state_vars["n"] = 0
+```
+
+**Reading guide:**
+
+- `tick(step)` — entry from outside the system. Constructs a `FrameEvent`, pushes a `FrameContext`, calls the kernel. The kernel routes to `_state_A`, which delegates to `_s_A_hdl_user_tick`. The handler reads the param, mutates state_vars, and sets `_return` on the top context. The interface wrapper pops the context and returns `_return` to the caller.
+- `$>` (lifecycle enter) — fired by the constructor. Same pipeline, but dispatched to `_s_A_hdl_frame_enter`. State-var init lives there — not in the dispatcher.
+- A user method **named `enter`** or `exit` would generate `_s_A_hdl_user_enter` / `_s_A_hdl_user_exit` — not colliding with `_s_A_hdl_frame_enter` / `_s_A_hdl_frame_exit`. The mangler namespace prefix guarantees this is decidable at codegen time, not inferred at runtime.
+
+#### `@@:params.X` and `@@:return` under the per-handler model
+
+These accessors are unchanged in semantics; only the **locals they resolve against** change from "inlined in the dispatcher" to "bound at the top of the handler method":
+
+| Frame accessor | Emitted Python (inside a handler method) |
+|---|---|
+| `@@:params.step` | `step` (bound from `__e._parameters[N]` at the top of `_s_A_hdl_user_tick`) |
+| `@@:return` (read) | `self._context_stack[-1]._return` (dynamic langs) / target-native typed downcast (static langs) |
+| `@@:return = <expr>` | `self._context_stack[-1]._return = <expr>` |
+| `@@:(<expr>)` | `self._context_stack[-1]._return = <expr>` |
+| `@@:event` | `self._context_stack[-1].event._message` |
+| `@@:data.k` | `self._context_stack[-1]._data["k"]` |
+
+The context stack is shared across layers — it holds the outermost interface call's state. A handler method sees the same top-of-stack context as the dispatcher and the router that called it. Nested self-calls (`@@:self.other()`) push their own contexts onto the stack and pop them when the inner interface wrapper returns, so each layer's `@@:return` refers to its own slot.
 
 ---
 
@@ -257,27 +456,67 @@ The stack entry and `__compartment` point to the **same object** — push$ saves
 
 ### Parent Forward (`=> $^`)
 
-Generated as a direct call to the parent's state method:
+At the forward site, the child shifts `compartment` one level up to the parent's own compartment. The parent dispatcher — and any handler methods it calls — then sees **its own state's compartment** as the parameter:
 
 ```python
-def _state_Child(self, __e):
-    if __e._message == "event_b":
-        self._state_Parent(__e)  # Direct call
+def _s_Child_hdl_user_event_b(self, __e, compartment):
+    # handler-local work…
+    self._state_Parent(__e, compartment.parent_compartment)  # shift up one level
+```
+
+This is the only place in the pipeline where compartment traversal happens. Handler methods never walk — they always receive their own state's compartment ready-to-use.
+
+The chain composes naturally. Grandchild → Child → Parent is `compartment.parent_compartment` applied twice, once at each forward site:
+
+```python
+def _s_Grandchild_hdl_user_event(self, __e, compartment):
+    self._state_Child(__e, compartment.parent_compartment)
+    # ... where Child's dispatcher in turn emits:
+    # self._state_Parent(__e, compartment.parent_compartment)
 ```
 
 ### Default Forward
 
-A bare `=> $^` at state level adds an else clause:
+A bare `=> $^` declaration on the state adds a trailing unguarded forward at the dispatcher tail, with the same one-level shift:
 
 ```python
-def _state_Child(self, __e):
-    if __e._message == "specific_event":
-        ...
-    else:
-        self._state_Parent(__e)  # Default forward
+def _state_Child(self, __e, compartment):
+    if __e._message == "specific_event": self._s_Child_hdl_user_specific_event(__e, compartment); return
+    # no elif-else — emitted only because the state declares `=> $^`
+    self._state_Parent(__e, compartment.parent_compartment)
 ```
 
-**V4 semantics:** Unhandled events are NOT automatically forwarded. `=> $^` must be used explicitly.
+**V4 semantics:** Unhandled events are NOT automatically forwarded. `=> $^` must be used explicitly for a state to participate in parent-chain dispatch on unhandled events.
+
+### What Handler Methods Always See
+
+Because the shift happens at the forward site (not inside the handler), every handler has a clean, uniform contract:
+
+| Signature parameter | Always refers to |
+|---|---|
+| `compartment` | The handler's own state's compartment |
+| `compartment.state_vars` | This state's state-scoped variables |
+| `compartment.state_args` | This state's declared state parameters |
+| `compartment.enter_args` / `.exit_args` | Lifecycle event parameters for this state |
+| `self.__compartment` | The currently ACTIVE state's compartment (may differ from `compartment` in HSM parent handlers) |
+
+Handlers never need to walk the compartment chain to find their own state's vars — the walk has been pre-applied at the forward site. This is both simpler emission (no conditional HSM-walk preamble) and faster dispatch (one pointer-chase per forward level vs. one full walk per state-var access).
+
+Handlers that need to reason about the active state (e.g. `@@:system.state`) still use `self.__compartment.state` — that intentionally reflects "which state is active," not "which handler is running."
+
+### Implicit state-arg binding
+
+State parameters (declared via `$State(arg1, arg2)`) flow into `compartment.state_args` at transition time. Inside the handler method, the emitter binds them to named locals at the top:
+
+```python
+def _s_Active_hdl_user_tick(self, __e, compartment):
+    # bind declared state params from compartment.state_args
+    initial = compartment.state_args[0]
+    # handler body
+    compartment.state_vars["count"] = compartment.state_vars["count"] + initial
+```
+
+Lifecycle enter/exit param binding works the same way but reads from `compartment.enter_args` / `compartment.exit_args`.
 
 ---
 
@@ -407,26 +646,31 @@ These validations are not possible with native self-calls, which the transpiler 
 
 ### Storage
 
-State variables are stored in `compartment.state_vars`:
+State variables are stored in `compartment.state_vars`, keyed by declared name. Because HSM forwards pre-shift the compartment parameter one level at each `=> $^` (see [Parent Forward](#parent-forward---)), a handler method's `compartment` parameter is **always** its own state's compartment:
 
 ```python
-# Access
-value = self.__compartment.state_vars["counter"]
+# Inside a handler method for state A (flat or HSM, doesn't matter).
+value = compartment.state_vars["counter"]
 
 # Assignment
-self.__compartment.state_vars["counter"] = value + 1
+compartment.state_vars["counter"] = value + 1
 ```
+
+There is no HSM walk inside handler methods. The walk has already been performed at each forward site via `compartment.parent_compartment`, so by the time the parent's handler runs, `compartment` is already pointing at the parent's own compartment.
 
 ### Initialization
 
-State variables initialize when the `$>` handler runs:
+State variables initialize inside the lifecycle `$>` handler method:
 
 ```python
-def _state_MyState(self, __e):
-    if __e._message == "$>":
-        self.__compartment.state_vars["counter"] = 0
-        self.__compartment.state_vars["data"] = {}
+def _s_MyState_hdl_frame_enter(self, __e, compartment):
+    if "counter" not in compartment.state_vars:
+        compartment.state_vars["counter"] = 0
+    if "data" not in compartment.state_vars:
+        compartment.state_vars["data"] = {}
 ```
+
+The `if not in` guard preserves state-var content on `pop$` restoration (see [State Stack Operations](#state-stack-operations)) — the handler runs only when the var doesn't already exist.
 
 ### Lifecycle
 
@@ -758,4 +1002,42 @@ When comparing strings in handler native code, use the target language's string 
 | Kotlin | `s == "value"` |
 | Go | `s == "value"` |
 | Others | `s == "value"` |
-| Go | `s.Method(args)` |
+
+---
+
+## Migration notes — from monolithic dispatch to per-handler methods
+
+Historically, framec emitted each state as a single monolithic function with handler bodies inlined in an if/elif chain:
+
+```python
+# Historical form — DEPRECATED
+def _state_A(self, __e):
+    __sv_comp = self.__compartment
+    while __sv_comp and __sv_comp.state != "A":
+        __sv_comp = __sv_comp.parent_compartment
+    if __e._message == "$>":
+        if "n" not in __sv_comp.state_vars:
+            __sv_comp.state_vars["n"] = 0
+    elif __e._message == "tick":
+        step = __e._parameters[0]
+        __sv_comp.state_vars["n"] = __sv_comp.state_vars["n"] + step
+        self._context_stack[-1]._return = __sv_comp.state_vars["n"]
+```
+
+The per-handler form replaces this with a thin dispatcher plus named handler methods. Concretely:
+
+| What changes | From | To |
+|---|---|---|
+| State function signature | `(self, __e)` | `(self, __e, compartment)` — router passes `self.__compartment` in |
+| State function body | inlined if/elif with handler bodies | thin dispatcher calling handler methods |
+| Handler body location | inlined in dispatcher | separate method `_s_<State>_hdl_<kind>_<event>` |
+| State-var access | `__sv_comp.state_vars[…]` via enclosing-scope local (set by an HSM-walk preamble at dispatcher entry) | `compartment.state_vars[…]` via parameter — no walk in handlers |
+| HSM forward (`=> $^`) | `self._state_Parent(__e)` | `self._state_Parent(__e, compartment.parent_compartment)` — shift up one level |
+| User method `enter`/`exit` | required alias arm in dispatch template | mangled to `hdl_user_enter` — different namespace |
+| Lifecycle state-var init | inside the dispatcher's `"$>"` branch | inside `_s_<State>_hdl_frame_enter` |
+
+The router's signature change (`dispatcher(e, compartment)`) propagates into every emitter — routing, transitions, forward calls to parent dispatchers. The `_context_stack`/`_state_stack`/`__compartment` fields and their semantics are unchanged. The kernel loop is unchanged. The transition deferred-commit mechanism is unchanged.
+
+Backends that already emit per-handler methods (Rust, Erlang via gen_statem) are structurally aligned with this model and need only mangler-level cleanup, not architectural change.
+
+**Design call:** HSM compartment traversal happens exactly once per `=> $^` forward, via `compartment.parent_compartment` at the emission site. Handler methods receive their own state's compartment ready-to-use, with no walk preamble. This is a true O(1) shift per forward — not O(depth) per state-var access — and makes every handler's contract uniform regardless of whether its state participates in an HSM chain.

@@ -1663,7 +1663,12 @@ pub(crate) fn generate_frame_expansion(
                 match lang {
                     // Python/TypeScript: call _state_Parent(__e) to dispatch via unified state method
                     TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                        format!("{}self._state_{}(__e)", indent_str, parent)
+                        if ctx.per_handler && matches!(lang, TargetLanguage::Python3) {
+                            // New architecture: shift compartment up one level at forward site.
+                            format!("{}self._state_{}(__e, compartment.parent_compartment)", indent_str, parent)
+                        } else {
+                            format!("{}self._state_{}(__e)", indent_str, parent)
+                        }
                     }
                     TargetLanguage::TypeScript
                     | TargetLanguage::Dart
@@ -2011,7 +2016,12 @@ pub(crate) fn generate_frame_expansion(
             // For HSM: use __sv_comp if available (navigates to correct compartment for parent states)
             match lang {
                 TargetLanguage::Python3 => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        // New architecture: handler method takes `compartment`
+                        // as a parameter already pointing at this state's own
+                        // compartment (HSM forwards pre-shift it).
+                        format!("compartment.state_vars[{}{}{}]", q, var_name, q)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
                         format!("self.__compartment.state_vars[{}{}{}]", q, var_name, q)
@@ -2246,7 +2256,13 @@ pub(crate) fn generate_frame_expansion(
 
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler && matches!(lang, TargetLanguage::Python3) {
+                        // New per-handler architecture: compartment is a param.
+                        format!(
+                            "{}compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp.state_vars[\"{}\"] = {}",
                             indent_str, var_name, expanded_expr
@@ -4256,6 +4272,7 @@ mod tests {
             parent_state: None,
             defined_systems: std::collections::HashSet::new(),
             use_sv_comp: false,
+            per_handler: false,
             state_var_types: state_var_types
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))

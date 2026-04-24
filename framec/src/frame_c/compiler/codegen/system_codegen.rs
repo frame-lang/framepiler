@@ -2963,7 +2963,11 @@ while self.__next_compartment is not None:
         decorators: vec![],
     });
 
-    // __router method - dispatches events to state methods
+    // __router method - dispatches events to state dispatcher methods.
+    // Per-handler architecture: the router passes `self.__compartment`
+    // as the second arg so dispatcher and handler methods see the active
+    // state's compartment as a named local parameter (see
+    // docs/frame_runtime.md § "Dispatch Model").
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e")],
@@ -2973,7 +2977,7 @@ while self.__next_compartment is not None:
 handler_name = f"_state_{state_name}"
 handler = getattr(self, handler_name, None)
 if handler:
-    handler(__e)"#
+    handler(__e, self.__compartment)"#
                 .to_string(),
             span: None,
         }],

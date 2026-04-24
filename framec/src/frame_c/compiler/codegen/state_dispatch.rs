@@ -868,6 +868,89 @@ pub(crate) fn generate_unified_state_dispatch(
     code.trim_end().to_string()
 }
 
+/// Python thin dispatcher body — emits one `if __e._message == "X":
+/// self._s_<State>_hdl_<kind>_<event>(__e, compartment); return` per
+/// handler, plus an optional trailing parent-forward line when the
+/// state declares `=> $^`. Handler bodies are NOT inlined — they live
+/// in their own methods emitted by `generate_python_per_handler_methods`.
+///
+/// See docs/frame_runtime.md § "Dispatch Model" for the three-layer
+/// pipeline rationale.
+fn generate_python_thin_dispatcher(
+    state_name: &str,
+    handlers: &std::collections::HashMap<String, HandlerEntry>,
+    state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
+    _ctx: &HandlerContext,
+    default_forward: bool,
+    has_state_vars: bool,
+) -> String {
+    let mut code = String::new();
+
+    // State params bind from compartment.state_args. These are locals scoped
+    // to the dispatcher; handler methods that need them get them re-bound
+    // in their own preamble (via generate_handler_from_arcanum).
+    for (i, sp) in state_params.iter().enumerate() {
+        let _ = &sp.param_type; // type is documentation only for Python
+        code.push_str(&format!(
+            "{} = compartment.state_args[{}]\n",
+            sp.name, i
+        ));
+    }
+
+    // Synthesize a `$>` dispatch arm when the state has state vars but no
+    // explicit `$>` handler. The synthetic `_s_<State>_hdl_frame_enter`
+    // method is emitted by generate_python_per_handler_methods and does the
+    // state-var default-init.
+    let has_explicit_enter = handlers.contains_key("$>");
+    if has_state_vars && !has_explicit_enter {
+        code.push_str(&format!(
+            "if __e._message == \"$>\":\n    self._s_{}_hdl_frame_enter(__e, compartment)\n    return\n",
+            state_name
+        ));
+    }
+
+    // Sort handlers for deterministic output.
+    let mut sorted_handlers: Vec<_> = handlers.iter().collect();
+    sorted_handlers.sort_by_key(|(event, _)| *event);
+
+    for (event, handler) in sorted_handlers {
+        let wire_message = match event.as_str() {
+            "$>" => "$>",
+            "$<" => "<$",
+            other => other,
+        };
+        let method_name = handler_method_name(state_name, handler);
+        // Multi-line emission so the async `await`-insertion pass can
+        // process each call on its own line. Single-line form
+        // `if X: self.foo(); return` would trigger a line-wide match
+        // and append `await ` in front of the `if` keyword.
+        code.push_str(&format!(
+            "if __e._message == \"{}\":\n    self.{}(__e, compartment)\n    return\n",
+            wire_message, method_name
+        ));
+    }
+
+    // Default-forward trailing call — emitted only when the state declares
+    // `=> $^`. The forward shifts `compartment` up one level (see
+    // docs/frame_runtime.md § "Parent Forward").
+    if default_forward {
+        if let Some(ref parent) = _ctx.parent_state {
+            code.push_str(&format!(
+                "self._state_{}(__e, compartment.parent_compartment)\n",
+                parent
+            ));
+        }
+    }
+
+    // If the dispatcher body is empty (no handlers, no default forward),
+    // Python requires a statement — emit `pass`.
+    if code.is_empty() {
+        code.push_str("pass\n");
+    }
+
+    code.trim_end().to_string()
+}
+
 /// Generate handler return_init code: sets the context return value at handler entry.
 /// Returns empty string if handler has no return_init.
 fn emit_handler_return_init(
@@ -1064,7 +1147,264 @@ pub(crate) fn generate_state_handlers_via_arcanum(
         ));
     }
 
+    // Python per-handler architecture: emit one method per handler, called
+    // by the thin dispatcher generated in `generate_state_method`. See
+    // docs/frame_runtime.md § "Dispatch Model".
+    if matches!(lang, TargetLanguage::Python3) {
+        methods.extend(generate_python_per_handler_methods(
+            system_name,
+            machine,
+            arcanum,
+            source,
+            has_state_vars,
+            &defined_systems,
+            &state_param_names,
+            &state_enter_param_names,
+            &state_exit_param_names,
+            &event_param_names,
+        ));
+    }
+
     methods
+}
+
+/// Emit per-handler methods for Python. Mirrors the structure of
+/// `generate_rust_handler_methods` but with the Python-specific
+/// handler-body mode flag (`per_handler: true`), so Frame expansion
+/// targets `compartment.state_vars[…]` / `compartment.parent_compartment`
+/// etc. rather than the legacy `__sv_comp` / `self.__compartment` forms.
+pub(crate) fn generate_python_per_handler_methods(
+    system_name: &str,
+    machine: &MachineAst,
+    arcanum: &Arcanum,
+    source: &[u8],
+    has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<CodegenNode> {
+    let mut methods = Vec::new();
+
+    let start_state_name = machine
+        .states
+        .first()
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
+
+    for state_entry in arcanum.get_enhanced_states(system_name) {
+        let is_start_state = state_entry.name == start_state_name;
+        let handler_state_var_types: std::collections::HashMap<String, String> = machine
+            .states
+            .iter()
+            .find(|s| s.name == state_entry.name)
+            .map(|s| {
+                s.state_vars
+                    .iter()
+                    .map(|sv| {
+                        let type_str = match &sv.var_type {
+                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
+                            crate::frame_c::compiler::frame_ast::Type::Unknown => {
+                                "int".to_string()
+                            }
+                        };
+                        (sv.name.clone(), type_str)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let state_ast = machine
+            .states
+            .iter()
+            .find(|s| s.name == state_entry.name);
+        let state_vars_for_init: &[StateVarAst] =
+            state_ast.map(|s| &s.state_vars[..]).unwrap_or(&[]);
+
+        // Synthesize an implicit `$>` lifecycle handler when the state has
+        // state vars but the user did NOT write `$>() { … }` explicitly.
+        // Without this, `$>` fires but the dispatcher has no arm for it, so
+        // state-var default values are never written and subsequent reads
+        // of `$.varName` hit a KeyError. Monolithic dispatch emitted this
+        // synthetic arm inline; per-handler must emit it as a method.
+        let has_explicit_enter = state_entry.handlers.contains_key("$>");
+        if !state_vars_for_init.is_empty() && !has_explicit_enter {
+            let synthetic_enter = HandlerEntry {
+                event: "$>".to_string(),
+                params: Vec::new(),
+                return_type: None,
+                return_init: None,
+                body_span: crate::frame_c::compiler::ast::Span { start: 0, end: 0 },
+                body_statements: Vec::new(),
+                is_enter: true,
+                is_exit: false,
+            };
+            let empty: Vec<String> = Vec::new();
+            let method = generate_python_handler_method(
+                system_name,
+                &state_entry.name,
+                state_entry.parent.as_deref(),
+                &synthetic_enter,
+                state_vars_for_init,
+                source,
+                has_state_vars,
+                defined_systems,
+                &empty,
+                is_start_state,
+                state_param_names,
+                state_enter_param_names,
+                state_exit_param_names,
+                event_param_names,
+                &handler_state_var_types,
+            );
+            methods.push(method);
+        }
+
+        for (_event, handler_entry) in &state_entry.handlers {
+            let empty: Vec<String> = Vec::new();
+            let method = generate_python_handler_method(
+                system_name,
+                &state_entry.name,
+                state_entry.parent.as_deref(),
+                handler_entry,
+                state_vars_for_init,
+                source,
+                has_state_vars,
+                defined_systems,
+                &empty,
+                is_start_state,
+                state_param_names,
+                state_enter_param_names,
+                state_exit_param_names,
+                event_param_names,
+                &handler_state_var_types,
+            );
+            methods.push(method);
+        }
+    }
+
+    methods
+}
+
+/// Emit a single Python handler method with the per-handler contract:
+///   def _s_<State>_hdl_<kind>_<event>(self, __e, compartment):
+/// Body layout:
+///   1. Param binding from __e._parameters (user methods) or
+///      compartment.enter_args / compartment.exit_args (lifecycle).
+///   2. State-var init preamble (lifecycle enter only — guarded `if not in`).
+///   3. Return-init assignment (if handler declares one).
+///   4. User-written handler body, expanded with per_handler: true so
+///      state-var access targets `compartment.state_vars[…]`.
+fn generate_python_handler_method(
+    system_name: &str,
+    state_name: &str,
+    parent_state: Option<&str>,
+    handler: &HandlerEntry,
+    state_vars_for_init: &[StateVarAst],
+    source: &[u8],
+    _has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    _sys_param_locals: &[String],
+    _is_start_state: bool,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
+    handler_state_var_types: &std::collections::HashMap<String, String>,
+) -> CodegenNode {
+    let method_name = handler_method_name(state_name, handler);
+
+    let ctx = HandlerContext {
+        system_name: system_name.to_string(),
+        state_name: state_name.to_string(),
+        event_name: handler.event.clone(),
+        parent_state: parent_state.map(|s| s.to_string()),
+        defined_systems: defined_systems.clone(),
+        use_sv_comp: false,
+        per_handler: true,
+        state_var_types: handler_state_var_types.clone(),
+        state_param_names: state_param_names.clone(),
+        state_enter_param_names: state_enter_param_names.clone(),
+        state_exit_param_names: state_exit_param_names.clone(),
+        event_param_names: event_param_names.clone(),
+        current_return_type: handler.return_type.clone(),
+    };
+
+    let mut body = String::new();
+
+    // Param binding. Lifecycle handlers read from compartment.enter_args /
+    // exit_args (set by the transition codegen on the target/source
+    // compartment). User-method handlers read from __e._parameters.
+    let param_source = if handler.is_enter {
+        "compartment.enter_args"
+    } else if handler.is_exit {
+        "compartment.exit_args"
+    } else {
+        "__e._parameters"
+    };
+    for (i, param) in handler.params.iter().enumerate() {
+        body.push_str(&format!("{} = {}[{}]\n", param.name, param_source, i));
+    }
+
+    // State-var initialization — only the lifecycle `$>` handler does this.
+    // The `if not in` guard preserves pop$ restore semantics.
+    if handler.is_enter {
+        for var in state_vars_for_init {
+            let init_val = if let Some(ref init) = var.init {
+                expression_to_string(init, TargetLanguage::Python3)
+            } else {
+                state_var_init_value(&var.var_type, TargetLanguage::Python3)
+            };
+            body.push_str(&format!(
+                "if \"{}\" not in compartment.state_vars:\n    compartment.state_vars[\"{}\"] = {}\n",
+                var.name, var.name, init_val
+            ));
+        }
+    }
+
+    // Return-init (declared via handler `: Type = default`).
+    let return_init_code =
+        emit_handler_return_init(handler, TargetLanguage::Python3, "", &ctx.system_name);
+    if !return_init_code.is_empty() {
+        body.push_str(&return_init_code);
+    }
+
+    // User-written handler body. Frame expansion uses ctx.per_handler=true,
+    // so state-var access emits compartment.state_vars[…] and HSM forwards
+    // emit self._state_Parent(__e, compartment.parent_compartment).
+    let body_src = emit_handler_body_via_statements(
+        &handler.body_span,
+        source,
+        TargetLanguage::Python3,
+        &ctx,
+    );
+    body.push_str(&body_src);
+
+    // Empty body placeholder — Python requires a statement.
+    if body.trim().is_empty() {
+        body.push_str("pass\n");
+    }
+
+    CodegenNode::Method {
+        name: method_name,
+        params: vec![
+            Param::new("__e"),
+            Param::new("compartment"),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: body,
+            span: Some(crate::frame_c::compiler::frame_ast::Span {
+                start: handler.body_span.start,
+                end: handler.body_span.end,
+            }),
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    }
 }
 
 /// Generate a `__state_{StateName}(__e)` method for Python/TypeScript
@@ -1112,6 +1452,12 @@ pub(crate) fn generate_state_method(
         parent_state: parent_state.map(|s| s.to_string()),
         defined_systems: defined_systems.clone(),
         use_sv_comp: !state_vars.is_empty(),
+        // Python migrates to per-handler in the separate handler-method
+        // emission path (generate_python_handler_method). The dispatcher's
+        // own `ctx` does not need per_handler set — its body either delegates
+        // to the thin dispatcher emitter or falls through to the legacy
+        // monolithic path for non-Python targets.
+        per_handler: false,
         state_var_types,
         state_param_names: state_param_names.clone(),
         state_enter_param_names: state_enter_param_names.clone(),
@@ -1122,7 +1468,19 @@ pub(crate) fn generate_state_method(
 
     // Generate the dispatch body based on __e._message / __e.message
     // Use unified dispatch for languages that have DispatchSyntax defined.
-    let body_code = if let Some(syn) = dispatch_syntax_for(lang) {
+    let body_code = if matches!(lang, TargetLanguage::Python3) {
+        // Per-handler architecture: the dispatcher body is a flat list of
+        // guarded calls to per-handler methods. Handler bodies themselves
+        // are emitted separately via `generate_python_per_handler_methods`.
+        generate_python_thin_dispatcher(
+            state_name,
+            handlers,
+            state_params,
+            &ctx,
+            default_forward,
+            !state_vars.is_empty(),
+        )
+    } else if let Some(syn) = dispatch_syntax_for(lang) {
         generate_unified_state_dispatch(
             _system_name,
             state_name,
@@ -1179,9 +1537,15 @@ pub(crate) fn generate_state_method(
             let event_type = format!("*{}FrameEvent", _system_name);
             vec![Param::new("__e").with_type(&event_type)]
         }
+        // Python per-handler architecture: dispatcher takes the active
+        // state's compartment as a second param (see docs/frame_runtime.md
+        // § "Dispatch Model"). Other dynamic languages still use monolithic
+        // dispatch for now.
+        TargetLanguage::Python3 => {
+            vec![Param::new("__e"), Param::new("compartment")]
+        }
         // Dynamic languages: untyped event parameter
-        TargetLanguage::Python3
-        | TargetLanguage::Php
+        TargetLanguage::Php
         | TargetLanguage::Ruby
         | TargetLanguage::Erlang
         | TargetLanguage::GDScript
@@ -1274,6 +1638,7 @@ pub(crate) fn generate_handler_from_arcanum(
         parent_state: parent_state.map(|s| s.to_string()),
         defined_systems: defined_systems.clone(),
         use_sv_comp: false, // Handler-specific methods don't have __sv_comp preamble
+        per_handler: false, // Rust uses typed struct fields, not compartment param
         state_var_types: handler_state_var_types.clone(),
         state_param_names: state_param_names.clone(),
         state_enter_param_names: state_enter_param_names.clone(),
