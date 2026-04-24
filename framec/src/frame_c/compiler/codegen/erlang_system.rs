@@ -980,16 +980,102 @@ fn erlang_process_body_lines_full(
             } => {
                 // `self.<field> = self.<iface>(args)` — emit the
                 // dispatch bind, then a record update that writes the
-                // dispatch's return value into the field. Two
-                // data_gen bumps: one for the dispatch's returned
-                // Data, one for the record-update's.
+                // dispatch's return value into the field.
+                //
+                // Recursively classify nested `self.<iface>(…)` in
+                // args (same logic as the bare InterfaceCall branch
+                // below — extract, emit a prior dispatch bind,
+                // replace the arg with the bind's result var). Without
+                // this the inner `self.echo(…)` would pass through to
+                // Erlang as invalid dot-access on the `self` atom.
+                let mut args_rewritten = args.clone();
+                let mut iter_guard = 0;
+                while iter_guard < 16 {
+                    iter_guard += 1;
+                    // Process INNERMOST call first: use rfind to
+                    // pick the LAST `self.<iface>(` occurrence in
+                    // the string. In `self.a(self.b(self.c(X)))`
+                    // that's `self.c(X)` — its args have no further
+                    // `self.` patterns, so the emitted bind is clean.
+                    // Repeat until no `self.<iface>(` remains.
+                    let mut matched = None;
+                    let mut best_pos = 0usize;
+                    for iface in interface_names {
+                        let pat = format!("self.{}(", iface);
+                        if let Some(start) = args_rewritten.rfind(&pat) {
+                            if matched.is_none() || start >= best_pos {
+                                let open = start + pat.len() - 1;
+                                let bytes = args_rewritten.as_bytes();
+                                let mut depth = 0i32;
+                                let mut end = open;
+                                for i in open..bytes.len() {
+                                    match bytes[i] {
+                                        b'(' => depth += 1,
+                                        b')' => {
+                                            depth -= 1;
+                                            if depth == 0 {
+                                                end = i;
+                                                break;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                if end > open {
+                                    let inner_args =
+                                        args_rewritten[open + 1..end].to_string();
+                                    matched = Some((
+                                        iface.clone(),
+                                        start,
+                                        end + 1,
+                                        inner_args,
+                                    ));
+                                    best_pos = start;
+                                }
+                            }
+                        }
+                    }
+                    match matched {
+                        None => break,
+                        Some((iface, start, after_end, inner_args)) => {
+                            data_gen += 1;
+                            let bind_data = format!("Data{}", data_gen);
+                            let nested_result = format!("__NestedResult{}", data_gen);
+                            let nested_args = if inner_args.trim().is_empty() {
+                                "[]".to_string()
+                            } else {
+                                format!("[{}]", inner_args.trim())
+                            };
+                            let nested_method = to_snake_case(&iface);
+                            result.push(format!(
+                                "    {{{}, {}}} = frame_dispatch__({}, {}, {})",
+                                bind_data, nested_result, nested_method, nested_args, data_var
+                            ));
+                            data_var = bind_data;
+                            args_rewritten = format!(
+                                "{}{}{}",
+                                &args_rewritten[..start],
+                                nested_result,
+                                &args_rewritten[after_end..]
+                            );
+                        }
+                    }
+                }
+                // Rewrite remaining `self.<field>` reads in args.
+                let data_access = format!("{}#data.", data_var);
+                let args_rewritten = replace_outside_strings_and_comments(
+                    &args_rewritten,
+                    TargetLanguage::Erlang,
+                    &[("self.", data_access.as_str())],
+                );
+
                 data_gen += 1;
                 let call_data = format!("Data{}", data_gen);
                 let result_name = format!("__IfaceResult{}", data_gen);
-                let args_list = if args.is_empty() {
+                let args_list = if args_rewritten.is_empty() {
                     "[]".to_string()
                 } else {
-                    format!("[{}]", args)
+                    format!("[{}]", args_rewritten)
                 };
                 result.push(format!(
                     "    {{{}, {}}} = frame_dispatch__({}, {}, {})",
@@ -1020,35 +1106,48 @@ fn erlang_process_body_lines_full(
                 // the atom `self`.
                 let mut args_rewritten = args.clone();
                 let mut iter_guard = 0;
-                while iter_guard < 8 {
+                while iter_guard < 16 {
                     iter_guard += 1;
+                    // Process INNERMOST call first via rfind — in
+                    // `self.a(self.b(self.c(X)))` the last-starting
+                    // `self.` pattern is `self.c(X)`, whose args have
+                    // no further nested calls. Emitting the innermost
+                    // bind FIRST avoids leaving unresolved nested
+                    // patterns inside an already-emitted bind's args.
                     let mut matched = None;
+                    let mut best_pos = 0usize;
                     for iface in interface_names {
                         let pat = format!("self.{}(", iface);
-                        if let Some(start) = args_rewritten.find(&pat) {
-                            // Find matching close paren for this call.
-                            let open = start + pat.len() - 1;
-                            let bytes = args_rewritten.as_bytes();
-                            let mut depth = 0i32;
-                            let mut end = open;
-                            for i in open..bytes.len() {
-                                match bytes[i] {
-                                    b'(' => depth += 1,
-                                    b')' => {
-                                        depth -= 1;
-                                        if depth == 0 {
-                                            end = i;
-                                            break;
+                        if let Some(start) = args_rewritten.rfind(&pat) {
+                            if matched.is_none() || start >= best_pos {
+                                let open = start + pat.len() - 1;
+                                let bytes = args_rewritten.as_bytes();
+                                let mut depth = 0i32;
+                                let mut end = open;
+                                for i in open..bytes.len() {
+                                    match bytes[i] {
+                                        b'(' => depth += 1,
+                                        b')' => {
+                                            depth -= 1;
+                                            if depth == 0 {
+                                                end = i;
+                                                break;
+                                            }
                                         }
+                                        _ => {}
                                     }
-                                    _ => {}
                                 }
-                            }
-                            if end > open {
-                                let inner_args =
-                                    args_rewritten[open + 1..end].to_string();
-                                matched = Some((iface.clone(), start, end + 1, inner_args));
-                                break;
+                                if end > open {
+                                    let inner_args =
+                                        args_rewritten[open + 1..end].to_string();
+                                    matched = Some((
+                                        iface.clone(),
+                                        start,
+                                        end + 1,
+                                        inner_args,
+                                    ));
+                                    best_pos = start;
+                                }
                             }
                         }
                     }
