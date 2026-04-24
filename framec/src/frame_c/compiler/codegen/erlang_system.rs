@@ -104,34 +104,69 @@ fn erlang_rewrite_native_classified_full(
         }
     }
 
-    // self.method(args) → interface dispatch (for interface methods)
+    // self.method(args) → interface dispatch (for interface methods).
+    //
+    // When the line contains multiple `self.<iface>(` patterns (e.g.
+    // `self.dbl(self.echo(X))`), pick the OUTERMOST call — the one
+    // whose opening paren appears EARLIEST in the line. Iteration
+    // order over interface_names is not meaningful for that choice.
+    // Inner calls nested in the args are re-classified recursively by
+    // the body-processor's InterfaceCall handler.
+    let mut best: Option<(&String, usize)> = None;
     for iface in interface_names {
         let pattern = format!("self.{}(", iface);
-        if l.contains(&pattern) {
-            // Extract: result_var = self.method(args)
-            let method_snake = to_snake_case(iface);
-            if let Some(eq_pos) = l.find('=') {
+        if let Some(pos) = l.find(&pattern) {
+            match best {
+                None => best = Some((iface, pos)),
+                Some((_, cur_pos)) if pos < cur_pos => best = Some((iface, pos)),
+                _ => {}
+            }
+        }
+    }
+    if let Some((iface, open_pos)) = best {
+        // Parenthesis-match to find the matching close for the
+        // call's opening paren. Using `rfind(')')` could land on a
+        // paren from an ENCLOSING / following expression (e.g.
+        // `... self.echo(X) + 1)` would cut `X) + 1`).
+        let pattern = format!("self.{}(", iface);
+        let call_start = open_pos + pattern.len();
+        let open_paren_idx = call_start - 1;
+        let bytes = l.as_bytes();
+        let mut depth = 0i32;
+        let mut call_end = l.len();
+        for i in open_paren_idx..bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        call_end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let method_snake = to_snake_case(iface);
+        let args = l[call_start..call_end].trim().to_string();
+        if let Some(eq_pos) = l.find('=') {
+            // Only treat as `lhs = self.method(...)` when the `=` is
+            // BEFORE the call — otherwise it's a `==` / `>=` / an
+            // equality inside the args, not an assignment.
+            if eq_pos < open_pos {
                 let result_var = l[..eq_pos].trim().to_string();
-                let call_start = l.find(&pattern).map(|p| p + pattern.len()).unwrap_or(0);
-                let call_end = l.rfind(')').unwrap_or(l.len());
-                let args = l[call_start..call_end].trim().to_string();
                 return ErlangRewrite::InterfaceCall {
                     method: method_snake,
                     args,
                     result_var,
                 };
-            } else {
-                // No assignment — just call
-                let call_start = l.find(&pattern).map(|p| p + pattern.len()).unwrap_or(0);
-                let call_end = l.rfind(')').unwrap_or(l.len());
-                let args = l[call_start..call_end].trim().to_string();
-                return ErlangRewrite::InterfaceCall {
-                    method: method_snake,
-                    args,
-                    result_var: "_".to_string(),
-                };
             }
         }
+        return ErlangRewrite::InterfaceCall {
+            method: method_snake,
+            args,
+            result_var: "_".to_string(),
+        };
     }
 
     // self.field = self.method(args) — record-update whose RHS is an
@@ -371,11 +406,20 @@ fn erlang_capitalize_params(line: &str, param_names: &[(&str, String)]) -> Strin
 /// Process a sequence of native lines, threading Data through modifications.
 /// Returns (processed_lines, final_data_var) where final_data_var tracks
 /// the most recent Data binding (Data, Data1, Data2, etc.)
+/// Processed handler body, its final Data variable, and the final
+/// `__ReturnVal` generation name. Callers use `final_rv_name` in the
+/// gen_statem reply tuple rather than hardcoding `__ReturnVal` — the
+/// body processor may have SSA-renamed earlier writes to avoid
+/// Erlang's single-assignment collision, so the last write's actual
+/// name is the authoritative one. If no writes happened,
+/// `final_rv_name` is `"ok"` (the gen_statem default reply value).
+type ErlangBodyResult = (Vec<String>, String, String);
+
 fn erlang_process_body_lines(
     lines: &[&str],
     action_names: &[String],
     initial_data: &str,
-) -> (Vec<String>, String) {
+) -> ErlangBodyResult {
     erlang_process_body_lines_with_params(lines, action_names, initial_data, &[])
 }
 
@@ -384,7 +428,7 @@ fn erlang_process_body_lines_with_params(
     action_names: &[String],
     initial_data: &str,
     param_names: &[(&str, String)],
-) -> (Vec<String>, String) {
+) -> ErlangBodyResult {
     erlang_process_body_lines_full(lines, action_names, &[], initial_data, param_names)
 }
 
@@ -488,7 +532,7 @@ fn erlang_process_body_lines_full(
     interface_names: &[String],
     initial_data: &str,
     param_names: &[(&str, String)],
-) -> (Vec<String>, String) {
+) -> ErlangBodyResult {
     let mut result: Vec<String> = Vec::new();
     let mut data_var = initial_data.to_string();
     let mut data_gen = 0;
@@ -1035,6 +1079,17 @@ fn erlang_process_body_lines_full(
                     }
                 }
 
+                // Any remaining `self.<field>` reads in the args
+                // (state-var reads, domain reads) must be rewritten
+                // with the current `data_var` prefix — same as the
+                // Plain path does on ordinary lines.
+                let data_access = format!("{}#data.", data_var);
+                let args_rewritten = replace_outside_strings_and_comments(
+                    &args_rewritten,
+                    TargetLanguage::Erlang,
+                    &[("self.", data_access.as_str())],
+                );
+
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
                 let args_list = if args_rewritten.is_empty() {
@@ -1077,7 +1132,148 @@ fn erlang_process_body_lines_full(
         }
     }
 
-    (result, data_var)
+    // SSA-rename `__ReturnVal` so repeat writes don't collide with
+    // Erlang's single-assignment rule. Each top-level write becomes
+    // `__ReturnVal_K` for K = 1, 2, 3… Reads between writes K and
+    // K+1 bind to `__ReturnVal_K`. Returns the LAST write's name
+    // (or `"ok"` if no writes), which the handler emitter uses in
+    // its terminal reply tuple — no hardcoded name at the emit site.
+    // Only top-level writes are renamed; case-arm writes have their
+    // own per-arm unification.
+    let final_rv_name: String;
+    {
+        fn is_direct_write(t: &str) -> bool {
+            t.starts_with("__ReturnVal = ")
+        }
+        fn is_tuple_bind(t: &str) -> bool {
+            t.starts_with('{')
+                && t.contains(", __ReturnVal}")
+                && t.contains(" = ")
+        }
+        // Pass 1: collect top-level write indices.
+        let mut depth: i32 = 0;
+        let mut writes: Vec<usize> = Vec::new();
+        for (i, line) in result.iter().enumerate() {
+            let t = line.trim();
+            let opens = (t.starts_with("case ") || t.starts_with("case("))
+                && (t.ends_with(" of") || t.ends_with(" of,"));
+            let closes = t == "end" || t == "end," || t == "end;";
+            if opens {
+                depth += 1;
+                continue;
+            }
+            if closes {
+                depth = (depth - 1).max(0);
+                continue;
+            }
+            if depth == 0 && (is_direct_write(t) || is_tuple_bind(t)) {
+                writes.push(i);
+            }
+        }
+        // Determine the final return-value name for the caller's
+        // terminal tuple: `__ReturnVal_K` where K is the number of
+        // writes. If no writes occurred in this body, fall back to
+        // `"ok"` — the gen_statem convention for "no reply value".
+        final_rv_name = if writes.is_empty() {
+            "ok".to_string()
+        } else {
+            format!("__ReturnVal_{}", writes.len())
+        };
+        // Pass 2: rename every write to `__ReturnVal_K` and rewrite
+        // reads between write K and write K+1 to `__ReturnVal_K`.
+        // Reads BEFORE the first write keep `__ReturnVal` (no prior
+        // value — the slot's default; shouldn't appear in
+        // well-formed source).
+        if !writes.is_empty() {
+            let total = writes.len();
+            let mut depth2: i32 = 0;
+            let mut write_idx = 0usize; // how many writes we've passed (0..total)
+            for (i, line) in result.iter_mut().enumerate() {
+                let t: String = line.trim().to_string();
+                let opens = (t.starts_with("case ") || t.starts_with("case("))
+                    && (t.ends_with(" of") || t.ends_with(" of,"));
+                let closes = t == "end" || t == "end," || t == "end;";
+                if opens {
+                    depth2 += 1;
+                    continue;
+                }
+                if closes {
+                    depth2 = (depth2 - 1).max(0);
+                    continue;
+                }
+                // Is this line one of the tracked writes?
+                let is_tracked_write = write_idx < total && writes[write_idx] == i;
+                if is_tracked_write {
+                    // Rewrite RHS reads of __ReturnVal to the
+                    // previous write's name (if any).
+                    if write_idx > 0 {
+                        let prev_name = format!("__ReturnVal_{}", write_idx);
+                        // Direct write: only rewrite after `=`; tuple bind:
+                        // hide the LHS __ReturnVal with a sentinel, rewrite,
+                        // restore.
+                        if is_direct_write(&t) {
+                            if let Some(eq_pos) = line.find('=') {
+                                let (lhs, rhs) = line.split_at(eq_pos + 1);
+                                let rhs_new = replace_outside_strings_and_comments(
+                                    rhs,
+                                    TargetLanguage::Erlang,
+                                    &[("__ReturnVal", prev_name.as_str())],
+                                );
+                                *line = format!("{}{}", lhs, rhs_new);
+                            }
+                        } else {
+                            let sentinel = "__RVLhsSentinel";
+                            let hidden = line.replacen(
+                                ", __ReturnVal}",
+                                &format!(", {}}}", sentinel),
+                                1,
+                            );
+                            let rewritten = replace_outside_strings_and_comments(
+                                &hidden,
+                                TargetLanguage::Erlang,
+                                &[("__ReturnVal", prev_name.as_str())],
+                            );
+                            *line = rewritten.replace(
+                                &format!(", {}}}", sentinel),
+                                ", __ReturnVal}",
+                            );
+                        }
+                    }
+                    // Rename the LHS to `__ReturnVal_{write_idx+1}`.
+                    // Every write gets a fresh name — including the
+                    // last, which is exposed via `final_rv_name` to
+                    // the handler emitter. No hardcoded terminal at
+                    // the emit site.
+                    let new_name = format!("__ReturnVal_{}", write_idx + 1);
+                    if is_direct_write(&t) {
+                        *line = line.replacen("__ReturnVal", &new_name, 1);
+                    } else {
+                        *line = line.replacen(
+                            ", __ReturnVal}",
+                            &format!(", {}}}", new_name),
+                            1,
+                        );
+                    }
+                    write_idx += 1;
+                } else {
+                    // Non-write line — rewrite reads to the most
+                    // recent write's name (`__ReturnVal_{write_idx}`).
+                    // Before the first write, no rename: the slot
+                    // still holds its default.
+                    if write_idx > 0 {
+                        let name = format!("__ReturnVal_{}", write_idx);
+                        *line = replace_outside_strings_and_comments(
+                            line,
+                            TargetLanguage::Erlang,
+                            &[("__ReturnVal", name.as_str())],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    (result, data_var, final_rv_name)
 }
 
 /// Wrap a state handler body in transition-guard `case` expressions after
@@ -2312,7 +2508,7 @@ pub(crate) fn generate_erlang_system(
                         })
                         .collect();
                     let lines: Vec<&str> = enter_body.lines().collect();
-                    let (processed, final_data) = erlang_process_body_lines_with_params(
+                    let (processed, final_data, _final_rv) = erlang_process_body_lines_with_params(
                         &lines,
                         &action_names,
                         "Data",
@@ -2490,7 +2686,7 @@ pub(crate) fn generate_erlang_system(
 
                     // Process through Data threading (handles both simple and case-block bodies)
                     let lines: Vec<&str> = spliced_body.lines().collect();
-                    let (processed, _final_data) = erlang_process_body_lines_full(
+                    let (processed, _final_data, final_rv) = erlang_process_body_lines_full(
                         &lines,
                         &action_names,
                         &interface_names,
@@ -2561,14 +2757,7 @@ pub(crate) fn generate_erlang_system(
                                                     .collect::<String>()
                                             })
                                         });
-                                    let reply_val = if processed
-                                        .iter()
-                                        .any(|l| l.contains("__ReturnVal"))
-                                    {
-                                        "__ReturnVal"
-                                    } else {
-                                        "ok"
-                                    };
+                                    let reply_val = final_rv.as_str();
                                     if let Some(fwd) = last_fwd_var {
                                         code.push_str(",\n");
                                         code.push_str(&format!(
@@ -2624,14 +2813,7 @@ pub(crate) fn generate_erlang_system(
                                                 .collect::<String>()
                                         })
                                     });
-                                let reply_val = if processed
-                                    .iter()
-                                    .any(|l| l.contains("__ReturnVal"))
-                                {
-                                    "__ReturnVal"
-                                } else {
-                                    "ok"
-                                };
+                                let reply_val = final_rv.as_str();
                                 if let Some(fwd) = last_fwd_var {
                                     code.push_str(",\n");
                                     code.push_str(&format!(
@@ -2656,7 +2838,7 @@ pub(crate) fn generate_erlang_system(
                 } else {
                     // No return tuple — process through Data threading and add return
                     let lines: Vec<&str> = spliced_body.lines().collect();
-                    let (processed, final_data) = erlang_process_body_lines_full(
+                    let (processed, final_data, final_rv_nr) = erlang_process_body_lines_full(
                         &lines,
                         &action_names,
                         &interface_names,
@@ -2666,15 +2848,17 @@ pub(crate) fn generate_erlang_system(
                     if processed.is_empty() {
                         code.push_str("    {keep_state, Data, [{reply, From, ok}]};\n");
                     } else {
-                        // Check if @@:return was used (sets __ReturnVal)
-                        let has_return_val = processed.iter().any(|l| l.contains("__ReturnVal"));
+                        // Use the body processor's authoritative
+                        // final return-value name. `"ok"` when no
+                        // `@@:return` writes happened in the body.
+                        let has_return_val = final_rv_nr != "ok";
                         let has_transition = processed
                             .iter()
                             .any(|l| l.trim().starts_with("frame_transition__("));
                         let has_case = processed
                             .iter()
                             .any(|l| l.trim().starts_with("case ") || l.contains(" case "));
-                        let reply_val = if has_return_val { "__ReturnVal" } else { "ok" };
+                        let reply_val: &str = final_rv_nr.as_str();
 
                         if has_case && has_transition {
                             // Case block with transitions in some arms.
@@ -2956,7 +3140,7 @@ pub(crate) fn generate_erlang_system(
                     })
                     .collect();
                 let lines: Vec<&str> = raw_exit.lines().collect();
-                let (processed, final_data) = erlang_process_body_lines_with_params(
+                let (processed, final_data, _final_rv) = erlang_process_body_lines_with_params(
                     &lines,
                     &action_names,
                     "Data",
@@ -3060,7 +3244,7 @@ pub(crate) fn generate_erlang_system(
             // gen_statem tuple, and the calling handler's own guard picks
             // up the new state after the action returns with the transitioned
             // Data.
-            let (processed, final_data) = erlang_process_body_lines_full(
+            let (processed, final_data, _final_rv) = erlang_process_body_lines_full(
                 &lines,
                 &action_names,
                 &interface_names,
