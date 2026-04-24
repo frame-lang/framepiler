@@ -66,6 +66,22 @@ pub(crate) fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerC
         .unwrap_or_else(|| i.to_string())
 }
 
+/// Strip the outer parentheses from `(inner)` → `inner`.
+///
+/// Preconditions (checked by the caller): `s` is non-empty and wrapped
+/// in a matching outer `(…)` pair. The three @@:self.method expansion
+/// sites use this to unwrap `raw_args_with_parens` before splicing the
+/// arg list into a target's native call form (e.g. C's free-function
+/// dispatch `Sys_method(self, <inner>)`).
+fn strip_outer_parens(s: &str) -> &str {
+    debug_assert!(
+        s.len() >= 2 && s.starts_with('(') && s.ends_with(')'),
+        "strip_outer_parens called on non-paren-wrapped input: {:?}",
+        s
+    );
+    &s[1..s.len() - 1]
+}
+
 /// Wrap a C++ expression in std::string() if it's a string literal.
 /// Prevents std::bad_any_cast when storing in std::any (const char* vs std::string).
 fn cpp_wrap_string_literal(expr: &str) -> String {
@@ -74,6 +90,113 @@ fn cpp_wrap_string_literal(expr: &str) -> String {
         format!("std::string({})", trimmed)
     } else {
         expr.to_string()
+    }
+}
+
+/// `@@:return` typed-read expansion across all 17 targets.
+///
+/// The per-call context stack's `_return` slot is untyped in every
+/// typed target (`Object`/`Any`/`void*`/`std::any`/…). A bare read
+/// fails the first time the result hits an arithmetic op, a typed
+/// self-call arg, or a return-type-checked `return`. This helper
+/// emits the target's native downcast keyed on the handler's declared
+/// Frame return type (`int`/`bool`/`str`/float-ish). Unknown types
+/// fall back to the raw slot access, matching each target's natural
+/// default (Java returns `Object`, C returns `void*`, etc.).
+///
+/// Dynamic-typed targets (Python, JavaScript, Ruby, Lua, PHP, Dart,
+/// GDScript) don't need a cast — they get the bare access.
+pub(crate) fn context_return_read_typed(
+    lang: TargetLanguage,
+    frame_type: &str,
+    system_name: &str,
+) -> String {
+    match lang {
+        TargetLanguage::Python3 | TargetLanguage::GDScript => {
+            "self._context_stack[-1]._return".to_string()
+        }
+        TargetLanguage::TypeScript
+        | TargetLanguage::Dart
+        | TargetLanguage::JavaScript => {
+            "this._context_stack[this._context_stack.length - 1]._return".to_string()
+        }
+        TargetLanguage::C => {
+            let raw = format!("{}_RETURN(self)", system_name);
+            match frame_type {
+                "int" | "bool" => format!("((int)(intptr_t){})", raw),
+                "str" => format!("((const char*){})", raw),
+                _ => raw,
+            }
+        }
+        TargetLanguage::Rust => super::rust_system::rust_context_return_read_typed(frame_type),
+        TargetLanguage::Cpp => {
+            let cpp_type = match frame_type {
+                "int" => "int",
+                "bool" => "bool",
+                "str" => "std::string",
+                _ => "std::string", // legacy default
+            };
+            format!(
+                "std::any_cast<{}>(_context_stack.back()._return)",
+                cpp_type
+            )
+        }
+        TargetLanguage::Java => {
+            let raw = "_context_stack.get(_context_stack.size() - 1)._return";
+            match frame_type {
+                "int" => format!("((Integer) {}).intValue()", raw),
+                "bool" => format!("((Boolean) {}).booleanValue()", raw),
+                "str" => format!("((String) {})", raw),
+                _ => raw.to_string(),
+            }
+        }
+        TargetLanguage::Kotlin => {
+            let raw = "_context_stack[_context_stack.size - 1]._return";
+            match frame_type {
+                "int" => format!("({} as Int)", raw),
+                "bool" => format!("({} as Boolean)", raw),
+                "str" => format!("({} as String)", raw),
+                _ => raw.to_string(),
+            }
+        }
+        TargetLanguage::Swift => {
+            let raw = "_context_stack[_context_stack.count - 1]._return";
+            match frame_type {
+                "int" => format!("({} as! Int)", raw),
+                "bool" => format!("({} as! Bool)", raw),
+                "str" => format!("({} as! String)", raw),
+                _ => raw.to_string(),
+            }
+        }
+        TargetLanguage::CSharp => {
+            let raw = "_context_stack[_context_stack.Count - 1]._return";
+            match frame_type {
+                "int" => format!("((int) {})", raw),
+                "bool" => format!("((bool) {})", raw),
+                "str" => format!("((string) {})", raw),
+                _ => raw.to_string(),
+            }
+        }
+        TargetLanguage::Go => {
+            let raw = "s._context_stack[len(s._context_stack)-1]._return";
+            match frame_type {
+                "int" => format!("{}.(int)", raw),
+                "bool" => format!("{}.(bool)", raw),
+                "str" => format!("{}.(string)", raw),
+                _ => raw.to_string(),
+            }
+        }
+        TargetLanguage::Php => {
+            "$this->_context_stack[count($this->_context_stack) - 1]->_return".to_string()
+        }
+        TargetLanguage::Ruby => {
+            "@_context_stack[@_context_stack.length - 1]._return".to_string()
+        }
+        TargetLanguage::Lua => {
+            "self._context_stack[#self._context_stack]._return".to_string()
+        }
+        TargetLanguage::Erlang => "__ReturnVal".to_string(),
+        TargetLanguage::Graphviz => unreachable!(),
     }
 }
 
@@ -2429,101 +2552,7 @@ pub(crate) fn generate_frame_expansion(
                 // Dynamic-typed targets (Python, JS, Ruby, Lua, PHP,
                 // Dart, GDScript) need no cast.
                 let rt = ctx.current_return_type.as_deref().unwrap_or("");
-                match lang {
-                    TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                        "self._context_stack[-1]._return".to_string()
-                    }
-                    TargetLanguage::TypeScript
-                    | TargetLanguage::Dart
-                    | TargetLanguage::JavaScript => {
-                        "this._context_stack[this._context_stack.length - 1]._return".to_string()
-                    }
-                    TargetLanguage::C => {
-                        // `<Sys>_RETURN(self)` macro yields `void*`. When the
-                        // handler's declared return type is a primitive, cast
-                        // the read via `(int)(intptr_t)` (for int/bool — C's
-                        // bool is int) or `(const char*)` for strings so the
-                        // rvalue is usable in typed expression positions.
-                        let raw = format!("{}_RETURN(self)", ctx.system_name);
-                        match rt {
-                            "int" | "bool" => {
-                                format!("((int)(intptr_t){})", raw)
-                            }
-                            "str" => format!("((const char*){})", raw),
-                            _ => raw,
-                        }
-                    }
-                    TargetLanguage::Rust => super::rust_system::rust_context_return_read_typed(rt),
-                    TargetLanguage::Cpp => {
-                        let cpp_type = match rt {
-                            "int" => "int",
-                            "str" => "std::string",
-                            "bool" => "bool",
-                            _ => "std::string", // legacy default
-                        };
-                        format!(
-                            "std::any_cast<{}>(_context_stack.back()._return)",
-                            cpp_type
-                        )
-                    }
-                    TargetLanguage::Java => {
-                        let raw = "_context_stack.get(_context_stack.size() - 1)._return";
-                        match rt {
-                            "int"  => format!("((Integer) {}).intValue()", raw),
-                            "bool" => format!("((Boolean) {}).booleanValue()", raw),
-                            "str"  => format!("((String) {})", raw),
-                            _      => raw.to_string(),
-                        }
-                    }
-                    TargetLanguage::Kotlin => {
-                        let raw = "_context_stack[_context_stack.size - 1]._return";
-                        match rt {
-                            "int"  => format!("({} as Int)", raw),
-                            "bool" => format!("({} as Boolean)", raw),
-                            "str"  => format!("({} as String)", raw),
-                            _      => raw.to_string(),
-                        }
-                    }
-                    TargetLanguage::Swift => {
-                        let raw = "_context_stack[_context_stack.count - 1]._return";
-                        match rt {
-                            "int"  => format!("({} as! Int)", raw),
-                            "bool" => format!("({} as! Bool)", raw),
-                            "str"  => format!("({} as! String)", raw),
-                            _      => raw.to_string(),
-                        }
-                    }
-                    TargetLanguage::CSharp => {
-                        let raw = "_context_stack[_context_stack.Count - 1]._return";
-                        match rt {
-                            "int"  => format!("((int) {})", raw),
-                            "bool" => format!("((bool) {})", raw),
-                            "str"  => format!("((string) {})", raw),
-                            _      => raw.to_string(),
-                        }
-                    }
-                    TargetLanguage::Go => {
-                        let raw = "s._context_stack[len(s._context_stack)-1]._return";
-                        match rt {
-                            "int"  => format!("{}.(int)", raw),
-                            "bool" => format!("{}.(bool)", raw),
-                            "str"  => format!("{}.(string)", raw),
-                            _      => raw.to_string(),
-                        }
-                    }
-                    TargetLanguage::Php => {
-                        "$this->_context_stack[count($this->_context_stack) - 1]->_return"
-                            .to_string()
-                    }
-                    TargetLanguage::Ruby => {
-                        "@_context_stack[@_context_stack.length - 1]._return".to_string()
-                    }
-                    TargetLanguage::Lua => {
-                        "self._context_stack[#self._context_stack]._return".to_string()
-                    }
-                    TargetLanguage::Erlang => "__ReturnVal".to_string(),
-                    TargetLanguage::Graphviz => unreachable!(),
-                }
+                context_return_read_typed(lang, rt, &ctx.system_name)
             }
         }
         FrameSegmentKind::ContextReturnExpr => {
@@ -3051,7 +3080,7 @@ pub(crate) fn generate_frame_expansion(
                 && raw_args_with_parens.starts_with('(')
                 && raw_args_with_parens.ends_with(')')
             {
-                let inner = &raw_args_with_parens[1..raw_args_with_parens.len() - 1];
+                let inner = strip_outer_parens(raw_args_with_parens);
                 if inner.is_empty() {
                     raw_args_with_parens.to_string()
                 } else {
@@ -3081,8 +3110,7 @@ pub(crate) fn generate_frame_expansion(
                     // separate borrows — not simultaneous — so the
                     // checker accepts.
                     if args_with_parens.contains("self.") {
-                        let inner =
-                            &args_with_parens[1..args_with_parens.len() - 1];
+                        let inner = strip_outer_parens(args_with_parens);
                         format!(
                             "{{ let __rs_tmp_arg = {}; self.{}(__rs_tmp_arg) }}",
                             inner, method_name
@@ -3099,7 +3127,7 @@ pub(crate) fn generate_frame_expansion(
                     if args_with_parens == "()" {
                         format!("{}_{}(self)", ctx.system_name, method_name)
                     } else {
-                        let inner_args = &args_with_parens[1..args_with_parens.len() - 1];
+                        let inner_args = strip_outer_parens(args_with_parens);
                         format!("{}_{}(self, {})", ctx.system_name, method_name, inner_args)
                     }
                 }
