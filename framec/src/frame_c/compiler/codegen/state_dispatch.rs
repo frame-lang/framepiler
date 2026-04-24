@@ -1238,6 +1238,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             | TargetLanguage::Kotlin
             | TargetLanguage::Swift
             | TargetLanguage::Cpp
+            | TargetLanguage::CSharp
     ) {
         methods.extend(generate_per_handler_methods(
             lang,
@@ -1620,6 +1621,24 @@ fn generate_per_handler_method_for_lang(
             state_hsm_parents,
         ),
         TargetLanguage::Cpp => generate_cpp_handler_method(
+            system_name,
+            state_name,
+            parent_state,
+            handler,
+            state_vars_for_init,
+            source,
+            has_state_vars,
+            defined_systems,
+            sys_param_locals,
+            is_start_state,
+            state_param_names,
+            state_enter_param_names,
+            state_exit_param_names,
+            event_param_names,
+            handler_state_var_types,
+            state_hsm_parents,
+        ),
+        TargetLanguage::CSharp => generate_csharp_handler_method(
             system_name,
             state_name,
             parent_state,
@@ -2610,6 +2629,126 @@ fn generate_cpp_handler_method(
     }
 }
 
+/// Emit a single C# handler method under the per-handler contract:
+///   private void _s_<State>_hdl_<kind>_<event>(SysFrameEvent __e, SysCompartment compartment)
+/// C# specifics: `(T) compartment.state_args[i]` typed cast, `.ContainsKey("x")`
+/// init guard.
+#[allow(clippy::too_many_arguments)]
+fn generate_csharp_handler_method(
+    system_name: &str,
+    state_name: &str,
+    parent_state: Option<&str>,
+    handler: &HandlerEntry,
+    state_vars_for_init: &[StateVarAst],
+    source: &[u8],
+    _has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    _sys_param_locals: &[String],
+    _is_start_state: bool,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
+    handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
+) -> CodegenNode {
+    let method_name = handler_method_name(state_name, handler);
+    let lang = TargetLanguage::CSharp;
+
+    let ctx = HandlerContext {
+        system_name: system_name.to_string(),
+        state_name: state_name.to_string(),
+        event_name: handler.event.clone(),
+        parent_state: parent_state.map(|s| s.to_string()),
+        defined_systems: defined_systems.clone(),
+        use_sv_comp: false,
+        per_handler: true,
+        state_var_types: handler_state_var_types.clone(),
+        state_param_names: state_param_names.clone(),
+        state_enter_param_names: state_enter_param_names.clone(),
+        state_exit_param_names: state_exit_param_names.clone(),
+        event_param_names: event_param_names.clone(),
+        state_hsm_parents: state_hsm_parents.clone(),
+        current_return_type: handler.return_type.clone(),
+    };
+
+    let mut body = String::new();
+
+    // State-param binding. C# uses `var name = (T) compartment.state_args[i];`.
+    if let Some(sp_names) = state_param_names.get(state_name) {
+        for (i, name) in sp_names.iter().enumerate() {
+            let cs_type = "int"; // default — no type info in state_param_names
+            body.push_str(&format!(
+                "{} {} = ({}) compartment.state_args[{}];\n",
+                cs_type, name, cs_type, i
+            ));
+        }
+    }
+
+    // Handler-param binding.
+    let param_source = if handler.is_enter {
+        "compartment.enter_args"
+    } else if handler.is_exit {
+        "compartment.exit_args"
+    } else {
+        "__e._parameters"
+    };
+    for (i, param) in handler.params.iter().enumerate() {
+        let type_str = param.symbol_type.as_deref().unwrap_or("int");
+        let cs_type = csharp_map_type(type_str);
+        body.push_str(&format!(
+            "{} {} = ({}) {}[{}];\n",
+            cs_type, param.name, cs_type, param_source, i
+        ));
+    }
+
+    // State-var init (lifecycle enter only).
+    if handler.is_enter {
+        for var in state_vars_for_init {
+            let init_val = if let Some(ref init) = var.init {
+                expression_to_string(init, lang)
+            } else {
+                state_var_init_value(&var.var_type, lang)
+            };
+            body.push_str(&format!(
+                "if (!compartment.state_vars.ContainsKey(\"{}\")) {{\n    compartment.state_vars[\"{}\"] = {};\n}}\n",
+                var.name, var.name, init_val
+            ));
+        }
+    }
+
+    let return_init_code = emit_handler_return_init(handler, lang, "", &ctx.system_name);
+    if !return_init_code.is_empty() {
+        body.push_str(&return_init_code);
+    }
+
+    let body_src = emit_handler_body_via_statements(&handler.body_span, source, lang, &ctx);
+    body.push_str(&body_src);
+
+    let event_type = format!("{}FrameEvent", system_name);
+    let comp_type = format!("{}Compartment", system_name);
+
+    CodegenNode::Method {
+        name: method_name,
+        params: vec![
+            Param::new("__e").with_type(&event_type),
+            Param::new("compartment").with_type(&comp_type),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: body,
+            span: Some(crate::frame_c::compiler::frame_ast::Span {
+                start: handler.body_span.start,
+                end: handler.body_span.end,
+            }),
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    }
+}
+
 /// Emit a single Dart handler method under the per-handler contract.
 /// Dart: `final x = …;` param bindings with explicit type casts,
 /// `containsKey("x")` init guard, null-safe compartment handling.
@@ -3178,6 +3317,7 @@ pub(crate) fn generate_state_method(
             | TargetLanguage::Kotlin
             | TargetLanguage::Swift
             | TargetLanguage::Cpp
+            | TargetLanguage::CSharp
     ) {
         // Per-handler architecture: the dispatcher body is a flat list of
         // guarded calls to per-handler methods. Handler bodies themselves
@@ -3267,7 +3407,11 @@ pub(crate) fn generate_state_method(
         }
         TargetLanguage::CSharp => {
             let event_type = format!("{}FrameEvent", _system_name);
-            vec![Param::new("__e").with_type(&event_type)]
+            let comp_type = format!("{}Compartment", _system_name);
+            vec![
+                Param::new("__e").with_type(&event_type),
+                Param::new("compartment").with_type(&comp_type),
+            ]
         }
         TargetLanguage::Go => {
             let event_type = format!("*{}FrameEvent", _system_name);

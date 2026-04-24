@@ -3964,13 +3964,14 @@ fn generate_csharp_machinery(
         decorators: vec![],
     });
 
-    // __router - if/else if chain with ==
+    // __router - per-handler architecture passes __compartment as second
+    // arg (see docs/frame_runtime.md § "Dispatch Model").
     let mut router_code = String::new();
     router_code.push_str("string state_name = __compartment.state;\n");
     for (i, state) in states.iter().enumerate() {
         let prefix = if i == 0 { "if" } else { "} else if" };
         router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
-        router_code.push_str(&format!("    _state_{}(__e);\n", state));
+        router_code.push_str(&format!("    _state_{}(__e, __compartment);\n", state));
     }
     if !states.is_empty() {
         router_code.push_str("}");

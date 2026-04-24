@@ -879,13 +879,27 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::CSharp => {
                         let mut code = String::new();
+                        // Eager HSM chain — no compartment duplication.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}{{ var __new_compartment = new {}Compartment(\"{}\");\n",
-                            indent_str, ctx.system_name, target
+                            "{}{{ {}Compartment __new_compartment = null;\n",
+                            indent_str, ctx.system_name
                         ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ var __c = new {}Compartment(\"{}\"); __c.parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__new_compartment.parent_compartment = __compartment;\n",
-                            indent_str
+                            "{}{{ var __c = new {}Compartment(\"{}\"); __c.parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                            indent_str, ctx.system_name, target
                         ));
                         code.push_str(&format!(
                             "{}__new_compartment.forward_event = __e;\n",
@@ -1672,14 +1686,29 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        // Create new compartment -- block scope prevents redeclaration in multiple branches
+                        // Eager HSM chain construction — no compartment
+                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        // Block scope prevents redeclaration in multiple branches.
                         code.push_str(&format!(
-                            "{}{{ var __new_compartment = new {}Compartment(\"{}\");\n",
-                            indent_str, ctx.system_name, target
+                            "{}{{ {}Compartment __new_compartment = null;\n",
+                            indent_str, ctx.system_name
                         ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ var __c = new {}Compartment(\"{}\"); __c.parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__new_compartment.parent_compartment = __compartment;\n",
-                            indent_str
+                            "{}{{ var __c = new {}Compartment(\"{}\"); __c.parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                            indent_str, ctx.system_name, target
                         ));
 
                         // Set state_args if present (positional Add)
@@ -2126,7 +2155,14 @@ pub(crate) fn generate_frame_expansion(
                         }
                     }
                     TargetLanguage::CSharp => {
-                        format!("{}_state_{}(__e);", indent_str, parent)
+                        if ctx.per_handler {
+                            format!(
+                                "{}_state_{}(__e, compartment.parent_compartment);",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}_state_{}(__e);", indent_str, parent)
+                        }
                     }
                     TargetLanguage::Kotlin => {
                         if ctx.per_handler {
@@ -2698,7 +2734,9 @@ pub(crate) fn generate_frame_expansion(
                     } else {
                         format!("({}) ", cs_type)
                     };
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("{}compartment.state_vars[{}{}{}]", cast, q, var_name, q)
+                    } else if ctx.use_sv_comp {
                         format!("{}__sv_comp.state_vars[{}{}{}]", cast, q, var_name, q)
                     } else {
                         format!("{}__compartment.state_vars[{}{}{}]", cast, q, var_name, q)
@@ -2980,7 +3018,12 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::CSharp => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!(
+                            "{}compartment.state_vars[\"{}\"] = {};",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp.state_vars[\"{}\"] = {};",
                             indent_str, var_name, expanded_expr
@@ -4211,7 +4254,12 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     } else {
                         format!("({}) ", cs_type)
                     };
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!(
+                            "{}compartment.state_vars[\"{}\"]",
+                            cast, var_name
+                        ))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("{}__sv_comp.state_vars[\"{}\"]", cast, var_name))
                     } else {
                         result.push_str(&format!(
