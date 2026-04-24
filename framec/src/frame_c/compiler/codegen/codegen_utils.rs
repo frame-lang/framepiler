@@ -27,6 +27,13 @@ pub(crate) struct HandlerContext {
     /// monolithic dispatch semantics apply (the dispatcher computes
     /// `__sv_comp` once and handler bodies reference it).
     pub per_handler: bool,
+    /// Map from state name to its declared HSM parent state name (if any).
+    /// Built from `$Child => $Parent` declarations in the machine block.
+    /// At transition codegen time, used to eagerly construct the new
+    /// compartment's parent chain so `compartment.parent_compartment`
+    /// points at the state's declared HSM parent — not the transition-
+    /// source compartment. See `_scratch/bug_parent_compartment_hsm_walk.md`.
+    pub state_hsm_parents: std::collections::HashMap<String, String>,
     /// State variable types for type-aware expansion (e.g., C++ std::any_cast<Type>)
     pub state_var_types: std::collections::HashMap<String, String>,
     /// Map from state name to its declared param names (in declaration order).

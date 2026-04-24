@@ -850,8 +850,32 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment)\n", indent_str, ctx.system_name, target));
+                        // Create new compartment with eager HSM parent chain.
+                        // Walk target's declared `$A => $B` ancestry outer-in,
+                        // constructing each layer with parent_compartment = the
+                        // previously-constructed (outer) layer. Compartments
+                        // are NEVER duplicated from the transition-source
+                        // compartment — parent_compartment reflects static
+                        // HSM structure only (see
+                        // _scratch/bug_parent_compartment_hsm_walk.md).
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse(); // outermost first
+                        code.push_str(&format!("{}__compartment = None\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment(\"{}\", parent_compartment=__compartment)\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment = {}Compartment(\"{}\", parent_compartment=__compartment)\n",
+                            indent_str, ctx.system_name, target
+                        ));
 
                         // Set state_args if present (positional append)
                         if let Some(ref state) = state_str {
@@ -904,8 +928,27 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        // Create new compartment: positional args, .new() constructor
-                        code.push_str(&format!("{}var __compartment = {}Compartment.new(\"{}\", self.__compartment.copy())\n", indent_str, ctx.system_name, target));
+                        // Create new compartment with eager HSM parent chain —
+                        // see _scratch/bug_parent_compartment_hsm_walk.md.
+                        // Never duplicate the transition-source compartment.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        code.push_str(&format!("{}var __compartment = null\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
+                            indent_str, ctx.system_name, target
+                        ));
 
                         // Set state_args if present (positional append)
                         if let Some(ref state) = state_str {
@@ -958,8 +1001,36 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        // Create new compartment with parent_compartment for HSM support
-                        code.push_str(&format!("{}const __compartment = new {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
+                        // Create new compartment with eager HSM parent chain —
+                        // see _scratch/bug_parent_compartment_hsm_walk.md.
+                        // Never duplicate the transition-source compartment.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        // TS adds the nullable type annotation on the `let` decl;
+                        // JS elides it.
+                        if matches!(lang, TargetLanguage::TypeScript) {
+                            code.push_str(&format!(
+                                "{}let __compartment: {}Compartment | null = null;\n",
+                                indent_str, ctx.system_name
+                            ));
+                        } else {
+                            code.push_str(&format!("{}let __compartment = null;\n", indent_str));
+                        }
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = new {}Compartment(\"{}\", __compartment);\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment = new {}Compartment(\"{}\", __compartment);\n",
+                            indent_str, ctx.system_name, target
+                        ));
 
                         // Set state_args if present (positional push)
                         if let Some(ref state) = state_str {
@@ -1502,8 +1573,25 @@ pub(crate) fn generate_frame_expansion(
                                 ));
                             }
                         }
+                        // Eager HSM chain construction — see
+                        // _scratch/bug_parent_compartment_hsm_walk.md.
+                        // Never duplicate the transition-source compartment.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        code.push_str(&format!("{}__compartment = nil\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n",
+                            "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
                             indent_str, ctx.system_name, target
                         ));
                         // Set state_args (positional append)
@@ -1546,11 +1634,27 @@ pub(crate) fn generate_frame_expansion(
                                 ));
                             }
                         }
+                        // Eager HSM chain construction — see
+                        // _scratch/bug_parent_compartment_hsm_walk.md.
+                        // Never duplicate the transition-source compartment.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        let comp_class = format!("{}Compartment", ctx.system_name);
+                        code.push_str(&format!("{}local __compartment = nil\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}.new(\"{}\", __compartment)\n",
+                                indent_str, comp_class, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}local __compartment = {}.new(\"{}\")\n",
-                            indent_str,
-                            format!("{}Compartment", ctx.system_name),
-                            target
+                            "{}__compartment = {}.new(\"{}\", __compartment)\n",
+                            indent_str, comp_class, target
                         ));
                         // Set state_args (positional table.insert)
                         if let Some(ref state) = state_str {
@@ -4351,6 +4455,7 @@ mod tests {
             state_enter_param_names: std::collections::HashMap::new(),
             state_exit_param_names: std::collections::HashMap::new(),
             event_param_names: std::collections::HashMap::new(),
+            state_hsm_parents: std::collections::HashMap::new(),
             current_return_type: None,
         }
     }

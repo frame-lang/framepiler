@@ -1124,6 +1124,16 @@ pub(crate) fn generate_state_handlers_via_arcanum(
         }
     }
 
+    // Build state → declared HSM parent lookup from `$Child => $Parent`
+    // declarations. Used by transition codegen to eagerly construct the new
+    // compartment's parent_compartment chain — see
+    // _scratch/bug_parent_compartment_hsm_walk.md.
+    let state_hsm_parents: std::collections::HashMap<String, String> = machine
+        .states
+        .iter()
+        .filter_map(|s| s.parent.as_ref().map(|p| (s.name.clone(), p.clone())))
+        .collect();
+
     // Identify the start state (first state in the machine) so the
     // Rust dispatch can switch on whether this state's lifecycle params
     // are bound from system header (start) or from transitions (non-start).
@@ -1234,6 +1244,15 @@ pub(crate) fn generate_per_handler_methods(
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
 
+    // State → declared HSM parent map for use by transition codegen inside
+    // handler bodies (so `-> $Child` where Child => Parent constructs the
+    // full chain rather than patching parent_compartment = self.__compartment).
+    let state_hsm_parents: std::collections::HashMap<String, String> = machine
+        .states
+        .iter()
+        .filter_map(|s| s.parent.as_ref().map(|p| (s.name.clone(), p.clone())))
+        .collect();
+
     let start_state_name = machine
         .states
         .first()
@@ -1305,6 +1324,7 @@ pub(crate) fn generate_per_handler_methods(
                 state_exit_param_names,
                 event_param_names,
                 &handler_state_var_types,
+                &state_hsm_parents,
             );
             methods.push(method);
         }
@@ -1328,6 +1348,7 @@ pub(crate) fn generate_per_handler_methods(
                 state_exit_param_names,
                 event_param_names,
                 &handler_state_var_types,
+                &state_hsm_parents,
             );
             methods.push(method);
         }
@@ -1361,6 +1382,7 @@ fn generate_per_handler_method_for_lang(
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     match lang {
         TargetLanguage::Python3 => generate_python_handler_method(
@@ -1379,6 +1401,7 @@ fn generate_per_handler_method_for_lang(
             state_exit_param_names,
             event_param_names,
             handler_state_var_types,
+            state_hsm_parents,
         ),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
             generate_typescript_handler_method(
@@ -1398,6 +1421,7 @@ fn generate_per_handler_method_for_lang(
                 state_exit_param_names,
                 event_param_names,
                 handler_state_var_types,
+                state_hsm_parents,
             )
         }
         TargetLanguage::Ruby => generate_ruby_handler_method(
@@ -1416,6 +1440,7 @@ fn generate_per_handler_method_for_lang(
             state_exit_param_names,
             event_param_names,
             handler_state_var_types,
+            state_hsm_parents,
         ),
         TargetLanguage::GDScript => generate_gdscript_handler_method(
             system_name,
@@ -1433,6 +1458,7 @@ fn generate_per_handler_method_for_lang(
             state_exit_param_names,
             event_param_names,
             handler_state_var_types,
+            state_hsm_parents,
         ),
         TargetLanguage::Lua => generate_lua_handler_method(
             system_name,
@@ -1450,6 +1476,7 @@ fn generate_per_handler_method_for_lang(
             state_exit_param_names,
             event_param_names,
             handler_state_var_types,
+            state_hsm_parents,
         ),
         _ => unreachable!(
             "generate_per_handler_method_for_lang called with non-per-handler target {:?}",
@@ -1478,6 +1505,7 @@ fn generate_ruby_handler_method(
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::Ruby;
@@ -1495,6 +1523,7 @@ fn generate_ruby_handler_method(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
     };
 
@@ -1586,6 +1615,7 @@ fn generate_lua_handler_method(
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::Lua;
@@ -1603,6 +1633,7 @@ fn generate_lua_handler_method(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
     };
 
@@ -1696,6 +1727,7 @@ fn generate_gdscript_handler_method(
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::GDScript;
@@ -1713,6 +1745,7 @@ fn generate_gdscript_handler_method(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
     };
 
@@ -1801,6 +1834,7 @@ fn generate_typescript_handler_method(
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
 
@@ -1817,6 +1851,7 @@ fn generate_typescript_handler_method(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
     };
 
@@ -1925,6 +1960,7 @@ fn generate_python_handler_method(
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
 
@@ -1941,6 +1977,7 @@ fn generate_python_handler_method(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
     };
 
@@ -2085,6 +2122,12 @@ pub(crate) fn generate_state_method(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        // generate_state_method doesn't have access to the machine AST;
+        // the per-handler path uses state_hsm_parents via the dedicated
+        // per-handler emitter chain. This ctx is only used for the
+        // dispatcher body (thin or monolithic) which doesn't emit
+        // transitions. Empty map is safe here.
+        state_hsm_parents: std::collections::HashMap::new(),
         current_return_type: None,
     };
 
@@ -2097,6 +2140,7 @@ pub(crate) fn generate_state_method(
             | TargetLanguage::JavaScript
             | TargetLanguage::Ruby
             | TargetLanguage::GDScript
+            | TargetLanguage::Lua
     ) {
         // Per-handler architecture: the dispatcher body is a flat list of
         // guarded calls to per-handler methods. Handler bodies themselves
@@ -2285,6 +2329,9 @@ pub(crate) fn generate_handler_from_arcanum(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
+        // Rust uses typed struct fields for state vars, not compartment.state_vars —
+        // doesn't depend on HSM parent chain for correctness.
+        state_hsm_parents: std::collections::HashMap::new(),
         current_return_type: handler.return_type.clone(),
     };
 
