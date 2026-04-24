@@ -18,6 +18,36 @@ use crate::frame_c::compiler::frame_ast::{MachineAst, StateVarAst, SystemAst, Ty
 use crate::frame_c::visitors::TargetLanguage;
 
 // ============================================================================
+// Handler Method Name Mangler
+// ============================================================================
+
+/// Canonical method name for a Frame handler in a target namespace.
+///
+/// The mangling splits lifecycle handlers from user interface methods via an
+/// explicit `hdl_frame_*` / `hdl_user_*` prefix, so a user method named
+/// `enter` (mangled `_s_A_hdl_user_enter`) cannot collide with the lifecycle
+/// `$>` handler (mangled `_s_A_hdl_frame_enter`) — fixes the latent Rust-side
+/// collision described in bug_enter_exit_method_collision.md.
+///
+/// Format: `_s_<state>_hdl_frame_enter` (lifecycle enter),
+///         `_s_<state>_hdl_frame_exit`  (lifecycle exit),
+///         `_s_<state>_hdl_user_<event>` (user interface method).
+///
+/// Event names for user methods are bare identifiers by parser invariant
+/// (`[A-Za-z_][A-Za-z0-9_]*`), so no sanitization is required today. If
+/// future syntax introduces non-identifier event keys, extend this helper
+/// with a sanitizer rather than letting ad-hoc manglers drift.
+pub(crate) fn handler_method_name(state_name: &str, handler: &HandlerEntry) -> String {
+    if handler.is_enter {
+        format!("_s_{}_hdl_frame_enter", state_name)
+    } else if handler.is_exit {
+        format!("_s_{}_hdl_frame_exit", state_name)
+    } else {
+        format!("_s_{}_hdl_user_{}", state_name, handler.event)
+    }
+}
+
+// ============================================================================
 // Unified Dispatch Syntax — shared across all if/elif-style languages
 // ============================================================================
 
@@ -1228,14 +1258,7 @@ pub(crate) fn generate_handler_from_arcanum(
         }
     }
 
-    // Determine method name based on handler type
-    let method_name = if handler.is_enter {
-        format!("_s_{}_enter", state_name)
-    } else if handler.is_exit {
-        format!("_s_{}_exit", state_name)
-    } else {
-        format!("_s_{}_{}", state_name, handler.event)
-    };
+    let method_name = handler_method_name(state_name, handler);
 
     // Build context for HSM forwarding. The state_param_names /
     // state_enter_param_names / state_exit_param_names maps are

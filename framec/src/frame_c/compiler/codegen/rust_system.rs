@@ -10,7 +10,7 @@
 
 use super::ast::{CodegenNode, Field, Param, Visibility};
 use super::codegen_utils::type_to_string;
-use super::state_dispatch::generate_handler_from_arcanum;
+use super::state_dispatch::{generate_handler_from_arcanum, handler_method_name};
 use super::system_codegen::{expand_tagged_in_domain, init_references_param};
 use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
 use crate::frame_c::compiler::frame_ast::{
@@ -576,11 +576,7 @@ pub(crate) fn generate_rust_state_dispatch(
             _ => event.as_str(),
         };
 
-        let handler_method = match event.as_str() {
-            "$>" => format!("_s_{}_enter", state_name),
-            "$<" => format!("_s_{}_exit", state_name),
-            _ => format!("_s_{}_{}", state_name, event),
-        };
+        let handler_method = handler_method_name(state_name, handler);
 
         let is_lifecycle = event == "$>" || event == "$<";
         if !handler.params.is_empty() && is_lifecycle {
