@@ -768,14 +768,32 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Kotlin => {
                         let mut code = String::new();
+                        // Eager HSM chain — no compartment duplication.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        let all_states: Vec<String> = ancestors
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once(target.clone()))
+                            .collect();
+                        let (first, rest) = all_states
+                            .split_first()
+                            .expect("at least target is present");
                         code.push_str(&format!(
-                            "{}val __compartment = {}Compartment(\"{}\")\n",
-                            indent_str, ctx.system_name, target
+                            "{}var __compartment: {}Compartment = {}Compartment(\"{}\")\n",
+                            indent_str, ctx.system_name, ctx.system_name, first
                         ));
-                        code.push_str(&format!(
-                            "{}__compartment.parent_compartment = this.__compartment\n",
-                            indent_str
-                        ));
+                        for next in rest {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment(\"{}\").also {{ it.parent_compartment = __compartment }}\n",
+                                indent_str, ctx.system_name, next
+                            ));
+                        }
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e\n",
                             indent_str
@@ -1453,14 +1471,37 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
+                        // Eager HSM chain — no compartment duplication.
+                        // Outer-in chain so target's parent_compartment
+                        // walks up to the declared root.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        // Emit the outermost ancestor (or the target, if
+                        // no ancestors) as the initial non-null value;
+                        // subsequent links chain via `.also { ... }`.
+                        let all_states: Vec<String> = ancestors
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once(target.clone()))
+                            .collect();
+                        let (first, rest) = all_states
+                            .split_first()
+                            .expect("at least target is present");
                         code.push_str(&format!(
-                            "{}val __compartment = {}Compartment(\"{}\")\n",
-                            indent_str, ctx.system_name, target
+                            "{}var __compartment: {}Compartment = {}Compartment(\"{}\")\n",
+                            indent_str, ctx.system_name, ctx.system_name, first
                         ));
-                        code.push_str(&format!(
-                            "{}__compartment.parent_compartment = this.__compartment\n",
-                            indent_str
-                        ));
+                        for next in rest {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment(\"{}\").also {{ it.parent_compartment = __compartment }}\n",
+                                indent_str, ctx.system_name, next
+                            ));
+                        }
 
                         // Set state_args (positional add)
                         if let Some(ref state) = state_str {
@@ -2007,7 +2048,17 @@ pub(crate) fn generate_frame_expansion(
                     TargetLanguage::CSharp => {
                         format!("{}_state_{}(__e);", indent_str, parent)
                     }
-                    TargetLanguage::Kotlin | TargetLanguage::Swift => {
+                    TargetLanguage::Kotlin => {
+                        if ctx.per_handler {
+                            format!(
+                                "{}_state_{}(__e, compartment.parent_compartment!!)",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}_state_{}(__e)", indent_str, parent)
+                        }
+                    }
+                    TargetLanguage::Swift => {
                         format!("{}_state_{}(__e)", indent_str, parent)
                     }
                     // Go: call s._state_Parent(__e) — forward is not terminal, no return
@@ -2486,7 +2537,9 @@ pub(crate) fn generate_frame_expansion(
                     } else {
                         format!(" as {}", kt_type)
                     };
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("compartment.state_vars[{}{}{}]{}", q, var_name, q, cast)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[{}{}{}]{}", q, var_name, q, cast)
                     } else {
                         format!("__compartment.state_vars[{}{}{}]{}", q, var_name, q, cast)
@@ -2768,7 +2821,25 @@ pub(crate) fn generate_frame_expansion(
                         )
                     }
                 }
-                TargetLanguage::Kotlin | TargetLanguage::Swift => {
+                TargetLanguage::Kotlin => {
+                    if ctx.per_handler {
+                        format!(
+                            "{}compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
+                        format!(
+                            "{}__sv_comp.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else {
+                        format!(
+                            "{}__compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
+                    }
+                }
+                TargetLanguage::Swift => {
                     if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp.state_vars[\"{}\"] = {}",
@@ -3967,7 +4038,12 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     } else {
                         format!(" as {}", kt_type)
                     };
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!(
+                            "compartment.state_vars[\"{}\"]{}",
+                            var_name, cast
+                        ))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast))
                     } else {
                         result.push_str(&format!(
