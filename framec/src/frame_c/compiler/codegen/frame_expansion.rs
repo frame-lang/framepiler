@@ -1663,8 +1663,10 @@ pub(crate) fn generate_frame_expansion(
                 match lang {
                     // Python/TypeScript: call _state_Parent(__e) to dispatch via unified state method
                     TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                        if ctx.per_handler && matches!(lang, TargetLanguage::Python3) {
-                            // New architecture: shift compartment up one level at forward site.
+                        if ctx.per_handler {
+                            // Per-handler architecture: shift compartment up one
+                            // level at the forward site so the parent dispatcher
+                            // sees its own compartment as the param.
                             format!("{}self._state_{}(__e, compartment.parent_compartment)", indent_str, parent)
                         } else {
                             format!("{}self._state_{}(__e)", indent_str, parent)
@@ -2288,8 +2290,8 @@ pub(crate) fn generate_frame_expansion(
 
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                    if ctx.per_handler && matches!(lang, TargetLanguage::Python3) {
-                        // New per-handler architecture: compartment is a param.
+                    if ctx.per_handler {
+                        // Per-handler architecture: compartment is a param.
                         format!(
                             "{}compartment.state_vars[\"{}\"] = {}",
                             indent_str, var_name, expanded_expr
@@ -3714,7 +3716,9 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     }
                 }
                 TargetLanguage::GDScript => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!("compartment.state_vars[\"{}\"]", var_name))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("__sv_comp.state_vars[\"{}\"]", var_name))
                     } else {
                         result.push_str(&format!("self.__compartment.state_vars[\"{}\"]", var_name))

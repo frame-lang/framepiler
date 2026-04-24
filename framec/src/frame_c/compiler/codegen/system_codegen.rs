@@ -4282,7 +4282,10 @@ while self.__next_compartment != null:
         decorators: vec![],
     });
 
-    // __router method
+    // __router — per-handler architecture: pass self.__compartment as
+    // the second arg so dispatcher/handler methods receive the active
+    // state's compartment as a named local (docs/frame_runtime.md §
+    // "Dispatch Model").
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e")],
@@ -4291,7 +4294,7 @@ while self.__next_compartment != null:
             code: r#"var state_name = self.__compartment.state
 var handler_name = "_state_" + state_name
 if self.has_method(handler_name):
-    self.call(handler_name, __e)"#
+    self.call(handler_name, __e, self.__compartment)"#
                 .to_string(),
             span: None,
         }],
