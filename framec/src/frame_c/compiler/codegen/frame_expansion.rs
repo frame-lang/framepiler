@@ -575,10 +575,34 @@ pub(crate) fn generate_frame_expansion(
                     SegmentMetadata::Transition { target_state, .. } => target_state.clone(),
                     _ => "Unknown".to_string(),
                 };
+                // Build the target state's HSM ancestry outer-in. Used
+                // below by the per-handler targets (Python/TS/JS/GDScript/
+                // Ruby/Lua) to construct the parent_compartment chain
+                // eagerly, never duplicating the transition-source
+                // compartment (see
+                // _scratch/bug_parent_compartment_hsm_walk.md).
+                let mut ancestors: Vec<String> = Vec::new();
+                let mut cursor = target.clone();
+                while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                    ancestors.push(parent.clone());
+                    cursor = parent.clone();
+                }
+                ancestors.reverse();
+
                 match lang {
                     TargetLanguage::Python3 => {
                         let mut code = String::new();
-                        code.push_str(&format!("{}__compartment = {}Compartment(\"{}\", parent_compartment=self.__compartment)\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!("{}__compartment = None\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment(\"{}\", parent_compartment=__compartment)\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment = {}Compartment(\"{}\", parent_compartment=__compartment)\n",
+                            indent_str, ctx.system_name, target
+                        ));
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e\n",
                             indent_str
@@ -589,7 +613,17 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::GDScript => {
                         let mut code = String::new();
-                        code.push_str(&format!("{}var __compartment = {}Compartment.new(\"{}\", self.__compartment.copy())\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!("{}var __compartment = null\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
+                            indent_str, ctx.system_name, target
+                        ));
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e\n",
                             indent_str
@@ -600,7 +634,24 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
                         let mut code = String::new();
-                        code.push_str(&format!("{}const __compartment = new {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
+                        if matches!(lang, TargetLanguage::TypeScript) {
+                            code.push_str(&format!(
+                                "{}let __compartment: {}Compartment | null = null;\n",
+                                indent_str, ctx.system_name
+                            ));
+                        } else {
+                            code.push_str(&format!("{}let __compartment = null;\n", indent_str));
+                        }
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = new {}Compartment(\"{}\", __compartment);\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}__compartment = new {}Compartment(\"{}\", __compartment);\n",
+                            indent_str, ctx.system_name, target
+                        ));
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e;\n",
                             indent_str
@@ -613,6 +664,9 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Dart => {
+                        // Dart is still on monolithic dispatch; keep the
+                        // legacy `.copy()` for transition-source until it
+                        // migrates to per-handler.
                         let mut code = String::new();
                         code.push_str(&format!("{}final __compartment = {}Compartment(\"{}\", this.__compartment.copy());\n", indent_str, ctx.system_name, target));
                         code.push_str(&format!(
@@ -775,8 +829,15 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Ruby => {
                         let mut code = String::new();
+                        code.push_str(&format!("{}__compartment = nil\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__compartment = {}Compartment.new(\"{}\", @__compartment.copy)\n",
+                            "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
                             indent_str, ctx.system_name, target
                         ));
                         code.push_str(&format!(
@@ -789,8 +850,15 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Lua => {
                         let mut code = String::new();
+                        code.push_str(&format!("{}local __compartment = nil\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}local __compartment = {}Compartment.new(\"{}\")\n",
+                            "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
                             indent_str, ctx.system_name, target
                         ));
                         code.push_str(&format!(
