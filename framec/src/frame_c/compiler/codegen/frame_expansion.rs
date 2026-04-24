@@ -698,13 +698,28 @@ pub(crate) fn generate_frame_expansion(
                     ),
                     TargetLanguage::C => {
                         let mut code = String::new();
+                        // Eager HSM chain — no compartment duplication.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n",
+                            "{}{}_Compartment* __compartment = NULL;\n",
+                            indent_str, ctx.system_name
+                        ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ {}_Compartment* __c = {}_Compartment_new(\"{}\"); __c->parent_compartment = __compartment; __compartment = __c; }}\n",
+                                indent_str, ctx.system_name, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}{{ {}_Compartment* __c = {}_Compartment_new(\"{}\"); __c->parent_compartment = __compartment; __compartment = __c; }}\n",
                             indent_str, ctx.system_name, ctx.system_name, target
                         ));
-                        if ctx.parent_state.is_some() {
-                            code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_ref(self->__compartment);\n", indent_str, ctx.system_name));
-                        }
                         code.push_str(&format!(
                             "{}__compartment->forward_event = __e;\n",
                             indent_str
@@ -1340,19 +1355,38 @@ pub(crate) fn generate_frame_expansion(
 
                         // Store exit_args in current compartment (positional via integer key)
                         if let Some(ref exit) = exit_str {
-                            for (i, arg) in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
+                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
                                 code.push_str(&format!("{}{}_FrameVec_push(self->__compartment->exit_args, (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, arg));
                             }
                         }
 
-                        // Create new compartment
+                        // Eager HSM chain construction — no compartment
+                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
+                        // C's reference-counted compartments need `_ref` to
+                        // pin the parent link, but we also want the chain
+                        // to reflect the target's declared ancestry, not
+                        // the transition-source compartment.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}{}_Compartment* __compartment = {}_Compartment_new(\"{}\");\n",
+                            "{}{}_Compartment* __compartment = NULL;\n",
+                            indent_str, ctx.system_name
+                        ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ {}_Compartment* __c = {}_Compartment_new(\"{}\"); __c->parent_compartment = __compartment; __compartment = __c; }}\n",
+                                indent_str, ctx.system_name, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}{{ {}_Compartment* __c = {}_Compartment_new(\"{}\"); __c->parent_compartment = __compartment; __compartment = __c; }}\n",
                             indent_str, ctx.system_name, ctx.system_name, target
                         ));
-                        if ctx.parent_state.is_some() {
-                            code.push_str(&format!("{}__compartment->parent_compartment = {}_Compartment_ref(self->__compartment);\n", indent_str, ctx.system_name));
-                        }
 
                         // Set state_args if present (positional via integer key)
                         if let Some(ref state) = state_str {
@@ -2125,11 +2159,22 @@ pub(crate) fn generate_frame_expansion(
                     TargetLanguage::Rust => {
                         super::rust_system::rust_parent_forward(&indent_str, parent)
                     }
-                    // C: call System_state_Parent(self, __e) since C has no methods
-                    TargetLanguage::C => format!(
-                        "{}{}_state_{}(self, __e);",
-                        indent_str, ctx.system_name, parent
-                    ),
+                    // C: call System_state_Parent(self, __e, parent_compartment)
+                    // — per-handler architecture shifts the compartment up
+                    // one level at the forward site.
+                    TargetLanguage::C => {
+                        if ctx.per_handler {
+                            format!(
+                                "{}{}_state_{}(self, __e, compartment->parent_compartment);",
+                                indent_str, ctx.system_name, parent
+                            )
+                        } else {
+                            format!(
+                                "{}{}_state_{}(self, __e);",
+                                indent_str, ctx.system_name, parent
+                            )
+                        }
+                    }
                     // C++: call _state_Parent(__e, compartment->parent_compartment)
                     // — forward is not terminal, no return.
                     TargetLanguage::Cpp => {
@@ -2587,12 +2632,11 @@ pub(crate) fn generate_frame_expansion(
                 }
                 TargetLanguage::C => {
                     // For C, access via FrameDict_get with type-aware cast.
-                    // When we're inside an HSM-forwarded parent handler,
-                    // `use_sv_comp` is set: read from the local
-                    // `__sv_comp` pointer (walked up to the owning state
-                    // at dispatch entry by fmt_hsm_nav) instead of the
-                    // currently-active compartment, which is still the
-                    // child's at this point.
+                    // Per-handler takes precedence — read from the handler's
+                    // named `compartment` param. When use_sv_comp is set in
+                    // the legacy path, read from `__sv_comp` pointer (walked
+                    // up to owning state at dispatch entry); otherwise
+                    // default to `self->__compartment`.
                     let c_type = ctx
                         .state_var_types
                         .get(var_name.as_str())
@@ -2602,7 +2646,9 @@ pub(crate) fn generate_frame_expansion(
                         "char*" | "const char*" | "str" | "string" | "String" => "(const char*)",
                         _ => "(int)(intptr_t)",
                     };
-                    let comp = if ctx.use_sv_comp {
+                    let comp = if ctx.per_handler {
+                        "compartment"
+                    } else if ctx.use_sv_comp {
                         "__sv_comp"
                     } else {
                         "self->__compartment"
@@ -2919,7 +2965,10 @@ pub(crate) fn generate_frame_expansion(
                     &expanded_expr,
                 ),
                 TargetLanguage::C => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("{}{}_FrameDict_set(compartment->state_vars, \"{}\", (void*)(intptr_t)({}));",
+                            indent_str, ctx.system_name, var_name, expanded_expr)
+                    } else if ctx.use_sv_comp {
                         format!("{}{}_FrameDict_set(__sv_comp->state_vars, \"{}\", (void*)(intptr_t)({}));",
                             indent_str, ctx.system_name, var_name, expanded_expr)
                     } else {
@@ -4128,7 +4177,12 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         "char*" | "const char*" | "str" | "string" | "String" => "(const char*)",
                         _ => "(int)(intptr_t)",
                     };
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!(
+                            "{}{}_FrameDict_get(compartment->state_vars, \"{}\")",
+                            cast, ctx.system_name, var_name
+                        ))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!(
                             "{}{}_FrameDict_get(__sv_comp->state_vars, \"{}\")",
                             cast, ctx.system_name, var_name

@@ -57,16 +57,22 @@ impl LanguageBackend for CBackend {
                 ));
 
                 // Add forward declarations for state handler methods
+                // AND per-handler methods (`_s_<State>_hdl_<kind>_<event>`).
+                // Per-handler architecture adds `compartment` as a third arg
+                // (see docs/frame_runtime.md § "Dispatch Model").
                 for method in methods {
                     if let CodegenNode::Method {
                         name: method_name, ..
                     } = method
                     {
-                        if method_name.starts_with("_state_") {
+                        if method_name.starts_with("_state_")
+                            || method_name.starts_with("_s_")
+                        {
                             result.push_str(&format!(
-                                "static void {}_{}({}* self, {}_FrameEvent* __e);\n",
+                                "static void {}_{}({}* self, {}_FrameEvent* __e, {}_Compartment* compartment);\n",
                                 name,
                                 method_name.trim_start_matches('_'),
+                                name,
                                 name,
                                 name
                             ));
@@ -84,8 +90,10 @@ impl LanguageBackend for CBackend {
                         ..
                     } = method
                     {
-                        // Skip state handlers, kernel, router, transition (already declared)
+                        // Skip state handlers, per-handler methods, kernel,
+                        // router, transition (already declared).
                         if method_name.starts_with("_state_")
+                            || method_name.starts_with("_s_")
                             || method_name.starts_with("__")
                             || method_name == "new"
                             || method_name == "destroy"

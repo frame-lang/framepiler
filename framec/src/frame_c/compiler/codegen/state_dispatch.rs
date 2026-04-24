@@ -917,6 +917,10 @@ fn generate_thin_dispatcher_generic(
     } else {
         ""
     };
+    // C uses free functions (`Sys_<method>(self, ...)`) instead of
+    // member dispatch (`self->method(...)`). Switch to the C convention
+    // for handler / forward calls.
+    let is_c = matches!(syn.lang, TargetLanguage::C);
 
     // State params bind from compartment.state_args at the top of the
     // dispatcher. Uses fmt_bind_param for language-specific syntax.
@@ -941,9 +945,16 @@ fn generate_thin_dispatcher_generic(
     if has_state_vars && !has_explicit_enter {
         let method = format!("_s_{}_hdl_frame_enter", state_name);
         code.push_str(&(syn.fmt_if)("$>"));
-        code.push_str(&format!(
-            "{indent}{self_prefix}{method}({var_sigil}__e, {var_sigil}compartment){semi}\n"
-        ));
+        if is_c {
+            code.push_str(&format!(
+                "{indent}{}_s_{}_hdl_frame_enter(self, __e, compartment){semi}\n",
+                ctx.system_name, state_name
+            ));
+        } else {
+            code.push_str(&format!(
+                "{indent}{self_prefix}{method}({var_sigil}__e, {var_sigil}compartment){semi}\n"
+            ));
+        }
         code.push_str(&format!("{indent}return{semi}\n"));
         code.push_str(close);
     }
@@ -965,9 +976,17 @@ fn generate_thin_dispatcher_generic(
         // `if X: self.foo(); return` form would trigger a line-wide
         // match and prepend `await ` in front of the `if` keyword.
         code.push_str(&(syn.fmt_if)(wire_message));
-        code.push_str(&format!(
-            "{indent}{self_prefix}{method_name}({var_sigil}__e, {var_sigil}compartment){semi}\n"
-        ));
+        if is_c {
+            code.push_str(&format!(
+                "{indent}{}_{}(self, __e, compartment){semi}\n",
+                ctx.system_name,
+                method_name.trim_start_matches('_')
+            ));
+        } else {
+            code.push_str(&format!(
+                "{indent}{self_prefix}{method_name}({var_sigil}__e, {var_sigil}compartment){semi}\n"
+            ));
+        }
         code.push_str(&format!("{indent}return{semi}\n"));
         code.push_str(close);
     }
@@ -996,10 +1015,17 @@ fn generate_thin_dispatcher_generic(
             } else {
                 "parent_compartment"
             };
-            code.push_str(&format!(
-                "{self_prefix}_state_{}({var_sigil}__e, {var_sigil}compartment{deref}{parent_field}{}){semi}\n",
-                parent, bang
-            ));
+            if is_c {
+                code.push_str(&format!(
+                    "{}_state_{}(self, __e, compartment->parent_compartment){semi}\n",
+                    ctx.system_name, parent
+                ));
+            } else {
+                code.push_str(&format!(
+                    "{self_prefix}_state_{}({var_sigil}__e, {var_sigil}compartment{deref}{parent_field}{}){semi}\n",
+                    parent, bang
+                ));
+            }
         }
     }
 
@@ -1239,6 +1265,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             | TargetLanguage::Swift
             | TargetLanguage::Cpp
             | TargetLanguage::CSharp
+            | TargetLanguage::C
     ) {
         methods.extend(generate_per_handler_methods(
             lang,
@@ -1639,6 +1666,24 @@ fn generate_per_handler_method_for_lang(
             state_hsm_parents,
         ),
         TargetLanguage::CSharp => generate_csharp_handler_method(
+            system_name,
+            state_name,
+            parent_state,
+            handler,
+            state_vars_for_init,
+            source,
+            has_state_vars,
+            defined_systems,
+            sys_param_locals,
+            is_start_state,
+            state_param_names,
+            state_enter_param_names,
+            state_exit_param_names,
+            event_param_names,
+            handler_state_var_types,
+            state_hsm_parents,
+        ),
+        TargetLanguage::C => generate_c_handler_method(
             system_name,
             state_name,
             parent_state,
@@ -2749,6 +2794,142 @@ fn generate_csharp_handler_method(
     }
 }
 
+/// Emit a single C handler method under the per-handler contract:
+///   static void Sys__s_<State>_hdl_<kind>_<event>(Sys* self, Sys_FrameEvent* __e, Sys_Compartment* compartment)
+/// C specifics: free functions (not class methods), `(T) FrameDict_get(...)`
+/// typed cast for state-var access, `->` deref, C backend prefixes
+/// `Sys_` and inserts `self` automatically.
+#[allow(clippy::too_many_arguments)]
+fn generate_c_handler_method(
+    system_name: &str,
+    state_name: &str,
+    parent_state: Option<&str>,
+    handler: &HandlerEntry,
+    state_vars_for_init: &[StateVarAst],
+    source: &[u8],
+    _has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    _sys_param_locals: &[String],
+    _is_start_state: bool,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
+    handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
+) -> CodegenNode {
+    let method_name = handler_method_name(state_name, handler);
+    let lang = TargetLanguage::C;
+
+    let ctx = HandlerContext {
+        system_name: system_name.to_string(),
+        state_name: state_name.to_string(),
+        event_name: handler.event.clone(),
+        parent_state: parent_state.map(|s| s.to_string()),
+        defined_systems: defined_systems.clone(),
+        use_sv_comp: false,
+        per_handler: true,
+        state_var_types: handler_state_var_types.clone(),
+        state_param_names: state_param_names.clone(),
+        state_enter_param_names: state_enter_param_names.clone(),
+        state_exit_param_names: state_exit_param_names.clone(),
+        event_param_names: event_param_names.clone(),
+        state_hsm_parents: state_hsm_parents.clone(),
+        current_return_type: handler.return_type.clone(),
+    };
+
+    let mut body = String::new();
+
+    // State-param binding. C uses `int name = (int)(intptr_t) FrameVec_get(compartment->state_args, i);`.
+    if let Some(sp_names) = state_param_names.get(state_name) {
+        for (i, name) in sp_names.iter().enumerate() {
+            body.push_str(&format!(
+                "int {} = (int)(intptr_t){}_FrameVec_get(compartment->state_args, {});\n",
+                name, system_name, i
+            ));
+            body.push_str(&format!("(void){};\n", name));
+        }
+    }
+
+    // Handler-param binding.
+    let param_source_pre = if handler.is_enter {
+        "compartment->enter_args"
+    } else if handler.is_exit {
+        "compartment->exit_args"
+    } else {
+        "__e->_parameters"
+    };
+    for (i, param) in handler.params.iter().enumerate() {
+        let type_str = param.symbol_type.as_deref().unwrap_or("int");
+        let (c_decl, cast) = match type_str.trim() {
+            "str" | "string" | "String" | "char*" | "const char*" => {
+                ("const char*", "(const char*)")
+            }
+            t if t.ends_with('*') => (t, "("),
+            _ => ("int", "(int)(intptr_t)"),
+        };
+        if cast.ends_with('(') {
+            // Generic pointer type — emit matching parens
+            body.push_str(&format!(
+                "{} {} = ({}){}_FrameVec_get({}, {});\n",
+                c_decl, param.name, c_decl, system_name, param_source_pre, i
+            ));
+        } else {
+            body.push_str(&format!(
+                "{} {} = {}{}_FrameVec_get({}, {});\n",
+                c_decl, param.name, cast, system_name, param_source_pre, i
+            ));
+        }
+        body.push_str(&format!("(void){};\n", param.name));
+    }
+
+    // State-var init (lifecycle enter only). Uses FrameDict_has + FrameDict_set.
+    if handler.is_enter {
+        for var in state_vars_for_init {
+            let init_val = if let Some(ref init) = var.init {
+                expression_to_string(init, lang)
+            } else {
+                state_var_init_value(&var.var_type, lang)
+            };
+            body.push_str(&format!(
+                "if (!{}_FrameDict_has(compartment->state_vars, \"{}\")) {{\n    {}_FrameDict_set(compartment->state_vars, \"{}\", (void*)(intptr_t)({}));\n}}\n",
+                system_name, var.name, system_name, var.name, init_val
+            ));
+        }
+    }
+
+    let return_init_code = emit_handler_return_init(handler, lang, "", &ctx.system_name);
+    if !return_init_code.is_empty() {
+        body.push_str(&return_init_code);
+    }
+
+    let body_src = emit_handler_body_via_statements(&handler.body_span, source, lang, &ctx);
+    body.push_str(&body_src);
+
+    let event_type = format!("{}_FrameEvent*", system_name);
+    let comp_type = format!("{}_Compartment*", system_name);
+
+    CodegenNode::Method {
+        name: method_name,
+        params: vec![
+            Param::new("__e").with_type(&event_type),
+            Param::new("compartment").with_type(&comp_type),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: body,
+            span: Some(crate::frame_c::compiler::frame_ast::Span {
+                start: handler.body_span.start,
+                end: handler.body_span.end,
+            }),
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    }
+}
+
 /// Emit a single Dart handler method under the per-handler contract.
 /// Dart: `final x = …;` param bindings with explicit type casts,
 /// `containsKey("x")` init guard, null-safe compartment handling.
@@ -3318,6 +3499,7 @@ pub(crate) fn generate_state_method(
             | TargetLanguage::Swift
             | TargetLanguage::Cpp
             | TargetLanguage::CSharp
+            | TargetLanguage::C
     ) {
         // Per-handler architecture: the dispatcher body is a flat list of
         // guarded calls to per-handler methods. Handler bodies themselves
@@ -3387,7 +3569,11 @@ pub(crate) fn generate_state_method(
         }
         TargetLanguage::C => {
             let event_type = format!("{}_FrameEvent*", _system_name);
-            vec![Param::new("__e").with_type(&event_type)]
+            let comp_type = format!("{}_Compartment*", _system_name);
+            vec![
+                Param::new("__e").with_type(&event_type),
+                Param::new("compartment").with_type(&comp_type),
+            ]
         }
         TargetLanguage::Cpp => {
             let event_type = format!("{}FrameEvent&", _system_name);

@@ -4397,6 +4397,9 @@ if self.has_method(handler_name):
 
 /// Generate C router dispatch using if-else chain with strcmp
 fn generate_c_router_dispatch(system: &SystemAst) -> String {
+    // Per-handler architecture: pass self->__compartment as third arg so
+    // dispatcher + handler methods see the owning state's compartment as
+    // a named local (see docs/frame_runtime.md § "Dispatch Model").
     let sys = &system.name;
     let mut code = String::new();
     code.push_str("const char* state_name = self->__compartment->state;\n");
@@ -4405,7 +4408,7 @@ fn generate_c_router_dispatch(system: &SystemAst) -> String {
         for (i, state) in machine.states.iter().enumerate() {
             let cond = if i == 0 { "if" } else { "} else if" };
             code.push_str(&format!(
-                "{} (strcmp(state_name, \"{}\") == 0) {{\n    {}_state_{}(self, __e);\n",
+                "{} (strcmp(state_name, \"{}\") == 0) {{\n    {}_state_{}(self, __e, self->__compartment);\n",
                 cond, state.name, sys, state.name
             ));
         }
