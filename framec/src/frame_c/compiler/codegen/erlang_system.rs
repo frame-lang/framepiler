@@ -870,6 +870,7 @@ fn erlang_process_body_lines_full(
                 let data_brace = format!(", {}}}", data_var);
                 let data_paren = format!(", {})", data_var);
                 let data_access2 = format!("{}#data.", data_var);
+                let data_update = format!("{}#data{{", data_var);
                 rewritten = replace_outside_strings_and_comments(
                     &rewritten,
                     TargetLanguage::Erlang,
@@ -878,6 +879,13 @@ fn erlang_process_body_lines_full(
                         (", Data}", data_brace.as_str()),
                         (", Data)", data_paren.as_str()),
                         ("Data#data.", data_access2.as_str()),
+                        // Record-update syntax `Data#data{field = val}`.
+                        // Without this substitution, a structural line
+                        // that emits a record update (e.g. `pop$` transit
+                        // emission) would read the pre-handler Data
+                        // snapshot, discarding any `self.x = ...` writes
+                        // that bumped `data_var` before this line.
+                        ("Data#data{", data_update.as_str()),
                     ],
                 );
             }
