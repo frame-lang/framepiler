@@ -302,6 +302,63 @@ mod tests {
         );
     }
 
+    /// Regression — bug_enter_exit_method_collision.md.
+    /// User interface methods named `enter` must dispatch under their own
+    /// wire message, not be aliased to the lifecycle `$>` event. Before the
+    /// fix, the body was folded into the `$>` arm, no `"enter"` arm was
+    /// emitted, and construction crashed on empty `_parameters`.
+    #[test]
+    fn test_user_enter_method_does_not_alias_lifecycle_enter() {
+        let frame = r#"
+@@target python_3
+@@system M {
+    interface:
+        enter(field: str, value: str): str
+    machine:
+        $A {
+            $.x: str = ""
+            enter(field: str, value: str): str {
+                $.x = value
+                @@:("ok")
+            }
+        }
+}"#;
+        let out = compile_module(frame, TargetLanguage::Python3).expect("compile");
+        // Two distinct dispatch arms must be emitted: one for the lifecycle
+        // `$>` and one for the user method `enter`.
+        assert!(
+            out.contains("__e._message == \"$>\""),
+            "missing lifecycle $> arm:\n{}",
+            out
+        );
+        assert!(
+            out.contains("__e._message == \"enter\""),
+            "missing user-method `enter` arm — it was aliased to $>:\n{}",
+            out
+        );
+    }
+
+    /// Regression — same bug, exit side.
+    #[test]
+    fn test_user_exit_method_does_not_alias_lifecycle_exit() {
+        let frame = r#"
+@@target python_3
+@@system M {
+    interface:
+        exit(code: int): str
+    machine:
+        $A {
+            exit(code: int): str { @@:("bye") }
+        }
+}"#;
+        let out = compile_module(frame, TargetLanguage::Python3).expect("compile");
+        assert!(
+            out.contains("__e._message == \"exit\""),
+            "missing user-method `exit` arm — it was aliased to <$:\n{}",
+            out
+        );
+    }
+
     #[test]
     fn test_typescript_compilation_with_validation() {
         // Test TypeScript target also blocks on validation errors

@@ -2690,16 +2690,12 @@ pub(crate) fn generate_erlang_system(
                 code.push_str("    {keep_state, Data};\n");
             }
 
-            // Event handlers
+            // Event handlers. The parser puts lifecycle `$>` / `<$` into
+            // `state.enter` / `state.exit`, not here, so `state.handlers` only
+            // contains user-defined interface methods — no lifecycle-skip
+            // filter needed. A user method named `enter` or `exit` dispatches
+            // as a regular event atom (fixes bug_enter_exit_method_collision).
             for handler in &state.handlers {
-                if handler.event == "$>"
-                    || handler.event == "enter"
-                    || handler.event == "<$"
-                    || handler.event == "exit"
-                {
-                    continue; // Skip lifecycle handlers
-                }
-
                 let event_atom = to_snake_case(&handler.event);
 
                 // Build parameter pattern for gen_statem call

@@ -679,7 +679,11 @@ pub(crate) fn generate_unified_state_dispatch(
 ) -> String {
     let mut code = String::new();
     let mut first = true;
-    let has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+    // Only the lifecycle `$>` key signals an explicit enter handler. A user
+    // interface method named `enter` is a regular event — it must not
+    // suppress auto-generated state-var init, and its body must not be
+    // merged into the `$>` branch.
+    let has_enter_handler = handlers.contains_key("$>");
 
     // 1. State param binding
     for (i, sp) in state_params.iter().enumerate() {
@@ -721,9 +725,13 @@ pub(crate) fn generate_unified_state_dispatch(
     sorted_handlers.sort_by_key(|(event, _)| *event);
 
     for (event, handler) in sorted_handlers {
+        // Wire message: only the lifecycle keys map to the sigil form. Handler
+        // keys of literal `"enter"` / `"exit"` are user-defined interface
+        // methods and dispatch under their own name (fixes user-method
+        // collision with lifecycle events — bug_enter_exit_method_collision).
         let message = match event.as_str() {
-            "$>" | "enter" => "$>",
-            "$<" | "exit" => "<$",
+            "$>" => "$>",
+            "$<" => "<$",
             _ => event.as_str(),
         };
 
@@ -736,8 +744,8 @@ pub(crate) fn generate_unified_state_dispatch(
         first = false;
         code.push_str(&condition);
 
-        // State var init in enter handler
-        if (event == "$>" || event == "enter") && !state_vars.is_empty() {
+        // State var init in enter handler — only the lifecycle `$>` key.
+        if event == "$>" && !state_vars.is_empty() {
             for var in state_vars {
                 let init_val = if let Some(ref init) = var.init {
                     expression_to_string(init, syn.lang)
@@ -753,11 +761,12 @@ pub(crate) fn generate_unified_state_dispatch(
             }
         }
 
-        // Param unpacking — enter/exit handlers read from compartment args,
-        // interface handlers read from event._parameters
-        let param_source = if event == "$>" || event == "enter" {
+        // Param unpacking — lifecycle handlers read from compartment args;
+        // interface handlers (including user methods named `enter` / `exit`)
+        // read from event._parameters.
+        let param_source = if event == "$>" {
             "enter"
-        } else if event == "$<" || event == "exit" || event == "<$" {
+        } else if event == "$<" {
             "exit"
         } else {
             "event"

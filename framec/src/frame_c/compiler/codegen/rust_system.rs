@@ -560,24 +560,29 @@ pub(crate) fn generate_rust_state_dispatch(
     let mut sorted_handlers: Vec<_> = handlers.iter().collect();
     sorted_handlers.sort_by_key(|(event, _)| *event);
 
-    let _has_enter_handler = handlers.contains_key("$>") || handlers.contains_key("enter");
+    // Only the lifecycle `$>` key signals an explicit enter handler. A user
+    // interface method named `enter` is a regular event — see
+    // bug_enter_exit_method_collision for why the old aliasing was wrong.
+    let _has_enter_handler = handlers.contains_key("$>");
     let _needs_state_var_init = !state_vars.is_empty();
 
     for (event, handler) in sorted_handlers {
+        // Wire message and per-handler method are keyed only off the sigil
+        // lifecycle events. A user-defined `enter` / `exit` falls through to
+        // the default arm and dispatches under its own name.
         let message = match event.as_str() {
-            "$>" | "enter" => "$>",
-            "$<" | "exit" => "<$",
+            "$>" => "$>",
+            "$<" => "<$",
             _ => event.as_str(),
         };
 
         let handler_method = match event.as_str() {
-            "$>" | "enter" => format!("_s_{}_enter", state_name),
-            "$<" | "exit" => format!("_s_{}_exit", state_name),
+            "$>" => format!("_s_{}_enter", state_name),
+            "$<" => format!("_s_{}_exit", state_name),
             _ => format!("_s_{}_{}", state_name, event),
         };
 
-        let is_lifecycle =
-            event == "$>" || event == "enter" || event == "$<" || event == "exit" || event == "<$";
+        let is_lifecycle = event == "$>" || event == "$<";
         if !handler.params.is_empty() && is_lifecycle {
             if is_start_state {
                 code.push_str(&format!(
