@@ -910,6 +910,13 @@ fn generate_thin_dispatcher_generic(
     let semi = syn.semi;
     let close = syn.close_final;
     let self_prefix = syn.self_prefix;
+    // PHP requires `$` on variable references (`$__e`, `$compartment`);
+    // every other per-handler target emits bare identifiers.
+    let var_sigil = if matches!(syn.lang, TargetLanguage::Php) {
+        "$"
+    } else {
+        ""
+    };
 
     // State params bind from compartment.state_args at the top of the
     // dispatcher. Uses fmt_bind_param for language-specific syntax.
@@ -935,7 +942,7 @@ fn generate_thin_dispatcher_generic(
         let method = format!("_s_{}_hdl_frame_enter", state_name);
         code.push_str(&(syn.fmt_if)("$>"));
         code.push_str(&format!(
-            "{indent}{self_prefix}{method}(__e, compartment){semi}\n"
+            "{indent}{self_prefix}{method}({var_sigil}__e, {var_sigil}compartment){semi}\n"
         ));
         code.push_str(&format!("{indent}return{semi}\n"));
         code.push_str(close);
@@ -959,7 +966,7 @@ fn generate_thin_dispatcher_generic(
         // match and prepend `await ` in front of the `if` keyword.
         code.push_str(&(syn.fmt_if)(wire_message));
         code.push_str(&format!(
-            "{indent}{self_prefix}{method_name}(__e, compartment){semi}\n"
+            "{indent}{self_prefix}{method_name}({var_sigil}__e, {var_sigil}compartment){semi}\n"
         ));
         code.push_str(&format!("{indent}return{semi}\n"));
         code.push_str(close);
@@ -976,8 +983,14 @@ fn generate_thin_dispatcher_generic(
             } else {
                 ""
             };
+            // PHP uses `->` for property access; other targets use `.`.
+            let deref = if matches!(syn.lang, TargetLanguage::Php) {
+                "->"
+            } else {
+                "."
+            };
             code.push_str(&format!(
-                "{self_prefix}_state_{}(__e, compartment.parent_compartment{}){semi}\n",
+                "{self_prefix}_state_{}({var_sigil}__e, {var_sigil}compartment{deref}parent_compartment{}){semi}\n",
                 parent, bang
             ));
         }
@@ -1212,6 +1225,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             | TargetLanguage::GDScript
             | TargetLanguage::Lua
             | TargetLanguage::Dart
+            | TargetLanguage::Php
     ) {
         methods.extend(generate_per_handler_methods(
             lang,
@@ -1503,6 +1517,24 @@ fn generate_per_handler_method_for_lang(
             handler_state_var_types,
             state_hsm_parents,
         ),
+        TargetLanguage::Php => generate_php_handler_method(
+            system_name,
+            state_name,
+            parent_state,
+            handler,
+            state_vars_for_init,
+            source,
+            has_state_vars,
+            defined_systems,
+            sys_param_locals,
+            is_start_state,
+            state_param_names,
+            state_enter_param_names,
+            state_exit_param_names,
+            event_param_names,
+            handler_state_var_types,
+            state_hsm_parents,
+        ),
         _ => unreachable!(
             "generate_per_handler_method_for_lang called with non-per-handler target {:?}",
             lang
@@ -1716,6 +1748,115 @@ fn generate_lua_handler_method(
 
     CodegenNode::Method {
         name: method_name,
+        params: vec![Param::new("__e"), Param::new("compartment")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: body,
+            span: Some(crate::frame_c::compiler::frame_ast::Span {
+                start: handler.body_span.start,
+                end: handler.body_span.end,
+            }),
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    }
+}
+
+/// Emit a single PHP handler method under the per-handler contract.
+/// PHP specifics: `$param` for handler params, `$this->` receiver,
+/// `$compartment->` for the passed compartment, `array_key_exists`
+/// init guard.
+fn generate_php_handler_method(
+    system_name: &str,
+    state_name: &str,
+    parent_state: Option<&str>,
+    handler: &HandlerEntry,
+    state_vars_for_init: &[StateVarAst],
+    source: &[u8],
+    _has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    _sys_param_locals: &[String],
+    _is_start_state: bool,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
+    handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
+) -> CodegenNode {
+    let method_name = handler_method_name(state_name, handler);
+    let lang = TargetLanguage::Php;
+
+    let ctx = HandlerContext {
+        system_name: system_name.to_string(),
+        state_name: state_name.to_string(),
+        event_name: handler.event.clone(),
+        parent_state: parent_state.map(|s| s.to_string()),
+        defined_systems: defined_systems.clone(),
+        use_sv_comp: false,
+        per_handler: true,
+        state_var_types: handler_state_var_types.clone(),
+        state_param_names: state_param_names.clone(),
+        state_enter_param_names: state_enter_param_names.clone(),
+        state_exit_param_names: state_exit_param_names.clone(),
+        event_param_names: event_param_names.clone(),
+        state_hsm_parents: state_hsm_parents.clone(),
+        current_return_type: handler.return_type.clone(),
+    };
+
+    let mut body = String::new();
+
+    if let Some(sp_names) = state_param_names.get(state_name) {
+        for (i, name) in sp_names.iter().enumerate() {
+            body.push_str(&format!(
+                "${} = $compartment->state_args[{}];\n",
+                name, i
+            ));
+        }
+    }
+
+    let param_source = if handler.is_enter {
+        "$compartment->enter_args"
+    } else if handler.is_exit {
+        "$compartment->exit_args"
+    } else {
+        "$__e->_parameters"
+    };
+    for (i, param) in handler.params.iter().enumerate() {
+        body.push_str(&format!(
+            "${} = {}[{}];\n",
+            param.name, param_source, i
+        ));
+    }
+
+    if handler.is_enter {
+        for var in state_vars_for_init {
+            let init_val = if let Some(ref init) = var.init {
+                expression_to_string(init, lang)
+            } else {
+                state_var_init_value(&var.var_type, lang)
+            };
+            body.push_str(&format!(
+                "if (!array_key_exists(\"{}\", $compartment->state_vars)) {{\n    $compartment->state_vars[\"{}\"] = {};\n}}\n",
+                var.name, var.name, init_val
+            ));
+        }
+    }
+
+    let return_init_code = emit_handler_return_init(handler, lang, "", &ctx.system_name);
+    if !return_init_code.is_empty() {
+        body.push_str(&return_init_code);
+    }
+
+    let body_src = emit_handler_body_via_statements(&handler.body_span, source, lang, &ctx);
+    body.push_str(&body_src);
+
+    CodegenNode::Method {
+        name: method_name,
+        // PHP uses `$` prefix on formal param names (the codegen emitter
+        // adds it). Use bare names here — the PHP backend prefixes.
         params: vec![Param::new("__e"), Param::new("compartment")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
@@ -2294,6 +2435,7 @@ pub(crate) fn generate_state_method(
             | TargetLanguage::GDScript
             | TargetLanguage::Lua
             | TargetLanguage::Dart
+            | TargetLanguage::Php
     ) {
         // Per-handler architecture: the dispatcher body is a flat list of
         // guarded calls to per-handler methods. Handler bodies themselves
@@ -2380,18 +2522,19 @@ pub(crate) fn generate_state_method(
             let event_type = format!("*{}FrameEvent", _system_name);
             vec![Param::new("__e").with_type(&event_type)]
         }
-        // Python per-handler architecture: dispatcher takes the active
-        // state's compartment as a second param (see docs/frame_runtime.md
-        // § "Dispatch Model"). Other dynamic languages still use monolithic
+        // Per-handler architecture: dispatcher takes the active state's
+        // compartment as a second param (see docs/frame_runtime.md §
+        // "Dispatch Model"). Other dynamic languages still use monolithic
         // dispatch for now.
         TargetLanguage::Python3
         | TargetLanguage::Ruby
         | TargetLanguage::GDScript
-        | TargetLanguage::Lua => {
+        | TargetLanguage::Lua
+        | TargetLanguage::Php => {
             vec![Param::new("__e"), Param::new("compartment")]
         }
         // Dynamic languages: untyped event parameter
-        TargetLanguage::Php | TargetLanguage::Erlang => {
+        TargetLanguage::Erlang => {
             vec![Param::new("__e")]
         }
         TargetLanguage::Graphviz => unreachable!(),

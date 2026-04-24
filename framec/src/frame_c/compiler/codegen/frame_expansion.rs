@@ -789,8 +789,19 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Php => {
+                        // Eager HSM chain — no compartment duplication.
                         let mut code = String::new();
-                        code.push_str(&format!("{}$__compartment = new {}Compartment(\"{}\", $this->__compartment->copy());\n", indent_str, ctx.system_name, target));
+                        code.push_str(&format!("{}$__compartment = null;\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}$__compartment = new {}Compartment(\"{}\", $__compartment);\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}$__compartment = new {}Compartment(\"{}\", $__compartment);\n",
+                            indent_str, ctx.system_name, target
+                        ));
                         code.push_str(&format!(
                             "{}$__compartment->forward_event = $__e;\n",
                             indent_str
@@ -1628,7 +1639,25 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        code.push_str(&format!("{}$__compartment = new {}Compartment(\"{}\", $this->__compartment->copy());\n", indent_str, ctx.system_name, target));
+                        // Eager HSM chain — no compartment duplication.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
+                        code.push_str(&format!("{}$__compartment = null;\n", indent_str));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}$__compartment = new {}Compartment(\"{}\", $__compartment);\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
+                        code.push_str(&format!(
+                            "{}$__compartment = new {}Compartment(\"{}\", $__compartment);\n",
+                            indent_str, ctx.system_name, target
+                        ));
 
                         // Set state_args if present (positional append)
                         if let Some(ref state) = state_str {
@@ -1916,7 +1945,16 @@ pub(crate) fn generate_frame_expansion(
                     }
                     // Go: call s._state_Parent(__e) — forward is not terminal, no return
                     TargetLanguage::Go => format!("{}s._state_{}(__e)", indent_str, parent),
-                    TargetLanguage::Php => format!("{}$this->_state_{}($__e);", indent_str, parent),
+                    TargetLanguage::Php => {
+                        if ctx.per_handler {
+                            format!(
+                                "{}$this->_state_{}($__e, $compartment->parent_compartment);",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}$this->_state_{}($__e);", indent_str, parent)
+                        }
+                    }
                     TargetLanguage::Ruby => {
                         if ctx.per_handler {
                             format!(
@@ -2277,7 +2315,9 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Php => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("$compartment->state_vars[{}{}{}]", q, var_name, q)
+                    } else if ctx.use_sv_comp {
                         format!("$__sv_comp->state_vars[{}{}{}]", q, var_name, q)
                     } else {
                         format!("$this->__compartment->state_vars[{}{}{}]", q, var_name, q)
@@ -2567,7 +2607,12 @@ pub(crate) fn generate_frame_expansion(
                         }
                     }
                     let rhs = php_prefix_params(&expanded_expr, &current_params);
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!(
+                            "{}$compartment->state_vars[\"{}\"] = {};",
+                            indent_str, var_name, rhs
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}$__sv_comp->state_vars[\"{}\"] = {};",
                             indent_str, var_name, rhs
@@ -3902,7 +3947,9 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     }
                 }
                 TargetLanguage::Php => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!("$compartment->state_vars[\"{}\"]", var_name))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("$__sv_comp->state_vars[\"{}\"]", var_name))
                     } else {
                         result.push_str(&format!(

@@ -3171,7 +3171,10 @@ while ($this->__next_compartment !== null) {{
         decorators: vec![],
     });
 
-    // PHP: __router method - dispatches events to state methods
+    // PHP: __router method - per-handler architecture: pass self's
+    // active compartment as second arg so dispatcher + handler methods
+    // see the owning state's compartment as a named local (see
+    // docs/frame_runtime.md § "Dispatch Model").
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e")],
@@ -3180,7 +3183,7 @@ while ($this->__next_compartment !== null) {{
             code: r#"$state_name = $this->__compartment->state;
 $handler_name = "_state_" . $state_name;
 if (method_exists($this, $handler_name)) {
-    $this->$handler_name($__e);
+    $this->$handler_name($__e, $this->__compartment);
 }"#
             .to_string(),
             span: None,
