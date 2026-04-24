@@ -718,13 +718,27 @@ pub(crate) fn generate_frame_expansion(
                     }
                     TargetLanguage::Cpp => {
                         let mut code = String::new();
+                        // Eager HSM chain — no compartment duplication.
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n",
-                            indent_str, ctx.system_name, target
+                            "{}std::shared_ptr<{}Compartment> __new_compartment = nullptr;\n",
+                            indent_str, ctx.system_name
                         ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ auto __c = std::make_shared<{}Compartment>(\"{}\"); __c->parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__new_compartment->parent_compartment = __compartment;\n",
-                            indent_str
+                            "{}{{ auto __c = std::make_shared<{}Compartment>(\"{}\"); __c->parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                            indent_str, ctx.system_name, target
                         ));
                         code.push_str(&format!("{}__new_compartment->forward_event = std::make_unique<{}FrameEvent>(__e);\n", indent_str, ctx.system_name));
                         code.push_str(&format!(
@@ -1362,14 +1376,28 @@ pub(crate) fn generate_frame_expansion(
                             }
                         }
 
-                        // Create new compartment with parent_compartment for HSM support
+                        // Eager HSM chain construction — no compartment
+                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
+                        let mut ancestors: Vec<String> = Vec::new();
+                        let mut cursor = target.clone();
+                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                            ancestors.push(parent.clone());
+                            cursor = parent.clone();
+                        }
+                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}auto __new_compartment = std::make_shared<{}Compartment>(\"{}\");\n",
-                            indent_str, ctx.system_name, target
+                            "{}std::shared_ptr<{}Compartment> __new_compartment = nullptr;\n",
+                            indent_str, ctx.system_name
                         ));
+                        for ancestor in &ancestors {
+                            code.push_str(&format!(
+                                "{}{{ auto __c = std::make_shared<{}Compartment>(\"{}\"); __c->parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                                indent_str, ctx.system_name, ancestor
+                            ));
+                        }
                         code.push_str(&format!(
-                            "{}__new_compartment->parent_compartment = __compartment;\n",
-                            indent_str
+                            "{}{{ auto __c = std::make_shared<{}Compartment>(\"{}\"); __c->parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                            indent_str, ctx.system_name, target
                         ));
 
                         // Set state_args if present (positional push_back)
@@ -2073,8 +2101,18 @@ pub(crate) fn generate_frame_expansion(
                         "{}{}_state_{}(self, __e);",
                         indent_str, ctx.system_name, parent
                     ),
-                    // C++: call _state_Parent(__e) — forward is not terminal, no return
-                    TargetLanguage::Cpp => format!("{}_state_{}(__e);", indent_str, parent),
+                    // C++: call _state_Parent(__e, compartment->parent_compartment)
+                    // — forward is not terminal, no return.
+                    TargetLanguage::Cpp => {
+                        if ctx.per_handler {
+                            format!(
+                                "{}_state_{}(__e, compartment->parent_compartment);",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}_state_{}(__e);", indent_str, parent)
+                        }
+                    }
                     // Java: per-handler architecture passes compartment as
                     // second arg; shift up one level at the forward site.
                     TargetLanguage::Java => {
@@ -2544,7 +2582,12 @@ pub(crate) fn generate_frame_expansion(
                         .get(var_name.as_str())
                         .map(|t| cpp_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!(
+                            "std::any_cast<{}>(compartment->state_vars[{}{}{}])",
+                            cpp_type, q, var_name, q
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "std::any_cast<{}>(__sv_comp->state_vars[{}{}{}])",
                             cpp_type, q, var_name, q
@@ -2847,7 +2890,12 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Cpp => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!(
+                            "{}compartment->state_vars[\"{}\"] = std::any({});",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp->state_vars[\"{}\"] = std::any({});",
                             indent_str, var_name, expanded_expr
@@ -4055,7 +4103,12 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         .get(&var_name)
                         .map(|t| cpp_map_type(t))
                         .unwrap_or_else(|| "int".to_string());
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!(
+                            "std::any_cast<{}>(compartment->state_vars[\"{}\"])",
+                            cpp_type, var_name
+                        ))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!(
                             "std::any_cast<{}>(__sv_comp->state_vars[\"{}\"])",
                             cpp_type, var_name

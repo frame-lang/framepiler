@@ -329,6 +329,18 @@ pub(crate) fn make_system_async(
                 *is_async = true;
                 // Add `await` to internal dispatch calls in NativeBlock strings
                 add_await_to_dispatch_calls(body, lang);
+                // C++ coroutines: per-handler methods (`_s_<…>_hdl_<…>`) may
+                // lack a terminating co_await / co_return / co_yield (e.g.
+                // a lifecycle enter that just runs native code). For those,
+                // append `co_return;` so the function is actually a
+                // coroutine — otherwise `FrameTask<void>` is returned by
+                // value without a backing promise, and the caller's
+                // `co_await` crashes.
+                if matches!(lang, TargetLanguage::Cpp)
+                    && (name.starts_with("_s_") || name.starts_with("_state_"))
+                {
+                    ensure_cpp_coroutine_terminator(body);
+                }
             }
             if let CodegenNode::Constructor { body, .. } = method {
                 // Constructor stays sync — remove kernel call for async systems
@@ -451,6 +463,39 @@ _context_stack.RemoveAt(_context_stack.Count - 1);"#,
     }
 }
 
+/// Ensure a C++ method body contains at least one coroutine keyword
+/// (`co_await`, `co_return`, `co_yield`). If none is present, append
+/// `co_return;` to the body's last NativeBlock. Required because
+/// `FrameTask<T>` is only constructed as a coroutine when the function
+/// body contains a coroutine keyword — otherwise the declared return
+/// type is a default-constructed `FrameTask<T>` with an empty handle,
+/// which crashes on `co_await`.
+fn ensure_cpp_coroutine_terminator(body: &mut Vec<CodegenNode>) {
+    let has_coroutine_keyword = body.iter().any(|node| {
+        if let CodegenNode::NativeBlock { code, .. } = node {
+            code.contains("co_await") || code.contains("co_return") || code.contains("co_yield")
+        } else {
+            false
+        }
+    });
+    if has_coroutine_keyword {
+        return;
+    }
+    if let Some(CodegenNode::NativeBlock { code, .. }) = body.iter_mut().rev().find(|n| {
+        matches!(n, CodegenNode::NativeBlock { .. })
+    }) {
+        if !code.ends_with('\n') {
+            code.push('\n');
+        }
+        code.push_str("co_return;\n");
+    } else {
+        body.push(CodegenNode::NativeBlock {
+            code: "co_return;\n".to_string(),
+            span: None,
+        });
+    }
+}
+
 /// Remove kernel call from constructor body (for async two-phase init).
 fn remove_kernel_call_from_body(body: &mut Vec<CodegenNode>) {
     body.retain(|node| {
@@ -519,6 +564,11 @@ fn add_await_to_string(code: &str, lang: TargetLanguage) -> String {
             || trimmed.starts_with("$this->__kernel(")
             || trimmed.starts_with("$this->__router(")
             || trimmed.starts_with("$this->_state_")
+            // C++: `this->` uses `->` deref, not `.` like TS/Java/etc.
+            || trimmed.starts_with("this->__kernel(")
+            || trimmed.starts_with("this->__router(")
+            || trimmed.starts_with("this->_state_")
+            || trimmed.starts_with("this->_s_")
             // Bare references (no `self.`/`this.` prefix): Swift uses bare
             // for same-instance method calls.
             || trimmed.starts_with("__kernel(")
@@ -3427,13 +3477,14 @@ fn generate_cpp_machinery(
         decorators: vec![],
     });
 
-    // __router
+    // __router — per-handler architecture passes __compartment as second
+    // arg (see docs/frame_runtime.md § "Dispatch Model").
     let mut router_code = String::new();
     router_code.push_str("const auto& state_name = __compartment->state;\n");
     for (i, state) in states.iter().enumerate() {
         let prefix = if i == 0 { "if" } else { "} else if" };
         router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
-        router_code.push_str(&format!("    _state_{}(__e);\n", state));
+        router_code.push_str(&format!("    _state_{}(__e, __compartment);\n", state));
     }
     if !states.is_empty() {
         router_code.push_str("}");
