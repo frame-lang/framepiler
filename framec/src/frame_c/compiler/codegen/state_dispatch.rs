@@ -67,6 +67,12 @@ pub(crate) struct DispatchSyntax {
     pub close_final: &'static str,
     /// Else clause start ("else:\n" for Python, "} else {\n" for brace langs)
     pub else_start: &'static str,
+    /// Receiver prefix for calling own methods inside a generated method
+    /// body ("self." for Python/Ruby/Rust, "this." for TS/JS/Java/Kotlin/
+    /// C#/Dart/C++, "$this->" for PHP, "s." for Go, "self:" for Lua).
+    /// Used by the per-handler thin dispatcher to emit the call site:
+    ///   `<self_prefix><method>(__e, compartment)`.
+    pub self_prefix: &'static str,
 
     // --- Callbacks for language-specific code fragments ---
     /// First `if` condition matching event message
@@ -107,6 +113,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "",
             else_start: "else:\n",
+            self_prefix: "self.",
             fmt_if: |msg| format!("if __e._message == \"{}\":\n", msg),
             fmt_elif: |msg| format!("elif __e._message == \"{}\":\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -141,6 +148,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "",
             else_start: "else:\n",
+            self_prefix: "self.",
             fmt_if: |msg| format!("if __e._message == \"{}\":\n", msg),
             fmt_elif: |msg| format!("elif __e._message == \"{}\":\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -175,6 +183,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "this.",
             fmt_if: |msg| format!("if (__e._message === \"{}\") {{\n", msg),
             fmt_elif: |msg| format!("}} else if (__e._message === \"{}\") {{\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -211,6 +220,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "end\n",
             else_start: "else\n",
+            self_prefix: "self.",
             fmt_if: |msg| format!("if __e._message == \"{}\"\n", msg),
             fmt_elif: |msg| format!("elsif __e._message == \"{}\"\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -247,6 +257,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "end\n",
             else_start: "else\n",
+            self_prefix: "self:",
             fmt_if: |msg| format!("if __e._message == \"{}\" then\n", msg),
             fmt_elif: |msg| format!("elseif __e._message == \"{}\" then\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -284,6 +295,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "$this->",
             fmt_if: |msg| format!("if ($__e->_message == \"{}\") {{\n", msg),
             fmt_elif: |msg| format!("}} elseif ($__e->_message == \"{}\") {{\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -320,6 +332,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "this.",
             fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg),
             fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -364,6 +377,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "this.",
             fmt_if: |msg| format!("if (__e._message.equals(\"{}\")) {{\n", msg),
             fmt_elif: |msg| format!("}} else if (__e._message.equals(\"{}\")) {{\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -402,6 +416,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "this.",
             fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg),
             fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -440,6 +455,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "self.",
             fmt_if: |msg| format!("if __e._message == \"{}\" {{\n", msg),
             fmt_elif: |msg| format!("}} else if __e._message == \"{}\" {{\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -478,6 +494,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "this.",
             // Dart: escape $ in message strings to avoid string interpolation
             fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg.replace('$', "\\$")),
             fmt_elif: |msg| {
@@ -537,6 +554,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "this->",
             fmt_if: |msg| format!("if (__e._message == \"{}\") {{\n", msg),
             fmt_elif: |msg| format!("}} else if (__e._message == \"{}\") {{\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -591,6 +609,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "s.",
             fmt_if: |msg| format!("if __e._message == \"{}\" {{\n", msg),
             fmt_elif: |msg| format!("}} else if __e._message == \"{}\" {{\n", msg),
             fmt_hsm_nav: |state, _sys| {
@@ -643,6 +662,7 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             indent: "    ",
             close_final: "}\n",
             else_start: "} else {\n",
+            self_prefix: "self->",
             fmt_if: |msg| format!("if (strcmp(__e->_message, \"{}\") == 0) {{\n", msg),
             fmt_elif: |msg| format!("}} else if (strcmp(__e->_message, \"{}\") == 0) {{\n", msg),
             fmt_hsm_nav: |state, sys| {
@@ -868,45 +888,57 @@ pub(crate) fn generate_unified_state_dispatch(
     code.trim_end().to_string()
 }
 
-/// Python thin dispatcher body — emits one `if __e._message == "X":
-/// self._s_<State>_hdl_<kind>_<event>(__e, compartment); return` per
-/// handler, plus an optional trailing parent-forward line when the
-/// state declares `=> $^`. Handler bodies are NOT inlined — they live
-/// in their own methods emitted by `generate_python_per_handler_methods`.
+/// Generic thin dispatcher body — emits one guarded block per handler
+/// that calls the handler method and returns. Shared across all per-
+/// handler-architecture targets; language syntax comes from the
+/// `DispatchSyntax` struct. Handler bodies are NOT inlined — they live
+/// in their own methods emitted by `generate_per_handler_methods`.
 ///
 /// See docs/frame_runtime.md § "Dispatch Model" for the three-layer
 /// pipeline rationale.
-fn generate_python_thin_dispatcher(
+fn generate_thin_dispatcher_generic(
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_params: &[crate::frame_c::compiler::frame_ast::StateParam],
-    _ctx: &HandlerContext,
+    ctx: &HandlerContext,
     default_forward: bool,
     has_state_vars: bool,
+    syn: &DispatchSyntax,
 ) -> String {
     let mut code = String::new();
+    let indent = syn.indent;
+    let semi = syn.semi;
+    let close = syn.close_final;
+    let self_prefix = syn.self_prefix;
 
-    // State params bind from compartment.state_args. These are locals scoped
-    // to the dispatcher; handler methods that need them get them re-bound
-    // in their own preamble (via generate_handler_from_arcanum).
+    // State params bind from compartment.state_args at the top of the
+    // dispatcher. Uses fmt_bind_param for language-specific syntax.
     for (i, sp) in state_params.iter().enumerate() {
-        let _ = &sp.param_type; // type is documentation only for Python
-        code.push_str(&format!(
-            "{} = compartment.state_args[{}]\n",
-            sp.name, i
+        let type_str = match &sp.param_type {
+            Type::Custom(s) => s.as_str(),
+            Type::Unknown => "int",
+        };
+        code.push_str(&(syn.fmt_bind_param)(
+            &sp.name,
+            type_str,
+            &ctx.system_name,
+            i,
         ));
     }
 
     // Synthesize a `$>` dispatch arm when the state has state vars but no
     // explicit `$>` handler. The synthetic `_s_<State>_hdl_frame_enter`
-    // method is emitted by generate_python_per_handler_methods and does the
+    // method is emitted by generate_per_handler_methods and does the
     // state-var default-init.
     let has_explicit_enter = handlers.contains_key("$>");
     if has_state_vars && !has_explicit_enter {
+        let method = format!("_s_{}_hdl_frame_enter", state_name);
+        code.push_str(&(syn.fmt_if)("$>"));
         code.push_str(&format!(
-            "if __e._message == \"$>\":\n    self._s_{}_hdl_frame_enter(__e, compartment)\n    return\n",
-            state_name
+            "{indent}{self_prefix}{method}(__e, compartment){semi}\n"
         ));
+        code.push_str(&format!("{indent}return{semi}\n"));
+        code.push_str(close);
     }
 
     // Sort handlers for deterministic output.
@@ -920,32 +952,37 @@ fn generate_python_thin_dispatcher(
             other => other,
         };
         let method_name = handler_method_name(state_name, handler);
-        // Multi-line emission so the async `await`-insertion pass can
-        // process each call on its own line. Single-line form
-        // `if X: self.foo(); return` would trigger a line-wide match
-        // and append `await ` in front of the `if` keyword.
+        // Each branch is its own standalone `if ... return` block so
+        // the async-aware `add_await_to_dispatch_calls` pass processes
+        // each call on its own line. A single-line
+        // `if X: self.foo(); return` form would trigger a line-wide
+        // match and prepend `await ` in front of the `if` keyword.
+        code.push_str(&(syn.fmt_if)(wire_message));
         code.push_str(&format!(
-            "if __e._message == \"{}\":\n    self.{}(__e, compartment)\n    return\n",
-            wire_message, method_name
+            "{indent}{self_prefix}{method_name}(__e, compartment){semi}\n"
         ));
+        code.push_str(&format!("{indent}return{semi}\n"));
+        code.push_str(close);
     }
 
-    // Default-forward trailing call — emitted only when the state declares
-    // `=> $^`. The forward shifts `compartment` up one level (see
-    // docs/frame_runtime.md § "Parent Forward").
+    // Default-forward trailing call — emitted only when the state
+    // declares `=> $^`. The forward shifts `compartment` up one level
+    // (see docs/frame_runtime.md § "Parent Forward").
     if default_forward {
-        if let Some(ref parent) = _ctx.parent_state {
+        if let Some(ref parent) = ctx.parent_state {
             code.push_str(&format!(
-                "self._state_{}(__e, compartment.parent_compartment)\n",
+                "{self_prefix}_state_{}(__e, compartment.parent_compartment){semi}\n",
                 parent
             ));
         }
     }
 
     // If the dispatcher body is empty (no handlers, no default forward),
-    // Python requires a statement — emit `pass`.
-    if code.is_empty() {
-        code.push_str("pass\n");
+    // indent-based langs (Python) require a `pass`; brace langs accept
+    // an empty body.
+    if code.is_empty() && !syn.empty_body.is_empty() {
+        code.push_str(syn.empty_body);
+        code.push('\n');
     }
 
     code.trim_end().to_string()
@@ -1147,11 +1184,15 @@ pub(crate) fn generate_state_handlers_via_arcanum(
         ));
     }
 
-    // Python per-handler architecture: emit one method per handler, called
+    // Per-handler architecture: emit one method per handler, called
     // by the thin dispatcher generated in `generate_state_method`. See
     // docs/frame_runtime.md § "Dispatch Model".
-    if matches!(lang, TargetLanguage::Python3) {
-        methods.extend(generate_python_per_handler_methods(
+    if matches!(
+        lang,
+        TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
+    ) {
+        methods.extend(generate_per_handler_methods(
+            lang,
             system_name,
             machine,
             arcanum,
@@ -1173,7 +1214,8 @@ pub(crate) fn generate_state_handlers_via_arcanum(
 /// handler-body mode flag (`per_handler: true`), so Frame expansion
 /// targets `compartment.state_vars[…]` / `compartment.parent_compartment`
 /// etc. rather than the legacy `__sv_comp` / `self.__compartment` forms.
-pub(crate) fn generate_python_per_handler_methods(
+pub(crate) fn generate_per_handler_methods(
+    lang: TargetLanguage,
     system_name: &str,
     machine: &MachineAst,
     arcanum: &Arcanum,
@@ -1241,7 +1283,8 @@ pub(crate) fn generate_python_per_handler_methods(
                 is_exit: false,
             };
             let empty: Vec<String> = Vec::new();
-            let method = generate_python_handler_method(
+            let method = generate_per_handler_method_for_lang(
+                lang,
                 system_name,
                 &state_entry.name,
                 state_entry.parent.as_deref(),
@@ -1263,7 +1306,8 @@ pub(crate) fn generate_python_per_handler_methods(
 
         for (_event, handler_entry) in &state_entry.handlers {
             let empty: Vec<String> = Vec::new();
-            let method = generate_python_handler_method(
+            let method = generate_per_handler_method_for_lang(
+                lang,
                 system_name,
                 &state_entry.name,
                 state_entry.parent.as_deref(),
@@ -1285,6 +1329,198 @@ pub(crate) fn generate_python_per_handler_methods(
     }
 
     methods
+}
+
+/// Dispatch to the per-language handler-method emitter for a per-handler
+/// architecture target. Each target builds the same 3-param method
+/// signature `(self, __e, compartment)` but with per-language syntax for
+/// param types, param binding, state-var init preamble, and statement
+/// terminators. The handler body itself is emitted via
+/// `emit_handler_body_via_statements` with `per_handler: true`, so
+/// Frame-expansion side of the codegen routes state-var access,
+/// `=> $^`, etc. to the compartment-parameter form.
+fn generate_per_handler_method_for_lang(
+    lang: TargetLanguage,
+    system_name: &str,
+    state_name: &str,
+    parent_state: Option<&str>,
+    handler: &HandlerEntry,
+    state_vars_for_init: &[StateVarAst],
+    source: &[u8],
+    has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    sys_param_locals: &[String],
+    is_start_state: bool,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
+    handler_state_var_types: &std::collections::HashMap<String, String>,
+) -> CodegenNode {
+    match lang {
+        TargetLanguage::Python3 => generate_python_handler_method(
+            system_name,
+            state_name,
+            parent_state,
+            handler,
+            state_vars_for_init,
+            source,
+            has_state_vars,
+            defined_systems,
+            sys_param_locals,
+            is_start_state,
+            state_param_names,
+            state_enter_param_names,
+            state_exit_param_names,
+            event_param_names,
+            handler_state_var_types,
+        ),
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
+            generate_typescript_handler_method(
+                lang,
+                system_name,
+                state_name,
+                parent_state,
+                handler,
+                state_vars_for_init,
+                source,
+                has_state_vars,
+                defined_systems,
+                sys_param_locals,
+                is_start_state,
+                state_param_names,
+                state_enter_param_names,
+                state_exit_param_names,
+                event_param_names,
+                handler_state_var_types,
+            )
+        }
+        _ => unreachable!(
+            "generate_per_handler_method_for_lang called with non-per-handler target {:?}",
+            lang
+        ),
+    }
+}
+
+/// Emit a single TypeScript/JavaScript handler method under the per-
+/// handler contract: `_s_<State>_hdl_<kind>_<event>(__e, compartment)`.
+/// Body layout mirrors `generate_python_handler_method` but with TS/JS
+/// syntax for param binding, state-var init guard, and statement
+/// terminators.
+fn generate_typescript_handler_method(
+    lang: TargetLanguage,
+    system_name: &str,
+    state_name: &str,
+    parent_state: Option<&str>,
+    handler: &HandlerEntry,
+    state_vars_for_init: &[StateVarAst],
+    source: &[u8],
+    _has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    _sys_param_locals: &[String],
+    _is_start_state: bool,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
+    handler_state_var_types: &std::collections::HashMap<String, String>,
+) -> CodegenNode {
+    let method_name = handler_method_name(state_name, handler);
+
+    let ctx = HandlerContext {
+        system_name: system_name.to_string(),
+        state_name: state_name.to_string(),
+        event_name: handler.event.clone(),
+        parent_state: parent_state.map(|s| s.to_string()),
+        defined_systems: defined_systems.clone(),
+        use_sv_comp: false,
+        per_handler: true,
+        state_var_types: handler_state_var_types.clone(),
+        state_param_names: state_param_names.clone(),
+        state_enter_param_names: state_enter_param_names.clone(),
+        state_exit_param_names: state_exit_param_names.clone(),
+        event_param_names: event_param_names.clone(),
+        current_return_type: handler.return_type.clone(),
+    };
+
+    let mut body = String::new();
+
+    // State-param binding. State params (declared via `$State(a, b)`) flow
+    // through `compartment.state_args` — bind them to named locals at the
+    // top of every handler so handler bodies can reference them by name.
+    if let Some(sp_names) = state_param_names.get(state_name) {
+        for (i, name) in sp_names.iter().enumerate() {
+            body.push_str(&format!("const {} = compartment.state_args[{}];\n", name, i));
+        }
+    }
+
+    // Param binding. Lifecycle handlers read from compartment.enter_args /
+    // exit_args; user-method handlers read from __e._parameters.
+    let param_source = if handler.is_enter {
+        "compartment.enter_args"
+    } else if handler.is_exit {
+        "compartment.exit_args"
+    } else {
+        "__e._parameters"
+    };
+    for (i, param) in handler.params.iter().enumerate() {
+        body.push_str(&format!(
+            "const {} = {}[{}];\n",
+            param.name, param_source, i
+        ));
+    }
+
+    // State-var initialization — only the lifecycle `$>` handler. The
+    // `if not in` guard preserves pop$ restore semantics.
+    if handler.is_enter {
+        for var in state_vars_for_init {
+            let init_val = if let Some(ref init) = var.init {
+                expression_to_string(init, lang)
+            } else {
+                state_var_init_value(&var.var_type, lang)
+            };
+            body.push_str(&format!(
+                "if (!(\"{}\" in compartment.state_vars)) {{\n    compartment.state_vars[\"{}\"] = {};\n}}\n",
+                var.name, var.name, init_val
+            ));
+        }
+    }
+
+    // Return-init (declared via handler `: Type = default`).
+    let return_init_code = emit_handler_return_init(handler, lang, "", &ctx.system_name);
+    if !return_init_code.is_empty() {
+        body.push_str(&return_init_code);
+    }
+
+    // User-written handler body. Frame expansion uses ctx.per_handler=true,
+    // so state-var access emits compartment.state_vars[…] and HSM forwards
+    // emit this._state_Parent(__e, compartment.parent_compartment).
+    let body_src = emit_handler_body_via_statements(&handler.body_span, source, lang, &ctx);
+    body.push_str(&body_src);
+
+    // Method params: __e: <Sys>FrameEvent, compartment: <Sys>Compartment.
+    let event_type = format!("{}FrameEvent", system_name);
+    let comp_type = format!("{}Compartment", system_name);
+
+    CodegenNode::Method {
+        name: method_name,
+        params: vec![
+            Param::new("__e").with_type(&event_type),
+            Param::new("compartment").with_type(&comp_type),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: body,
+            span: Some(crate::frame_c::compiler::frame_ast::Span {
+                start: handler.body_span.start,
+                end: handler.body_span.end,
+            }),
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    }
 }
 
 /// Emit a single Python handler method with the per-handler contract:
@@ -1332,6 +1568,15 @@ fn generate_python_handler_method(
     };
 
     let mut body = String::new();
+
+    // State-param binding. State params (declared via `$State(a, b)`) flow
+    // through `compartment.state_args` — bind them to named locals at the
+    // top of every handler so handler bodies can reference them by name.
+    if let Some(sp_names) = state_param_names.get(state_name) {
+        for (i, name) in sp_names.iter().enumerate() {
+            body.push_str(&format!("{} = compartment.state_args[{}]\n", name, i));
+        }
+    }
 
     // Param binding. Lifecycle handlers read from compartment.enter_args /
     // exit_args (set by the transition codegen on the target/source
@@ -1468,17 +1713,22 @@ pub(crate) fn generate_state_method(
 
     // Generate the dispatch body based on __e._message / __e.message
     // Use unified dispatch for languages that have DispatchSyntax defined.
-    let body_code = if matches!(lang, TargetLanguage::Python3) {
+    let body_code = if matches!(
+        lang,
+        TargetLanguage::Python3 | TargetLanguage::TypeScript | TargetLanguage::JavaScript
+    ) {
         // Per-handler architecture: the dispatcher body is a flat list of
         // guarded calls to per-handler methods. Handler bodies themselves
-        // are emitted separately via `generate_python_per_handler_methods`.
-        generate_python_thin_dispatcher(
+        // are emitted separately via `generate_per_handler_methods`.
+        let syn = dispatch_syntax_for(lang).expect("DispatchSyntax for per-handler target");
+        generate_thin_dispatcher_generic(
             state_name,
             handlers,
             state_params,
             &ctx,
             default_forward,
             !state_vars.is_empty(),
+            &syn,
         )
     } else if let Some(syn) = dispatch_syntax_for(lang) {
         generate_unified_state_dispatch(
@@ -1510,7 +1760,18 @@ pub(crate) fn generate_state_method(
     };
 
     let params = match lang {
-        TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
+        // TypeScript/JavaScript have migrated to per-handler dispatch —
+        // dispatcher takes the active state's compartment as a second
+        // param (see docs/frame_runtime.md § "Dispatch Model").
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
+            let event_type = format!("{}FrameEvent", _system_name);
+            let comp_type = format!("{}Compartment", _system_name);
+            vec![
+                Param::new("__e").with_type(&event_type),
+                Param::new("compartment").with_type(&comp_type),
+            ]
+        }
+        TargetLanguage::Dart => {
             let event_type = format!("{}FrameEvent", _system_name);
             vec![Param::new("__e").with_type(&event_type)]
         }

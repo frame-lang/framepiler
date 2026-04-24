@@ -1673,7 +1673,19 @@ pub(crate) fn generate_frame_expansion(
                     TargetLanguage::TypeScript
                     | TargetLanguage::Dart
                     | TargetLanguage::JavaScript => {
-                        format!("{}this._state_{}(__e);", indent_str, parent)
+                        if ctx.per_handler
+                            && matches!(
+                                lang,
+                                TargetLanguage::TypeScript | TargetLanguage::JavaScript
+                            )
+                        {
+                            format!(
+                                "{}this._state_{}(__e, compartment.parent_compartment);",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}this._state_{}(__e);", indent_str, parent)
+                        }
                     }
                     // Rust: call parent state router (not specific handler) to dispatch via match
                     TargetLanguage::Rust => {
@@ -2028,7 +2040,10 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        // Per-handler architecture: compartment is a param.
+                        format!("compartment.state_vars[{}{}{}]", q, var_name, q)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
                         format!("this.__compartment.state_vars[{}{}{}]", q, var_name, q)
@@ -2275,7 +2290,14 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler
+                        && matches!(lang, TargetLanguage::TypeScript | TargetLanguage::JavaScript)
+                    {
+                        format!(
+                            "{}compartment.state_vars[\"{}\"] = {};",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp.state_vars[\"{}\"] = {};",
                             indent_str, var_name, expanded_expr
@@ -3473,14 +3495,18 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
             let var_name = String::from_utf8_lossy(&bytes[start..i]).to_string();
             match lang {
                 TargetLanguage::Python3 => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!("compartment.state_vars[\"{}\"]", var_name))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("__sv_comp.state_vars[\"{}\"]", var_name))
                     } else {
                         result.push_str(&format!("self.__compartment.state_vars[\"{}\"]", var_name))
                     }
                 }
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!("compartment.state_vars[\"{}\"]", var_name))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("__sv_comp.state_vars[\"{}\"]", var_name))
                     } else {
                         result.push_str(&format!("this.__compartment.state_vars[\"{}\"]", var_name))

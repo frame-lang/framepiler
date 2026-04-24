@@ -3063,14 +3063,18 @@ while (this.__next_compartment !== null) {{
         decorators: vec![],
     });
 
-    // __router method - dispatches events to state methods
+    // __router method - dispatches events to state dispatcher methods.
+    // Per-handler architecture: the router passes `this.__compartment`
+    // as the second arg so dispatcher and handler methods see the active
+    // state's compartment as a named local parameter (see
+    // docs/frame_runtime.md § "Dispatch Model").
     // TypeScript uses `(this as any)` for dynamic dispatch; JS uses `this` directly
     let router_code = if matches!(lang, TargetLanguage::TypeScript) {
         r#"const state_name = this.__compartment.state;
 const handler_name = `_state_${state_name}`;
 const handler = (this as any)[handler_name];
 if (handler) {
-    handler.call(this, __e);
+    handler.call(this, __e, this.__compartment);
 }"#
         .to_string()
     } else {
@@ -3078,7 +3082,7 @@ if (handler) {
 const handler_name = `_state_${state_name}`;
 const handler = this[handler_name];
 if (handler) {
-    handler.call(this, __e);
+    handler.call(this, __e, this.__compartment);
 }"#
         .to_string()
     };
