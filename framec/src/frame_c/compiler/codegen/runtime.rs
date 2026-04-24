@@ -710,17 +710,23 @@ pub fn generate_compartment_class(system: &SystemAst, lang: TargetLanguage) -> O
             Field::new("state")
                 .with_type("string")
                 .with_visibility(Visibility::Public),
+            // state_args / enter_args / exit_args are arrays (Frame passes
+            // positional values); initialized as `[]` in the constructor and
+            // consumed by FrameEvent which expects `any[]`. Declaring them as
+            // Record<string, any> here produced a TS2345 type error under
+            // strict type checking when the initializer `[]` (any[]) didn't
+            // match. state_vars IS a map (name → value) so stays Record.
             Field::new("state_args")
-                .with_type("Record<string, any>")
+                .with_type("any[]")
                 .with_visibility(Visibility::Public),
             Field::new("state_vars")
                 .with_type("Record<string, any>")
                 .with_visibility(Visibility::Public),
             Field::new("enter_args")
-                .with_type("Record<string, any>")
+                .with_type("any[]")
                 .with_visibility(Visibility::Public),
             Field::new("exit_args")
-                .with_type("Record<string, any>")
+                .with_type("any[]")
                 .with_visibility(Visibility::Public),
             Field::new("forward_event")
                 .with_type("any")
