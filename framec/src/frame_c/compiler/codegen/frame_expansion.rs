@@ -1708,7 +1708,16 @@ pub(crate) fn generate_frame_expansion(
                     // Go: call s._state_Parent(__e) — forward is not terminal, no return
                     TargetLanguage::Go => format!("{}s._state_{}(__e)", indent_str, parent),
                     TargetLanguage::Php => format!("{}$this->_state_{}($__e);", indent_str, parent),
-                    TargetLanguage::Ruby => format!("{}_state_{}(__e)", indent_str, parent),
+                    TargetLanguage::Ruby => {
+                        if ctx.per_handler {
+                            format!(
+                                "{}_state_{}(__e, compartment.parent_compartment)",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}_state_{}(__e)", indent_str, parent)
+                        }
+                    }
                     TargetLanguage::Lua => format!("{}self:_state_{}(__e)", indent_str, parent),
                     TargetLanguage::Erlang => {
                         // gen_statem: delegate to parent by calling parent state function directly.
@@ -2057,7 +2066,9 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Ruby => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("compartment.state_vars[{}{}{}]", q, var_name, q)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
                         format!("@__compartment.state_vars[{}{}{}]", q, var_name, q)
@@ -2204,21 +2215,27 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Lua => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("compartment.state_vars[{}{}{}]", q, var_name, q)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
                         format!("self.__compartment.state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::Dart => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("compartment.state_vars[{}{}{}]", q, var_name, q)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
                         format!("this.__compartment.state_vars[{}{}{}]", q, var_name, q)
                     }
                 }
                 TargetLanguage::GDScript => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!("compartment.state_vars[{}{}{}]", q, var_name, q)
+                    } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
                         format!("self.__compartment.state_vars[{}{}{}]", q, var_name, q)
@@ -2347,7 +2364,12 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Ruby => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!(
+                            "{}compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp.state_vars[\"{}\"] = {}",
                             indent_str, var_name, expanded_expr
@@ -3669,7 +3691,9 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     }
                 }
                 TargetLanguage::Ruby => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!("compartment.state_vars[\"{}\"]", var_name))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("__sv_comp.state_vars[\"{}\"]", var_name))
                     } else {
                         result.push_str(&format!("@__compartment.state_vars[\"{}\"]", var_name))
