@@ -1194,6 +1194,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             | TargetLanguage::JavaScript
             | TargetLanguage::Ruby
             | TargetLanguage::GDScript
+            | TargetLanguage::Lua
     ) {
         methods.extend(generate_per_handler_methods(
             lang,
@@ -1433,6 +1434,23 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
         ),
+        TargetLanguage::Lua => generate_lua_handler_method(
+            system_name,
+            state_name,
+            parent_state,
+            handler,
+            state_vars_for_init,
+            source,
+            has_state_vars,
+            defined_systems,
+            sys_param_locals,
+            is_start_state,
+            state_param_names,
+            state_enter_param_names,
+            state_exit_param_names,
+            event_param_names,
+            handler_state_var_types,
+        ),
         _ => unreachable!(
             "generate_per_handler_method_for_lang called with non-per-handler target {:?}",
             lang
@@ -1530,6 +1548,115 @@ fn generate_ruby_handler_method(
         // Ruby permits empty bodies but an explicit nil keeps intent clear.
         body.push_str("nil\n");
     }
+
+    CodegenNode::Method {
+        name: method_name,
+        params: vec![Param::new("__e"), Param::new("compartment")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: body,
+            span: Some(crate::frame_c::compiler::frame_ast::Span {
+                start: handler.body_span.start,
+                end: handler.body_span.end,
+            }),
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    }
+}
+
+/// Emit a single Lua handler method under the per-handler contract.
+/// Lua specifics: 1-indexed arrays (`[i+1]`), `local` for vars, `nil`
+/// check for state-var init guard.
+fn generate_lua_handler_method(
+    system_name: &str,
+    state_name: &str,
+    parent_state: Option<&str>,
+    handler: &HandlerEntry,
+    state_vars_for_init: &[StateVarAst],
+    source: &[u8],
+    _has_state_vars: bool,
+    defined_systems: &std::collections::HashSet<String>,
+    _sys_param_locals: &[String],
+    _is_start_state: bool,
+    state_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
+    event_param_names: &std::collections::HashMap<String, Vec<String>>,
+    handler_state_var_types: &std::collections::HashMap<String, String>,
+) -> CodegenNode {
+    let method_name = handler_method_name(state_name, handler);
+    let lang = TargetLanguage::Lua;
+
+    let ctx = HandlerContext {
+        system_name: system_name.to_string(),
+        state_name: state_name.to_string(),
+        event_name: handler.event.clone(),
+        parent_state: parent_state.map(|s| s.to_string()),
+        defined_systems: defined_systems.clone(),
+        use_sv_comp: false,
+        per_handler: true,
+        state_var_types: handler_state_var_types.clone(),
+        state_param_names: state_param_names.clone(),
+        state_enter_param_names: state_enter_param_names.clone(),
+        state_exit_param_names: state_exit_param_names.clone(),
+        event_param_names: event_param_names.clone(),
+        current_return_type: handler.return_type.clone(),
+    };
+
+    let mut body = String::new();
+
+    if let Some(sp_names) = state_param_names.get(state_name) {
+        for (i, name) in sp_names.iter().enumerate() {
+            // Lua is 1-indexed — shift `[i]` to `[i+1]` for state_args.
+            body.push_str(&format!(
+                "local {} = compartment.state_args[{}]\n",
+                name,
+                i + 1
+            ));
+        }
+    }
+
+    let param_source = if handler.is_enter {
+        "compartment.enter_args"
+    } else if handler.is_exit {
+        "compartment.exit_args"
+    } else {
+        "__e._parameters"
+    };
+    for (i, param) in handler.params.iter().enumerate() {
+        body.push_str(&format!(
+            "local {} = {}[{}]\n",
+            param.name,
+            param_source,
+            i + 1
+        ));
+    }
+
+    if handler.is_enter {
+        for var in state_vars_for_init {
+            let init_val = if let Some(ref init) = var.init {
+                expression_to_string(init, lang)
+            } else {
+                state_var_init_value(&var.var_type, lang)
+            };
+            // Lua: nil check since tables return nil for missing keys.
+            body.push_str(&format!(
+                "if compartment.state_vars[\"{}\"] == nil then\n    compartment.state_vars[\"{}\"] = {}\nend\n",
+                var.name, var.name, init_val
+            ));
+        }
+    }
+
+    let return_init_code = emit_handler_return_init(handler, lang, "", &ctx.system_name);
+    if !return_init_code.is_empty() {
+        body.push_str(&return_init_code);
+    }
+
+    let body_src = emit_handler_body_via_statements(&handler.body_span, source, lang, &ctx);
+    body.push_str(&body_src);
 
     CodegenNode::Method {
         name: method_name,
@@ -2056,11 +2183,14 @@ pub(crate) fn generate_state_method(
         // state's compartment as a second param (see docs/frame_runtime.md
         // § "Dispatch Model"). Other dynamic languages still use monolithic
         // dispatch for now.
-        TargetLanguage::Python3 | TargetLanguage::Ruby | TargetLanguage::GDScript => {
+        TargetLanguage::Python3
+        | TargetLanguage::Ruby
+        | TargetLanguage::GDScript
+        | TargetLanguage::Lua => {
             vec![Param::new("__e"), Param::new("compartment")]
         }
         // Dynamic languages: untyped event parameter
-        TargetLanguage::Php | TargetLanguage::Erlang | TargetLanguage::Lua => {
+        TargetLanguage::Php | TargetLanguage::Erlang => {
             vec![Param::new("__e")]
         }
         TargetLanguage::Graphviz => unreachable!(),

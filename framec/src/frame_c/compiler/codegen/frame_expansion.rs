@@ -1720,7 +1720,16 @@ pub(crate) fn generate_frame_expansion(
                             format!("{}_state_{}(__e)", indent_str, parent)
                         }
                     }
-                    TargetLanguage::Lua => format!("{}self:_state_{}(__e)", indent_str, parent),
+                    TargetLanguage::Lua => {
+                        if ctx.per_handler {
+                            format!(
+                                "{}self:_state_{}(__e, compartment.parent_compartment)",
+                                indent_str, parent
+                            )
+                        } else {
+                            format!("{}self:_state_{}(__e)", indent_str, parent)
+                        }
+                    }
                     TargetLanguage::Erlang => {
                         // gen_statem: delegate to parent by calling parent state function directly.
                         // The parent handler returns a gen_statem response tuple.
@@ -2464,7 +2473,12 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Lua => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        format!(
+                            "{}compartment.state_vars[\"{}\"] = {}",
+                            indent_str, var_name, expanded_expr
+                        )
+                    } else if ctx.use_sv_comp {
                         format!(
                             "{}__sv_comp.state_vars[\"{}\"] = {}",
                             indent_str, var_name, expanded_expr
@@ -3702,7 +3716,9 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                     }
                 }
                 TargetLanguage::Lua => {
-                    if ctx.use_sv_comp {
+                    if ctx.per_handler {
+                        result.push_str(&format!("compartment.state_vars[\"{}\"]", var_name))
+                    } else if ctx.use_sv_comp {
                         result.push_str(&format!("__sv_comp.state_vars[\"{}\"]", var_name))
                     } else {
                         result.push_str(&format!("self.__compartment.state_vars[\"{}\"]", var_name))

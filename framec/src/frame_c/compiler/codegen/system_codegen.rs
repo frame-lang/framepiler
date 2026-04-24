@@ -4091,7 +4091,10 @@ end"#,
         decorators: vec![],
     });
 
-    // __router method — dispatches to state handler methods
+    // __router — per-handler architecture: pass self.__compartment as
+    // the second arg so dispatcher/handler methods receive the active
+    // state's compartment as a named local (docs/frame_runtime.md §
+    // "Dispatch Model").
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e")],
@@ -4100,7 +4103,7 @@ end"#,
             code: r#"local state_name = self.__compartment.state
 local handler = self["_state_" .. state_name]
 if handler then
-    handler(self, __e)
+    handler(self, __e, self.__compartment)
 end"#
                 .to_string(),
             span: None,
