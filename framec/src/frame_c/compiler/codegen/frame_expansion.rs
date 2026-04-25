@@ -766,33 +766,13 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Swift => {
+                        // Forward transition: same chain via __prepareEnter,
+                        // plus forward_event field set on the leaf.
                         let mut code = String::new();
-                        // Eager HSM chain — no compartment duplication.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
-                        let all_states: Vec<String> = ancestors
-                            .iter()
-                            .cloned()
-                            .chain(std::iter::once(target.clone()))
-                            .collect();
-                        let (first, rest) = all_states
-                            .split_first()
-                            .expect("at least target is present");
                         code.push_str(&format!(
-                            "{}var __compartment = {}Compartment(state: \"{}\")\n",
-                            indent_str, ctx.system_name, first
+                            "{}let __compartment = {}.__prepareEnter(\"{}\", [], [])\n",
+                            indent_str, ctx.system_name, target
                         ));
-                        for next in rest {
-                            code.push_str(&format!(
-                                "{}do {{ let c = {}Compartment(state: \"{}\"); c.parent_compartment = __compartment; __compartment = c }}\n",
-                                indent_str, ctx.system_name, next
-                            ));
-                        }
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e\n",
                             indent_str
@@ -1518,76 +1498,58 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Swift => {
-                        // Swift: no `new`, no semicolons, `let`, `nil`
+                        // Per-handler architecture with helpers (per
+                        // docs/frame_runtime_introduction.md Step 21+):
+                        // __prepareEnter / __prepareExit / __transition.
                         let mut code = String::new();
 
-                        // Store exit_args on CURRENT compartment (positional append)
+                        let state_args_list = if let Some(ref state) = state_str {
+                            let vals: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    }
+                                })
+                                .collect();
+                            format!("[{}]", vals.join(", "))
+                        } else {
+                            "[]".to_string()
+                        };
+                        let enter_args_list = if let Some(ref enter) = enter_str {
+                            let vals: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            format!("[{}]", vals.join(", "))
+                        } else {
+                            "[]".to_string()
+                        };
+
                         if let Some(ref exit) = exit_str {
-                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+                            let vals: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if !vals.is_empty() {
                                 code.push_str(&format!(
-                                    "{}self.__compartment.exit_args.append({})\n",
-                                    indent_str, arg
+                                    "{}__prepareExit([{}])\n",
+                                    indent_str,
+                                    vals.join(", ")
                                 ));
                             }
                         }
 
-                        // Eager HSM chain — no compartment duplication.
-                        // Use the split-first pattern: emit the outermost
-                        // ancestor (or the target, if no ancestors) as the
-                        // initial non-optional var, then chain links via
-                        // `do { ... }` blocks. Keeping `__compartment`
-                        // non-optional lets downstream `.state_args.append`
-                        // work without optional-chaining sugar.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
-                        let all_states: Vec<String> = ancestors
-                            .iter()
-                            .cloned()
-                            .chain(std::iter::once(target.clone()))
-                            .collect();
-                        let (first, rest) = all_states
-                            .split_first()
-                            .expect("at least target is present");
                         code.push_str(&format!(
-                            "{}var __compartment = {}Compartment(state: \"{}\")\n",
-                            indent_str, ctx.system_name, first
+                            "{}let __compartment = {}.__prepareEnter(\"{}\", {}, {})\n",
+                            indent_str, ctx.system_name, target, state_args_list, enter_args_list
                         ));
-                        for next in rest {
-                            code.push_str(&format!(
-                                "{}do {{ let c = {}Compartment(state: \"{}\"); c.parent_compartment = __compartment; __compartment = c }}\n",
-                                indent_str, ctx.system_name, next
-                            ));
-                        }
-
-                        // Set state_args (positional append)
-                        if let Some(ref state) = state_str {
-                            for arg in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let value = if let Some(eq_pos) = arg.find('=') {
-                                    arg[eq_pos + 1..].trim()
-                                } else {
-                                    arg
-                                };
-                                code.push_str(&format!(
-                                    "{}__compartment.state_args.append({})\n",
-                                    indent_str, value
-                                ));
-                            }
-                        }
-
-                        // Set enter_args (positional append)
-                        if let Some(ref enter) = enter_str {
-                            for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                code.push_str(&format!(
-                                    "{}__compartment.enter_args.append({})\n",
-                                    indent_str, arg
-                                ));
-                            }
-                        }
 
                         code.push_str(&format!(
                             "{}__transition(__compartment)\n{}return",

@@ -597,6 +597,9 @@ fn add_await_to_string(code: &str, lang: TargetLanguage) -> String {
             // for same-instance method calls.
             || trimmed.starts_with("__kernel(")
             || trimmed.starts_with("__router(")
+            || trimmed.starts_with("__fire_")
+            || trimmed.starts_with("__route_to_state(")
+            || trimmed.starts_with("__process_transition_loop(")
             || (trimmed.starts_with("_state_") && !trimmed.starts_with("_state_stack"))
             // Rust match arms and braced dispatch:
             // "StateName" => self._state_X(__e),
@@ -1776,105 +1779,41 @@ pub(crate) fn generate_constructor(
                     });
                 }
                 TargetLanguage::Swift => {
-                    // Swift: Create compartment chain for HSM if start state has parent
-                    if !ancestor_chain.is_empty() {
-                        let mut hsm_init_code = String::new();
-                        hsm_init_code.push_str("// HSM: Create parent compartment chain\n");
-
-                        let mut prev_comp_var = "nil".to_string();
-                        for (i, ancestor) in ancestor_chain.iter().enumerate() {
-                            let comp_var = format!("__parent_comp_{}", i);
-                            hsm_init_code.push_str(&format!(
-                                "let {} = {}(state: \"{}\")\n",
-                                comp_var, compartment_class, ancestor.name
-                            ));
-                            if prev_comp_var != "nil" {
-                                hsm_init_code.push_str(&format!(
-                                    "{}.parent_compartment = {}\n",
-                                    comp_var, prev_comp_var
-                                ));
-                            }
-                            for var in &ancestor.state_vars {
-                                let init_val = if let Some(ref init) = var.init {
-                                    expression_to_string(init, TargetLanguage::Swift)
-                                } else {
-                                    state_var_init_value(&var.var_type, TargetLanguage::Swift)
-                                };
-                                hsm_init_code.push_str(&format!(
-                                    "{}.state_vars[\"{}\"] = {}\n",
-                                    comp_var, var.name, init_val
-                                ));
-                            }
-                            prev_comp_var = comp_var;
-                        }
-                        hsm_init_code.push_str(&format!(
-                            "self.__compartment = {}(state: \"{}\")\n",
-                            compartment_class, first_state.name
-                        ));
-                        hsm_init_code.push_str(&format!(
-                            "self.__compartment.parent_compartment = {}\n",
-                            prev_comp_var
-                        ));
-                        hsm_init_code.push_str("self.__next_compartment = nil");
-
-                        // System state and enter params (HSM path).
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    hsm_init_code.push_str(&format!(
-                                        "\nself.__compartment.state_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    hsm_init_code.push_str(&format!(
-                                        "\nself.__compartment.enter_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-
-                        body.push(CodegenNode::NativeBlock {
-                            code: hsm_init_code,
-                            span: None,
-                        });
-                    } else {
-                        body.push(CodegenNode::NativeBlock {
-                            code: format!(
-                                "__compartment = {}(state: \"{}\")\n__next_compartment = nil",
-                                compartment_class, first_state.name
-                            ),
-                            span: None,
-                        });
-
-                        // System state and enter params (non-HSM path).
-                        let mut compartment_inits: Vec<String> = Vec::new();
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    compartment_inits.push(format!(
-                                        "__compartment.state_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    compartment_inits.push(format!(
-                                        "__compartment.enter_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-                        if !compartment_inits.is_empty() {
-                            body.push(CodegenNode::NativeBlock {
-                                code: compartment_inits.join("\n"),
-                                span: None,
-                            });
-                        }
-                    }
+                    // Swift: build start chain via __prepareEnter, the same
+                    // helper used by every transition. System header
+                    // params flow into state_args / enter_args.
+                    let _ = compartment_class;
+                    let state_args_vec: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg
+                            )
+                        })
+                        .map(|p| p.name.clone())
+                        .collect();
+                    let enter_args_vec: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg
+                            )
+                        })
+                        .map(|p| p.name.clone())
+                        .collect();
+                    let state_arg = format!("[{}]", state_args_vec.join(", "));
+                    let enter_arg = format!("[{}]", enter_args_vec.join(", "));
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!(
+                            "self.__compartment = {}.__prepareEnter(\"{}\", {}, {})\nself.__next_compartment = nil",
+                            system.name, first_state.name, state_arg, enter_arg
+                        ),
+                        span: None,
+                    });
                 }
                 TargetLanguage::CSharp => {
                     // C#: Create compartment chain for HSM if start state has parent
@@ -2299,22 +2238,7 @@ s._context_stack = s._context_stack[:len(s._context_stack)-1]"#,
                     "if (!__skipInitialEnter) {\n    __fire_enter_cascade()\n    __process_transition_loop()\n}".to_string()
                 }
                 TargetLanguage::Swift => format!(
-                    // `__skipInitialEnter` is a class-level static flag that
-                    // restoreState sets to true before invoking init() so the
-                    // initial-state `$>()` enter handler does not fire on a
-                    // restored instance. Without this, every Swift @@persist
-                    // system would leak enter side effects from state `$A`
-                    // on top of its restored compartment. The flag is always
-                    // emitted (false by default for non-persist systems too)
-                    // so the class has one init signature regardless of
-                    // whether @@persist is declared — simplifies call sites.
-                    r#"if !{0}.__skipInitialEnter {{
-    let __frame_event = {0}FrameEvent(message: "$>")
-    let __ctx = {0}FrameContext(event: __frame_event)
-    _context_stack.append(__ctx)
-    __kernel(_context_stack[_context_stack.count - 1]._event)
-    _context_stack.removeLast()
-}}"#,
+                    "if !{}.__skipInitialEnter {{\n    __fire_enter_cascade()\n    __process_transition_loop()\n}}",
                     system.name
                 ),
                 TargetLanguage::Php => {
@@ -4251,66 +4175,69 @@ fn generate_swift_machinery(
     compartment_class: &str,
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+    let chains = compute_hsm_chains(system);
 
-    // Class-level static flag: restoreState sets this before calling init
-    // to suppress the initial-state $>() dispatch. Default false means all
-    // non-restore instantiations fire ENTER as before. Always emitted so
-    // init()'s generated body can reference it regardless of @@persist.
+    // Class-level static flag.
     methods.push(CodegenNode::NativeBlock {
         code: "static var __skipInitialEnter: Bool = false".to_string(),
         span: None,
     });
 
-    let states: Vec<&str> = system
-        .machine
-        .as_ref()
-        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-        .unwrap_or_default();
+    // hsm_chain — class method (so it's callable from init before all
+    // stored properties are initialized; Swift forbids instance-method
+    // calls on `self` until that point).
+    let mut chain_method = String::from(
+        "private static func hsm_chain() -> [String: [String]] {\n    return [\n",
+    );
+    for (leaf, chain) in &chains {
+        let chain_str = chain
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        chain_method.push_str(&format!("        \"{}\": [{}],\n", leaf, chain_str));
+    }
+    chain_method.push_str("    ]\n}");
+    methods.push(CodegenNode::NativeBlock {
+        code: chain_method,
+        span: None,
+    });
 
-    // __kernel — Swift: no semicolons, no `new`, `!=` for comparison
-    let mut kernel_code = String::new();
-    kernel_code.push_str("__router(__e)\n");
-    kernel_code.push_str("while __next_compartment != nil {\n");
-    kernel_code.push_str("    let next_compartment = __next_compartment!\n");
-    kernel_code.push_str("    __next_compartment = nil\n");
-    kernel_code.push_str(&format!(
-        "    let exit_event = {}(message: \"<$\")\n",
-        event_class
-    ));
-    kernel_code.push_str("    __router(exit_event)\n");
-    kernel_code.push_str("    __compartment = next_compartment\n");
-    kernel_code.push_str("    if __compartment.forward_event == nil {\n");
-    kernel_code.push_str(&format!(
-        "        let enter_event = {}(message: \"$>\")\n",
-        event_class
-    ));
-    kernel_code.push_str("        __router(enter_event)\n");
-    kernel_code.push_str("    } else {\n");
-    kernel_code.push_str("        let forward_event = __compartment.forward_event!\n");
-    kernel_code.push_str("        __compartment.forward_event = nil\n");
-    kernel_code.push_str("        if forward_event._message == \"$>\" {\n");
-    kernel_code.push_str("            __router(forward_event)\n");
-    kernel_code.push_str("        } else {\n");
-    kernel_code.push_str(&format!(
-        "            let enter_event = {}(message: \"$>\")\n",
-        event_class
-    ));
-    kernel_code.push_str("            __router(enter_event)\n");
-    kernel_code.push_str("            __router(forward_event)\n");
-    kernel_code.push_str("        }\n");
-    kernel_code.push_str("    }\n");
-    kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-    kernel_code.push_str("    for i in 0..<_context_stack.count {\n");
-    kernel_code.push_str("        _context_stack[i]._transitioned = true\n");
-    kernel_code.push_str("    }\n");
-    kernel_code.push_str("}");
+    // __prepareEnter — class method (must be callable from init before
+    // stored properties are initialized; doesn't touch instance state
+    // anyway). Constructs the destination HSM chain.
+    methods.push(CodegenNode::NativeBlock {
+        code: format!(
+            r#"private static func __prepareEnter(_ leaf: String, _ state_args: [Any], _ enter_args: [Any]) -> {0} {{
+    var comp: {0}? = nil
+    for name in {1}.hsm_chain()[leaf]! {{
+        let new_comp = {0}(state: name)
+        new_comp.state_args = state_args
+        new_comp.enter_args = enter_args
+        new_comp.parent_compartment = comp
+        comp = new_comp
+    }}
+    return comp!
+}}"#,
+            compartment_class, system.name
+        ),
+        span: None,
+    });
 
+    // __prepareExit — populates exit_args on every layer.
     methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![Param::new("__e").with_type(event_class)],
+        name: "__prepareExit".to_string(),
+        params: vec![Param::new("exit_args").with_type("[Any]")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: kernel_code,
+            code: format!(
+                r#"var comp: {}? = __compartment
+while comp != nil {{
+    comp!.exit_args = exit_args
+    comp = comp!.parent_compartment
+}}"#,
+                compartment_class
+            ),
             span: None,
         }],
         is_async: false,
@@ -4319,25 +4246,146 @@ fn generate_swift_machinery(
         decorators: vec![],
     });
 
-    // __router — Swift: per-handler architecture passes __compartment
-    // as second arg (see docs/frame_runtime.md § "Dispatch Model").
-    let mut router_code = String::new();
-    router_code.push_str("let state_name = __compartment.state\n");
+    // __route_to_state — cascade router.
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
+    let mut route_code = String::new();
     for (i, state) in states.iter().enumerate() {
         let prefix = if i == 0 { "if" } else { "} else if" };
-        router_code.push_str(&format!("{} state_name == \"{}\" {{\n", prefix, state));
-        router_code.push_str(&format!("    _state_{}(__e, __compartment)\n", state));
+        route_code.push_str(&format!("{} state_name == \"{}\" {{\n", prefix, state));
+        route_code.push_str(&format!("    _state_{}(__e, compartment)\n", state));
     }
     if !states.is_empty() {
-        router_code.push_str("}");
+        route_code.push_str("}");
     }
+    methods.push(CodegenNode::Method {
+        name: "__route_to_state".to_string(),
+        params: vec![
+            Param::new("state_name").with_type("String"),
+            Param::new("__e").with_type(event_class),
+            Param::new("compartment").with_type(compartment_class),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: route_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
+    // __fire_exit_cascade — bottom-up.
+    methods.push(CodegenNode::Method {
+        name: "__fire_exit_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"var comp: {0}? = __compartment
+while comp != nil {{
+    let exit_event = {1}(message: "<$", parameters: comp!.exit_args)
+    __route_to_state(comp!.state, exit_event, comp!)
+    comp = comp!.parent_compartment
+}}"#,
+                compartment_class, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_enter_cascade — top-down.
+    methods.push(CodegenNode::Method {
+        name: "__fire_enter_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"var chain: [{0}] = []
+var comp: {0}? = __compartment
+while comp != nil {{
+    chain.append(comp!)
+    comp = comp!.parent_compartment
+}}
+for i in stride(from: chain.count - 1, through: 0, by: -1) {{
+    let layer = chain[i]
+    let enter_event = {1}(message: "$>", parameters: layer.enter_args)
+    __route_to_state(layer.state, enter_event, layer)
+}}"#,
+                compartment_class, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __process_transition_loop — drains queued transitions.
+    methods.push(CodegenNode::Method {
+        name: "__process_transition_loop".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"while __next_compartment != nil {
+    let next_compartment = __next_compartment!
+    __next_compartment = nil
+    __fire_exit_cascade()
+    __compartment = next_compartment
+    if next_compartment.forward_event == nil {
+        __fire_enter_cascade()
+    } else {
+        let forward_event = next_compartment.forward_event!
+        next_compartment.forward_event = nil
+        __fire_enter_cascade()
+        if forward_event._message != "$>" {
+            __router(forward_event)
+        }
+    }
+    for i in 0..<_context_stack.count {
+        _context_stack[i]._transitioned = true
+    }
+}"#
+            .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __kernel — routes event then drains.
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(event_class)],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "__router(__e)\n__process_transition_loop()".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router — delegates to __route_to_state.
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e").with_type(event_class)],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: router_code,
+            code: "__route_to_state(__compartment.state, __e, __compartment)".to_string(),
             span: None,
         }],
         is_async: false,
