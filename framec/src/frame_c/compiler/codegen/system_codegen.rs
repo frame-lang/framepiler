@@ -2343,100 +2343,40 @@ pub(crate) fn generate_constructor(
                     }
                 }
                 TargetLanguage::GDScript => {
-                    // GDScript: Create compartment chain for HSM if start state has parent
-                    if !ancestor_chain.is_empty() {
-                        let mut hsm_init_code = String::new();
-                        hsm_init_code.push_str("# HSM: Create parent compartment chain\n");
-
-                        let mut prev_comp_var = "null".to_string();
-                        for (i, ancestor) in ancestor_chain.iter().enumerate() {
-                            let comp_var = format!("__parent_comp_{}", i);
-                            hsm_init_code.push_str(&format!(
-                                "var {} = {}.new(\"{}\", {})\n",
-                                comp_var, compartment_class, ancestor.name, prev_comp_var
-                            ));
-                            // Initialize state vars for this ancestor
-                            for var in &ancestor.state_vars {
-                                let init_val = if let Some(ref init) = var.init {
-                                    expression_to_string(init, TargetLanguage::GDScript)
-                                } else {
-                                    state_var_init_value(&var.var_type, TargetLanguage::GDScript)
-                                };
-                                hsm_init_code.push_str(&format!(
-                                    "{}.state_vars[\"{}\"] = {}\n",
-                                    comp_var, var.name, init_val
-                                ));
-                            }
-                            prev_comp_var = comp_var;
-                        }
-                        hsm_init_code.push_str(&format!(
-                            "self.__compartment = {}.new(\"{}\", {})\n",
-                            compartment_class, first_state.name, prev_comp_var
-                        ));
-                        hsm_init_code.push_str("self.__next_compartment = null");
-
-                        // System state and enter params (HSM path).
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    hsm_init_code.push_str(&format!(
-                                        "\nself.__compartment.state_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    hsm_init_code.push_str(&format!(
-                                        "\nself.__compartment.enter_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-
-                        body.push(CodegenNode::NativeBlock {
-                            code: hsm_init_code,
-                            span: None,
-                        });
-                    } else {
-                        body.push(CodegenNode::assign(
-                            CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
-                            CodegenNode::New {
-                                class: compartment_class.clone(),
-                                args: vec![CodegenNode::string(&first_state.name)],
-                            },
-                        ));
-                        body.push(CodegenNode::assign(
-                            CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
-                            CodegenNode::null(),
-                        ));
-
-                        // System state and enter params (non-HSM path).
-                        let mut compartment_inits: Vec<String> = Vec::new();
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    compartment_inits.push(format!(
-                                        "self.__compartment.state_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    compartment_inits.push(format!(
-                                        "self.__compartment.enter_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-                        if !compartment_inits.is_empty() {
-                            body.push(CodegenNode::NativeBlock {
-                                code: compartment_inits.join("\n"),
-                                span: None,
-                            });
-                        }
-                    }
+                    // GDScript: build start chain via __prepareEnter, the
+                    // same helper used by every transition. System header
+                    // params flow into state_args / enter_args.
+                    let state_args_vec: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg
+                            )
+                        })
+                        .map(|p| p.name.clone())
+                        .collect();
+                    let enter_args_vec: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg
+                            )
+                        })
+                        .map(|p| p.name.clone())
+                        .collect();
+                    let state_arg = format!("[{}]", state_args_vec.join(", "));
+                    let enter_arg = format!("[{}]", enter_args_vec.join(", "));
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!(
+                            "self.__compartment = self.__prepareEnter(\"{}\", {}, {})\nself.__next_compartment = null",
+                            first_state.name, state_arg, enter_arg
+                        ),
+                        span: None,
+                    });
                 }
                 // Lua: build start chain via __prepareEnter, the same
                 // helper used by all transitions. System header params
@@ -2638,16 +2578,10 @@ array_pop($this->_context_stack);"#,
                     "final __frame_event = {}(\"\\$>\", this.__compartment.enter_args);\nfinal __ctx = {}FrameContext(__frame_event, null);\n_context_stack.add(__ctx);\n__kernel(_context_stack[_context_stack.length - 1].event);\n_context_stack.removeLast();",
                     event_class, system.name
                 ),
-                TargetLanguage::GDScript => format!(
-                    // Class-static `__skipInitialEnter` — see Swift comment.
-                    r#"if not __skipInitialEnter:
-    var __frame_event = {0}.new("$>", self.__compartment.enter_args)
-    var __ctx = {1}FrameContext.new(__frame_event, null)
-    self._context_stack.append(__ctx)
-    self.__kernel(self._context_stack[self._context_stack.size() - 1].event)
-    self._context_stack.pop_back()"#,
-                    event_class, system.name
-                ),
+                TargetLanguage::GDScript => {
+                    let _ = (event_class, &system.name);
+                    "if not __skipInitialEnter:\n    self.__fire_enter_cascade()\n    self.__process_transition_loop()".to_string()
+                }
                 TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
                 TargetLanguage::Graphviz => unreachable!(),
             };
@@ -2782,7 +2716,7 @@ pub(crate) fn generate_frame_machinery(
             &event_class,
             &compartment_class,
         )),
-        TargetLanguage::GDScript => methods.extend(generate_gdscript_machinery(&event_class)),
+        TargetLanguage::GDScript => methods.extend(generate_gdscript_machinery(system, &event_class, &compartment_class)),
         TargetLanguage::Graphviz => unreachable!(),
     }
 
@@ -4837,54 +4771,56 @@ while (__next_compartment != null) {{
     methods
 }
 
-fn generate_gdscript_machinery(event_class: &str) -> Vec<CodegenNode> {
+fn generate_gdscript_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+    let chains = compute_hsm_chains(system);
 
-    // Class-static flag gating the ctor's ENTER dispatch. GDScript 4.1+
-    // supports `static var`. See Swift comment for the rationale — same
-    // class of bug across every language whose restore path uses the
-    // default-construction idiom.
+    // Class-static flag gating the ctor's ENTER dispatch.
     methods.push(CodegenNode::NativeBlock {
         code: "static var __skipInitialEnter: bool = false".to_string(),
         span: None,
     });
 
-    // __kernel method
+    // hsm_chain — class method returning the topology table.
+    let mut chain_method = String::from("func hsm_chain() -> Dictionary:\n    return {\n");
+    for (leaf, chain) in &chains {
+        let chain_str = chain
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        chain_method.push_str(&format!("        \"{}\": [{}],\n", leaf, chain_str));
+    }
+    chain_method.push_str("    }");
+    methods.push(CodegenNode::NativeBlock {
+        code: chain_method,
+        span: None,
+    });
+
+    // __prepareEnter — constructs the destination HSM chain.
     methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![Param::new("__e")],
+        name: "__prepareEnter".to_string(),
+        params: vec![
+            Param::new("leaf"),
+            Param::new("state_args"),
+            Param::new("enter_args"),
+        ],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
             code: format!(
-                r#"# Route event to current state
-self.__router(__e)
-# Process any pending transition
-while self.__next_compartment != null:
-    var next_compartment = self.__next_compartment
-    self.__next_compartment = null
-    # Exit current state
-    var exit_event = {}.new("<$", self.__compartment.exit_args)
-    self.__router(exit_event)
-    # Switch to new compartment
-    self.__compartment = next_compartment
-    # Enter new state (or forward event)
-    if next_compartment.forward_event == null:
-        var enter_event = {}.new("$>", self.__compartment.enter_args)
-        self.__router(enter_event)
-    else:
-        # Forward event to new state
-        var forward_event = next_compartment.forward_event
-        next_compartment.forward_event = null
-        if forward_event._message == "$>":
-            self.__router(forward_event)
-        else:
-            var enter_event = {}.new("$>", self.__compartment.enter_args)
-            self.__router(enter_event)
-            self.__router(forward_event)
-    # Mark all stacked contexts as transitioned
-    for ctx in self._context_stack:
-        ctx._transitioned = true"#,
-                event_class, event_class, event_class
+                r#"var comp = null
+for name in self.hsm_chain()[leaf]:
+    var new_comp = {}.new(name)
+    new_comp.state_args = state_args.duplicate()
+    new_comp.enter_args = enter_args.duplicate()
+    new_comp.parent_compartment = comp
+    comp = new_comp
+return comp"#,
+                compartment_class
             ),
             span: None,
         }],
@@ -4894,20 +4830,147 @@ while self.__next_compartment != null:
         decorators: vec![],
     });
 
-    // __router — per-handler architecture: pass self.__compartment as
-    // the second arg so dispatcher/handler methods receive the active
-    // state's compartment as a named local (docs/frame_runtime.md §
-    // "Dispatch Model").
+    // __prepareExit — populates exit_args on every layer.
+    methods.push(CodegenNode::Method {
+        name: "__prepareExit".to_string(),
+        params: vec![Param::new("exit_args")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"var comp = self.__compartment
+while comp != null:
+    comp.exit_args = exit_args.duplicate()
+    comp = comp.parent_compartment"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __route_to_state — cascade router.
+    methods.push(CodegenNode::Method {
+        name: "__route_to_state".to_string(),
+        params: vec![
+            Param::new("state_name"),
+            Param::new("__e"),
+            Param::new("compartment"),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"var handler_name = "_state_" + state_name
+if self.has_method(handler_name):
+    self.call(handler_name, __e, compartment)"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_exit_cascade — bottom-up.
+    methods.push(CodegenNode::Method {
+        name: "__fire_exit_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"var comp = self.__compartment
+while comp != null:
+    var exit_event = {}.new("<$", comp.exit_args)
+    self.__route_to_state(comp.state, exit_event, comp)
+    comp = comp.parent_compartment"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_enter_cascade — top-down.
+    methods.push(CodegenNode::Method {
+        name: "__fire_enter_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"var chain = []
+var comp = self.__compartment
+while comp != null:
+    chain.append(comp)
+    comp = comp.parent_compartment
+for i in range(chain.size() - 1, -1, -1):
+    var layer = chain[i]
+    var enter_event = {}.new("$>", layer.enter_args)
+    self.__route_to_state(layer.state, enter_event, layer)"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __process_transition_loop — drains pending transitions.
+    methods.push(CodegenNode::Method {
+        name: "__process_transition_loop".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"while self.__next_compartment != null:
+    var next_compartment = self.__next_compartment
+    self.__next_compartment = null
+    self.__fire_exit_cascade()
+    self.__compartment = next_compartment
+    if next_compartment.forward_event == null:
+        self.__fire_enter_cascade()
+    else:
+        var forward_event = next_compartment.forward_event
+        next_compartment.forward_event = null
+        self.__fire_enter_cascade()
+        if forward_event._message != "$>":
+            self.__router(forward_event)
+    for ctx in self._context_stack:
+        ctx._transitioned = true"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __kernel — routes event then drains.
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "# Route event to current state\nself.__router(__e)\n# Process any pending transition\nself.__process_transition_loop()".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router — delegates to __route_to_state.
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"var state_name = self.__compartment.state
-var handler_name = "_state_" + state_name
-if self.has_method(handler_name):
-    self.call(handler_name, __e, self.__compartment)"#
-                .to_string(),
+            code: "self.__route_to_state(self.__compartment.state, __e, self.__compartment)".to_string(),
             span: None,
         }],
         is_async: false,
