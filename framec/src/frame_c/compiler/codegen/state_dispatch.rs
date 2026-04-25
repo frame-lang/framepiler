@@ -997,9 +997,14 @@ fn generate_thin_dispatcher_generic(
     // safe; assert non-null with `!` on the deref.
     if default_forward {
         if let Some(ref parent) = ctx.parent_state {
-            // Dart / Swift (`!`) and Kotlin (`!!`) assert non-null at the deref.
+            // Dart / Swift / TypeScript (`!`) and Kotlin (`!!`) assert
+            // non-null at the deref. TypeScript needs it because the
+            // Compartment.parent_compartment type is `Compartment | null`
+            // under strict null checks.
             let bang = match syn.lang {
-                TargetLanguage::Dart | TargetLanguage::Swift => "!",
+                TargetLanguage::Dart
+                | TargetLanguage::Swift
+                | TargetLanguage::TypeScript => "!",
                 TargetLanguage::Kotlin => "!!",
                 _ => "",
             };

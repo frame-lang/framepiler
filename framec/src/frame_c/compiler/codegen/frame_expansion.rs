@@ -629,24 +629,12 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
+                        // Forward transition: same chain via __prepareEnter,
+                        // plus forward_event field set on the leaf.
                         let mut code = String::new();
-                        if matches!(lang, TargetLanguage::TypeScript) {
-                            code.push_str(&format!(
-                                "{}let __compartment: {}Compartment | null = null;\n",
-                                indent_str, ctx.system_name
-                            ));
-                        } else {
-                            code.push_str(&format!("{}let __compartment = null;\n", indent_str));
-                        }
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}__compartment = new {}Compartment(\"{}\", __compartment);\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
                         code.push_str(&format!(
-                            "{}__compartment = new {}Compartment(\"{}\", __compartment);\n",
-                            indent_str, ctx.system_name, target
+                            "{}const __compartment = this.__prepareEnter(\"{}\", [], []);\n",
+                            indent_str, target
                         ));
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e;\n",
@@ -1184,81 +1172,66 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-                        // Create compartment, set fields, call __transition
+                        // Per-handler architecture with helpers (see
+                        // docs/frame_runtime_introduction.md Step 21+):
+                        // __prepareExit / __prepareEnter / __transition.
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment (positional push)
+                        let state_args_list = if let Some(ref state) = state_str {
+                            let vals: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    }
+                                })
+                                .collect();
+                            format!("[{}]", vals.join(", "))
+                        } else {
+                            "[]".to_string()
+                        };
+                        let enter_args_list = if let Some(ref enter) = enter_str {
+                            let vals: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    }
+                                })
+                                .collect();
+                            format!("[{}]", vals.join(", "))
+                        } else {
+                            "[]".to_string()
+                        };
+
                         if let Some(ref exit) = exit_str {
-                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+                            let vals: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if !vals.is_empty() {
                                 code.push_str(&format!(
-                                    "{}this.__compartment.exit_args.push({});\n",
-                                    indent_str, arg
+                                    "{}this.__prepareExit([{}]);\n",
+                                    indent_str,
+                                    vals.join(", ")
                                 ));
                             }
                         }
 
-                        // Create new compartment with eager HSM parent chain —
-                        // see _scratch/bug_parent_compartment_hsm_walk.md.
-                        // Never duplicate the transition-source compartment.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
-                        // TS adds the nullable type annotation on the `let` decl;
-                        // JS elides it.
-                        if matches!(lang, TargetLanguage::TypeScript) {
-                            code.push_str(&format!(
-                                "{}let __compartment: {}Compartment | null = null;\n",
-                                indent_str, ctx.system_name
-                            ));
-                        } else {
-                            code.push_str(&format!("{}let __compartment = null;\n", indent_str));
-                        }
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}__compartment = new {}Compartment(\"{}\", __compartment);\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
                         code.push_str(&format!(
-                            "{}__compartment = new {}Compartment(\"{}\", __compartment);\n",
-                            indent_str, ctx.system_name, target
+                            "{}const __compartment = this.__prepareEnter(\"{}\", {}, {});\n",
+                            indent_str, target, state_args_list, enter_args_list
                         ));
 
-                        // Set state_args if present (positional push)
-                        if let Some(ref state) = state_str {
-                            for arg in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let value = if let Some(eq_pos) = arg.find('=') {
-                                    arg[eq_pos + 1..].trim()
-                                } else {
-                                    arg
-                                };
-                                code.push_str(&format!(
-                                    "{}__compartment.state_args.push({});\n",
-                                    indent_str, value
-                                ));
-                            }
-                        }
-
-                        // Set enter_args if present (positional push)
-                        if let Some(ref enter) = enter_str {
-                            for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let value = if let Some(eq_pos) = arg.find('=') {
-                                    arg[eq_pos + 1..].trim()
-                                } else {
-                                    arg
-                                };
-                                code.push_str(&format!(
-                                    "{}__compartment.enter_args.push({});\n",
-                                    indent_str, value
-                                ));
-                            }
-                        }
-
-                        // Call __transition and return to exit the handler
                         code.push_str(&format!(
                             "{}this.__transition(__compartment);\n{}return;",
                             indent_str, indent_str
@@ -2137,11 +2110,14 @@ pub(crate) fn generate_frame_expansion(
                     | TargetLanguage::Dart
                     | TargetLanguage::JavaScript => {
                         if ctx.per_handler {
-                            // Dart is null-safe; assert non-null with `!`.
-                            // TS/JS accept the same postfix operator but
-                            // it's unnecessary — keep parity via the
-                            // Dart-specific branch.
-                            let bang = if matches!(lang, TargetLanguage::Dart) {
+                            // Dart and TypeScript are null-safe; assert
+                            // non-null with `!`. JavaScript ignores the
+                            // postfix annotation in runtime semantics —
+                            // keep it bare.
+                            let bang = if matches!(
+                                lang,
+                                TargetLanguage::Dart | TargetLanguage::TypeScript
+                            ) {
                                 "!"
                             } else {
                                 ""
