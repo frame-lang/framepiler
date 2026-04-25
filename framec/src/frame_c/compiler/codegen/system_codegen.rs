@@ -1497,99 +1497,40 @@ pub(crate) fn generate_constructor(
                     });
                 }
                 TargetLanguage::Php => {
-                    // PHP: Create compartment chain for HSM if start state has parent
-                    if !ancestor_chain.is_empty() {
-                        let mut hsm_init_code = String::new();
-                        hsm_init_code.push_str("// HSM: Create parent compartment chain\n");
-
-                        let mut prev_comp_var = "null".to_string();
-                        for (i, ancestor) in ancestor_chain.iter().enumerate() {
-                            let comp_var = format!("$__parent_comp_{}", i);
-                            hsm_init_code.push_str(&format!(
-                                "{} = new {}(\"{}\", {});\n",
-                                comp_var, compartment_class, ancestor.name, prev_comp_var
-                            ));
-                            for var in &ancestor.state_vars {
-                                let init_val = if let Some(ref init) = var.init {
-                                    expression_to_string(init, TargetLanguage::Php)
-                                } else {
-                                    state_var_init_value(&var.var_type, TargetLanguage::Php)
-                                };
-                                hsm_init_code.push_str(&format!(
-                                    "{}->state_vars[\"{}\"] = {};\n",
-                                    comp_var, var.name, init_val
-                                ));
-                            }
-                            prev_comp_var = comp_var;
-                        }
-                        hsm_init_code.push_str(&format!(
-                            "$this->__compartment = new {}(\"{}\", {});\n",
-                            compartment_class, first_state.name, prev_comp_var
-                        ));
-                        hsm_init_code.push_str("$this->__next_compartment = null;");
-
-                        // System state and enter params (HSM path).
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    hsm_init_code.push_str(&format!(
-                                        "\n$this->__compartment->state_args[] = ${};",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    hsm_init_code.push_str(&format!(
-                                        "\n$this->__compartment->enter_args[] = ${};",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-
-                        body.push(CodegenNode::NativeBlock {
-                            code: hsm_init_code,
-                            span: None,
-                        });
-                    } else {
-                        body.push(CodegenNode::assign(
-                            CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
-                            CodegenNode::New {
-                                class: compartment_class.clone(),
-                                args: vec![CodegenNode::string(&first_state.name)],
-                            },
-                        ));
-                        body.push(CodegenNode::assign(
-                            CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
-                            CodegenNode::null(),
-                        ));
-
-                        // System state and enter params (non-HSM path).
-                        let mut compartment_inits: Vec<String> = Vec::new();
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    compartment_inits.push(format!(
-                                        "$this->__compartment->state_args[] = ${};",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    compartment_inits.push(format!(
-                                        "$this->__compartment->enter_args[] = ${};",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-                        if !compartment_inits.is_empty() {
-                            body.push(CodegenNode::NativeBlock {
-                                code: compartment_inits.join("\n"),
-                                span: None,
-                            });
-                        }
-                    }
+                    // PHP: build start chain via __prepareEnter, the same
+                    // helper used by every transition. System header
+                    // params flow into state_args / enter_args.
+                    let state_args_vec: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg
+                            )
+                        })
+                        .map(|p| format!("${}", p.name))
+                        .collect();
+                    let enter_args_vec: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg
+                            )
+                        })
+                        .map(|p| format!("${}", p.name))
+                        .collect();
+                    let state_arg = format!("[{}]", state_args_vec.join(", "));
+                    let enter_arg = format!("[{}]", enter_args_vec.join(", "));
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!(
+                            "$this->__compartment = $this->__prepareEnter(\"{}\", {}, {});\n$this->__next_compartment = null;",
+                            first_state.name, state_arg, enter_arg
+                        ),
+                        span: None,
+                    });
                 }
                 TargetLanguage::Ruby => {
                     // Ruby: build start chain via __prepareEnter, the same
@@ -2558,14 +2499,10 @@ s._context_stack = s._context_stack[:len(s._context_stack)-1]"#,
 }}"#,
                     system.name
                 ),
-                TargetLanguage::Php => format!(
-                    r#"$__frame_event = new {}("$>", $this->__compartment->enter_args);
-$__ctx = new {}FrameContext($__frame_event, null);
-$this->_context_stack[] = $__ctx;
-$this->__kernel($this->_context_stack[count($this->_context_stack) - 1]->_event);
-array_pop($this->_context_stack);"#,
-                    event_class, system.name
-                ),
+                TargetLanguage::Php => {
+                    let _ = (event_class, &system.name);
+                    "$this->__fire_enter_cascade();\n$this->__process_transition_loop();".to_string()
+                }
                 TargetLanguage::Ruby => {
                     let _ = (event_class, &system.name);
                     "__fire_enter_cascade\n__process_transition_loop".to_string()
@@ -2673,7 +2610,7 @@ pub(crate) fn generate_frame_machinery(
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => methods.extend(
             generate_javascript_machinery(system, lang, &event_class, &compartment_class),
         ),
-        TargetLanguage::Php => methods.extend(generate_php_machinery(&event_class)),
+        TargetLanguage::Php => methods.extend(generate_php_machinery(system, &event_class, &compartment_class)),
         TargetLanguage::Ruby => methods.extend(generate_ruby_machinery(system, &event_class, &compartment_class)),
         TargetLanguage::Rust => methods.extend(super::rust_system::generate_rust_machinery(
             system,
@@ -3276,50 +3213,51 @@ this.__process_transition_loop();"#
     methods
 }
 
-fn generate_php_machinery(event_class: &str) -> Vec<CodegenNode> {
+fn generate_php_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
-    // PHP: __kernel method - the main event processing loop
+    let chains = compute_hsm_chains(system);
+
+    // hsm_chain — instance method returning the topology table.
+    let mut chain_method = String::from("public function hsm_chain() {\n    return [\n");
+    for (leaf, chain) in &chains {
+        let chain_str = chain
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        chain_method.push_str(&format!("        \"{}\" => [{}],\n", leaf, chain_str));
+    }
+    chain_method.push_str("    ];\n}");
+    methods.push(CodegenNode::NativeBlock {
+        code: chain_method,
+        span: None,
+    });
+
+    // __prepareEnter — constructs the destination HSM chain.
     methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![Param::new("__e")],
+        name: "__prepareEnter".to_string(),
+        params: vec![
+            Param::new("leaf"),
+            Param::new("state_args"),
+            Param::new("enter_args"),
+        ],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
             code: format!(
-                r#"// Route event to current state
-$this->__router($__e);
-// Process any pending transition
-while ($this->__next_compartment !== null) {{
-    $next_compartment = $this->__next_compartment;
-    $this->__next_compartment = null;
-    // Exit current state
-    $exit_event = new {}("<$", $this->__compartment->exit_args);
-    $this->__router($exit_event);
-    // Switch to new compartment
-    $this->__compartment = $next_compartment;
-    // Enter new state (or forward event)
-    if ($next_compartment->forward_event === null) {{
-        $enter_event = new {}("$>", $this->__compartment->enter_args);
-        $this->__router($enter_event);
-    }} else {{
-        // Forward event to new state
-        $forward_event = $next_compartment->forward_event;
-        $next_compartment->forward_event = null;
-        if ($forward_event->_message === "$>") {{
-            // Forwarding enter event - just send it
-            $this->__router($forward_event);
-        }} else {{
-            // Forwarding other event - send $> first, then forward
-            $enter_event = new {}("$>", $this->__compartment->enter_args);
-            $this->__router($enter_event);
-            $this->__router($forward_event);
-        }}
-    }}
-    // Mark all stacked contexts as transitioned
-    foreach ($this->_context_stack as $ctx) {{
-        $ctx->_transitioned = true;
-    }}
-}}"#,
-                event_class, event_class, event_class
+                r#"$comp = null;
+foreach ($this->hsm_chain()[$leaf] as $name) {{
+    $new_comp = new {}($name);
+    $new_comp->state_args = $state_args;
+    $new_comp->enter_args = $enter_args;
+    $new_comp->parent_compartment = $comp;
+    $comp = $new_comp;
+}}
+return $comp;"#,
+                compartment_class
             ),
             span: None,
         }],
@@ -3329,19 +3267,16 @@ while ($this->__next_compartment !== null) {{
         decorators: vec![],
     });
 
-    // PHP: __router method - per-handler architecture: pass self's
-    // active compartment as second arg so dispatcher + handler methods
-    // see the owning state's compartment as a named local (see
-    // docs/frame_runtime.md § "Dispatch Model").
+    // __prepareExit — populates exit_args on every layer.
     methods.push(CodegenNode::Method {
-        name: "__router".to_string(),
-        params: vec![Param::new("__e")],
+        name: "__prepareExit".to_string(),
+        params: vec![Param::new("exit_args")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"$state_name = $this->__compartment->state;
-$handler_name = "_state_" . $state_name;
-if (method_exists($this, $handler_name)) {
-    $this->$handler_name($__e, $this->__compartment);
+            code: r#"$comp = $this->__compartment;
+while ($comp !== null) {
+    $comp->exit_args = $exit_args;
+    $comp = $comp->parent_compartment;
 }"#
             .to_string(),
             span: None,
@@ -3352,7 +3287,145 @@ if (method_exists($this, $handler_name)) {
         decorators: vec![],
     });
 
-    // PHP: __transition method - caches next compartment (deferred transition)
+    // __route_to_state — cascade router.
+    methods.push(CodegenNode::Method {
+        name: "__route_to_state".to_string(),
+        params: vec![
+            Param::new("state_name"),
+            Param::new("__e"),
+            Param::new("compartment"),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"$handler_name = "_state_" . $state_name;
+if (method_exists($this, $handler_name)) {
+    $this->$handler_name($__e, $compartment);
+}"#
+            .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_exit_cascade — bottom-up.
+    methods.push(CodegenNode::Method {
+        name: "__fire_exit_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"$comp = $this->__compartment;
+while ($comp !== null) {{
+    $exit_event = new {}("<$", $comp->exit_args);
+    $this->__route_to_state($comp->state, $exit_event, $comp);
+    $comp = $comp->parent_compartment;
+}}"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_enter_cascade — top-down.
+    methods.push(CodegenNode::Method {
+        name: "__fire_enter_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"$chain = [];
+$comp = $this->__compartment;
+while ($comp !== null) {{
+    $chain[] = $comp;
+    $comp = $comp->parent_compartment;
+}}
+for ($i = count($chain) - 1; $i >= 0; $i--) {{
+    $layer = $chain[$i];
+    $enter_event = new {}("$>", $layer->enter_args);
+    $this->__route_to_state($layer->state, $enter_event, $layer);
+}}"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __process_transition_loop — drains queued transitions.
+    methods.push(CodegenNode::Method {
+        name: "__process_transition_loop".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"while ($this->__next_compartment !== null) {
+    $next_compartment = $this->__next_compartment;
+    $this->__next_compartment = null;
+    $this->__fire_exit_cascade();
+    $this->__compartment = $next_compartment;
+    if ($next_compartment->forward_event === null) {
+        $this->__fire_enter_cascade();
+    } else {
+        $forward_event = $next_compartment->forward_event;
+        $next_compartment->forward_event = null;
+        $this->__fire_enter_cascade();
+        if ($forward_event->_message !== "$>") {
+            $this->__router($forward_event);
+        }
+    }
+    foreach ($this->_context_stack as $ctx) {
+        $ctx->_transitioned = true;
+    }
+}"#
+            .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __kernel — routes event then drains.
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "// Route event to current state\n$this->__router($__e);\n// Process any pending transition\n$this->__process_transition_loop();".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router — delegates to __route_to_state.
+    methods.push(CodegenNode::Method {
+        name: "__router".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "$this->__route_to_state($this->__compartment->state, $__e, $this->__compartment);".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __transition — caches next compartment.
     methods.push(CodegenNode::Method {
         name: "__transition".to_string(),
         params: vec![Param::new("next_compartment")],
