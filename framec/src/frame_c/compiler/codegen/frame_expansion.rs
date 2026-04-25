@@ -957,17 +957,13 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Lua => {
+                        // Forward transition. nil for empty args lists
+                        // (block-transformer workaround — see regular-
+                        // transition Lua case).
                         let mut code = String::new();
-                        code.push_str(&format!("{}local __compartment = nil\n", indent_str));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
                         code.push_str(&format!(
-                            "{}__compartment = {}Compartment.new(\"{}\", __compartment)\n",
-                            indent_str, ctx.system_name, target
+                            "{}local __compartment = self:__prepareEnter(\"{}\", nil, nil)\n",
+                            indent_str, target
                         ));
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e\n",
@@ -1955,61 +1951,83 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Lua => {
+                        // Per-handler architecture with helpers (per
+                        // docs/frame_runtime_introduction.md Step 21+).
+                        // Uses table.pack(...) instead of `{}` literals
+                        // because the Lua block transformer mishandles
+                        // `{}` table literals inside if/else bodies
+                        // (sees them as nested block braces). nil is
+                        // accepted by __prepareEnter / __prepareExit
+                        // when there are no args.
                         let mut code = String::new();
-                        // Store exit_args (positional table.insert)
+
+                        // state_args
+                        let state_arg = if let Some(ref state) = state_str {
+                            let vals: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    }
+                                })
+                                .collect();
+                            if vals.is_empty() {
+                                "nil".to_string()
+                            } else {
+                                format!("table.pack({})", vals.join(", "))
+                            }
+                        } else {
+                            "nil".to_string()
+                        };
+
+                        // enter_args
+                        let enter_arg = if let Some(ref enter) = enter_str {
+                            let vals: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    }
+                                })
+                                .collect();
+                            if vals.is_empty() {
+                                "nil".to_string()
+                            } else {
+                                format!("table.pack({})", vals.join(", "))
+                            }
+                        } else {
+                            "nil".to_string()
+                        };
+
+                        // exit_args (only emitted when present)
                         if let Some(ref exit) = exit_str {
-                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+                            let vals: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if !vals.is_empty() {
                                 code.push_str(&format!(
-                                    "{}table.insert(self.__compartment.exit_args, {})\n",
-                                    indent_str, arg
+                                    "{}self:__prepareExit(table.pack({}))\n",
+                                    indent_str,
+                                    vals.join(", ")
                                 ));
                             }
                         }
-                        // Eager HSM chain construction — see
-                        // _scratch/bug_parent_compartment_hsm_walk.md.
-                        // Never duplicate the transition-source compartment.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
-                        let comp_class = format!("{}Compartment", ctx.system_name);
-                        code.push_str(&format!("{}local __compartment = nil\n", indent_str));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}__compartment = {}.new(\"{}\", __compartment)\n",
-                                indent_str, comp_class, ancestor
-                            ));
-                        }
+
                         code.push_str(&format!(
-                            "{}__compartment = {}.new(\"{}\", __compartment)\n",
-                            indent_str, comp_class, target
+                            "{}local __compartment = self:__prepareEnter(\"{}\", {}, {})\n",
+                            indent_str, target, state_arg, enter_arg
                         ));
-                        // Set state_args (positional table.insert)
-                        if let Some(ref state) = state_str {
-                            for arg in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let value = if let Some(eq_pos) = arg.find('=') {
-                                    arg[eq_pos + 1..].trim()
-                                } else {
-                                    arg
-                                };
-                                code.push_str(&format!(
-                                    "{}table.insert(__compartment.state_args, {})\n",
-                                    indent_str, value
-                                ));
-                            }
-                        }
-                        // Set enter_args (positional table.insert)
-                        if let Some(ref enter) = enter_str {
-                            for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                code.push_str(&format!(
-                                    "{}table.insert(__compartment.enter_args, {})\n",
-                                    indent_str, arg
-                                ));
-                            }
-                        }
+
                         code.push_str(&format!(
                             "{}self:__transition(__compartment)\n{}return",
                             indent_str, indent_str

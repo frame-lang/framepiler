@@ -2438,16 +2438,47 @@ pub(crate) fn generate_constructor(
                         }
                     }
                 }
+                // Lua: build start chain via __prepareEnter, the same
+                // helper used by all transitions. System header params
+                // flow into state_args / enter_args channels. Uses
+                // table.pack(...) / nil instead of `{}` literals
+                // (block-transformer workaround).
+                TargetLanguage::Lua => {
+                    let state_args_vec: Vec<String> = system.params.iter()
+                        .filter(|p| matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::StateArg))
+                        .map(|p| p.name.clone())
+                        .collect();
+                    let enter_args_vec: Vec<String> = system.params.iter()
+                        .filter(|p| matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::EnterArg))
+                        .map(|p| p.name.clone())
+                        .collect();
+                    let state_arg = if state_args_vec.is_empty() {
+                        "nil".to_string()
+                    } else {
+                        format!("table.pack({})", state_args_vec.join(", "))
+                    };
+                    let enter_arg = if enter_args_vec.is_empty() {
+                        "nil".to_string()
+                    } else {
+                        format!("table.pack({})", enter_args_vec.join(", "))
+                    };
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!(
+                            "self.__compartment = self:__prepareEnter(\"{}\", {}, {})\nself.__next_compartment = nil",
+                            first_state.name, state_arg, enter_arg
+                        ),
+                        span: None,
+                    });
+                }
                 // Dynamic languages and remaining: New expression
-                // (Lua, Erlang, Kotlin — all routed here)
+                // (Erlang, Kotlin — all routed here)
                 TargetLanguage::Python3
                 | TargetLanguage::TypeScript
                 | TargetLanguage::JavaScript
                 | TargetLanguage::Php
                 | TargetLanguage::Ruby
                 | TargetLanguage::Erlang
-                | TargetLanguage::Kotlin
-                | TargetLanguage::Lua => {
+                | TargetLanguage::Kotlin => {
                     body.push(CodegenNode::assign(
                         CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
                         CodegenNode::New {
@@ -2459,39 +2490,6 @@ pub(crate) fn generate_constructor(
                         CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                         CodegenNode::null(),
                     ));
-
-                    // System state and enter params (Lua path — Lua's
-                    // compartment has state_args/enter_args dicts the same
-                    // way Python does). Erlang and Kotlin have their own
-                    // dispatch routes upstream (Erlang via gen_statem,
-                    // Kotlin via the explicit branch above), so for these
-                    // the population is a no-op.
-                    if matches!(syntax.language, TargetLanguage::Lua) {
-                        let mut compartment_inits: Vec<String> = Vec::new();
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    compartment_inits.push(format!(
-                                        "table.insert(self.__compartment.state_args, {})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    compartment_inits.push(format!(
-                                        "table.insert(self.__compartment.enter_args, {})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-                        if !compartment_inits.is_empty() {
-                            body.push(CodegenNode::NativeBlock {
-                                code: compartment_inits.join("\n"),
-                                span: None,
-                            });
-                        }
-                    }
                 }
                 TargetLanguage::Graphviz => unreachable!(),
             }
@@ -2632,14 +2630,10 @@ array_pop($this->_context_stack);"#,
                     let _ = (event_class, &system.name);
                     "__fire_enter_cascade\n__process_transition_loop".to_string()
                 }
-                TargetLanguage::Lua => format!(
-                    r#"local __frame_event = {}.new("$>", self.__compartment.enter_args)
-local __ctx = {}FrameContext.new(__frame_event, nil)
-self._context_stack[#self._context_stack + 1] = __ctx
-self:__kernel(self._context_stack[#self._context_stack]._event)
-self._context_stack[#self._context_stack] = nil"#,
-                    event_class, system.name
-                ),
+                TargetLanguage::Lua => {
+                    let _ = (event_class, &system.name);
+                    "self:__fire_enter_cascade()\nself:__process_transition_loop()".to_string()
+                }
                 TargetLanguage::Dart => format!(
                     "final __frame_event = {}(\"\\$>\", this.__compartment.enter_args);\nfinal __ctx = {}FrameContext(__frame_event, null);\n_context_stack.add(__ctx);\n__kernel(_context_stack[_context_stack.length - 1].event);\n_context_stack.removeLast();",
                     event_class, system.name
@@ -2782,7 +2776,7 @@ pub(crate) fn generate_frame_machinery(
         TargetLanguage::Erlang => {
             // gen_statem: kernel/router/transition are built into OTP — no custom methods needed
         }
-        TargetLanguage::Lua => methods.extend(generate_lua_machinery(&event_class)),
+        TargetLanguage::Lua => methods.extend(generate_lua_machinery(system, &event_class, &compartment_class)),
         TargetLanguage::Dart => methods.extend(generate_dart_machinery(
             system,
             &event_class,
@@ -4496,47 +4490,67 @@ fn generate_go_machinery(system: &SystemAst) -> Vec<CodegenNode> {
     methods
 }
 
-fn generate_lua_machinery(event_class: &str) -> Vec<CodegenNode> {
+fn generate_lua_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
-    // __kernel method
+    let chains = compute_hsm_chains(system);
+
+    // hsm_chain — class method returning the topology table.
+    // Built via sequential assignments rather than a literal table
+    // expression: the Lua block transformer treats `{ … }` on
+    // multiple lines as a Frame block (matching `if`/`while`
+    // bodies) and rewrites it incorrectly. Sequential assignments
+    // avoid the multi-line literal entirely.
+    let mut chain_method = String::from("function ");
+    chain_method.push_str(&system.name);
+    chain_method.push_str(":hsm_chain()\n    local t = {}\n");
+    for (leaf, chain) in &chains {
+        let chain_str = chain
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        chain_method.push_str(&format!("    t[\"{}\"] = {{{}}}\n", leaf, chain_str));
+    }
+    chain_method.push_str("    return t\nend");
+    methods.push(CodegenNode::NativeBlock {
+        code: chain_method,
+        span: None,
+    });
+
+    // __prepareEnter — constructs the destination HSM chain. Accepts
+    // nil for empty args lists so transition sites can call
+    // `self:__prepareEnter("X", nil, nil)` without emitting `{}`
+    // literals (the Lua block transformer mishandles `{}` inside
+    // if/else bodies — see transition emission notes).
     methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![Param::new("__e")],
+        name: "__prepareEnter".to_string(),
+        params: vec![
+            Param::new("leaf"),
+            Param::new("state_args"),
+            Param::new("enter_args"),
+        ],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
             code: format!(
-                r#"-- Route event to current state
-self:__router(__e)
--- Process any pending transition
-while self.__next_compartment ~= nil do
-    local next_compartment = self.__next_compartment
-    self.__next_compartment = nil
-    -- Exit current state
-    local exit_event = {}.new("<$", self.__compartment.exit_args)
-    self:__router(exit_event)
-    -- Switch to new compartment
-    self.__compartment = next_compartment
-    -- Enter new state (or forward event)
-    if next_compartment.forward_event == nil then
-        local enter_event = {}.new("$>", self.__compartment.enter_args)
-        self:__router(enter_event)
-    else
-        local forward_event = next_compartment.forward_event
-        next_compartment.forward_event = nil
-        if forward_event._message == "$>" then
-            self:__router(forward_event)
-        else
-            local enter_event = {}.new("$>", self.__compartment.enter_args)
-            self:__router(enter_event)
-            self:__router(forward_event)
-        end
-    end
-    -- Mark all stacked contexts as transitioned
-    for _, ctx in ipairs(self._context_stack) do
-        ctx._transitioned = true
-    end
-end"#,
-                event_class, event_class, event_class
+                r#"state_args = state_args or {{}}
+enter_args = enter_args or {{}}
+local comp = nil
+local chain = self:hsm_chain()[leaf]
+for i = 1, #chain do
+    local new_comp = {}.new(chain[i])
+    new_comp.state_args = {{}}
+    for j = 1, #state_args do new_comp.state_args[j] = state_args[j] end
+    new_comp.enter_args = {{}}
+    for j = 1, #enter_args do new_comp.enter_args[j] = enter_args[j] end
+    new_comp.parent_compartment = comp
+    comp = new_comp
+end
+return comp"#,
+                compartment_class
             ),
             span: None,
         }],
@@ -4546,21 +4560,157 @@ end"#,
         decorators: vec![],
     });
 
-    // __router — per-handler architecture: pass self.__compartment as
-    // the second arg so dispatcher/handler methods receive the active
-    // state's compartment as a named local (docs/frame_runtime.md §
-    // "Dispatch Model").
+    // __prepareExit — populates exit_args on every layer.
+    methods.push(CodegenNode::Method {
+        name: "__prepareExit".to_string(),
+        params: vec![Param::new("exit_args")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"local comp = self.__compartment
+while comp ~= nil do
+    comp.exit_args = {}
+    for j = 1, #exit_args do comp.exit_args[j] = exit_args[j] end
+    comp = comp.parent_compartment
+end"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __route_to_state — cascade router.
+    methods.push(CodegenNode::Method {
+        name: "__route_to_state".to_string(),
+        params: vec![
+            Param::new("state_name"),
+            Param::new("__e"),
+            Param::new("compartment"),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"local handler = self["_state_" .. state_name]
+if handler then
+    handler(self, __e, compartment)
+end"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_exit_cascade — bottom-up.
+    methods.push(CodegenNode::Method {
+        name: "__fire_exit_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"local comp = self.__compartment
+while comp ~= nil do
+    local exit_event = {}.new("<$", comp.exit_args)
+    self:__route_to_state(comp.state, exit_event, comp)
+    comp = comp.parent_compartment
+end"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_enter_cascade — top-down.
+    methods.push(CodegenNode::Method {
+        name: "__fire_enter_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"local chain = {{}}
+local comp = self.__compartment
+while comp ~= nil do
+    chain[#chain + 1] = comp
+    comp = comp.parent_compartment
+end
+for i = #chain, 1, -1 do
+    local layer = chain[i]
+    local enter_event = {}.new("$>", layer.enter_args)
+    self:__route_to_state(layer.state, enter_event, layer)
+end"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __process_transition_loop — drains pending transitions.
+    methods.push(CodegenNode::Method {
+        name: "__process_transition_loop".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"while self.__next_compartment ~= nil do
+    local next_compartment = self.__next_compartment
+    self.__next_compartment = nil
+    self:__fire_exit_cascade()
+    self.__compartment = next_compartment
+    if next_compartment.forward_event == nil then
+        self:__fire_enter_cascade()
+    else
+        local forward_event = next_compartment.forward_event
+        next_compartment.forward_event = nil
+        self:__fire_enter_cascade()
+        if forward_event._message ~= "$>" then
+            self:__router(forward_event)
+        end
+    end
+    for _, ctx in ipairs(self._context_stack) do
+        ctx._transitioned = true
+    end
+end"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __kernel — routes event then drains transitions.
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "-- Route event to current state\nself:__router(__e)\n-- Process any pending transition\nself:__process_transition_loop()".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router — delegates to __route_to_state for the active compartment.
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"local state_name = self.__compartment.state
-local handler = self["_state_" .. state_name]
-if handler then
-    handler(self, __e, self.__compartment)
-end"#
-                .to_string(),
+            code: "self:__route_to_state(self.__compartment.state, __e, self.__compartment)".to_string(),
             span: None,
         }],
         is_async: false,
