@@ -1425,89 +1425,32 @@ pub(crate) fn generate_constructor(
                     }
                 }
                 TargetLanguage::Python3 => {
-                    // Python: Create compartment chain for HSM if start state has parent
-                    if !ancestor_chain.is_empty() {
-                        let mut hsm_init_code = String::new();
-                        hsm_init_code.push_str("# HSM: Create parent compartment chain\n");
-
-                        // Create compartments from root to leaf
-                        let mut prev_comp_var = "None".to_string();
-                        for (i, ancestor) in ancestor_chain.iter().enumerate() {
-                            let comp_var = format!("__parent_comp_{}", i);
-                            hsm_init_code.push_str(&format!(
-                                "{} = {}(\"{}\", parent_compartment={})\n",
-                                comp_var, compartment_class, ancestor.name, prev_comp_var
-                            ));
-                            // Initialize state vars for this ancestor
-                            for var in &ancestor.state_vars {
-                                let init_val = if let Some(ref init) = var.init {
-                                    expression_to_string(init, TargetLanguage::Python3)
-                                } else {
-                                    state_var_init_value(&var.var_type, TargetLanguage::Python3)
-                                };
-                                hsm_init_code.push_str(&format!(
-                                    "{}.state_vars[\"{}\"] = {}\n",
-                                    comp_var, var.name, init_val
-                                ));
+                    // Python: build the start state's compartment chain
+                    // via __prepareEnter, the same helper used by all
+                    // transitions. System header params flow into the
+                    // start state's state_args / enter_args channels.
+                    let mut state_args_vec: Vec<String> = Vec::new();
+                    let mut enter_args_vec: Vec<String> = Vec::new();
+                    for p in &system.params {
+                        match p.kind {
+                            crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
+                                state_args_vec.push(p.name.clone());
                             }
-                            prev_comp_var = comp_var;
-                        }
-                        // Create the start state compartment with parent link
-                        hsm_init_code.push_str(&format!(
-                            "self.__compartment = {}(\"{}\", parent_compartment={})\n",
-                            compartment_class, first_state.name, prev_comp_var
-                        ));
-                        hsm_init_code.push_str("self.__next_compartment = None");
-
-                        body.push(CodegenNode::NativeBlock {
-                            code: hsm_init_code,
-                            span: None,
-                        });
-                    } else {
-                        // No HSM parent - simple compartment creation
-                        body.push(CodegenNode::assign(
-                            CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
-                            CodegenNode::New {
-                                class: compartment_class.clone(),
-                                args: vec![CodegenNode::string(&first_state.name)],
-                            },
-                        ));
-                        body.push(CodegenNode::assign(
-                            CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
-                            CodegenNode::null(),
-                        ));
-                        // System state and enter params: bind into start state's
-                        // state_args / enter_args. The constructor receives params
-                        // via system.params; each StateArg/EnterArg entry writes
-                        // into the corresponding compartment dict so the state's
-                        // dispatch (state_args) and enter handler (enter_args) can
-                        // read them. Domain params are handled by the domain field
-                        // initializer loop above and aren't touched here.
-                        let mut compartment_inits: Vec<String> = Vec::new();
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    compartment_inits.push(format!(
-                                        "self.__compartment.state_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    compartment_inits.push(format!(
-                                        "self.__compartment.enter_args.append({})",
-                                        p.name
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
+                            crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
+                                enter_args_vec.push(p.name.clone());
                             }
-                        }
-                        if !compartment_inits.is_empty() {
-                            body.push(CodegenNode::NativeBlock {
-                                code: compartment_inits.join("\n"),
-                                span: None,
-                            });
+                            crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
                         }
                     }
+                    let state_args_lit = format!("[{}]", state_args_vec.join(", "));
+                    let enter_args_lit = format!("[{}]", enter_args_vec.join(", "));
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!(
+                            "self.__compartment = self.__prepareEnter(\"{}\", {}, {})\nself.__next_compartment = None",
+                            first_state.name, state_args_lit, enter_args_lit
+                        ),
+                        span: None,
+                    });
                 }
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
                     // TypeScript: Create compartment chain for HSM if start state has parent
@@ -2880,8 +2823,43 @@ self._context_stack[#self._context_stack] = nil"#,
     }
 }
 
-/// Generate Frame machinery methods (__kernel, __router, __transition)
-/// for all target languages.
+/// Compute the HSM topology chain for each state in the machine.
+///
+/// Returns a list of (leaf_state_name, ancestor_chain) pairs, where
+/// `ancestor_chain` is ordered root-to-leaf (with the leaf as the last
+/// entry). For flat states, the chain has length 1 — just the state
+/// itself. For HSM children, the chain walks up via each state's
+/// declared `parent` field until a state with no parent is reached.
+///
+/// This is the source of truth for `_HSM_CHAIN` table emission and for
+/// `__prepareEnter` / persistence-restore chain reconstruction.
+pub(crate) fn compute_hsm_chains(system: &SystemAst) -> Vec<(String, Vec<String>)> {
+    let machine = match &system.machine {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+    let parent_lookup: std::collections::HashMap<String, Option<String>> = machine
+        .states
+        .iter()
+        .map(|s| (s.name.clone(), s.parent.clone()))
+        .collect();
+    let mut result = Vec::new();
+    for state in &machine.states {
+        let mut chain: Vec<String> = Vec::new();
+        let mut cursor = Some(state.name.clone());
+        while let Some(name) = cursor {
+            chain.push(name.clone());
+            cursor = parent_lookup.get(&name).cloned().flatten();
+        }
+        chain.reverse();
+        result.push((state.name.clone(), chain));
+    }
+    result
+}
+
+/// Generate Frame machinery methods (__kernel, __router, __transition,
+/// __prepareEnter, __prepareExit, __fire_enter_cascade,
+/// __fire_exit_cascade, __route_to_state) for all target languages.
 pub(crate) fn generate_frame_machinery(
     system: &SystemAst,
     syntax: &super::backend::ClassSyntax,
@@ -2892,7 +2870,7 @@ pub(crate) fn generate_frame_machinery(
     let event_class = format!("{}FrameEvent", system.name);
 
     match lang {
-        TargetLanguage::Python3 => methods.extend(generate_python3_machinery(&event_class)),
+        TargetLanguage::Python3 => methods.extend(generate_python3_machinery(system, &event_class, &compartment_class)),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => methods.extend(
             generate_javascript_machinery(lang, &event_class, &compartment_class),
         ),
@@ -2963,47 +2941,57 @@ pub(crate) fn generate_frame_machinery(
 // out gives each language an isolated, navigable function while
 // keeping codegen entirely in this file.
 
-fn generate_python3_machinery(event_class: &str) -> Vec<CodegenNode> {
+fn generate_python3_machinery(
+    system: &SystemAst,
+    event_class: &str,
+    compartment_class: &str,
+) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
-    // __kernel method - the main event processing loop
-    // Routes event to current state, then processes any pending transition
+    let chains = compute_hsm_chains(system);
+
+    // _HSM_CHAIN class attribute — static topology table mapping each
+    // state name to its root-to-leaf ancestor chain. Used by
+    // __prepareEnter to construct destination compartment chains and by
+    // restore_state() to reconstruct chains from a save blob.
+    let mut chain_lines = String::from("_HSM_CHAIN = {\n");
+    for (leaf, chain) in &chains {
+        let chain_str = chain
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        chain_lines.push_str(&format!("    \"{}\": [{}],\n", leaf, chain_str));
+    }
+    chain_lines.push('}');
+    methods.push(CodegenNode::NativeBlock {
+        code: chain_lines,
+        span: None,
+    });
+
+    // __prepareEnter — constructs the destination HSM chain for a
+    // transition. Each compartment in the chain receives its own copy of
+    // state_args / enter_args; ancestors and the leaf get the same
+    // values under the signature-match rule (see docs/frame_runtime.md
+    // § "Uniform Parameter Propagation").
     methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![Param::new("__e")],
+        name: "__prepareEnter".to_string(),
+        params: vec![
+            Param::new("leaf"),
+            Param::new("state_args"),
+            Param::new("enter_args"),
+        ],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
             code: format!(
-                r#"# Route event to current state
-self.__router(__e)
-# Process any pending transition
-while self.__next_compartment is not None:
-    next_compartment = self.__next_compartment
-    self.__next_compartment = None
-    # Exit current state
-    exit_event = {}("<$", self.__compartment.exit_args)
-    self.__router(exit_event)
-    # Switch to new compartment
-    self.__compartment = next_compartment
-    # Enter new state (or forward event)
-    if next_compartment.forward_event is None:
-        enter_event = {}("$>", self.__compartment.enter_args)
-        self.__router(enter_event)
-    else:
-        # Forward event to new state
-        forward_event = next_compartment.forward_event
-        next_compartment.forward_event = None
-        if forward_event._message == "$>":
-            # Forwarding enter event - just send it
-            self.__router(forward_event)
-        else:
-            # Forwarding other event - send $> first, then forward
-            enter_event = {}("$>", self.__compartment.enter_args)
-            self.__router(enter_event)
-            self.__router(forward_event)
-    # Mark all stacked contexts as transitioned
-    for ctx in self._context_stack:
-        ctx._transitioned = True"#,
-                event_class, event_class, event_class
+                r#"comp = None
+for name in self._HSM_CHAIN[leaf]:
+    new_comp = {}(name)
+    new_comp.state_args = list(state_args)
+    new_comp.enter_args = list(enter_args)
+    new_comp.parent_compartment = comp
+    comp = new_comp
+return comp"#,
+                compartment_class
             ),
             span: None,
         }],
@@ -3013,21 +3001,149 @@ while self.__next_compartment is not None:
         decorators: vec![],
     });
 
-    // __router method - dispatches events to state dispatcher methods.
-    // Per-handler architecture: the router passes `self.__compartment`
-    // as the second arg so dispatcher and handler methods see the active
-    // state's compartment as a named local parameter (see
-    // docs/frame_runtime.md § "Dispatch Model").
+    // __prepareExit — populates exit_args on every compartment in the
+    // current source chain before the kernel's exit cascade fires.
+    methods.push(CodegenNode::Method {
+        name: "__prepareExit".to_string(),
+        params: vec![Param::new("exit_args")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"comp = self.__compartment
+while comp is not None:
+    comp.exit_args = list(exit_args)
+    comp = comp.parent_compartment"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __route_to_state — cascade router. Routes an event to a specific
+    // state's dispatcher with a specific compartment, instead of using
+    // self.__compartment. Used by the enter/exit cascades to dispatch to
+    // every layer of the HSM chain.
+    methods.push(CodegenNode::Method {
+        name: "__route_to_state".to_string(),
+        params: vec![
+            Param::new("state_name"),
+            Param::new("__e"),
+            Param::new("compartment"),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"handler_name = f"_state_{state_name}"
+handler = getattr(self, handler_name, None)
+if handler:
+    handler(__e, compartment)"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_exit_cascade — fires <$ on every layer of the current
+    // chain, walking from leaf upward (bottom-up).
+    methods.push(CodegenNode::Method {
+        name: "__fire_exit_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"comp = self.__compartment
+while comp is not None:
+    exit_event = {}("<$", comp.exit_args)
+    self.__route_to_state(comp.state, exit_event, comp)
+    comp = comp.parent_compartment"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_enter_cascade — fires $> on every layer of the new chain,
+    // walking from root downward (top-down).
+    methods.push(CodegenNode::Method {
+        name: "__fire_enter_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"chain = []
+comp = self.__compartment
+while comp is not None:
+    chain.append(comp)
+    comp = comp.parent_compartment
+for comp in reversed(chain):
+    enter_event = {}("$>", comp.enter_args)
+    self.__route_to_state(comp.state, enter_event, comp)"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __kernel method - the main event processing loop. Per-handler
+    // architecture with HSM cascades: the kernel synthesizes <$ and $>
+    // events around the compartment switch, and the cascade helpers walk
+    // every layer of the chain.
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"# Route event to current state
+self.__router(__e)
+# Process any pending transition
+while self.__next_compartment is not None:
+    next_compartment = self.__next_compartment
+    self.__next_compartment = None
+    # Exit current chain (bottom-up)
+    self.__fire_exit_cascade()
+    # Switch to new compartment
+    self.__compartment = next_compartment
+    # Enter new chain (top-down) or forward event
+    if next_compartment.forward_event is None:
+        self.__fire_enter_cascade()
+    else:
+        forward_event = next_compartment.forward_event
+        next_compartment.forward_event = None
+        self.__fire_enter_cascade()
+        if forward_event._message != "$>":
+            self.__router(forward_event)
+    # Mark all stacked contexts as transitioned
+    for ctx in self._context_stack:
+        ctx._transitioned = True"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router — dispatches events to the current state's dispatcher
+    // method. Always uses self.__compartment.
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"state_name = self.__compartment.state
-handler_name = f"_state_{state_name}"
-handler = getattr(self, handler_name, None)
-if handler:
-    handler(__e, self.__compartment)"#
+            code: r#"self.__route_to_state(self.__compartment.state, __e, self.__compartment)"#
                 .to_string(),
             span: None,
         }],
