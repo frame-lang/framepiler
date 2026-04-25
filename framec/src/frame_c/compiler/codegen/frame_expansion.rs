@@ -750,33 +750,13 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Kotlin => {
+                        // Forward transition: same chain via __prepareEnter,
+                        // plus forward_event field set on the leaf.
                         let mut code = String::new();
-                        // Eager HSM chain — no compartment duplication.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
-                        let all_states: Vec<String> = ancestors
-                            .iter()
-                            .cloned()
-                            .chain(std::iter::once(target.clone()))
-                            .collect();
-                        let (first, rest) = all_states
-                            .split_first()
-                            .expect("at least target is present");
                         code.push_str(&format!(
-                            "{}var __compartment: {}Compartment = {}Compartment(\"{}\")\n",
-                            indent_str, ctx.system_name, ctx.system_name, first
+                            "{}val __compartment = __prepareEnter(\"{}\", mutableListOf<Any?>(), mutableListOf<Any?>())\n",
+                            indent_str, target
                         ));
-                        for next in rest {
-                            code.push_str(&format!(
-                                "{}__compartment = {}Compartment(\"{}\").also {{ it.parent_compartment = __compartment }}\n",
-                                indent_str, ctx.system_name, next
-                            ));
-                        }
                         code.push_str(&format!(
                             "{}__compartment.forward_event = __e\n",
                             indent_str
@@ -1470,75 +1450,66 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Kotlin => {
-                        // Kotlin: no `new`, no semicolons
+                        // Per-handler architecture with helpers (per
+                        // docs/frame_runtime_introduction.md Step 21+):
+                        // __prepareEnter / __prepareExit / __transition.
                         let mut code = String::new();
 
-                        // Store exit_args (positional add)
+                        let state_args_list = if let Some(ref state) = state_str {
+                            let vals: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    }
+                                })
+                                .collect();
+                            if vals.is_empty() {
+                                "mutableListOf<Any?>()".to_string()
+                            } else {
+                                format!("mutableListOf<Any?>({})", vals.join(", "))
+                            }
+                        } else {
+                            "mutableListOf<Any?>()".to_string()
+                        };
+                        let enter_args_list = if let Some(ref enter) = enter_str {
+                            let vals: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if vals.is_empty() {
+                                "mutableListOf<Any?>()".to_string()
+                            } else {
+                                format!("mutableListOf<Any?>({})", vals.join(", "))
+                            }
+                        } else {
+                            "mutableListOf<Any?>()".to_string()
+                        };
+
                         if let Some(ref exit) = exit_str {
-                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+                            let vals: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if !vals.is_empty() {
                                 code.push_str(&format!(
-                                    "{}__compartment.exit_args.add({})\n",
-                                    indent_str, arg
+                                    "{}__prepareExit(mutableListOf<Any?>({}))\n",
+                                    indent_str,
+                                    vals.join(", ")
                                 ));
                             }
                         }
 
-                        // Eager HSM chain — no compartment duplication.
-                        // Outer-in chain so target's parent_compartment
-                        // walks up to the declared root.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
-                        // Emit the outermost ancestor (or the target, if
-                        // no ancestors) as the initial non-null value;
-                        // subsequent links chain via `.also { ... }`.
-                        let all_states: Vec<String> = ancestors
-                            .iter()
-                            .cloned()
-                            .chain(std::iter::once(target.clone()))
-                            .collect();
-                        let (first, rest) = all_states
-                            .split_first()
-                            .expect("at least target is present");
                         code.push_str(&format!(
-                            "{}var __compartment: {}Compartment = {}Compartment(\"{}\")\n",
-                            indent_str, ctx.system_name, ctx.system_name, first
+                            "{}val __compartment = __prepareEnter(\"{}\", {}, {})\n",
+                            indent_str, target, state_args_list, enter_args_list
                         ));
-                        for next in rest {
-                            code.push_str(&format!(
-                                "{}__compartment = {}Compartment(\"{}\").also {{ it.parent_compartment = __compartment }}\n",
-                                indent_str, ctx.system_name, next
-                            ));
-                        }
-
-                        // Set state_args (positional add)
-                        if let Some(ref state) = state_str {
-                            for arg in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let value = if let Some(eq_pos) = arg.find('=') {
-                                    arg[eq_pos + 1..].trim()
-                                } else {
-                                    arg
-                                };
-                                code.push_str(&format!(
-                                    "{}__compartment.state_args.add({})\n",
-                                    indent_str, value
-                                ));
-                            }
-                        }
-
-                        // Set enter_args (positional add)
-                        if let Some(ref enter) = enter_str {
-                            for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                code.push_str(&format!(
-                                    "{}__compartment.enter_args.add({})\n",
-                                    indent_str, arg
-                                ));
-                            }
-                        }
 
                         code.push_str(&format!(
                             "{}__transition(__compartment)\n{}return",
