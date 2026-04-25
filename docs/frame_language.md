@@ -309,6 +309,15 @@ interface:
 - Default return value is a native expression, used when no handler sets `@@:return`
 - A return type with no default implies `None`/`null` as default
 
+**Cross-target return behavior:** in **strongly-typed targets**
+(TypeScript, Java, Kotlin, Swift, C#, Dart, C, C++, Go, Rust) the
+declared `: type` annotation is required for the wrapper to expose a
+return value — without it, the method is `void`. In **dynamic targets**
+(Python, JavaScript, Ruby, Lua, PHP, GDScript, Erlang) the wrapper
+always exposes the FrameContext's return slot, so `: type` is
+documentation only. See [Frame Runtime — Return values across target
+languages](frame_runtime.md#return-values-across-target-languages).
+
 ---
 
 ## Machine Section

@@ -17,6 +17,27 @@ use crate::frame_c::compiler::frame_ast::{
 };
 use crate::frame_c::visitors::TargetLanguage;
 
+/// True for dynamically-typed targets where every function returns
+/// *something* regardless of the source's declared return type. The
+/// interface method wrapper for these targets always exposes the
+/// FrameContext's return slot to the caller — there's no `void` to
+/// honor (see docs/frame_runtime.md § "Return values across target
+/// languages"). For statically-typed targets, the wrapper conditions
+/// on the source's declared return type so it doesn't try to return
+/// from a `void`-typed method.
+fn is_dynamic_target(lang: TargetLanguage) -> bool {
+    matches!(
+        lang,
+        TargetLanguage::Python3
+            | TargetLanguage::JavaScript
+            | TargetLanguage::Ruby
+            | TargetLanguage::Lua
+            | TargetLanguage::Php
+            | TargetLanguage::GDScript
+            | TargetLanguage::Erlang
+    )
+}
+
 /// Generate interface wrapper methods
 ///
 /// For Python/TypeScript: Create FrameEvent and call __kernel
@@ -127,7 +148,14 @@ pub(crate) fn generate_interface_wrappers(
                     String::new()
                 };
 
-                let has_return = method.return_type.is_some() || method.return_init.is_some();
+                // Python is a dynamic target: the wrapper always exposes
+                // the FrameContext's return slot, regardless of declared
+                // return type (see docs/frame_runtime.md § "Return values
+                // across target languages"). Source-level `: type` is
+                // documentation only here.
+                let has_return = is_dynamic_target(lang)
+                    || method.return_type.is_some()
+                    || method.return_init.is_some();
                 if has_return {
                     CodegenNode::NativeBlock {
                         code: format!(
@@ -175,7 +203,12 @@ self._context_stack.pop()"#,
                 // TypeScript uses ! (non-null assertion), JavaScript doesn't
                 let pop_suffix = if matches!(lang, TargetLanguage::TypeScript) { "!" } else { "" };
 
-                if method.return_type.is_some() || method.return_init.is_some() {
+                // JavaScript is dynamic (always returns); TypeScript is
+                // strongly-typed (conditional on declared type).
+                if is_dynamic_target(lang)
+                    || method.return_type.is_some()
+                    || method.return_init.is_some()
+                {
                     CodegenNode::NativeBlock {
                         code: format!(
                             "const __e = new {}(\"{}\", {});\nconst __ctx = new {}(__e, null);{}\nthis._context_stack.push(__ctx);\nthis.__kernel(__e);\nreturn this._context_stack.pop(){}._return;",
@@ -211,7 +244,10 @@ self._context_stack.pop()"#,
                     String::new()
                 };
 
-                if method.return_type.is_some() || method.return_init.is_some() {
+                if is_dynamic_target(lang)
+                    || method.return_type.is_some()
+                    || method.return_init.is_some()
+                {
                     CodegenNode::NativeBlock {
                         code: format!(
                             "$__e = new {}(\"{}\", {});\n$__ctx = new {}($__e, null);{}\n$this->_context_stack[] = $__ctx;\n$this->__kernel($__e);\nreturn array_pop($this->_context_stack)->_return;",
@@ -247,7 +283,10 @@ self._context_stack.pop()"#,
                     String::new()
                 };
 
-                if method.return_type.is_some() || method.return_init.is_some() {
+                if is_dynamic_target(lang)
+                    || method.return_type.is_some()
+                    || method.return_init.is_some()
+                {
                     CodegenNode::NativeBlock {
                         code: format!(
                             "__e = {}.new(\"{}\", {})\n__ctx = {}.new(__e, nil){}\n@_context_stack.push(__ctx)\n__kernel(__e)\nreturn @_context_stack.pop._return",
@@ -706,7 +745,10 @@ return __result;"#,
                     String::new()
                 };
 
-                if method.return_type.is_some() || method.return_init.is_some() {
+                if is_dynamic_target(lang)
+                    || method.return_type.is_some()
+                    || method.return_init.is_some()
+                {
                     // Lua's block transformer treats `return` as terminal
                     // and strips any token that follows it on the same
                     // line. Emitting `local __ret = ...; pop; return __ret`
@@ -794,7 +836,9 @@ return __result;"#,
                     String::new()
                 };
 
-                let has_return = method.return_type.is_some() || method.return_init.is_some();
+                let has_return = is_dynamic_target(lang)
+                    || method.return_type.is_some()
+                    || method.return_init.is_some();
                 if has_return {
                     CodegenNode::NativeBlock {
                         code: format!(
