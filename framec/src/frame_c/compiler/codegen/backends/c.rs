@@ -55,6 +55,36 @@ impl LanguageBackend for CBackend {
                     "static void {}_transition({}* self, {}_Compartment* next);\n",
                     name, name, name
                 ));
+                // Cascade helper forward declarations (HSM cascade
+                // architecture per docs/frame_runtime.md Step 21+).
+                result.push_str(&format!(
+                    "static int {}_hsm_chain({}* self, const char* leaf, const char*** out_chain);\n",
+                    name, name
+                ));
+                result.push_str(&format!(
+                    "static {}_Compartment* {}_prepareEnter({}* self, const char* leaf, {}_FrameVec* state_args, {}_FrameVec* enter_args);\n",
+                    name, name, name, name, name
+                ));
+                result.push_str(&format!(
+                    "static void {}_prepareExit({}* self, {}_FrameVec* exit_args);\n",
+                    name, name, name
+                ));
+                result.push_str(&format!(
+                    "static void {}_route_to_state({}* self, const char* state_name, {}_FrameEvent* __e, {}_Compartment* compartment);\n",
+                    name, name, name, name
+                ));
+                result.push_str(&format!(
+                    "static void {}_fire_enter_cascade({}* self);\n",
+                    name, name
+                ));
+                result.push_str(&format!(
+                    "static void {}_fire_exit_cascade({}* self);\n",
+                    name, name
+                ));
+                result.push_str(&format!(
+                    "static void {}_process_transition_loop({}* self);\n",
+                    name, name
+                ));
 
                 // Add forward declarations for state handler methods
                 // AND per-handler methods (`_s_<State>_hdl_<kind>_<event>`).

@@ -667,27 +667,11 @@ pub(crate) fn generate_frame_expansion(
                         &target,
                     ),
                     TargetLanguage::C => {
+                        // Forward transition: same chain via __prepareEnter,
+                        // plus forward_event field set on the leaf.
                         let mut code = String::new();
-                        // Eager HSM chain — no compartment duplication.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}{}_Compartment* __compartment = NULL;\n",
-                            indent_str, ctx.system_name
-                        ));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}{{ {}_Compartment* __c = {}_Compartment_new(\"{}\"); __c->parent_compartment = __compartment; __compartment = __c; }}\n",
-                                indent_str, ctx.system_name, ctx.system_name, ancestor
-                            ));
-                        }
-                        code.push_str(&format!(
-                            "{}{{ {}_Compartment* __c = {}_Compartment_new(\"{}\"); __c->parent_compartment = __compartment; __compartment = __c; }}\n",
+                            "{}{}_Compartment* __compartment = {}_prepareEnter(self, \"{}\", NULL, NULL);\n",
                             indent_str, ctx.system_name, ctx.system_name, target
                         ));
                         code.push_str(&format!(
@@ -1181,64 +1165,129 @@ pub(crate) fn generate_frame_expansion(
                         &enter_str,
                     ),
                     TargetLanguage::C => {
-                        // C: Create compartment and call transition
-                        // NOTE: C runtime still uses FrameDict — uses integer-string keys as positional proxy
+                        // Per-handler architecture with helpers (per
+                        // docs/frame_runtime.md Step 21+):
+                        // __prepareEnter / __prepareExit / __transition.
                         let mut code = String::new();
+                        let sys = &ctx.system_name;
 
-                        // Store exit_args in current compartment (positional via integer key)
+                        // exit_args via __prepareExit if any provided.
                         if let Some(ref exit) = exit_str {
-                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                code.push_str(&format!("{}{}_FrameVec_push(self->__compartment->exit_args, (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, arg));
+                            let vals: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if !vals.is_empty() {
+                                code.push_str(&format!(
+                                    "{}{{ {}_FrameVec* __ea = {}_FrameVec_new();\n",
+                                    indent_str, sys, sys
+                                ));
+                                for v in &vals {
+                                    code.push_str(&format!(
+                                        "{}{}_FrameVec_push(__ea, (void*)(intptr_t)({}));\n",
+                                        indent_str, sys, v
+                                    ));
+                                }
+                                code.push_str(&format!(
+                                    "{}{}_prepareExit(self, __ea);\n",
+                                    indent_str, sys
+                                ));
+                                code.push_str(&format!(
+                                    "{}{}_FrameVec_destroy(__ea); }}\n",
+                                    indent_str, sys
+                                ));
                             }
                         }
 
-                        // Eager HSM chain construction — no compartment
-                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
-                        // C's reference-counted compartments need `_ref` to
-                        // pin the parent link, but we also want the chain
-                        // to reflect the target's declared ancestry, not
-                        // the transition-source compartment.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
-                        code.push_str(&format!(
-                            "{}{}_Compartment* __compartment = NULL;\n",
-                            indent_str, ctx.system_name
-                        ));
-                        for ancestor in &ancestors {
+                        // Build state_args / enter_args FrameVecs, call __prepareEnter.
+                        let state_vals: Vec<String> = if let Some(ref state) = state_str {
+                            state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim().to_string()
+                                    } else {
+                                        arg.to_string()
+                                    }
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let enter_vals: Vec<String> = if let Some(ref enter) = enter_str {
+                            enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|s| s.to_string())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+
+                        // Open block scope so locals don't collide with
+                        // sibling transitions in the same handler (e.g.
+                        // separate `if` branches).
+                        code.push_str(&format!("{}{{\n", indent_str));
+                        if state_vals.is_empty() {
                             code.push_str(&format!(
-                                "{}{{ {}_Compartment* __c = {}_Compartment_new(\"{}\"); __c->parent_compartment = __compartment; __compartment = __c; }}\n",
-                                indent_str, ctx.system_name, ctx.system_name, ancestor
+                                "{}    {}_FrameVec* __sa = NULL;\n",
+                                indent_str, sys
+                            ));
+                        } else {
+                            code.push_str(&format!(
+                                "{}    {}_FrameVec* __sa = {}_FrameVec_new();\n",
+                                indent_str, sys, sys
+                            ));
+                            for v in &state_vals {
+                                code.push_str(&format!(
+                                    "{}    {}_FrameVec_push(__sa, (void*)(intptr_t)({}));\n",
+                                    indent_str, sys, v
+                                ));
+                            }
+                        }
+                        if enter_vals.is_empty() {
+                            code.push_str(&format!(
+                                "{}    {}_FrameVec* __ea = NULL;\n",
+                                indent_str, sys
+                            ));
+                        } else {
+                            code.push_str(&format!(
+                                "{}    {}_FrameVec* __ea = {}_FrameVec_new();\n",
+                                indent_str, sys, sys
+                            ));
+                            for v in &enter_vals {
+                                code.push_str(&format!(
+                                    "{}    {}_FrameVec_push(__ea, (void*)(intptr_t)({}));\n",
+                                    indent_str, sys, v
+                                ));
+                            }
+                        }
+                        code.push_str(&format!(
+                            "{}    {}_Compartment* __compartment = {}_prepareEnter(self, \"{}\", __sa, __ea);\n",
+                            indent_str, sys, sys, target
+                        ));
+                        if !state_vals.is_empty() {
+                            code.push_str(&format!(
+                                "{}    {}_FrameVec_destroy(__sa);\n",
+                                indent_str, sys
+                            ));
+                        }
+                        if !enter_vals.is_empty() {
+                            code.push_str(&format!(
+                                "{}    {}_FrameVec_destroy(__ea);\n",
+                                indent_str, sys
                             ));
                         }
                         code.push_str(&format!(
-                            "{}{{ {}_Compartment* __c = {}_Compartment_new(\"{}\"); __c->parent_compartment = __compartment; __compartment = __c; }}\n",
-                            indent_str, ctx.system_name, ctx.system_name, target
+                            "{}    {}_transition(self, __compartment);\n",
+                            indent_str, sys
                         ));
-
-                        // Set state_args if present (positional via integer key)
-                        if let Some(ref state) = state_str {
-                            for (i, arg) in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
-                                code.push_str(&format!("{}{}_FrameVec_push(__compartment->state_args, (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, arg));
-                            }
-                        }
-
-                        // Set enter_args if present (positional via integer key)
-                        if let Some(ref enter) = enter_str {
-                            for (i, arg) in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).enumerate() {
-                                code.push_str(&format!("{}{}_FrameVec_push(__compartment->enter_args, (void*)(intptr_t)({}));\n", indent_str, ctx.system_name, arg));
-                            }
-                        }
-
-                        // Call transition and return to exit the handler
-                        code.push_str(&format!(
-                            "{}{}_transition(self, __compartment);\n{}return;",
-                            indent_str, ctx.system_name, indent_str
-                        ));
+                        code.push_str(&format!("{}}}\n", indent_str));
+                        code.push_str(&format!("{}return;", indent_str));
                         code
                     }
                     TargetLanguage::Cpp => {
