@@ -1434,9 +1434,21 @@ if __name__ == '__main__':
 
 **How it works:** `@@:self.reading()` dispatches through the full kernel pipeline. The return value is available as a native expression.
 
-**Transition guard:** In `attempt_post_shutdown()`, calling `@@:self.trigger_shutdown()` transitions to `$Shutdown`. When control returns, the guard detects the transition and suppresses remaining code — `self.trace = "after"` never executes because the system is no longer in `$Active`.
+**Automatic transition guard:** In `attempt_post_shutdown()`, calling `@@:self.trigger_shutdown()` transitions to `$Shutdown`. The framepiler emits an early-return guard immediately after every `@@:self.method(...)` call site:
 
-**Features used:** `@@:self.method()`, reentrant dispatch, return value from self-call, transition guard, `@@:system.state`
+```python
+def _s_Active_hdl_user_attempt_post_shutdown(self, __e, compartment):
+    self.trace = "before"
+    self.trigger_shutdown()
+    if self._context_stack[-1]._transitioned: return  # ← guard
+    self.trace = "after"
+```
+
+The kernel sets `_transitioned = True` on every stacked context after processing a transition. The guard returns early when the flag is set, so `self.trace = "after"` never runs and the trace ends at `"before"`.
+
+This is a runtime safety property, not a manual pattern — every `@@:self.method(...)` call across all 17 backends gets the guard automatically. Authors don't need to write defensive `@@:system.state == "..."` checks; framec inserts the guard wherever it belongs.
+
+**Features used:** `@@:self.method()`, reentrant dispatch, return value from self-call, automatic transition guard (runtime feature), `@@:system.state` (read of current state name)
 
 -----
 
