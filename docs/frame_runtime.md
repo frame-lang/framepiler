@@ -2307,8 +2307,8 @@ own system's interface methods. `attempt_post_shutdown()` calls
 `@@:self.trigger_shutdown()` and then tries to update `self.trace`
 afterward; the shutdown handler transitions to `$Shutdown`, which
 has consequences for the line that runs after the self-call.
-That's the transition guard problem we'll work through after the
-basic mechanics.
+That's the situation framec's automatic transition guard handles
+for you — we'll work through the mechanics below.
 
 ### Self-call mechanics
 
@@ -2436,60 +2436,84 @@ sequence visible:
 11.         __next_compartment is set → kernel processes the transition
 12.         (no <$ or $> declared, but the compartment switch happens)
 13.         __compartment is now $Shutdown's compartment
-14.       pop ctx_trigger
-15.     trigger_shutdown returns
-16.     self.trace += "after-call;"   ← this still runs
-17.   pop ctx_attempt
+14.         **kernel marks every stacked context as transitioned**
+15.       pop ctx_trigger
+16.     trigger_shutdown returns
+17.     **transition guard fires → return** (`self.trace += "after-call;"` is skipped)
+18.   pop ctx_attempt
 ```
 
-After `trigger_shutdown()` returns at line 15, the system is
+After `trigger_shutdown()` returns at line 16, the system is
 already in `$Shutdown`. The line `self.trace = self.trace +
-"after-call;"` on line 16 still runs — it's native Python in the
-`attempt_post_shutdown` handler method, and Python doesn't know
-the system has transitioned. The trace ends up
-`"shutdown-handler;after-call;"`.
+"after-call;"` does **not** run — framec inserts an automatic
+transition guard immediately after every `@@:self.method(...)`
+call. The trace ends up `"shutdown-handler;"` only.
 
-This is sometimes the right behavior. But it's often a bug:
+This matters because code after a transitioning self-call would
+otherwise be a footgun:
 
-- Code after the self-call may read state variables that no longer
-  exist (their compartment was just discarded).
-- Code after the self-call may transition again, layering on top
-  of the self-call's transition.
-- Code after the self-call may not make sense in the new state.
+- It would read state variables that no longer exist (their
+  compartment was just discarded).
+- It would transition again, layering on top of the self-call's
+  transition.
+- It would run in a state where it doesn't make sense.
 
-### The transition guard pattern
+### The automatic transition guard
 
-When a handler does work after a self-call that might transition,
-guard the work with a state check:
+The runtime guards every self-call site for you. The
+**FrameContext** gains another slot, `_transitioned`, that the
+kernel sets to `True` on every stacked context after processing a
+transition. After every `@@:self.method(...)` call, framec emits a
+guard that returns early if the flag is set:
 
-```frame
-attempt_post_shutdown() {
-    @@:self.trigger_shutdown()
-    if @@:system.state == "Active":
-        self.trace = self.trace + "after-call;"
-}
+```python
+class SensorFrameContext:
+    def __init__(self, event, return_default):
+        self.event = event
+        self._return = return_default
+        self._data = {}
+        **self._transitioned = False**
+
+def __kernel(self, __e):
+    self.__router(__e)
+    if self.__next_compartment is not None:
+        # ...transition processing (exit cascade, switch, enter cascade)...
+        **for ctx in self._context_stack:
+            ctx._transitioned = True**
+
+def _s_Active_hdl_user_attempt_post_shutdown(self, __e, compartment):
+    self.trigger_shutdown()
+    **if self._context_stack[-1]._transitioned: return**
+    self.trace = self.trace + "after-call;"
 ```
 
-`@@:system.state` reads the current state name from the
-compartment. After the self-call, this evaluates whatever state
-the system is in *now* — if a transition happened, it'll be the
-destination state, not the original.
+The flag is per-context, set on the whole stack — so a deep self-
+call chain triggering a transition guards every level. Each
+handler returns through its guard, the wrappers pop their contexts
+normally, and control unwinds cleanly to the original caller while
+the system sits in the new state.
 
-The guard explicitly says "only run this if we're still where we
-were." A handler that wants to be transition-safe can use this
-pattern around any self-call that might transition.
+Strongly-typed targets emit the same shape with target-syntax for
+the early return — `if (this._context_stack[length-1]._transitioned) return;`
+in TypeScript, `if (_context_stack.back()._transitioned) return;`
+in C++, and so on. Erlang implements the same functional contract
+via a `gen_statem` case-expression on the returned data record's
+`frame_current_state` rather than a flag — different mechanism,
+identical observable behavior.
 
-This is a tradeoff in Frame's design. Self-calls go through the
-full dispatch pipeline so they behave consistently with external
-calls — transitions, lifecycle handlers, everything. The cost is
-that a self-call can change the system's state out from under the
-calling handler. Frame doesn't try to hide this; the guard pattern
-makes it explicit when it matters.
+Self-calls go through the full dispatch pipeline so they behave
+consistently with external calls — transitions, lifecycle
+handlers, everything. The runtime guards against the obvious
+foot-gun (continuing to run handler code after the system has
+transitioned out from under it) by emitting an automatic check
+after every self-call site. Authors get consistent dispatch
+behavior without having to defend against in-flight transitions
+themselves.
 
 For self-calls that don't transition (like `@@:self.reading()` in
-this sensor), no guard is needed — the post-call code is fine.
-The guard pattern only matters when the called method might
-transition.
+this sensor), the guard sees `_transitioned == False` and the
+post-call code runs normally. The guard only short-circuits when
+the called method actually queued a transition.
 
 ### Validation
 
