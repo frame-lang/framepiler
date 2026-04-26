@@ -3663,6 +3663,7 @@ pub(crate) fn generate_handler_from_arcanum(
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
+    state_hsm_parents: &std::collections::HashMap<String, String>,
 ) -> CodegenNode {
     // Build params from handler's parameter symbols
     // V4 uses native types, so we just pass them through as-is
@@ -3719,9 +3720,12 @@ pub(crate) fn generate_handler_from_arcanum(
         state_enter_param_names: state_enter_param_names.clone(),
         state_exit_param_names: state_exit_param_names.clone(),
         event_param_names: event_param_names.clone(),
-        // Rust uses typed struct fields for state vars, not compartment.state_vars —
-        // doesn't depend on HSM parent chain for correctness.
-        state_hsm_parents: std::collections::HashMap::new(),
+        // Used by Rust transition emission to walk the destination HSM
+        // chain and propagate state-args through every layer's typed
+        // StateContext variant (per docs/frame_runtime.md Step 22's
+        // signature-match rule). The map is also useful for any
+        // future propagation step that needs ancestor lookup.
+        state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
     };
 

@@ -861,6 +861,15 @@ pub(crate) fn generate_rust_handler_methods(
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
 
+    // Build the state→parent map once for all handler emissions.
+    // Used by transition codegen to propagate state-args through
+    // every HSM ancestor's typed StateContext variant.
+    let state_hsm_parents: std::collections::HashMap<String, String> = machine
+        .states
+        .iter()
+        .filter_map(|s| s.parent.as_ref().map(|p| (s.name.clone(), p.clone())))
+        .collect();
+
     let start_state_name = machine
         .states
         .first()
@@ -922,6 +931,7 @@ pub(crate) fn generate_rust_handler_methods(
                 state_exit_param_names,
                 &std::collections::HashMap::new(), // event_param_names — Rust uses typed params directly
                 &handler_state_var_types,
+                &state_hsm_parents,
             );
             methods.push(method);
         }
