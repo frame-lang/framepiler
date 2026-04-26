@@ -284,32 +284,25 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
                 CodegenNode::Ident("None".to_string()),
             ));
 
-            // Rebuild via __prepareEnter so any HSM ancestors are
-            // present in the chain. (Flat states get a one-element
-            // chain — same shape, no extra cost.)
+            // Build the start chain via __prepareEnter, passing system
+            // header EnterArg params as the enter_args payload. The
+            // helper writes the Vec into every layer's `enter_args`
+            // field so the cascade's per-layer `$>` events all see the
+            // same args (signature-match rule).
+            let enter_arg_pushes: Vec<String> = system
+                .params
+                .iter()
+                .filter(|p| matches!(p.kind, ParamKind::EnterArg))
+                .map(|p| format!("self.__sys_{}.to_string()", p.name))
+                .collect();
             body.push(CodegenNode::NativeBlock {
                 code: format!(
-                    "self.__compartment = self.__prepareEnter(\"{}\");",
-                    first_state.name
+                    "self.__compartment = self.__prepareEnter(\"{}\", vec![{}]);",
+                    first_state.name,
+                    enter_arg_pushes.join(", ")
                 ),
                 span: None,
             });
-
-            // Start state enter_args from system header params
-            // (state_args are NOT emitted for Rust — Rust uses the typed
-            // StateContext enum, initialised by Compartment::new(); the
-            // actual values live in __sys_* fields read by handlers.)
-            for p in &system.params {
-                if matches!(p.kind, ParamKind::EnterArg) {
-                    body.push(CodegenNode::NativeBlock {
-                        code: format!(
-                            "self.__compartment.enter_args.push(self.__sys_{}.to_string());",
-                            p.name
-                        ),
-                        span: None,
-                    });
-                }
-            }
 
             // Fire $> cascade. Push a frame context so handlers that
             // read @@:return / @@:data have a stack entry, then drive
@@ -388,24 +381,32 @@ pub(crate) fn generate_rust_machinery(
         decorators: vec![],
     });
 
-    // __prepareEnter — build the destination HSM chain leaf-down.
+    // __prepareEnter — build the destination HSM chain leaf-down. The
+    // `enter_args` Vec is cloned into every layer's `enter_args` field
+    // so the cascade's per-layer synthesized `$>` events all carry
+    // the same payload (per the signature-match rule in
+    // docs/frame_runtime.md § "How propagation works in the runtime").
     methods.push(CodegenNode::Method {
         name: "__prepareEnter".to_string(),
-        params: vec![Param::new("leaf").with_type("&str")],
+        params: vec![
+            Param::new("leaf").with_type("&str"),
+            Param::new("enter_args").with_type("Vec<String>"),
+        ],
         return_type: Some(compartment_class.to_string()),
         body: vec![CodegenNode::NativeBlock {
             code: format!(
                 r#"let chain = self.__hsm_chain(leaf);
-let mut comp: Option<{}> = None;
+let mut comp: Option<{0}> = None;
 for name in chain.iter() {{
-    let mut new_comp = {}::new(name);
+    let mut new_comp = {0}::new(name);
+    new_comp.enter_args = enter_args.clone();
     if let Some(parent) = comp.take() {{
         new_comp.parent_compartment = Some(Box::new(parent));
     }}
     comp = Some(new_comp);
 }}
 comp.expect("chain must contain at least the leaf state")"#,
-                compartment_class, compartment_class
+                compartment_class
             ),
             span: None,
         }],
@@ -1014,13 +1015,29 @@ pub(crate) fn rust_expand_transition(
     state_str: &Option<String>,
     enter_str: &Option<String>,
 ) -> String {
-    // Per-handler architecture with helpers (per
-    // docs/frame_runtime.md Step 21+): __prepareEnter / __prepareExit
-    // / __transition. Block scope `{ ... }` so multiple transitions
-    // in the same handler don't collide on `__compartment`.
+    // Per-handler architecture with helpers (docs/frame_runtime.md
+    // Step 21+): __prepareEnter / __prepareExit / __transition.
+    //
+    // For HSM, the spec's signature-match rule (Step 22) means
+    // exit_args, enter_args, and state_args propagate identically to
+    // every layer of the source chain (exit) and destination chain
+    // (enter / state). We honour that by:
+    //   * routing exit_args through __prepareExit (writes to every
+    //     source-chain layer),
+    //   * routing enter_args through __prepareEnter (writes to every
+    //     destination-chain layer),
+    //   * walking the destination chain after construction and
+    //     pattern-matching each layer's typed StateContext variant
+    //     to populate its state-arg fields.
+    //
+    // The destination chain is known at codegen time via
+    // `ctx.state_hsm_parents` so we emit a depth-N nested if-let
+    // rather than a runtime walk — the generated code is also more
+    // readable than a `match c.state.as_str()` chain.
+
     let mut code = String::new();
 
-    // exit_args via __prepareExit if any provided.
+    // ---- exit_args → __prepareExit (every source-chain layer) ----
     if let Some(ref exit) = exit_str {
         let vals: Vec<String> = exit
             .split(',')
@@ -1044,59 +1061,114 @@ pub(crate) fn rust_expand_transition(
         }
     }
 
-    code.push_str(&format!(
-        "{}let mut __compartment = self.__prepareEnter(\"{}\");\n",
-        indent_str, target
-    ));
-
-    // State args populated only on the leaf — Rust's typed
-    // StateContext enum has different variants per state, so the
-    // generic propagation pattern other targets use doesn't fit.
-    // The signature-match rule (Step 22 of the runtime spec) means
-    // ancestor handlers see args of matching type via the same
-    // mechanism, but that propagation isn't yet wired in this Rust
-    // backend. (Tracked as follow-up.)
-    if let Some(ref state) = state_str {
-        let args: Vec<&str> = state
+    // ---- enter_args → __prepareEnter (every destination-chain layer) ----
+    let enter_args_vec = if let Some(ref enter) = enter_str {
+        enter
             .split(',')
             .map(|x| x.trim())
             .filter(|x| !x.is_empty())
-            .collect();
-        if !args.is_empty() {
-            code.push_str(&format!(
-                "{}if let {}StateContext::{}(ref mut ctx) = __compartment.state_context {{\n",
-                indent_str, ctx.system_name, target
-            ));
-            for (i, arg) in args.iter().enumerate() {
-                let (key, value) = if let Some(eq_pos) = arg.find('=') {
+            .map(|arg| {
+                let raw = if let Some(eq_pos) = arg.find('=') {
+                    arg[eq_pos + 1..].trim()
+                } else {
+                    arg
+                };
+                format!("{}.to_string()", raw)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    code.push_str(&format!(
+        "{}let mut __compartment = self.__prepareEnter(\"{}\", vec![{}]);\n",
+        indent_str,
+        target,
+        enter_args_vec.join(", ")
+    ));
+
+    // ---- state_args → typed StateContext on every layer ----
+    // Build the destination chain leaf→root from ctx.state_hsm_parents.
+    if let Some(ref state) = state_str {
+        let args: Vec<(String, String)> = state
+            .split(',')
+            .map(|x| x.trim())
+            .filter(|x| !x.is_empty())
+            .enumerate()
+            .map(|(i, arg)| {
+                if let Some(eq_pos) = arg.find('=') {
                     (
                         arg[..eq_pos].trim().to_string(),
                         arg[eq_pos + 1..].trim().to_string(),
                     )
                 } else {
-                    (resolve_state_arg_key(i, target, ctx), (*arg).to_string())
-                };
-                code.push_str(&format!("{}    ctx.{} = {};\n", indent_str, key, value));
-            }
-            code.push_str(&format!("{}}}\n", indent_str));
-        }
-    }
+                    (resolve_state_arg_key(i, target, ctx), arg.to_string())
+                }
+            })
+            .collect();
 
-    // enter_args propagate to all layers via __prepareEnter writing
-    // them into each compartment's enter_args. We populate the leaf
-    // here; for now ancestors get an empty enter_args (signature-
-    // match propagation deferred — same follow-up note as above).
-    if let Some(ref enter) = enter_str {
-        for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-            let value = if let Some(eq_pos) = arg.find('=') {
-                arg[eq_pos + 1..].trim()
-            } else {
-                arg
-            };
+        if !args.is_empty() {
+            // Compute the destination chain (leaf → root). The
+            // signature-match rule guarantees every layer in the
+            // chain accepts the same state-arg names, so we write
+            // identical assignments at every depth.
+            let mut chain: Vec<String> = vec![target.to_string()];
+            let mut cursor = target.to_string();
+            while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
+                chain.push(parent.clone());
+                cursor = parent.clone();
+            }
+
+            // Open block scope so multiple transitions in the same
+            // handler don't collide on local names.
+            code.push_str(&format!("{}{{\n", indent_str));
+
+            // Leaf — direct field on __compartment.
+            let leaf = &chain[0];
             code.push_str(&format!(
-                "{}__compartment.enter_args.push({}.to_string());\n",
-                indent_str, value
+                "{0}    if let {1}StateContext::{2}(ref mut ctx) = __compartment.state_context {{\n",
+                indent_str, ctx.system_name, leaf
             ));
+            for (k, v) in &args {
+                code.push_str(&format!("{}        ctx.{} = {};\n", indent_str, k, v));
+            }
+            code.push_str(&format!("{}    }}\n", indent_str));
+
+            // Ancestors — walk via parent_compartment chain. Use a
+            // depth-N nested if-let so the borrow checker has a
+            // single linear chain of mutable reborrows; each step
+            // narrows scope so prior `ref mut` bindings are dropped.
+            for depth in 1..chain.len() {
+                let pad: String = "    ".repeat(depth);
+                let state = &chain[depth];
+                // Open `if let Some(ref mut p_<depth>)` for each ancestor.
+                code.push_str(&format!(
+                    "{0}    {1}if let Some(ref mut __anc_{2}) = ",
+                    indent_str, pad, depth
+                ));
+                if depth == 1 {
+                    code.push_str("__compartment.parent_compartment {\n");
+                } else {
+                    code.push_str(&format!("__anc_{}.parent_compartment {{\n", depth - 1));
+                }
+                code.push_str(&format!(
+                    "{0}    {1}    if let {2}StateContext::{3}(ref mut ctx) = __anc_{4}.state_context {{\n",
+                    indent_str, pad, ctx.system_name, state, depth
+                ));
+                for (k, v) in &args {
+                    code.push_str(&format!(
+                        "{}    {}        ctx.{} = {};\n",
+                        indent_str, pad, k, v
+                    ));
+                }
+                code.push_str(&format!("{}    {}    }}\n", indent_str, pad));
+            }
+            // Close all the `if let Some` scopes (ancestors).
+            for depth in (1..chain.len()).rev() {
+                let pad: String = "    ".repeat(depth);
+                code.push_str(&format!("{}    {}}}\n", indent_str, pad));
+            }
+            // Close block scope.
+            code.push_str(&format!("{}}}\n", indent_str));
         }
     }
 
@@ -1114,8 +1186,11 @@ pub(crate) fn rust_expand_forward_transition(
     target: &str,
 ) -> String {
     let mut code = String::new();
+    // Forward transition supplies no explicit enter_args — the
+    // forwarded event carries its own params, dispatched after the
+    // enter cascade by __process_transition_loop.
     code.push_str(&format!(
-        "{}let mut __compartment = self.__prepareEnter(\"{}\");\n",
+        "{}let mut __compartment = self.__prepareEnter(\"{}\", Vec::new());\n",
         indent_str, target
     ));
     code.push_str(&format!(

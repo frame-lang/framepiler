@@ -3750,12 +3750,40 @@ pub(crate) fn generate_handler_from_arcanum(
                 }
             }
         } else if !non_start_state_param_names.is_empty() {
-            // Non-start state with declared state params: pattern-match
-            // the typed state context and bind each declared param to a
-            // local at the top of the handler.
+            // Non-start state with declared state params: walk the
+            // HSM compartment chain to find the layer matching this
+            // handler's owner state, then pattern-match its typed
+            // StateContext variant. The walk is required because
+            // self.__compartment is the *leaf* compartment — when a
+            // cascade or `=> $^` fall-through fires this handler in
+            // an ancestor state, that ancestor's compartment is up
+            // the parent_compartment chain, not at the leaf. Reading
+            // self.__compartment.state_context directly was the
+            // bug: ancestor variants never matched and the binding
+            // silently fell back to Default::default().
             for name in non_start_state_param_names {
+                // Pattern syntax note: `match &__sc.state_context`
+                // makes the scrutinee a reference, so the inner
+                // binding `ctx` is auto-borrowed — using `ref ctx`
+                // here is rejected by recent rustc as
+                // "cannot explicitly borrow within an implicitly-
+                // borrowing pattern".
                 sys_param_preamble.push_str(&format!(
-                    "let {0} = if let {1}StateContext::{2}(ref ctx) = self.__compartment.state_context {{ ctx.{0}.clone() }} else {{ Default::default() }};\n",
+                    concat!(
+                        "let {0} = {{\n",
+                        "    let mut __sc = &self.__compartment;\n",
+                        "    while __sc.state != \"{2}\" {{\n",
+                        "        match __sc.parent_compartment.as_deref() {{\n",
+                        "            Some(p) => __sc = p,\n",
+                        "            None => break,\n",
+                        "        }}\n",
+                        "    }}\n",
+                        "    match &__sc.state_context {{\n",
+                        "        {1}StateContext::{2}(ctx) => ctx.{0}.clone(),\n",
+                        "        _ => Default::default(),\n",
+                        "    }}\n",
+                        "}};\n"
+                    ),
                     name, system_name, state_name
                 ));
             }
