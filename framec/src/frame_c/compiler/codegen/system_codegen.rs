@@ -1570,117 +1570,50 @@ pub(crate) fn generate_constructor(
                     });
                 }
                 TargetLanguage::Cpp => {
-                    // C++: Create compartment chain for HSM if start state has parent
-                    if !ancestor_chain.is_empty() {
-                        let mut hsm_init_code = String::new();
-                        hsm_init_code.push_str("// HSM: Create parent compartment chain\n");
-
-                        let mut prev_comp_expr = "nullptr".to_string();
-                        for (i, ancestor) in ancestor_chain.iter().enumerate() {
-                            let comp_var = format!("__parent_comp_{}", i);
-                            hsm_init_code.push_str(&format!(
-                                "auto {} = std::make_shared<{}>(\"{}\");\n",
-                                comp_var, compartment_class, ancestor.name
-                            ));
-                            if prev_comp_expr != "nullptr" {
-                                hsm_init_code.push_str(&format!(
-                                    "{}->parent_compartment = std::move({});\n",
-                                    comp_var, prev_comp_expr
-                                ));
-                            }
-                            for var in &ancestor.state_vars {
-                                let init_val = if let Some(ref init) = var.init {
-                                    cpp_wrap_any_arg(&expression_to_string(
-                                        init,
-                                        TargetLanguage::Cpp,
-                                    ))
-                                } else {
-                                    state_var_init_value(&var.var_type, TargetLanguage::Cpp)
-                                };
-                                hsm_init_code.push_str(&format!(
-                                    "{}->state_vars[\"{}\"] = std::any({});\n",
-                                    comp_var, var.name, init_val
-                                ));
-                            }
-                            prev_comp_expr = comp_var;
-                        }
-                        hsm_init_code.push_str(&format!(
-                            "__compartment = std::make_shared<{}>(\"{}\");\n",
-                            compartment_class, first_state.name
-                        ));
-                        hsm_init_code.push_str(&format!(
-                            "__compartment->parent_compartment = std::move({});\n",
-                            prev_comp_expr
-                        ));
-
-                        // System state and enter params: positional append into
-                        // the start state's state_args / enter_args vectors.
-                        // Values are wrapped in std::any so the dispatch
-                        // reader (which uses std::any_cast<Type>) round-trips
-                        // them correctly. cpp_wrap_any_arg promotes string
-                        // literals to std::string so any_cast<std::string>
-                        // works on the read side.
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    let wrapped = cpp_wrap_any_arg(&p.name);
-                                    hsm_init_code.push_str(&format!(
-                                        "__compartment->state_args.push_back(std::any({}));\n",
-                                        wrapped
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    let wrapped = cpp_wrap_any_arg(&p.name);
-                                    hsm_init_code.push_str(&format!(
-                                        "__compartment->enter_args.push_back(std::any({}));\n",
-                                        wrapped
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-
-                        body.push(CodegenNode::NativeBlock {
-                            code: hsm_init_code,
-                            span: None,
-                        });
-                    } else {
-                        body.push(CodegenNode::NativeBlock {
-                            code: format!(
-                                "__compartment = std::make_shared<{}>(\"{}\");",
-                                compartment_class, first_state.name
-                            ),
-                            span: None,
-                        });
-
-                        // System state and enter params (non-HSM path).
-                        let mut compartment_inits: Vec<String> = Vec::new();
-                        for p in &system.params {
-                            match p.kind {
-                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg => {
-                                    let wrapped = cpp_wrap_any_arg(&p.name);
-                                    compartment_inits.push(format!(
-                                        "__compartment->state_args.push_back(std::any({}));",
-                                        wrapped
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg => {
-                                    let wrapped = cpp_wrap_any_arg(&p.name);
-                                    compartment_inits.push(format!(
-                                        "__compartment->enter_args.push_back(std::any({}));",
-                                        wrapped
-                                    ));
-                                }
-                                crate::frame_c::compiler::frame_ast::ParamKind::Domain => {}
-                            }
-                        }
-                        if !compartment_inits.is_empty() {
-                            body.push(CodegenNode::NativeBlock {
-                                code: compartment_inits.join("\n"),
-                                span: None,
-                            });
-                        }
-                    }
+                    // C++: build start chain via __prepareEnter, the same
+                    // helper used by every transition. System header
+                    // state_args / enter_args flow through the helper.
+                    // Values are wrapped in std::any so the dispatch
+                    // reader (which uses std::any_cast<Type>) round-trips
+                    // them correctly.
+                    let _ = compartment_class;
+                    let state_args_wrapped: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg
+                            )
+                        })
+                        .map(|p| format!("std::any({})", cpp_wrap_any_arg(&p.name)))
+                        .collect();
+                    let enter_args_wrapped: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg
+                            )
+                        })
+                        .map(|p| format!("std::any({})", cpp_wrap_any_arg(&p.name)))
+                        .collect();
+                    let state_arg = format!(
+                        "std::vector<std::any>{{{}}}",
+                        state_args_wrapped.join(", ")
+                    );
+                    let enter_arg = format!(
+                        "std::vector<std::any>{{{}}}",
+                        enter_args_wrapped.join(", ")
+                    );
+                    body.push(CodegenNode::NativeBlock {
+                        code: format!(
+                            "__compartment = __prepareEnter(\"{}\", {}, {});",
+                            first_state.name, state_arg, enter_arg
+                        ),
+                        span: None,
+                    });
                 }
                 TargetLanguage::Java => {
                     // Java: build start chain via __prepareEnter, the same
@@ -2150,15 +2083,7 @@ self._context_stack.pop();"#,
                     )
                 },
                 TargetLanguage::Cpp => format!(
-                    // Class-static `__skipInitialEnter` — see Swift comment.
-                    r#"if (!__skipInitialEnter) {{
-    {0}FrameEvent __frame_event("$>");
-    {0}FrameContext __ctx(std::move(__frame_event));
-    _context_stack.push_back(std::move(__ctx));
-    __kernel(_context_stack.back()._event);
-    _context_stack.pop_back();
-}}"#,
-                    system.name
+                    "if (!__skipInitialEnter) {{\n    __fire_enter_cascade();\n    __process_transition_loop();\n}}"
                 ),
                 TargetLanguage::Java => {
                     let _ = (event_class, &system.name);
@@ -3492,58 +3417,62 @@ fn generate_cpp_machinery(
     compartment_class: &str,
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+    let chains = compute_hsm_chains(system);
+    let comp_ptr = format!("std::shared_ptr<{}>", compartment_class);
 
-    // Class-static flag used by restore_state to suppress the initial-
-    // state $>() dispatch on a restored instance. Inline initialization
-    // requires C++17+. See Swift comment for rationale — same class of
-    // bug across JVM + C++ + GDScript + Objective-C-style dynamic langs.
+    // Class-static flag.
     methods.push(CodegenNode::NativeBlock {
         code: "inline static bool __skipInitialEnter = false;".to_string(),
         span: None,
     });
 
-    let states: Vec<&str> = system
-        .machine
-        .as_ref()
-        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-        .unwrap_or_default();
+    // hsm_chain — instance method returning the topology table.
+    let mut chain_method = String::from(
+        "std::unordered_map<std::string, std::vector<std::string>> hsm_chain() {\n    return {\n",
+    );
+    for (leaf, chain) in &chains {
+        let chain_str = chain
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        chain_method.push_str(&format!(
+            "        {{\"{}\", {{{}}} }},\n",
+            leaf, chain_str
+        ));
+    }
+    chain_method.push_str("    };\n}");
+    methods.push(CodegenNode::NativeBlock {
+        code: chain_method,
+        span: None,
+    });
 
-    // __kernel
-    let mut kernel_code = String::new();
-    kernel_code.push_str("__router(__e);\n");
-    kernel_code.push_str("while (__next_compartment) {\n");
-    kernel_code.push_str("    auto next_compartment = std::move(__next_compartment);\n");
-    kernel_code.push_str(&format!("    {} exit_event(\"<$\");\n", event_class));
-    kernel_code.push_str("    __router(exit_event);\n");
-    kernel_code.push_str("    __compartment = std::move(next_compartment);\n");
-    kernel_code.push_str("    if (!__compartment->forward_event) {\n");
-    kernel_code.push_str(&format!("        {} enter_event(\"$>\");\n", event_class));
-    kernel_code.push_str("        __router(enter_event);\n");
-    kernel_code.push_str("    } else {\n");
-    kernel_code.push_str("        auto forward_event = std::move(__compartment->forward_event);\n");
-    kernel_code.push_str("        if (forward_event->_message == \"$>\") {\n");
-    kernel_code.push_str("            __router(*forward_event);\n");
-    kernel_code.push_str("        } else {\n");
-    kernel_code.push_str(&format!(
-        "            {} enter_event(\"$>\");\n",
-        event_class
-    ));
-    kernel_code.push_str("            __router(enter_event);\n");
-    kernel_code.push_str("            __router(*forward_event);\n");
-    kernel_code.push_str("        }\n");
-    kernel_code.push_str("    }\n");
-    kernel_code.push_str("    // Mark all stacked contexts as transitioned\n");
-    kernel_code.push_str("    for (auto& ctx : _context_stack) {\n");
-    kernel_code.push_str("        ctx._transitioned = true;\n");
-    kernel_code.push_str("    }\n");
-    kernel_code.push_str("}");
-
+    // __prepareEnter — constructs the destination HSM chain.
     methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
-        return_type: None,
+        name: "__prepareEnter".to_string(),
+        params: vec![
+            Param::new("leaf").with_type("const std::string&"),
+            Param::new("state_args").with_type("std::vector<std::any>"),
+            Param::new("enter_args").with_type("std::vector<std::any>"),
+        ],
+        return_type: Some(comp_ptr.clone()),
         body: vec![CodegenNode::NativeBlock {
-            code: kernel_code,
+            code: format!(
+                // Assign hsm_chain() to a local before iterating — the
+                // method returns by value, so a range-for over the
+                // temporary's [] result would dangle.
+                r#"{0} comp = nullptr;
+auto chain_table = hsm_chain();
+for (const auto& name : chain_table[leaf]) {{
+    auto new_comp = std::make_shared<{1}>(name);
+    new_comp->state_args = state_args;
+    new_comp->enter_args = enter_args;
+    new_comp->parent_compartment = comp;
+    comp = new_comp;
+}}
+return comp;"#,
+                comp_ptr, compartment_class
+            ),
             span: None,
         }],
         is_async: false,
@@ -3552,25 +3481,166 @@ fn generate_cpp_machinery(
         decorators: vec![],
     });
 
-    // __router — per-handler architecture passes __compartment as second
-    // arg (see docs/frame_runtime.md § "Dispatch Model").
-    let mut router_code = String::new();
-    router_code.push_str("const auto& state_name = __compartment->state;\n");
+    // __prepareExit — populates exit_args on every layer.
+    methods.push(CodegenNode::Method {
+        name: "__prepareExit".to_string(),
+        params: vec![Param::new("exit_args").with_type("std::vector<std::any>")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"{} comp = __compartment;
+while (comp) {{
+    comp->exit_args = exit_args;
+    comp = comp->parent_compartment;
+}}"#,
+                comp_ptr
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __route_to_state — cascade router.
+    let states: Vec<&str> = system
+        .machine
+        .as_ref()
+        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
+    let mut route_code = String::new();
     for (i, state) in states.iter().enumerate() {
         let prefix = if i == 0 { "if" } else { "} else if" };
-        router_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
-        router_code.push_str(&format!("    _state_{}(__e, __compartment);\n", state));
+        route_code.push_str(&format!("{} (state_name == \"{}\") {{\n", prefix, state));
+        route_code.push_str(&format!("    _state_{}(__e, compartment);\n", state));
     }
     if !states.is_empty() {
-        router_code.push_str("}");
+        route_code.push_str("}");
     }
+    methods.push(CodegenNode::Method {
+        name: "__route_to_state".to_string(),
+        params: vec![
+            Param::new("state_name").with_type("const std::string&"),
+            Param::new("__e").with_type(&format!("{}&", event_class)),
+            Param::new("compartment").with_type(&comp_ptr),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: route_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
 
+    // __fire_exit_cascade — bottom-up.
+    methods.push(CodegenNode::Method {
+        name: "__fire_exit_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"{0} comp = __compartment;
+while (comp) {{
+    {1} exit_event("<$", comp->exit_args);
+    __route_to_state(comp->state, exit_event, comp);
+    comp = comp->parent_compartment;
+}}"#,
+                comp_ptr, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_enter_cascade — top-down.
+    methods.push(CodegenNode::Method {
+        name: "__fire_enter_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"std::vector<{0}> chain;
+{0} comp = __compartment;
+while (comp) {{
+    chain.push_back(comp);
+    comp = comp->parent_compartment;
+}}
+for (auto it = chain.rbegin(); it != chain.rend(); ++it) {{
+    auto& layer = *it;
+    {1} enter_event("$>", layer->enter_args);
+    __route_to_state(layer->state, enter_event, layer);
+}}"#,
+                comp_ptr, event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __process_transition_loop — drains queued transitions.
+    methods.push(CodegenNode::Method {
+        name: "__process_transition_loop".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"while (__next_compartment) {
+    auto next_compartment = std::move(__next_compartment);
+    __fire_exit_cascade();
+    __compartment = std::move(next_compartment);
+    if (!__compartment->forward_event) {
+        __fire_enter_cascade();
+    } else {
+        auto forward_event = std::move(__compartment->forward_event);
+        __fire_enter_cascade();
+        if (forward_event->_message != "$>") {
+            __router(*forward_event);
+        }
+    }
+    for (auto& ctx : _context_stack) {
+        ctx._transitioned = true;
+    }
+}"#
+            .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __kernel — routes event then drains.
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: "__router(__e);\n__process_transition_loop();".to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router — delegates to __route_to_state.
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
         params: vec![Param::new("__e").with_type(&format!("{}&", event_class))],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: router_code,
+            code: "__route_to_state(__compartment->state, __e, __compartment);".to_string(),
             span: None,
         }],
         is_async: false,
@@ -3582,9 +3652,7 @@ fn generate_cpp_machinery(
     // __transition
     methods.push(CodegenNode::Method {
         name: "__transition".to_string(),
-        params: vec![
-            Param::new("next").with_type(&format!("std::shared_ptr<{}>", compartment_class))
-        ],
+        params: vec![Param::new("next").with_type(&comp_ptr)],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
             code: "__next_compartment = next;".to_string(),

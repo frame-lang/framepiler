@@ -702,32 +702,19 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Cpp => {
+                        // Forward transition: same chain via __prepareEnter,
+                        // plus forward_event field set on the leaf.
                         let mut code = String::new();
-                        // Eager HSM chain — no compartment duplication.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}std::shared_ptr<{}Compartment> __new_compartment = nullptr;\n",
+                            "{}auto __compartment = __prepareEnter(\"{}\", std::vector<std::any>{{}}, std::vector<std::any>{{}});\n",
+                            indent_str, target
+                        ));
+                        code.push_str(&format!(
+                            "{}__compartment->forward_event = std::make_unique<{}FrameEvent>(__e);\n",
                             indent_str, ctx.system_name
                         ));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}{{ auto __c = std::make_shared<{}Compartment>(\"{}\"); __c->parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
                         code.push_str(&format!(
-                            "{}{{ auto __c = std::make_shared<{}Compartment>(\"{}\"); __c->parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
-                            indent_str, ctx.system_name, target
-                        ));
-                        code.push_str(&format!("{}__new_compartment->forward_event = std::make_unique<{}FrameEvent>(__e);\n", indent_str, ctx.system_name));
-                        code.push_str(&format!(
-                            "{}__transition(std::move(__new_compartment));\n",
+                            "{}__transition(std::move(__compartment));\n",
                             indent_str
                         ));
                         code.push_str(&format!("{}return;", indent_str));
@@ -1268,73 +1255,64 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Cpp => {
-                        // C++: Create shared_ptr compartment, set fields, call __transition
+                        // Per-handler architecture with helpers (per
+                        // docs/frame_runtime_introduction.md Step 21+):
+                        // __prepareEnter / __prepareExit / __transition.
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment (positional push_back)
+                        let state_args_list = if let Some(ref state) = state_str {
+                            let vals: Vec<String> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    let raw = if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    };
+                                    format!("std::any({})", cpp_wrap_any_arg(raw))
+                                })
+                                .collect();
+                            format!("std::vector<std::any>{{{}}}", vals.join(", "))
+                        } else {
+                            "std::vector<std::any>{}".to_string()
+                        };
+                        let enter_args_list = if let Some(ref enter) = enter_str {
+                            let vals: Vec<String> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|a| format!("std::any({})", cpp_wrap_any_arg(a)))
+                                .collect();
+                            format!("std::vector<std::any>{{{}}}", vals.join(", "))
+                        } else {
+                            "std::vector<std::any>{}".to_string()
+                        };
+
                         if let Some(ref exit) = exit_str {
-                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let wrapped = cpp_wrap_any_arg(arg);
+                            let vals: Vec<String> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|a| format!("std::any({})", cpp_wrap_any_arg(a)))
+                                .collect();
+                            if !vals.is_empty() {
                                 code.push_str(&format!(
-                                    "{}__compartment->exit_args.push_back(std::any({}));\n",
-                                    indent_str, wrapped
+                                    "{}__prepareExit(std::vector<std::any>{{{}}});\n",
+                                    indent_str,
+                                    vals.join(", ")
                                 ));
                             }
                         }
 
-                        // Eager HSM chain construction — no compartment
-                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}std::shared_ptr<{}Compartment> __new_compartment = nullptr;\n",
-                            indent_str, ctx.system_name
-                        ));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}{{ auto __c = std::make_shared<{}Compartment>(\"{}\"); __c->parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
-                        code.push_str(&format!(
-                            "{}{{ auto __c = std::make_shared<{}Compartment>(\"{}\"); __c->parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
-                            indent_str, ctx.system_name, target
+                            "{}auto __next = __prepareEnter(\"{}\", {}, {});\n",
+                            indent_str, target, state_args_list, enter_args_list
                         ));
 
-                        // Set state_args if present (positional push_back)
-                        if let Some(ref state) = state_str {
-                            for arg in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let value = if let Some(eq_pos) = arg.find('=') {
-                                    cpp_wrap_any_arg(arg[eq_pos + 1..].trim())
-                                } else {
-                                    cpp_wrap_any_arg(arg)
-                                };
-                                code.push_str(&format!(
-                                    "{}__new_compartment->state_args.push_back(std::any({}));\n",
-                                    indent_str, value
-                                ));
-                            }
-                        }
-
-                        // Set enter_args if present (positional push_back)
-                        if let Some(ref enter) = enter_str {
-                            for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let wrapped = cpp_wrap_any_arg(arg);
-                                code.push_str(&format!(
-                                    "{}__new_compartment->enter_args.push_back(std::any({}));\n",
-                                    indent_str, wrapped
-                                ));
-                            }
-                        }
-
-                        // Call __transition and return to exit the handler
                         code.push_str(&format!(
-                            "{}__transition(std::move(__new_compartment));\n{}return;",
+                            "{}__transition(std::move(__next));\n{}return;",
                             indent_str, indent_str
                         ));
                         code
