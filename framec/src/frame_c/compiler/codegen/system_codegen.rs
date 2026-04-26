@@ -330,7 +330,10 @@ pub(crate) fn make_system_async(
                 // operations on Compartment objects, no event dispatch.
                 // Keeping them sync lets the constructor (which can't be
                 // async in JS/TS) call __prepareEnter directly.
-                if name == "__prepareEnter" || name == "__prepareExit" {
+                if name == "__prepareEnter"
+                    || name == "__prepareExit"
+                    || name == "__hsm_chain"
+                {
                     continue;
                 }
                 *is_async = true;

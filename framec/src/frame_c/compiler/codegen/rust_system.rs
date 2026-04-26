@@ -266,71 +266,34 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
         }
     }
 
-    // Compartment creation for start state
+    // Compartment creation for start state — placeholder in struct
+    // literal (just the leaf state, no ancestors). After the struct is
+    // built we replace via __prepareEnter so the chain cascades through
+    // the runtime helper exactly like every other transition.
     if let Some(ref machine) = system.machine {
         if let Some(first_state) = machine.states.first() {
-            let has_hsm_parent = first_state.parent.is_some();
-
-            if has_hsm_parent {
-                // Build ancestor chain from root to leaf
-                let mut ancestor_chain = Vec::new();
-                let mut current_parent = first_state.parent.as_ref();
-                while let Some(parent_name) = current_parent {
-                    if let Some(parent_state) =
-                        machine.states.iter().find(|s| &s.name == parent_name)
-                    {
-                        ancestor_chain.push(parent_state);
-                        current_parent = parent_state.parent.as_ref();
-                    } else {
-                        break;
-                    }
-                }
-                ancestor_chain.reverse();
-
-                // Block expression that creates parent chain and returns child
-                let mut block_expr = String::new();
-                block_expr.push_str("{\n");
-                let mut prev_comp_var = "None".to_string();
-                for (i, ancestor) in ancestor_chain.iter().enumerate() {
-                    let comp_var = format!("__parent_comp_{}", i);
-                    block_expr.push_str(&format!(
-                        "let mut {} = {}Compartment::new(\"{}\");\n",
-                        comp_var, system.name, ancestor.name
-                    ));
-                    block_expr.push_str(&format!(
-                        "{}.parent_compartment = {};\n",
-                        comp_var, prev_comp_var
-                    ));
-                    prev_comp_var = format!("Some(Box::new({}))", comp_var);
-                }
-                block_expr.push_str(&format!(
-                    "let mut __child = {}Compartment::new(\"{}\");\n",
+            body.push(CodegenNode::assign(
+                CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
+                CodegenNode::Ident(format!(
+                    "{}Compartment::new(\"{}\")",
                     system.name, first_state.name
-                ));
-                block_expr.push_str(&format!(
-                    "__child.parent_compartment = {};\n",
-                    prev_comp_var
-                ));
-                block_expr.push_str("__child\n}");
-
-                body.push(CodegenNode::assign(
-                    CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
-                    CodegenNode::Ident(block_expr),
-                ));
-            } else {
-                body.push(CodegenNode::assign(
-                    CodegenNode::field(CodegenNode::self_ref(), "__compartment"),
-                    CodegenNode::Ident(format!(
-                        "{}Compartment::new(\"{}\")",
-                        system.name, first_state.name
-                    )),
-                ));
-            }
-
+                )),
+            ));
             body.push(CodegenNode::assign(
                 CodegenNode::field(CodegenNode::self_ref(), "__next_compartment"),
                 CodegenNode::Ident("None".to_string()),
             ));
+
+            // Rebuild via __prepareEnter so any HSM ancestors are
+            // present in the chain. (Flat states get a one-element
+            // chain — same shape, no extra cost.)
+            body.push(CodegenNode::NativeBlock {
+                code: format!(
+                    "self.__compartment = self.__prepareEnter(\"{}\");",
+                    first_state.name
+                ),
+                span: None,
+            });
 
             // Start state enter_args from system header params
             // (state_args are NOT emitted for Rust — Rust uses the typed
@@ -338,8 +301,6 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
             // actual values live in __sys_* fields read by handlers.)
             for p in &system.params {
                 if matches!(p.kind, ParamKind::EnterArg) {
-                    // Reference the stored __sys_* field, not the raw param —
-                    // the param was moved into the field in the struct init above.
                     body.push(CodegenNode::NativeBlock {
                         code: format!(
                             "self.__compartment.enter_args.push(self.__sys_{}.to_string());",
@@ -350,7 +311,10 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
                 }
             }
 
-            // Fire $> event
+            // Fire $> cascade. Push a frame context so handlers that
+            // read @@:return / @@:data have a stack entry, then drive
+            // the cascade through the same helpers a regular transition
+            // uses.
             let event_class = format!("{}FrameEvent", system.name);
             let context_class = format!("{}FrameContext", system.name);
             body.push(CodegenNode::NativeBlock {
@@ -358,7 +322,8 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
                     "let __frame_event = {}::new_with_params(\"$>\", &self.__compartment.enter_args);\n\
                      let __ctx = {}::new(__frame_event, None);\n\
                      self._context_stack.push(__ctx);\n\
-                     self.__kernel();\n\
+                     self.__fire_enter_cascade();\n\
+                     self.__process_transition_loop();\n\
                      self._context_stack.pop();",
                     event_class, context_class
                 ),
@@ -393,44 +358,195 @@ pub(crate) fn generate_rust_machinery(
     compartment_class: &str,
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
+    let chains = super::system_codegen::compute_hsm_chains(system);
 
-    // __kernel — event processing loop with deferred transitions
+    // __hsm_chain — match on leaf, returns the chain as a static slice.
+    let mut chain_body = String::from("match leaf {\n");
+    for (leaf, chain) in &chains {
+        let entries = chain
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        chain_body.push_str(&format!(
+            "    \"{}\" => &[{}],\n",
+            leaf, entries
+        ));
+    }
+    chain_body.push_str("    _ => &[],\n}");
     methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
+        name: "__hsm_chain".to_string(),
+        params: vec![Param::new("leaf").with_type("&str")],
+        return_type: Some("&'static [&'static str]".to_string()),
+        body: vec![CodegenNode::NativeBlock {
+            code: chain_body,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __prepareEnter — build the destination HSM chain leaf-down.
+    methods.push(CodegenNode::Method {
+        name: "__prepareEnter".to_string(),
+        params: vec![Param::new("leaf").with_type("&str")],
+        return_type: Some(compartment_class.to_string()),
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"let chain = self.__hsm_chain(leaf);
+let mut comp: Option<{}> = None;
+for name in chain.iter() {{
+    let mut new_comp = {}::new(name);
+    if let Some(parent) = comp.take() {{
+        new_comp.parent_compartment = Some(Box::new(parent));
+    }}
+    comp = Some(new_comp);
+}}
+comp.expect("chain must contain at least the leaf state")"#,
+                compartment_class, compartment_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __prepareExit — populate exit_args on every layer of current chain.
+    methods.push(CodegenNode::Method {
+        name: "__prepareExit".to_string(),
+        params: vec![Param::new("exit_args").with_type("Vec<String>")],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"self.__compartment.exit_args = exit_args.clone();
+let mut cursor = self.__compartment.parent_compartment.as_deref_mut();
+while let Some(c) = cursor {
+    c.exit_args = exit_args.clone();
+    cursor = c.parent_compartment.as_deref_mut();
+}"#
+            .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __route_to_state — cascade router. Same dispatch table as __router
+    // but takes an explicit state name.
+    let mut route_code = String::from("match state_name {\n");
+    if let Some(ref machine) = system.machine {
+        for state in &machine.states {
+            route_code.push_str(&format!(
+                "    \"{}\" => self._state_{}(__e),\n",
+                state.name, state.name
+            ));
+        }
+    }
+    route_code.push_str("    _ => {}\n}");
+    methods.push(CodegenNode::Method {
+        name: "__route_to_state".to_string(),
+        params: vec![
+            Param::new("state_name").with_type("&str"),
+            Param::new("__e").with_type(&format!("&{}", event_class)),
+        ],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: route_code,
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_exit_cascade — bottom-up. Walk chain from leaf to root,
+    // firing <$ on each. Rust's borrow checker requires us to collect
+    // (state_name, exit_args) pairs first, then route.
+    methods.push(CodegenNode::Method {
+        name: "__fire_exit_cascade".to_string(),
         params: vec![],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
             code: format!(
-                r#"// Clone event from context stack (needed for borrow checker)
-let __e = self._context_stack.last().unwrap().event.clone();
-// Route event to current state
-self.__router(&__e);
-// Process any pending transition
-while self.__next_compartment.is_some() {{
+                r#"let mut layers: Vec<(String, Vec<String>)> = Vec::new();
+{{
+    let mut cursor = Some(&self.__compartment);
+    while let Some(c) = cursor {{
+        layers.push((c.state.clone(), c.exit_args.clone()));
+        cursor = c.parent_compartment.as_deref();
+    }}
+}}
+for (state_name, args) in &layers {{
+    let exit_event = {}::new_with_params("<$", args);
+    self.__route_to_state(state_name, &exit_event);
+}}"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __fire_enter_cascade — top-down. Walk chain to collect layers,
+    // iterate in reverse to fire $> root-first.
+    methods.push(CodegenNode::Method {
+        name: "__fire_enter_cascade".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"let mut layers: Vec<(String, Vec<String>)> = Vec::new();
+{{
+    let mut cursor = Some(&self.__compartment);
+    while let Some(c) = cursor {{
+        layers.push((c.state.clone(), c.enter_args.clone()));
+        cursor = c.parent_compartment.as_deref();
+    }}
+}}
+for (state_name, args) in layers.iter().rev() {{
+    let enter_event = {}::new_with_params("$>", args);
+    self.__route_to_state(state_name, &enter_event);
+}}"#,
+                event_class
+            ),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __process_transition_loop — drains queued transitions.
+    methods.push(CodegenNode::Method {
+        name: "__process_transition_loop".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: format!(
+                r#"while self.__next_compartment.is_some() {{
     let next_compartment = self.__next_compartment.take().unwrap();
-    // Exit current state (with exit_args from current compartment)
-    let exit_event = {0}::new_with_params("<$", &self.__compartment.exit_args);
-    self.__router(&exit_event);
-    // Switch to new compartment
+    self.__fire_exit_cascade();
     self.__compartment = next_compartment;
-    // Enter new state (or forward event)
     if self.__compartment.forward_event.is_none() {{
-        let enter_event = {0}::new_with_params("$>", &self.__compartment.enter_args);
-        self.__router(&enter_event);
+        self.__fire_enter_cascade();
     }} else {{
-        // Forward event to new state
         let forward_event = self.__compartment.forward_event.take().unwrap();
-        if forward_event.message == "$>" {{
-            // Forwarding enter event - just send it
-            self.__router(&forward_event);
-        }} else {{
-            // Forwarding other event - send $> first, then forward
-            let enter_event = {0}::new_with_params("$>", &self.__compartment.enter_args);
-            self.__router(&enter_event);
+        self.__fire_enter_cascade();
+        if forward_event.message != "$>" {{
             self.__router(&forward_event);
         }}
     }}
-    // Mark all stacked contexts as transitioned
+    let _ = {}::new("$>");  // satisfy unused-import / type checks
     for ctx in self._context_stack.iter_mut() {{
         ctx._transitioned = true;
     }}
@@ -445,7 +561,25 @@ while self.__next_compartment.is_some() {{
         decorators: vec![],
     });
 
-    // __router — dispatches events to state methods via match
+    // __kernel — thin: route then drain.
+    methods.push(CodegenNode::Method {
+        name: "__kernel".to_string(),
+        params: vec![],
+        return_type: None,
+        body: vec![CodegenNode::NativeBlock {
+            code: r#"let __e = self._context_stack.last().unwrap().event.clone();
+self.__router(&__e);
+self.__process_transition_loop();"#
+                .to_string(),
+            span: None,
+        }],
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Private,
+        decorators: vec![],
+    });
+
+    // __router — dispatches events to current state method via match.
     let router_code = generate_rust_router_dispatch(system);
     methods.push(CodegenNode::Method {
         name: "__router".to_string(),
@@ -880,33 +1014,48 @@ pub(crate) fn rust_expand_transition(
     state_str: &Option<String>,
     enter_str: &Option<String>,
 ) -> String {
+    // Per-handler architecture with helpers (per
+    // docs/frame_runtime.md Step 21+): __prepareEnter / __prepareExit
+    // / __transition. Block scope `{ ... }` so multiple transitions
+    // in the same handler don't collide on `__compartment`.
     let mut code = String::new();
 
-    // Store exit_args (positional push)
+    // exit_args via __prepareExit if any provided.
     if let Some(ref exit) = exit_str {
-        for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-            let value = if let Some(eq_pos) = arg.find('=') {
-                arg[eq_pos + 1..].trim()
-            } else {
-                arg
-            };
+        let vals: Vec<String> = exit
+            .split(',')
+            .map(|x| x.trim())
+            .filter(|x| !x.is_empty())
+            .map(|arg| {
+                let raw = if let Some(eq_pos) = arg.find('=') {
+                    arg[eq_pos + 1..].trim()
+                } else {
+                    arg
+                };
+                format!("{}.to_string()", raw)
+            })
+            .collect();
+        if !vals.is_empty() {
             code.push_str(&format!(
-                "{}self.__compartment.exit_args.push({}.to_string());\n",
-                indent_str, value
+                "{}self.__prepareExit(vec![{}]);\n",
+                indent_str,
+                vals.join(", ")
             ));
         }
     }
 
     code.push_str(&format!(
-        "{}let mut __compartment = {}Compartment::new(\"{}\");\n",
-        indent_str, ctx.system_name, target
-    ));
-    code.push_str(&format!(
-        "{}__compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));\n",
-        indent_str
+        "{}let mut __compartment = self.__prepareEnter(\"{}\");\n",
+        indent_str, target
     ));
 
-    // State args use typed StateContext struct -- still needs named field keys
+    // State args populated only on the leaf — Rust's typed
+    // StateContext enum has different variants per state, so the
+    // generic propagation pattern other targets use doesn't fit.
+    // The signature-match rule (Step 22 of the runtime spec) means
+    // ancestor handlers see args of matching type via the same
+    // mechanism, but that propagation isn't yet wired in this Rust
+    // backend. (Tracked as follow-up.)
     if let Some(ref state) = state_str {
         let args: Vec<&str> = state
             .split(',')
@@ -933,7 +1082,10 @@ pub(crate) fn rust_expand_transition(
         }
     }
 
-    // Store enter_args (positional push)
+    // enter_args propagate to all layers via __prepareEnter writing
+    // them into each compartment's enter_args. We populate the leaf
+    // here; for now ancestors get an empty enter_args (signature-
+    // match propagation deferred — same follow-up note as above).
     if let Some(ref enter) = enter_str {
         for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
             let value = if let Some(eq_pos) = arg.find('=') {
@@ -955,16 +1107,16 @@ pub(crate) fn rust_expand_transition(
     code
 }
 
-/// Rust transition-forward: create compartment with forwarded event.
+/// Rust transition-forward: build chain via __prepareEnter, set forward_event.
 pub(crate) fn rust_expand_forward_transition(
     indent_str: &str,
-    ctx: &HandlerContext,
+    _ctx: &HandlerContext,
     target: &str,
 ) -> String {
     let mut code = String::new();
     code.push_str(&format!(
-        "{}let mut __compartment = {}Compartment::new(\"{}\");\n",
-        indent_str, ctx.system_name, target
+        "{}let mut __compartment = self.__prepareEnter(\"{}\");\n",
+        indent_str, target
     ));
     code.push_str(&format!(
         "{}__compartment.forward_event = Some(__e.clone());\n",
