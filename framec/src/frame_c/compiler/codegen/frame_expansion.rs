@@ -801,37 +801,21 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::CSharp => {
+                        // Forward transition: same chain via __prepareEnter,
+                        // plus forward_event field set on the leaf. Local
+                        // is `__next` (not `__compartment`) — see C# regular
+                        // transition for why. Wrapped in `{ ... }` block
+                        // for the same reason.
                         let mut code = String::new();
-                        // Eager HSM chain — no compartment duplication.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}{{ {}Compartment __new_compartment = null;\n",
-                            indent_str, ctx.system_name
-                        ));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}{{ var __c = new {}Compartment(\"{}\"); __c.parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
-                        code.push_str(&format!(
-                            "{}{{ var __c = new {}Compartment(\"{}\"); __c.parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
+                            "{}{{ {}Compartment __next = __prepareEnter(\"{}\", new List<object>(), new List<object>());\n",
                             indent_str, ctx.system_name, target
                         ));
                         code.push_str(&format!(
-                            "{}__new_compartment.forward_event = __e;\n",
+                            "{}__next.forward_event = __e;\n",
                             indent_str
                         ));
-                        code.push_str(&format!(
-                            "{}__transition(__new_compartment); }}\n",
-                            indent_str
-                        ));
+                        code.push_str(&format!("{}__transition(__next); }}\n", indent_str));
                         code.push_str(&format!("{}return;", indent_str));
                         code
                     }
@@ -1558,72 +1542,78 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::CSharp => {
-                        // C#: Create compartment, set fields, call __transition
+                        // Per-handler architecture with helpers (per
+                        // docs/frame_runtime_introduction.md Step 21+):
+                        // __prepareEnter / __prepareExit / __transition.
+                        // Note: local var is named `__next` (not
+                        // `__compartment`) to avoid shadowing the field
+                        // in stack-push handlers that reference the field
+                        // earlier in the same block — C# rejects that
+                        // even when the local is declared later.
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment (positional Add)
+                        let state_args_list = if let Some(ref state) = state_str {
+                            let vals: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    }
+                                })
+                                .collect();
+                            if vals.is_empty() {
+                                "new List<object>()".to_string()
+                            } else {
+                                format!("new List<object> {{ {} }}", vals.join(", "))
+                            }
+                        } else {
+                            "new List<object>()".to_string()
+                        };
+                        let enter_args_list = if let Some(ref enter) = enter_str {
+                            let vals: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if vals.is_empty() {
+                                "new List<object>()".to_string()
+                            } else {
+                                format!("new List<object> {{ {} }}", vals.join(", "))
+                            }
+                        } else {
+                            "new List<object>()".to_string()
+                        };
+
                         if let Some(ref exit) = exit_str {
-                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+                            let vals: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if !vals.is_empty() {
                                 code.push_str(&format!(
-                                    "{}__compartment.exit_args.Add({});\n",
-                                    indent_str, arg
+                                    "{}__prepareExit(new List<object> {{ {} }});\n",
+                                    indent_str,
+                                    vals.join(", ")
                                 ));
                             }
                         }
 
-                        // Eager HSM chain construction — no compartment
-                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
-                        // Block scope prevents redeclaration in multiple branches.
+                        // Wrap in `{ ... }` block scope so multiple
+                        // transitions in the same handler (e.g. inside
+                        // separate `if` branches) don't trigger C#
+                        // CS0136 (same name used in enclosing scope).
                         code.push_str(&format!(
-                            "{}{{ {}Compartment __new_compartment = null;\n",
-                            indent_str, ctx.system_name
-                        ));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}{{ var __c = new {}Compartment(\"{}\"); __c.parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
-                        code.push_str(&format!(
-                            "{}{{ var __c = new {}Compartment(\"{}\"); __c.parent_compartment = __new_compartment; __new_compartment = __c; }}\n",
-                            indent_str, ctx.system_name, target
+                            "{}{{ {}Compartment __next = __prepareEnter(\"{}\", {}, {});\n",
+                            indent_str, ctx.system_name, target, state_args_list, enter_args_list
                         ));
 
-                        // Set state_args if present (positional Add)
-                        if let Some(ref state) = state_str {
-                            for arg in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let value = if let Some(eq_pos) = arg.find('=') {
-                                    arg[eq_pos + 1..].trim()
-                                } else {
-                                    arg
-                                };
-                                code.push_str(&format!(
-                                    "{}__new_compartment.state_args.Add({});\n",
-                                    indent_str, value
-                                ));
-                            }
-                        }
-
-                        // Set enter_args if present (positional Add)
-                        if let Some(ref enter) = enter_str {
-                            for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                code.push_str(&format!(
-                                    "{}__new_compartment.enter_args.Add({});\n",
-                                    indent_str, arg
-                                ));
-                            }
-                        }
-
-                        // Call __transition and return to exit the handler
                         code.push_str(&format!(
-                            "{}__transition(__new_compartment); }}\n{}return;",
+                            "{}__transition(__next); }}\n{}return;",
                             indent_str, indent_str
                         ));
                         code
