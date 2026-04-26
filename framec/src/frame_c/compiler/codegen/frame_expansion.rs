@@ -807,30 +807,17 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Go => {
+                        // Forward transition: same chain via __prepareEnter,
+                        // plus forward_event field set on the leaf.
                         let mut code = String::new();
-                        // Eager HSM chain construction — no compartment duplication.
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}var __compartment *{}Compartment = nil\n",
-                            indent_str, ctx.system_name
+                            "{}__compartment := s.__prepareEnter(\"{}\", []any{{}}, []any{{}})\n",
+                            indent_str, target
                         ));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}{{ __new_c := new{}Compartment(\"{}\"); __new_c.parentCompartment = __compartment; __compartment = __new_c }}\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
                         code.push_str(&format!(
-                            "{}{{ __new_c := new{}Compartment(\"{}\"); __new_c.parentCompartment = __compartment; __compartment = __new_c }}\n",
-                            indent_str, ctx.system_name, target
+                            "{}__compartment.forwardEvent = __e\n",
+                            indent_str
                         ));
-                        code.push_str(&format!("{}__compartment.forwardEvent = __e\n", indent_str));
                         code.push_str(&format!("{}s.__transition(__compartment)\n", indent_str));
                         code.push_str(&format!("{}return", indent_str));
                         code
@@ -1597,69 +1584,59 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Go => {
-                        // Go: Create compartment, set fields, call __transition
+                        // Per-handler architecture with helpers (per
+                        // docs/frame_runtime_introduction.md Step 21+):
+                        // __prepareEnter / __prepareExit / __transition.
                         let mut code = String::new();
 
-                        // Store exit_args in current compartment (positional append)
+                        let state_args_list = if let Some(ref state) = state_str {
+                            let vals: Vec<&str> = state
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .map(|arg| {
+                                    if let Some(eq_pos) = arg.find('=') {
+                                        arg[eq_pos + 1..].trim()
+                                    } else {
+                                        arg
+                                    }
+                                })
+                                .collect();
+                            format!("[]any{{{}}}", vals.join(", "))
+                        } else {
+                            "[]any{}".to_string()
+                        };
+                        let enter_args_list = if let Some(ref enter) = enter_str {
+                            let vals: Vec<&str> = enter
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            format!("[]any{{{}}}", vals.join(", "))
+                        } else {
+                            "[]any{}".to_string()
+                        };
+
                         if let Some(ref exit) = exit_str {
-                            for arg in exit.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
+                            let vals: Vec<&str> = exit
+                                .split(',')
+                                .map(|x| x.trim())
+                                .filter(|x| !x.is_empty())
+                                .collect();
+                            if !vals.is_empty() {
                                 code.push_str(&format!(
-                                    "{}s.__compartment.exitArgs = append(s.__compartment.exitArgs, {})\n",
-                                    indent_str, arg
+                                    "{}s.__prepareExit([]any{{{}}})\n",
+                                    indent_str,
+                                    vals.join(", ")
                                 ));
                             }
                         }
 
-                        // Eager HSM chain construction — no compartment
-                        // duplication (see _scratch/bug_parent_compartment_hsm_walk.md).
-                        let mut ancestors: Vec<String> = Vec::new();
-                        let mut cursor = target.clone();
-                        while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
-                            ancestors.push(parent.clone());
-                            cursor = parent.clone();
-                        }
-                        ancestors.reverse();
                         code.push_str(&format!(
-                            "{}var __compartment *{}Compartment = nil\n",
-                            indent_str, ctx.system_name
-                        ));
-                        for ancestor in &ancestors {
-                            code.push_str(&format!(
-                                "{}{{ __new_c := new{}Compartment(\"{}\"); __new_c.parentCompartment = __compartment; __compartment = __new_c }}\n",
-                                indent_str, ctx.system_name, ancestor
-                            ));
-                        }
-                        code.push_str(&format!(
-                            "{}{{ __new_c := new{}Compartment(\"{}\"); __new_c.parentCompartment = __compartment; __compartment = __new_c }}\n",
-                            indent_str, ctx.system_name, target
+                            "{}__compartment := s.__prepareEnter(\"{}\", {}, {})\n",
+                            indent_str, target, state_args_list, enter_args_list
                         ));
 
-                        // Set state_args if present (positional append)
-                        if let Some(ref state) = state_str {
-                            for arg in state.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                let value = if let Some(eq_pos) = arg.find('=') {
-                                    arg[eq_pos + 1..].trim()
-                                } else {
-                                    arg
-                                };
-                                code.push_str(&format!(
-                                    "{}__compartment.stateArgs = append(__compartment.stateArgs, {})\n",
-                                    indent_str, value
-                                ));
-                            }
-                        }
-
-                        // Set enter_args if present (positional append)
-                        if let Some(ref enter) = enter_str {
-                            for arg in enter.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()) {
-                                code.push_str(&format!(
-                                    "{}__compartment.enterArgs = append(__compartment.enterArgs, {})\n",
-                                    indent_str, arg
-                                ));
-                            }
-                        }
-
-                        // Call __transition and return to exit the handler
                         code.push_str(&format!(
                             "{}s.__transition(__compartment)\n{}return",
                             indent_str, indent_str
