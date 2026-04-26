@@ -1,1107 +1,3869 @@
-# Frame Runtime Architecture
+# The Frame Runtime, by example
 
 *Prompt Engineer: Mark Truluck <mark@frame-lang.org>*
 
-How Frame's language features are implemented in generated code. For
-the language itself, see [Frame Language Reference](frame_language.md).
-For framepiler internals, see [Framepiler Design](framepiler_design.md).
-For a progressive walkthrough that builds up the runtime piece by
-piece, see [Frame Runtime Walkthrough](frame_runtime_walkthrough.md).
+This document explains Frame's runtime by building up a system one
+feature at a time. We start with the simplest possible Frame source
+and add capability incrementally. Each step shows what changes — in
+the source and in the generated code — and explains the runtime
+mechanism that change activates.
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Core Data Structures](#core-data-structures)
-- [The Three Data Stores](#the-three-data-stores)
-- [Dispatch Model](#dispatch-model)
-- [Runtime Methods](#runtime-methods)
-- [Transitions](#transitions)
-- [State Stack Operations](#state-stack-operations)
-- [Hierarchical State Machines](#hierarchical-state-machines)
-- [System Context and Return Values](#system-context-and-return-values)
-- [Self Interface Calls](#self-interface-calls)
-- [State Variables](#state-variables)
-- [Actions and Operations](#actions-and-operations)
-- [Persistence](#persistence)
-- [Per-Language Patterns](#per-language-patterns)
-- [Runtime Edge Cases](#runtime-edge-cases)
+The example throughout is a lamp. It starts as a system that can
+only be turned on, and grows from there.
 
 ---
 
-## Overview
+## Step 1 — A system that accepts a call
 
-Frame uses a **deferred transition** model. State changes are cached
-during event handling and processed by a central kernel after handler
-completion. This prevents stack overflow in long-running services and
-enables event forwarding.
+The simplest Frame system has no states and one interface method:
 
-All target languages implement the identical kernel/router/dispatcher/
-handler architecture described here.
-
-### The runtime skeleton is always fully emitted
-
-Even a one-state, one-event system produces the complete
-FrameEvent / FrameContext / Compartment classes, both stacks
-(`_state_stack`, `_context_stack`), the full kernel transition loop,
-and all lifecycle-event routing. Features don't add runtime
-machinery — they add handler bodies that invoke machinery already
-present.
-
-This is deliberate: it gives every Frame system the same runtime
-shape regardless of which features it uses, making the generated code
-predictable in footprint and uniform to debug. Per-system scaffolding
-cost is ~95 lines in Python, with comparable ratios in every target.
-
-### Key architectural commitments
-
-Frame's runtime rests on four commitments that shape everything else:
-
-1. **Functional equivalence across backends.** A Frame system's
-   behavior is defined by its source, not by its implementation in
-   any target language. The migration scenario (compiling in one
-   language, serializing, resuming in another) is the stress test of
-   this commitment.
-2. **Per-handler dispatch.** Every event handler is a separate named
-   method, not an inlined arm of a monolithic if/elif chain. Stack
-   traces, breakpoints, and profilers point at the specific handler
-   that ran.
-3. **Uniform compartment construction.** Every compartment (leaf or
-   HSM ancestor) is constructed and populated identically. No special
-   cases for ancestors; no runtime walking to find the right
-   compartment.
-4. **Uniform parameter propagation.** The three parameter channels
-   (state_args, enter_args, exit_args) propagate from transition
-   sites to every layer of the HSM chain identically.
-
----
-
-## Core Data Structures
-
-### Compartment
-
-The compartment is Frame's central runtime data structure — a closure
-for states that preserves the state itself, the data from the various
-scopes, and runtime data needed for Frame machine semantics.
-
-```
-Compartment {
-    state: string                    # Current state identifier
-    state_args: list                 # State parameters — positional
-    state_vars: dict                 # State-local variables ($.varName)
-    enter_args: list                 # $> handler parameters — positional
-    exit_args: list                  # <$ handler parameters — positional
-    forward_event: Event?            # Stashed event for -> => forwarding
-    parent_compartment: Compartment? # HSM parent reference
+```frame
+@@system Lamp {
+    interface:
+        turn_on()
 }
 ```
 
-**Key invariants:**
-- Every system maintains `__compartment` (current state's compartment)
-  and `__next_compartment` (pending transition target, null when
-  idle).
-- `parent_compartment` is populated at transition time from the
-  system's static HSM topology. Handlers never walk this chain to
-  find state-local data — they receive their own compartment as a
-  parameter.
-- Each compartment owns its `state_args`, `enter_args`, `exit_args`
-  lists. Even when values propagate across HSM layers (see
-  [Uniform Parameter Propagation](#uniform-parameter-propagation)),
-  each layer holds its own list copy — no aliasing across layers.
+A system called `Lamp` that exposes one method. No machine block,
+no states, no handlers.
 
-### FrameEvent
+Here's what's generated:
 
-Lean routing object:
+```python
+class LampFrameEvent:
+    def __init__(self, message, parameters):
+        self._message = message
+        self._parameters = parameters
 
+class LampFrameContext:
+    def __init__(self, event):
+        self.event = event
+
+class Lamp:
+    def __init__(self):
+        self._context_stack = []
+
+    def turn_on(self):
+        __e = LampFrameEvent("turn_on", [])
+        __ctx = LampFrameContext(__e)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        self._context_stack.pop()
+
+    def __kernel(self, __e):
+        pass
 ```
-FrameEvent {
-    _message: string     # Event type ("$>", "<$", "methodName")
-    _parameters: list    # Positional parameter vector
+
+When someone calls `lamp.turn_on()`, the wrapper packages the call
+as a **FrameEvent** — a message name and a list of parameters. It
+then builds a **FrameContext** that holds the event, pushes it onto
+the context stack, hands the event to the kernel, and pops the
+context when the kernel returns.
+
+The kernel is empty. There's nothing to dispatch to. The runtime is
+set up to route events to handlers, but no handlers exist yet.
+
+> **In statically-typed targets** — `_parameters` becomes a typed
+> list whose element type is the target's "any" — `List<Object>`
+> in Java, `Vec<Box<dyn Any>>` in Rust, `[Any]` in Swift,
+> `List<object>` in C#. The wrapper packs heterogeneous parameter
+> values into the list and the handler unpacks them with casts at
+> the binding site (covered in Step 9). FrameEvent and FrameContext
+> are emitted as proper classes with typed fields rather than
+> Python's free-form attribute assignment.
+
+The next step gives the system a state, and the kernel gets work
+to do.
+
+---
+
+## Step 2 — Adding a state
+
+Now the lamp has a state:
+
+```frame
+@@system Lamp {
+    interface:
+        turn_on()
+
+    machine:
+        **$Operating {}**
 }
 ```
 
-Special messages: `"$>"` (enter), `"<$"` (exit).
+One state called `$Operating`, no handlers in it. The interface
+method `turn_on()` still has nowhere to go, but the runtime now
+has a state to track.
 
-**Parameters are positional.** `_parameters` is a positional list at
-the wire level. Named access in Frame source (`@@:params.x` or the
-declared parameter name) is a **compile-time rewrite** that binds each
-parameter to a typed local at the top of the handler body. This is
-the same mechanism any statically-typed language uses for function
-parameters: positional at the calling convention, named in source,
-resolved at compile time.
+The runtime needs a record of the active state, so a Compartment
+class shows up:
 
-### FrameContext
-
-Call context for interface method invocations:
-
-```
-FrameContext {
-    event: FrameEvent    # Reference to interface event
-    _return: any         # Return value slot
-    _data: dict          # Call-scoped data (@@:data)
-}
+```python
+class LampCompartment:
+    def __init__(self, state):
+        self.state = state
 ```
 
-- **Pushed** when an interface method is called.
-- **Popped** when the interface method returns.
-- Lifecycle events (`$>`, `<$`) use the existing context (no
-  push/pop).
-- Nested interface calls each have their own context (reentrancy).
+A compartment is just a record of which state the system is in.
+Right now it holds nothing but the state's name; later steps will
+give it more fields as features that need them appear. The system
+points at the current compartment through a new field:
 
-### System Fields
-
-Every generated system class contains:
-
-```
-__compartment: Compartment           # Current state's compartment
-__next_compartment: Compartment?     # Pending transition target
-_state_stack: list[Compartment]      # State history stack
-_context_stack: list[FrameContext]   # Interface call context stack
+```python
+def __init__(self):
+    self._context_stack = []
+    self.__compartment = LampCompartment("Operating")
 ```
 
----
+`__compartment` is `$Operating`, the only state available.
 
-## The Three Data Stores
-
-Frame gives handlers exactly three places to store data. They differ
-by **lifetime** and **scope**:
-
-| Store | Lifetime | Scope | Accessor | Storage |
-|---|---|---|---|---|
-| Domain | System lifetime | All handlers, all states | `self.field` | System instance |
-| State vars | State-instance lifetime | One state's handlers | `$.x` | `compartment.state_vars` |
-| Context data | One dispatch chain | One interface call's handlers | `@@:data.k` | `_context_stack[-1]._data` |
-
-These three are orthogonal. They answer three different questions:
-"what does the system remember," "what does this state remember,"
-"what does this call carry."
-
-### Decision rule
-
-**Pick the store with the shortest lifetime that covers the data's
-scope.**
-
-- Context data for data needed only within one interface call.
-- State vars for data local to a state's time of being current.
-- Domain for data that persists across all states and all calls.
-
-### Context data is always a dynamic map
-
-Unlike domain fields and state variables, context data has no declared
-schema. Keys are created on write, values are stored as the target's
-"any" type (`dict` in Python, `Map<String, Object>` in Java,
-`HashMap<String, Box<dyn Any>>` in Rust, and so on).
-
-This is intentional. `@@:data`'s scope spans an arbitrary subset of a
-system's handlers, actions, and lifecycle handlers — whatever gets
-reached during one dispatch chain. A declared schema would need to be
-the union of every key any callable might set, which devolves to
-"dynamic map with types tracked externally." Frame represents this
-honestly: the store is dynamic in every target.
-
-**In dynamically-typed targets** (Python, JavaScript, Ruby, Lua, PHP,
-GDScript, Erlang) this is invisible — reads and writes look like
-ordinary variable access.
-
-**In statically-typed targets** (Java, Kotlin, C#, Swift, Go, Rust,
-C, C++, TypeScript, Dart) reads evaluate to the target's "any" type
-and may require a cast at the use site. When a value is assigned to a
-typed local, the framepiler emits the cast automatically; in more
-general expressions, the cast is user-written.
-
-### What each store is good for
-
-**Domain.** System-wide state. Configuration that doesn't change.
-Counters that span many interface calls. Connections, caches, and
-anything else with system lifetime.
-
-**State vars.** State-specific state (literally). A timer's remaining
-duration, a buffer's contents, a workflow phase's accumulator — data
-that exists only while a particular state is active and should reset
-when the state exits and re-enters.
-
-**Context data.** Call-scoped scratch. Timestamps for *this* call.
-Intermediate decisions the handler makes and needs to pass to an
-action it will call. Data that spans the lifecycle events triggered
-by a transition in this call (`<$` of the source state, `$>` of the
-target state — both see the same `@@:data`).
-
-Context data is the only store reachable by actions (actions don't
-have a compartment, so `$.x` is unavailable there — see
-[Actions and Operations](#actions-and-operations)).
-
----
-
-## Dispatch Model
-
-Frame's event dispatch is structured as a **four-layer pipeline**,
-with each layer holding a single responsibility:
-
-```
-┌───────────────────────────────────────────────────────────────────┐
-│ Layer 0 — Kernel                                                  │
-│   __kernel(e)                                                     │
-│   • Entry point for every event — interface calls, lifecycle      │
-│     events, forwarded events all flow through here.               │
-│   • Calls __router(e) to dispatch the event.                      │
-│   • After the router returns, processes any pending transition    │
-│     by synthesizing <$ / $> events and re-entering __router.      │
-│   • Loops until __next_compartment is null.                       │
-│                                                                   │
-│   One kernel per system. Drives the pipeline.                     │
-└──────────────────────────────┬────────────────────────────────────┘
-                               │
-                               ▼
-┌───────────────────────────────────────────────────────────────────┐
-│ Layer 1 — Router                                                  │
-│   __router(e)                                                     │
-│   • Reads the active state name off self.__compartment.           │
-│   • Dispatches to the matching state dispatcher via static        │
-│     if/elif chain.                                                │
-│   • Passes self.__compartment explicitly as a third argument.     │
-│                                                                   │
-│   One router per system. Routes to N state dispatchers.           │
-└──────────────────────────────┬────────────────────────────────────┘
-                               │
-                               ▼
-┌───────────────────────────────────────────────────────────────────┐
-│ Layer 2 — State dispatcher                                        │
-│   _state_<State>(e, compartment)                                  │
-│   • Flat series of guarded calls, one per declared event.         │
-│   • Each match terminates with a handler call and return.         │
-│   • Optional trailing call to parent dispatcher when state        │
-│     declares `=> $^`.                                             │
-│                                                                   │
-│   One dispatcher per state. Routes to K handler methods.          │
-└──────────────────────────────┬────────────────────────────────────┘
-                               │
-                               ▼
-┌───────────────────────────────────────────────────────────────────┐
-│ Layer 3 — Handler method                                          │
-│   _s_<State>_hdl_<kind>_<event>(e, compartment)                   │
-│   • Binds handler params from e._parameters / enter_args /        │
-│     exit_args at the top of the method.                           │
-│   • compartment always belongs to this handler's own state —      │
-│     HSM forwards pre-shift it at each `=> $^`, so no walk         │
-│     inside the handler.                                           │
-│   • Executes the user-written handler body with $.x, @@:return,   │
-│     @@:self.foo(), etc. expanded by the codegen.                  │
-│                                                                   │
-│   One method per (state, event). Contains only this handler's    │
-│   logic.                                                          │
-└───────────────────────────────────────────────────────────────────┘
-```
-
-**Why four layers?** Each layer does one thing. The kernel knows
-nothing about event kinds or state names. The router knows nothing
-about event messages. The dispatcher knows nothing about handler
-bodies. The handler knows nothing about routing or transitions.
-
-This matters for evolution. Adding a new event form changes only the
-mangler and the handler emitter, not the layers above. Adding a new
-transition form changes only the kernel. Adding a new state doesn't
-change the kernel or router structure, just appends one branch to the
-router and one dispatcher method. Single-axis-of-change per layer.
-
-### Lifecycle events travel through the same pipeline
-
-The kernel synthesizes `$>` and `<$` FrameEvents during transitions
-and hands them to the router exactly like user events. They are
-routed to `_s_<State>_hdl_frame_enter` / `_s_<State>_hdl_frame_exit`
-through the normal dispatcher switch. There is no separate lifecycle
-fast-path — lifecycle events are ordinary events with reserved
-messages.
-
----
-
-## Runtime Methods
-
-### `__kernel`
-
-The central event processing loop:
+The kernel can't stay empty if there's a state to dispatch to.
+Events arrive via the kernel, so the kernel hands them to a router
+that knows how to find the right state:
 
 ```python
 def __kernel(self, __e):
     self.__router(__e)
 
-    while self.__next_compartment is not None:
-        next_compartment = self.__next_compartment
-        self.__next_compartment = None
+def __router(self, __e):
+    state_name = self.__compartment.state
+    if state_name == "Operating":
+        self._state_Operating(__e, self.__compartment)
 
-        # Exit current state (cascade bottom-up for HSM)
-        self.__fire_exit_cascade()
-
-        # Switch compartment
-        self.__compartment = next_compartment
-
-        # Enter new state (cascade top-down for HSM)
-        if next_compartment.forward_event is None:
-            self.__fire_enter_cascade()
-        else:
-            # Send $> first, then forward the stashed event
-            forward_event = next_compartment.forward_event
-            next_compartment.forward_event = None
-            self.__fire_enter_cascade()
-            self.__router(forward_event)
+def _state_Operating(self, __e, compartment):
+    pass
 ```
 
-The kernel drives the pipeline. When a handler calls `__transition`,
-it only *caches* the next compartment — the kernel processes it after
-the handler returns. This deferred model prevents stack overflow in
-long-running services and cleanly separates handler logic from
-lifecycle plumbing.
+The router reads the current state's name and calls that state's
+dispatcher — one branch per state in a static if/elif chain. Each
+state has its own dispatcher function that would match an event's
+message to a handler, but `$Operating` has no handlers, so its
+dispatcher is empty. When `turn_on()` arrives, the dispatcher gets
+called and returns immediately.
 
-The cascade helpers (`__fire_exit_cascade`, `__fire_enter_cascade`)
-walk the HSM chain appropriately — see
-[Hierarchical State Machines](#hierarchical-state-machines).
+The full path now: caller invokes `turn_on()` → wrapper builds the
+event and context → kernel calls the router → router calls the
+state dispatcher → dispatcher does nothing → everything unwinds.
 
-### `__router`
+---
 
-Static if/elif dispatch to state dispatcher methods:
+## Step 3 — Adding a handler
+
+```frame
+@@system Lamp {
+    interface:
+        turn_on()
+
+    machine:
+        $Operating {
+            **turn_on() {
+                print("lamp is on")
+            }**
+        }
+}
+```
+
+The state declares a handler for `turn_on()`. The dispatcher,
+which was empty in Step 2, gains a branch:
+
+```python
+def _state_Operating(self, __e, compartment):
+    # dispatcher
+    if __e._message == "turn_on":
+        self._s_Operating_hdl_user_turn_on(__e, compartment); return
+```
+
+The dispatcher checks the event's message. If it matches
+`"turn_on"`, it calls the handler and returns. And the handler
+itself appears:
+
+```python
+def _s_Operating_hdl_user_turn_on(self, __e, compartment):
+    print("lamp is on")
+```
+
+A handler is the unique piece of code that runs for one specific
+event in one specific state. `$Operating` has its own handler for
+`turn_on`. If another state also declared a `turn_on` handler,
+that would be a separate method — different state, different
+handler. The state-event pair identifies exactly one handler.
+
+The handler name has four parts:
+
+- `_s` — marks it as runtime-generated state code.
+- `Operating` — the state this handler belongs to.
+- `hdl_user` — the kind of handler. `user` means it's for an
+  interface method.
+- `turn_on` — the event being handled.
+
+Pattern: `_s_<State>_hdl_<kind>_<event>`.
+
+The single underscore prefix avoids Python's name mangling —
+`__name` gets rewritten to `_ClassName__name` inside classes,
+which would break the predictable naming. Other targets use the
+same scheme so generated code looks the same everywhere.
+
+Each handler is a separate method rather than inlined into the
+dispatcher. Stack traces land on the specific handler that ran.
+
+---
+
+## Step 4 — Adding a second state
+
+```frame
+@@system Lamp {
+    interface:
+        turn_on()
+
+    machine:
+        $Off {
+            turn_on() {
+            }
+        }
+
+        **$On {}**
+}
+```
+
+A second state, `$On`. Empty for now — no handlers, no way to get
+there. The `turn_on` handler in `$Off` does nothing.
+
+The first state declared in the machine block is the **start
+state**. The system enters it when constructed and stays there
+until a transition moves it somewhere else. `$Off` is the start
+state because it's listed first.
+
+`$On` exists in the source and gets generated, but nothing ever
+reaches it. There's no transition to `$On` anywhere, so the system
+enters `$Off` and stays there forever. This is legal but useless.
+
+The router needs to know about both states, so it gains a branch
+for `$On`:
 
 ```python
 def __router(self, __e):
     state_name = self.__compartment.state
-    if state_name == "Idle":
-        self._state_Idle(__e, self.__compartment)
-    elif state_name == "Working":
-        self._state_Working(__e, self.__compartment)
-    elif state_name == "Done":
-        self._state_Done(__e, self.__compartment)
+    if state_name == "Off":
+        self._state_Off(__e, self.__compartment)
+    **elif state_name == "On":
+        self._state_On(__e, self.__compartment)**
 ```
 
-One branch per state. The router passes `self.__compartment`
-explicitly as a third argument so dispatchers and their handler
-methods see the active compartment as a named local.
-
-### `__transition`
-
-Caches the next compartment (deferred):
+One branch per state — the router checks the current state's name
+and calls its dispatcher. `$On` gets its own dispatcher, empty for
+now since the state has no handlers:
 
 ```python
-def __transition(self, next_compartment):
-    self.__next_compartment = next_compartment
+**def _state_On(self, __e, compartment):
+    pass**
 ```
 
-This does NOT execute immediately. The kernel processes it after the
-handler returns.
+The runtime is set up to dispatch to `$On` if the system ever gets
+there. It just never does.
 
-### `__prepareEnter`
+---
 
-Constructs the destination HSM chain for a transition. Data-driven
-from a static HSM topology table emitted once per system:
+## Step 5 — Adding a transition
 
-```python
-# Emitted once per system, derived from static HSM declarations:
-_HSM_CHAIN = {
-    'Sibling':    ['Sibling'],
-    'Parent':     ['Parent'],
-    'Child':      ['Parent', 'Child'],
-    'Grandchild': ['Parent', 'Child', 'Grandchild'],
+```frame
+@@system Lamp {
+    interface:
+        turn_on()
+
+    machine:
+        $Off {
+            turn_on() {
+                **-> $On**
+            }
+        }
+
+        $On {}
 }
-
-def __prepareEnter(self, leaf, state_args, enter_args):
-    comp = None
-    for name in _HSM_CHAIN[leaf]:
-        comp = Compartment(name, comp)
-        comp.state_args = list(state_args)
-        comp.enter_args = list(enter_args)
-        # state_vars initialize lazily in the state's $> handler
-        # exit_args remain [] until set by a future __prepareExit
-    return comp
 ```
 
-Every compartment in the chain receives its own list copy of
-`state_args` and `enter_args`. All layers hold the same values — no
-shared references — so mutation of one layer's list doesn't affect
-other layers.
+`turn_on` now transitions to `$On`. The lamp can finally reach its
+other state.
 
-For non-HSM transitions, the chain has length 1 and the pattern still
-works.
-
-### `__prepareExit`
-
-Populates exit_args across the source HSM chain before the kernel's
-exit cascade fires:
+The system needs to track that a transition is pending, so the
+constructor gains a field:
 
 ```python
-def __prepareExit(self, exit_args):
-    comp = self.__compartment
-    while comp is not None:
-        comp.exit_args = list(exit_args)
-        comp = comp.parent_compartment
+def __init__(self):
+    self._context_stack = []
+    self.__compartment = LampCompartment("Off")
+    **self.__next_compartment = None**
 ```
 
-No topology table needed — the source chain already exists via the
-current compartment's `parent_compartment` links. For transitions
-without exit_args, this call is omitted entirely.
+`__next_compartment` holds the destination of a transition that's
+been requested but not yet processed. It's `None` when no
+transition is pending.
 
-### State Dispatchers
-
-**Each state is implemented as two tiers:** a *thin dispatcher*
-(`_state_<Name>`) that routes wire messages to dedicated *handler
-methods* (`_s_<Name>_hdl_<kind>_<event>`). The handler body for each
-event lives in its own named method — not inlined into a monolithic
-if/elif.
-
-#### Dispatcher shape
-
-The dispatcher is a flat series of guarded calls — each branch
-terminates on match with `return`:
+The handler doesn't switch states directly — it queues the switch:
 
 ```python
-def _state_MyState(self, __e, compartment):
-    if __e._message == "$>":      self._s_MyState_hdl_frame_enter(__e, compartment); return
-    if __e._message == "<$":      self._s_MyState_hdl_frame_exit(__e, compartment); return
-    if __e._message == "process": self._s_MyState_hdl_user_process(__e, compartment); return
-    if __e._message == "reset":   self._s_MyState_hdl_user_reset(__e, compartment); return
-    # The parent forward below is emitted ONLY when the state declares `=> $^`.
-    # When absent, unhandled events fall off the end silently.
-    self._state_ParentName(__e, compartment.parent_compartment)
+def _s_Off_hdl_user_turn_on(self, __e, compartment):
+    **next_comp = LampCompartment("On")
+    self.__transition(next_comp)
+    return**
 ```
 
-#### Handler method shape
-
-Each handler is a standalone method. Parameters carry the event and
-the compartment that was active when the router ran:
+It builds a compartment for the destination, hands it to
+`__transition`, and returns. The transition doesn't happen here.
+`__transition` is small — it just caches the destination:
 
 ```python
-def _s_MyState_hdl_frame_enter(self, __e, compartment):
-    # State-var initialization (only lifecycle enter does this)
-    if "count" not in compartment.state_vars:
-        compartment.state_vars["count"] = 0
-
-def _s_MyState_hdl_user_process(self, __e, compartment):
-    # Parameter binding from positional _parameters
-    data = __e._parameters[0]
-    # Handler body
-    compartment.state_vars["count"] = compartment.state_vars["count"] + 1
+**def __transition(self, next_compartment):
+    self.__next_compartment = next_compartment**
 ```
 
-#### Name mangling
+The actual state switch happens in the kernel, which now checks
+for a pending transition after the router returns:
 
-| Handler kind | Method name |
-|---|---|
-| Lifecycle `$>` | `_s_<State>_hdl_frame_enter` |
-| Lifecycle `<$` | `_s_<State>_hdl_frame_exit` |
-| User interface method `probe` | `_s_<State>_hdl_user_probe` |
+```python
+def __kernel(self, __e):
+    self.__router(__e)
 
-The `hdl_frame_*` vs `hdl_user_*` prefix split is a namespace
-guarantee: a user interface method named `enter` or `exit` cannot
-collide with a lifecycle handler because they live in disjoint
-namespaces. This is resolved at codegen time, not at runtime.
+    **# __next_compartment is set if a transition occurred
+    # during the router call.
+    if self.__next_compartment is not None:
+        next_compartment = self.__next_compartment
+        self.__next_compartment = None
+        self.__compartment = next_compartment**
+```
 
-Single-underscore prefix (`_s_…`) avoids Python's name mangling
-(`__name` → `_ClassName__name`). Target languages without this
-concern still use the same scheme for uniformity across backends.
+If a transition was queued during the router call, the kernel
+pulls the destination out of `__next_compartment`, clears the
+field, and switches the system's current compartment.
+
+This is Frame's **deferred transition** model. Handlers don't
+switch states; they queue a switch. The kernel does the actual
+switching after the handler finishes. This avoids problems where a
+handler ends up running in the wrong state because it switched
+mid-way through, and gives the kernel a single place to manage the
+lifecycle of state changes.
+
+The full path when `turn_on()` is called from `$Off`: the wrapper
+builds the event and pushes a context; the kernel calls the
+router; the router calls `_state_Off`; `_state_Off` calls
+`_s_Off_hdl_user_turn_on`; the handler builds an `$On` compartment
+and calls `__transition` then returns; the router returns; the
+kernel sees `__next_compartment` is set and switches
+`__compartment` to the new one; the wrapper pops the context.
+
+The system is now in `$On`. Calling `turn_on()` again does
+nothing — `$On` has no handler for it.
 
 ---
 
-## Transitions
+## Step 6 — Lifecycle handlers
 
-### Simple Transition (`-> $State`)
+```frame
+@@system Lamp {
+    interface:
+        turn_on()
 
-```python
-next_comp = self.__prepareEnter("Target", [], [])
-self.__transition(next_comp)
-return  # Handler exits; kernel processes transition
+    machine:
+        $Off {
+            **<$() {
+                print("lamp going on")
+            }**
+            turn_on() {
+                **-> "switch flipped" $On**
+            }
+        }
+
+        $On {
+            **$>() {
+                print("lamp is on")
+            }**
+        }
+}
 ```
 
-### Transition with State Args
+Three additions:
+
+- `$Off` declares an exit handler `<$()`.
+- `$On` declares an enter handler `$>()`.
+- The transition is now decorated with a label, `"switch flipped"`.
+
+Decorated transition labels are diagnostic only — they show up in
+generated diagrams and traces but don't affect runtime behavior.
+The label is the only source change that doesn't activate any
+runtime code.
+
+Lifecycle handlers do activate runtime code. When the lamp
+transitions from `$Off` to `$On`, the runtime fires `$Off`'s `<$`
+handler, then switches the compartment, then fires `$On`'s `$>`
+handler. The kernel grows to handle this — instead of just
+swapping compartments, it now synthesizes lifecycle events around
+the switch:
 
 ```python
-next_comp = self.__prepareEnter("Target", [value1, value2], [])
-self.__transition(next_comp)
-return
+def __kernel(self, __e):
+    self.__router(__e)
+
+    # __next_compartment is set if a transition occurred
+    # during the router call.
+    if self.__next_compartment is not None:
+        next_compartment = self.__next_compartment
+        self.__next_compartment = None
+
+        **# Fire <$ on the current state
+        exit_event = LampFrameEvent("<$", [])
+        self.__router(exit_event)**
+
+        self.__compartment = next_compartment
+
+        **# Fire $> on the new state
+        enter_event = LampFrameEvent("$>", [])
+        self.__router(enter_event)**
 ```
 
-### Transition with Enter Args
+The kernel synthesizes two FrameEvents during a transition. First
+it builds a `<$` event and routes it — this reaches the *current*
+compartment, which is still the source state, so the source
+state's exit handler runs. Then the kernel switches `__compartment`
+to the new one. Then it builds a `$>` event and routes it — this
+reaches the new compartment, so the destination state's enter
+handler runs.
+
+Lifecycle events go through the same router as user events.
+There's no special path for them. The dispatcher matches their
+messages (`"$>"`, `"<$"`) the same way it matches `"turn_on"`, so
+each state's dispatcher gains branches for the lifecycle messages
+its state declares:
 
 ```python
-next_comp = self.__prepareEnter("Target", [], [data, priority])
-self.__transition(next_comp)
-return
+def _state_Off(self, __e, compartment):
+    **if __e._message == "<$":
+        self._s_Off_hdl_frame_exit(__e, compartment); return**
+    if __e._message == "turn_on":
+        self._s_Off_hdl_user_turn_on(__e, compartment); return
+
+def _state_On(self, __e, compartment):
+    **if __e._message == "$>":
+        self._s_On_hdl_frame_enter(__e, compartment); return**
 ```
 
-### Transition with Exit Args
+Each state's dispatcher matches the lifecycle messages and routes
+to the right handler. The handler methods themselves are
+straightforward:
 
 ```python
-self.__prepareExit([cleanup_data])
-next_comp = self.__prepareEnter("Target", [], [])
-self.__transition(next_comp)
-return
+**def _s_Off_hdl_frame_exit(self, __e, compartment):
+    print("lamp going on")
+
+def _s_On_hdl_frame_enter(self, __e, compartment):
+    print("lamp is on")**
 ```
 
-### Full transition with all three channels
+The `frame` part of the name is what we deferred explaining in
+Step 3. Earlier we saw the four-part naming pattern
+`_s_<State>_hdl_<kind>_<event>`. The `kind` is `user` for
+interface methods and `frame` for lifecycle handlers (`$>` becomes
+`frame_enter`, `<$` becomes `frame_exit`).
+
+The split keeps the namespaces disjoint. A user could declare an
+interface method named `enter` and it would generate
+`_s_<State>_hdl_user_enter` — a different method from
+`_s_<State>_hdl_frame_enter`. No collision possible.
+
+The start state's `$>` handler also needs to run when the system
+is first constructed — entering the start state is itself a state
+entry — so the constructor fires it. Like every other entry into
+the kernel, the firing goes through a wrapper that pushes a
+FrameContext, runs the router, and pops:
 
 ```python
-self.__prepareExit(["done"])
-next_comp = self.__prepareEnter("Target", ["ABC123"], ["hello"])
-self.__transition(next_comp)
-return
+def __init__(self):
+    self._context_stack = []
+    self.__compartment = LampCompartment("Off")
+    self.__next_compartment = None
+
+    **# Fire $> on the start state
+    enter_event = LampFrameEvent("$>", [])
+    enter_ctx = LampFrameContext(enter_event)
+    self._context_stack.append(enter_ctx)
+    self.__router(enter_event)
+    self._context_stack.pop()**
 ```
 
-Three calls, three responsibilities:
+The push/pop is the same pattern interface method wrappers use.
+Any handler that runs during the cascade — including the start
+state's `$>` — needs a context on the stack so that `@@:return`,
+`@@:data`, and other context-stack reads have something to
+resolve against. The context pushed here is discarded after the
+constructor returns; there's no caller to give the return value
+to. But the handler runs without crashing on an empty stack.
 
-| Step | Responsibility | Acts on |
-|---|---|---|
-| `__prepareExit` | Populate source chain for exit cascade | Current chain |
-| `__prepareEnter` | Construct destination chain | New chain |
-| `__transition` | Cache destination; kernel processes rest | Kernel signal |
+The lamp doesn't currently declare `$Off.$>`, so this routes
+through the dispatcher and finds no match, doing nothing. But the
+mechanism is there for any state that has an enter handler.
 
-### Event Forwarding (`-> => $State`)
+Calling `turn_on()` now exercises the full lifecycle pipeline.
+The wrapper builds the event and pushes a context, then the
+kernel calls the router which calls `_state_Off`'s dispatcher,
+which calls the `turn_on` handler. The handler queues a
+transition to `$On` and returns. The router returns, and the
+kernel sees `__next_compartment` is set. It synthesizes a `<$`
+event and calls the router again — this reaches `_state_Off`
+(still the current state), whose dispatcher matches `<$` and
+calls `_s_Off_hdl_frame_exit`, which prints "lamp going on". The
+kernel then switches `__compartment` to `$On` and synthesizes a
+`$>` event. The router calls `_state_On` (the new current state),
+whose dispatcher matches `$>` and calls
+`_s_On_hdl_frame_enter`, which prints "lamp is on". Finally the
+wrapper pops the context.
 
-```python
-next_comp = self.__prepareEnter("Target", [], [])
-next_comp.forward_event = __e  # Stash current event
-self.__transition(next_comp)
-return
-```
-
-The kernel fires `$>` on the target first, then re-routes the stashed
-event through the target's dispatcher.
-
-### Transition to Popped State (`-> pop$`)
-
-```python
-next_comp = self._state_stack.pop()
-self.__transition(next_comp)
-return
-```
-
-The popped compartment retains all its state variables — no
-reinitialization (see [State Stack Operations](#state-stack-operations)).
+Two prints, in order: "lamp going on", "lamp is on". The lamp has
+gone from `$Off` to `$On` and run code on both sides of the
+transition.
 
 ---
 
-## State Stack Operations
+## Step 7 — Domain field
 
-### Push
+```frame
+@@system Lamp {
+    interface:
+        turn_on()
 
-```python
-self._state_stack.append(self.__compartment)
+    machine:
+        $Off {
+            <$() {
+                print("lamp going on")
+            }
+            turn_on() {
+                -> "switch flipped" $On
+            }
+        }
+
+        $On {
+            $>() {
+                **self.cycles = self.cycles + 1
+                print(f"lamp is on (cycle {self.cycles})")**
+            }
+        }
+
+    **domain:
+        cycles: int = 0**
+}
 ```
 
-The stack entry and `__compartment` point to the **same object**.
-`push$` saves a reference, not a copy. Modifications to the
-compartment after `push$` are visible through both. For snapshot
-semantics, use `push$ -> $State` which creates a new compartment via
-the transition.
+A `domain` block declares system-wide instance fields. `cycles`
+counts how many times the lamp has been turned on, surviving every
+state transition.
 
-### Reentry vs History
+Domain fields are accessed with `self.x` — just normal target
+language attribute access. Frame doesn't mediate domain reads or
+writes the way it does state variables or context data. The
+constructor gains a line to initialize the field:
 
-| Transition Type | State Variable Behavior |
-|---|---|
-| `-> $State` (normal) | Variables reset to initial values |
-| `-> pop$` (history) | Variables preserved from saved compartment |
+```python
+def __init__(self):
+    **self.cycles = 0**
+    self._context_stack = []
+    self.__compartment = LampCompartment("Off")
+    self.__next_compartment = None
 
-The `if not in compartment.state_vars` guard in `$>` handlers is what
-makes this work. On `pop$` restoration, state_vars are already
-populated (from the saved compartment), so the guard skips
-re-initialization. On normal entry, state_vars is empty, so the
-guard lets initialization run.
+    enter_event = LampFrameEvent("$>", [])
+    enter_ctx = LampFrameContext(enter_event)
+    self._context_stack.append(enter_ctx)
+    self.__router(enter_event)
+    self._context_stack.pop()
+```
+
+Domain initializers go before everything else in the constructor
+so their values are available if any startup code references them.
+
+The handler body in `$On.$>` reads and writes `self.cycles` as
+ordinary Python. There's no special accessor pattern. Domain
+fields are the simplest of Frame's three data stores — they live
+on the system instance directly.
+
+The other two stores (state variables and context data) require
+runtime support to manage their lifetimes. State variables live in
+a compartment's `state_vars` dict and reset each time the state is
+entered. Context data lives in a FrameContext's `_data` dict and
+exists only for the duration of one interface call. We'll see both
+of those in later steps.
+
+For now, the lamp tracks its on-count across all calls to
+`turn_on()`. Calling `turn_on()` four times prints
+`(cycle 1)` ... `(cycle 4)`, then ignores further calls because
+`$On` has no handler for `turn_on`.
 
 ---
 
-## Hierarchical State Machines
+## Step 8 — Return value
 
-Frame's HSM model is built on three interlocking commitments:
+```frame
+@@system Lamp {
+    interface:
+        turn_on()
+        **is_on(): bool**
 
-1. **Uniform compartment construction.** Every compartment (leaf or
-   ancestor) is constructed and populated identically by
-   `__prepareEnter`. No special cases for ancestors.
-2. **Uniform parameter propagation.** State_args, enter_args, and
-   exit_args all propagate from the transition site to every layer
-   of the chain.
-3. **Exact-match signature rule.** `$Child => $Parent` requires
-   matching signatures across all three parameter channels.
+    machine:
+        $Off {
+            <$() {
+                print("lamp going on")
+            }
+            turn_on() {
+                -> "switch flipped" $On
+            }
+            **is_on(): bool {
+                @@:(false)
+            }**
+        }
 
-Together these give `=> $Parent` a complete specialization contract.
+        $On {
+            $>() {
+                self.cycles = self.cycles + 1
+                print(f"lamp is on (cycle {self.cycles})")
+            }
+            **is_on(): bool {
+                @@:(true)
+            }**
+        }
 
-### Uniform Parameter Propagation
-
-**Every parameter channel that flows into an HSM state propagates
-uniformly across the chain.**
-
-The three parameter channels are:
-- `state_args` — declared state parameters, supplied at transition
-  via `-> $State(args)`
-- `enter_args` — `$>` handler parameters, supplied at transition via
-  `-> (args) $State`
-- `exit_args` — `<$` handler parameters, supplied at transition via
-  `(args) -> $State`
-
-All three:
-- Are supplied at the transition site
-- Target the leaf state syntactically
-- Propagate to every layer in the HSM chain
-- Must have signatures that match across `$Child => $Parent` edges
-
-After `__prepareEnter` for a transition to `$Leaf` with chain
-`[Root, Middle, Leaf]` and values `state_args=[a, b]`, `enter_args=[x]`:
-
-| Field | Root | Middle | Leaf |
-|---|---|---|---|
-| `state` | `"Root"` | `"Middle"` | `"Leaf"` |
-| `state_args` | `[a, b]` | `[a, b]` | `[a, b]` |
-| `enter_args` | `[x]` | `[x]` | `[x]` |
-| `exit_args` | `[]` | `[]` | `[]` |
-| `state_vars` | `{}` (lazy init) | `{}` (lazy init) | `{}` (lazy init) |
-| `parent_compartment` | `None` | `→ Root` | `→ Middle` |
-
-**Each compartment owns its list.** Even though values are the same
-across layers, each compartment holds an independent list (Option A
-— no shared references). This prevents aliasing bugs if any layer's
-handler mutates its received args.
-
-**State_vars are NOT propagated.** State_vars are state-local
-declarations, not parameters. Each state's state_vars are private to
-that state and initialize independently in that state's `$>` handler.
-
-### The `=> $Parent` Contract
-
-`$Child => $Parent` commits Child and Parent to:
-
-1. **Compartment chain.** Entering `$Child` from outside Parent's
-   hierarchy constructs a Parent compartment as the parent of Child's
-   compartment (recursively if Parent has its own HSM parent).
-2. **Matching state_args signature.** Child and Parent declare the
-   same state parameters (names and types).
-3. **Matching enter signature.** Child's `$>` signature equals
-   Parent's `$>` signature.
-4. **Matching exit signature.** Child's `<$` signature equals
-   Parent's `<$` signature, or neither state declares `<$`.
-5. **Lifecycle cascade.** On entry from outside, Parent's `$>` fires
-   before Child's, with the same args. On exit to outside, Parent's
-   `<$` fires after Child's, with the same args.
-6. **Event forwarding.** Unhandled events in Child forward to Parent
-   only via explicit `=> $^` at Child's dispatcher. No implicit
-   forwarding.
-
-This is a propagation relationship, not an override relationship.
-Both Child's and Parent's handlers run; neither replaces the other.
-
-### Signature-Match Rule (v4)
-
-If `$Child => $Parent`, then `$Child`'s signatures must **equal**
-`$Parent`'s signatures:
-
-- **state_args signature:** declared parameters match (names and
-  types).
-- **enter_args signature:** `$>` parameters match.
-- **exit_args signature:** `<$` parameters match, OR neither declares
-  `<$`.
-
-Transitively: if `$Grandchild => $Child => $Parent`, all three share
-the same signatures across all three channels.
-
-**Rationale.** Uniform propagation populates every layer's args with
-the transition's values. For each layer's handler to use them
-correctly, each layer's signature must accept those values.
-Mismatched signatures would let a handler see args of the wrong shape
-— type error at runtime, silent misbehavior in dynamically-typed
-backends. Rejecting mismatches at compile time makes propagation
-type-safe.
-
-**Future direction.** Prefix-match (Parent's signature is a prefix of
-Child's; Child may extend) is deferred to RFC 12 based on v4
-experience. Exact-match is the v4 default because it's simpler and
-relaxing exact→prefix is non-breaking.
-
-### Parent Forward (`=> $^`)
-
-At the forward site, the child shifts `compartment` one level up to
-the parent's own compartment:
-
-```python
-def _s_Child_hdl_user_event_b(self, __e, compartment):
-    # handler-local work…
-    self._state_Parent(__e, compartment.parent_compartment)
+    domain:
+        cycles: int = 0
+}
 ```
 
-This is the only place in the pipeline where compartment traversal
-happens. Handler methods never walk — they always receive their own
-state's compartment ready-to-use.
+`is_on(): bool` returns whether the lamp is currently on. Each
+state has its own handler — `$Off.is_on` returns `false`, `$On.is_on`
+returns `true`. The state-event pair determines which handler runs,
+which determines the answer.
 
-The chain composes naturally. Grandchild → Child → Parent is
-`compartment.parent_compartment` applied once at each forward site.
+`@@:(expr)` sets the return value. It's shorthand for
+`@@:return = expr`. Both compile to the same generated code.
 
-### Default Forward
-
-A bare `=> $^` declaration at the state level adds a trailing
-unguarded forward at the dispatcher tail:
+The return value needs somewhere to live during the call, so
+FrameContext gains a slot for it:
 
 ```python
-def _state_Child(self, __e, compartment):
-    if __e._message == "specific_event":
-        self._s_Child_hdl_user_specific_event(__e, compartment); return
-    # Trailing forward — emitted only because the state declares `=> $^`
-    self._state_Parent(__e, compartment.parent_compartment)
+class LampFrameContext:
+    def __init__(self, event):
+        self.event = event
+        **self._return = None**
 ```
 
-**Unhandled events do NOT automatically forward.** A state must
-explicitly declare `=> $^` (either at the state level for default
-forwarding, or at specific handler sites for selective forwarding)
-for unhandled events to reach its parent. Without `=> $^`, unhandled
-events simply fall off the dispatcher and are ignored.
-
-This is a deliberate design choice. HSM forwarding is an explicit
-capability, not an implicit fallback. A state that is structurally a
-Child (declared via `=> $Parent`) does not automatically delegate
-unhandled events — it must opt in via `=> $^`.
-
-### Kernel Cascade Semantics
-
-When the kernel processes a transition into a chain
-`[Root, Middle, Leaf]`:
-
-**Exit cascade** — fires first, on the source chain, bottom-up:
-
-1. `<$` fires on the source leaf (with its populated `exit_args`).
-2. `<$` fires on each ancestor walking up the source chain (each with
-   its populated `exit_args`).
-
-**Enter cascade** — fires after compartment switch, on destination
-chain, top-down:
-
-1. `$>` fires on Root (with its populated `enter_args`).
-2. `$>` fires on Middle (with its populated `enter_args`).
-3. `$>` fires on Leaf (with its populated `enter_args`).
-
-All layers in each cascade see their own populated args. Under exact-
-match, those args are the same values at every layer; Parent and
-Child handlers bind the same typed locals from the same values.
-
-### Transition during cascade
-
-Two rules govern transitions that occur inside a lifecycle handler:
-
-**Rule 1: A transition aborts the remaining cascade.** Once a handler
-calls `__transition` during a cascade, no further handlers in the
-current chain fire. The kernel finishes the current handler, then
-processes the new transition's exit cascade on whatever state is
-currently active, followed by the new destination's enter cascade.
-
-**Example:** if `$Root`'s `$>` transitions during an enter cascade
-on `[Root, Middle, Leaf]`, Middle's and Leaf's `$>` never fire. The
-system entered Root, transitioned, and is now following the new
-transition's cascade.
-
-**Rule 2: Event forwarding to a parent requires explicit `=> $^`.**
-Even when an HSM relationship exists, unhandled events do not
-automatically propagate to ancestors. A state declares `=> $^` either
-at the state level (for unconditional forwarding on unhandled events)
-or at specific handler sites (for conditional forwarding). Without
-`=> $^`, an event that isn't handled by a state's dispatcher is
-silently dropped, regardless of whether ancestors could handle it.
-
-These two rules keep HSM control flow explicit and predictable. No
-event reaches a handler the source didn't declare intent to reach.
-
----
-
-## System Context and Return Values
-
-### Accessor Grammar
-
-All `@@` accessors follow a uniform grammar:
-
-- **`:`** (colon) — navigates Frame's namespace hierarchy
-- **`.`** (dot) — accesses a field on the resolved object
-
-| Frame Syntax | Runtime Access (Python) |
-|---|---|
-| `@@:params.x` | `x` — bound at handler prologue from `__e._parameters[N]` |
-| `@@:return` | `self._context_stack[-1]._return` |
-| `@@:event` | `self._context_stack[-1].event._message` |
-| `@@:data.key` | `self._context_stack[-1]._data["key"]` |
-| `@@:self.method(args)` | `self.method(args)` (generated interface call) |
-| `@@:system.state` | `self.__compartment.state` |
-
-### Handler Parameter Binding
-
-When a handler is invoked, the emitter generates a prologue that
-binds each declared parameter to a typed local from the event's
-positional parameter vector:
+`_return` is where the return value lives during an interface
+call. The wrapper reads it after the kernel returns. The wrapper
+for `is_on` declares a return type and reads the slot at the end:
 
 ```python
-def _s_Active_hdl_user_tick(self, __e, compartment):
-    # Prologue: bind declared params from __e._parameters
-    step = __e._parameters[0]
-    dir  = __e._parameters[1]
-    # Handler body references `step` and `dir` as typed locals.
-    # @@:params.step in Frame source compiles to bare `step`.
+**def is_on(self) -> bool:
+    __e = LampFrameEvent("is_on", [])
+    __ctx = LampFrameContext(__e)
+    self._context_stack.append(__ctx)
+    self.__kernel(__e)
+    return self._context_stack.pop()._return**
 ```
 
-Lifecycle handler prologues bind from the compartment's
-`enter_args` / `exit_args` instead:
+It's the same shape as `turn_on`'s wrapper, plus a final line that
+returns `_return` from the popped context. The Python return type
+annotation comes from the Frame source.
+
+The dispatchers gain branches for `is_on`:
 
 ```python
-def _s_Active_hdl_frame_enter(self, __e, compartment):
-    # Prologue: bind declared enter params from compartment.enter_args
-    greeting = compartment.enter_args[0]
-    # Handler body
+def _state_Off(self, __e, compartment):
+    if __e._message == "<$":
+        self._s_Off_hdl_frame_exit(__e, compartment); return
+    if __e._message == "turn_on":
+        self._s_Off_hdl_user_turn_on(__e, compartment); return
+    **if __e._message == "is_on":
+        self._s_Off_hdl_user_is_on(__e, compartment); return**
+
+def _state_On(self, __e, compartment):
+    if __e._message == "$>":
+        self._s_On_hdl_frame_enter(__e, compartment); return
+    **if __e._message == "is_on":
+        self._s_On_hdl_user_is_on(__e, compartment); return**
 ```
 
-### Interface Method Pattern
+And each state has its own `is_on` handler:
 
 ```python
-def get_status(self) -> str:
-    __e = FrameEvent("get_status", [])
-    __ctx = FrameContext(__e, None)
+**def _s_Off_hdl_user_is_on(self, __e, compartment):
+    self._context_stack[-1]._return = False
+
+def _s_On_hdl_user_is_on(self, __e, compartment):
+    self._context_stack[-1]._return = True**
+```
+
+`@@:(false)` compiles to `self._context_stack[-1]._return = False`.
+The handler writes to the top-of-stack context's `_return` slot.
+The wrapper reads the same slot when the kernel returns.
+
+When `is_on()` is called from `$On`, the wrapper builds the event
+and pushes a context. The kernel calls the router, which calls
+`_state_On`. The dispatcher matches `is_on` and calls
+`_s_On_hdl_user_is_on`, which sets `_return` to `True`. The
+router returns; the kernel returns (no transition queued); the
+wrapper pops the context and returns `_return`.
+
+The caller gets `True`. The same flow with the lamp in `$Off`
+returns `False`. Same interface call, different result based on
+state — the basic value of state machines.
+
+> **In statically-typed targets** — The wrapper's behavior depends
+> on whether the source declares a return type. With a return
+> type (`is_on(): bool`), the wrapper emits `return …_return` —
+> same as Python. Without one (`log()`), the wrapper has no
+> `return` statement and the method is genuinely `void`.
+>
+> This means `@@:return` or `@@:(...)` inside a void-declared
+> method is meaningless — the wrapper has nowhere to read the
+> slot. The framepiler rejects this at compile time rather than
+> emitting code the target compiler would reject. (Returning a
+> value from a void method is a type error in Java, Rust, Go,
+> Swift, C#, Kotlin, Dart, TypeScript, C, and C++.)
+>
+> Dynamic targets — Python, JavaScript, Ruby, Lua, PHP, GDScript,
+> Erlang — don't make the void-vs-typed distinction at runtime.
+> Their wrappers always read and return the slot regardless of
+> whether the source declared a return type. A method declared
+> without `: type` in Python that uses `@@:(42)` will return 42 to
+> the caller; the same source compiled for Java would be rejected
+> by the framepiler.
+>
+> The asymmetry is deliberate. Frame matches each target's native
+> conventions rather than imposing a single uniform rule across
+> all 17 backends. Strongly-typed targets enforce void-vs-typed at
+> compile time; Frame respects that. Dynamic targets always return
+> *something* (`undefined`, `None`, `nil`); the wrapper carrying
+> the slot is the natural idiom.
+
+### Default return values
+
+What if a state doesn't declare a handler for an interface method
+that has a return type? Right now `is_on()` is handled in both
+states, but if `$Off` had no `is_on` handler, the dispatcher would
+fall through and `_return` would still be `None` when the wrapper
+read it. The caller would get `None` for a method declared to
+return `bool`.
+
+Frame solves this with **default return values** in the interface
+declaration:
+
+```frame
+interface:
+    turn_on()
+    **is_on(): bool = false**
+```
+
+The `= false` after the return type is the default. If no handler
+sets `@@:return`, the wrapper returns this value. The FrameContext
+constructor takes the default and initializes `_return` to it
+rather than `None`:
+
+```python
+class LampFrameContext:
+    def __init__(self, event**, return_default**):
+        self.event = event
+        self._return = **return_default**
+```
+
+The wrapper for each method passes its declared default in:
+
+```python
+def is_on(self) -> bool:
+    __e = LampFrameEvent("is_on", [])
+    __ctx = LampFrameContext(__e**, False**)
     self._context_stack.append(__ctx)
     self.__kernel(__e)
     return self._context_stack.pop()._return
 ```
 
-### Setting Return Value
+The wrapper for each interface method passes the appropriate
+default. For `turn_on()` (no return type), there's no default —
+the FrameContext just gets `None` and the wrapper doesn't read
+`_return` at all.
 
-`@@:return = value` or `@@:(value)` both write the **FrameContext's
-return slot** — the field on the FrameContext that the interface
-method's wrapper reads after `__kernel` returns. They are the only way
-to set it; nothing else writes that slot from Frame source.
+If a handler sets `@@:return = expr`, that overwrites the default.
+If no handler sets it, the wrapper returns whatever the default
+was. From the caller's point of view, every interface method with
+a return type produces a value — never `None` or undefined.
+
+Defaults are useful when some handlers compute a return value and
+others want to fall through with a sensible "nothing to report"
+value. A method declared `call(): str = "error"` lets handlers
+that don't explicitly set `@@:return` produce `"error"` automatically —
+useful for "operation rejected" or "not applicable in this state"
+semantics.
+
+A method declared with a return type but no default gets the
+target language's null/zero/empty value as the implicit default
+(`None` in Python, `null` in JavaScript, the zero value in Go,
+etc.). Explicit defaults are recommended in static targets where
+the implicit default may not be what you want.
+
+### Native `return` vs `@@:`
+
+Native `return` in a handler exits the dispatch method but does
+not set `_return`. The framepiler emits warning W415 when a
+handler uses `return expr` because the value is almost certainly
+meant to be the interface return value. To set the return value,
+use `@@:return = expr` or `@@:(expr)`. Bare `return` (with no
+expression) exits the handler early without affecting the return
+value.
+
+### Async
+
+Interface methods can be declared `async`. Whether and how that
+propagates through the wrapper depends on the target language —
+Python uses `async def` and `await`, JavaScript returns a Promise,
+and other targets handle it differently. The runtime structure
+described here doesn't change; the wrapper, kernel, and dispatch
+layers work the same. For target-specific async behavior, see the
+[Frame Language Reference](frame_language.md).
+
+---
+
+## Step 9 — Interface method parameters
+
+```frame
+@@system Lamp {
+    interface:
+        **turn_on(brightness: int)**
+        is_on(): bool
+
+    machine:
+        $Off {
+            <$() {
+                print("lamp going on")
+            }
+            **turn_on(brightness: int) {
+                print(f"requested brightness: {brightness}")
+                -> "switch flipped" $On
+            }**
+            is_on(): bool {
+                @@:(false)
+            }
+        }
+
+        $On {
+            $>() {
+                self.cycles = self.cycles + 1
+                print(f"lamp is on (cycle {self.cycles})")
+            }
+            is_on(): bool {
+                @@:(true)
+            }
+        }
+
+    domain:
+        cycles: int = 0
+}
+```
+
+`turn_on` now takes a `brightness` parameter. The handler reads
+it and prints it before transitioning.
+
+The wrapper accepts the parameter and packs it into the
+FrameEvent:
 
 ```python
-# Both compile to:
-self._context_stack[-1]._return = value
+def turn_on(self, **brightness: int**):
+    __e = LampFrameEvent("turn_on", **[brightness]**)
+    __ctx = LampFrameContext(__e)
+    self._context_stack.append(__ctx)
+    self.__kernel(__e)
+    self._context_stack.pop()
 ```
 
-**Note:** `return expr` in handlers is a native return that exits the
-dispatch method — the value is NOT set on the FrameContext. The
-framepiler emits W415 warning for this pattern.
+`_parameters` was always a list. With no parameters declared, the
+list was empty. Now it holds the value the caller passed in. The
+handler binds the parameter to a local at the top of its body:
 
-### Return values across target languages
+```python
+def _s_Off_hdl_user_turn_on(self, __e, compartment):
+    **brightness = __e._parameters[0]**
+    print(f"requested brightness: {brightness}")
+    next_comp = LampCompartment("On")
+    self.__transition(next_comp)
+    return
+```
 
-Whether the wrapper exposes the FrameContext's return slot to the
-caller depends on the target language's typing conventions. Frame
-matches each target's native idiom rather than imposing one.
+Each parameter is read from `__e._parameters` by
+position — `_parameters[0]` for the first declared parameter,
+`_parameters[1]` for the second, and so on. After binding, the
+handler body uses the parameters as ordinary locals.
 
-**Strongly-typed targets** (TypeScript, Java, Kotlin, Swift, C#,
-Dart, C, C++, Go, Rust). The wrapper emits `return …` only when the
-Frame source declares a return type:
+> **In statically-typed targets** — `_parameters[0]` is typed
+> "any" (`Object` in Java, `Box<dyn Any>` in Rust, `Any` in
+> Swift), so binding requires a cast to the declared parameter
+> type. The framepiler emits the cast based on the source's type
+> annotation:
+>
+> ```java
+> int brightness = (Integer) __e._parameters.get(0);
+> ```
+>
+> ```rust
+> let brightness: i32 = *__e._parameters[0].downcast_ref::<i32>().unwrap();
+> ```
+>
+> Same positional access pattern, just with the cast appropriate
+> to the target. Authors don't write the casts; the framepiler
+> generates them from the parameter's declared type. Because
+> Frame source declares all parameter types, every cast is known
+> at code-generation time — there's no dynamic type checking at
+> runtime.
+
+### Positional, with named access in source
+
+`_parameters` is a positional list at the wire level. Frame source
+lets you access parameters by name (`brightness` in the handler
+body, or `@@:params.brightness` if you prefer the explicit form),
+but that named access is a compile-time rewrite. The framepiler
+binds each parameter to a typed local at the top of the handler
+and rewrites named references to use that local.
+
+This is the same mechanism every statically-typed language uses
+for function parameters: positional at the calling convention,
+named at the source. The wire format is positional; the source is
+named; the framepiler bridges them.
+
+### `@@:params.x`
+
+`@@:params.x` is the explicit form of named parameter access. In a
+handler body it's interchangeable with the bare parameter name —
+both compile to the same local. It's most useful in actions, which
+don't have parameters of their own but can read the calling
+handler's parameters via the context stack. We'll see actions in
+Step 13.
+
+---
+
+## Step 10 — State arguments
 
 ```frame
-get_count(): int { @@:(self.n) }     // wrapper emits `return …;`
-log()                                // wrapper has no `return`
+@@system Lamp {
+    interface:
+        turn_on(brightness: int)
+        is_on(): bool
+        **get_brightness(): int**
+
+    machine:
+        $Off {
+            <$() {
+                print("lamp going on")
+            }
+            turn_on(brightness: int) {
+                **-> "switch flipped" $On(brightness)**
+            }
+            is_on(): bool {
+                @@:(false)
+            }
+            **get_brightness(): int {
+                @@:(0)
+            }**
+        }
+
+        **$On(brightness: int) {**
+            $>() {
+                self.cycles = self.cycles + 1
+                **print(f"lamp is on at brightness {brightness} (cycle {self.cycles})")**
+            }
+            is_on(): bool {
+                @@:(true)
+            }
+            **get_brightness(): int {
+                @@:(brightness)
+            }**
+        }
+
+    domain:
+        cycles: int = 0
+}
 ```
 
-The declared type also flows into the generated wrapper signature, so
-a method declared without `: type` is genuinely `void`. The target
-compiler would reject a `return value` statement inside it. This is
-Frame respecting the target's compile-time contract.
+`$On` now declares a state parameter `brightness: int`. The
+transition `-> $On(brightness)` passes the value at transition
+time. Handlers in `$On` can reference `brightness` as a local.
 
-**Dynamic targets** (Python, JavaScript, Ruby, Lua, PHP, GDScript,
-Erlang). The wrapper *always* emits a return that exposes the
-FrameContext's return slot, regardless of whether the source declared
-a return type. If no handler called `@@:(...)`, the slot still holds
-the default (`null`/`None`/`nil`) and the caller receives that.
-Source-level `: type` annotations in dynamic targets are documentation
-only; the wrapper behavior is the same with or without them.
+A new interface method, `get_brightness()`, returns the current
+brightness — `0` from `$Off` (no state arg), the actual value from
+`$On`.
+
+Compartments need to carry state args, so the Compartment class
+gains a field:
+
+```python
+class LampCompartment:
+    def __init__(self, state):
+        self.state = state
+        **self.state_args = []**
+```
+
+`state_args` is a positional list, same shape as
+`FrameEvent._parameters`. It holds the values passed by the
+transition. The transition itself populates `state_args` on the
+new compartment before queueing it:
+
+```python
+def _s_Off_hdl_user_turn_on(self, __e, compartment):
+    brightness = __e._parameters[0]
+    next_comp = LampCompartment("On")
+    **next_comp.state_args = [brightness]**
+    self.__transition(next_comp)
+    return
+```
+
+The handler builds the new compartment, then populates its
+`state_args` before calling `__transition`. The kernel doesn't
+need to know about state args specifically — it just switches
+compartments. The args travel with the compartment.
+
+Handlers in `$On` bind state args at the top, the same way they
+bind event parameters:
+
+```python
+def _s_On_hdl_frame_enter(self, __e, compartment):
+    **brightness = compartment.state_args[0]**
+    self.cycles = self.cycles + 1
+    print(f"lamp is on at brightness {brightness} (cycle {self.cycles})")
+
+def _s_On_hdl_user_get_brightness(self, __e, compartment):
+    **brightness = compartment.state_args[0]**
+    self._context_stack[-1]._return = brightness
+```
+
+Every handler in `$On` reads `brightness` from
+`compartment.state_args[0]` — same prologue pattern as event
+parameters, just reading from a different list.
+
+State args persist for the lifetime of the compartment. They're
+set once when the compartment is built and read by every handler
+that runs in that state. This is different from event parameters,
+which arrive with each individual call.
+
+When `turn_on(75)` is called from `$Off`, the wrapper builds the
+event with `_parameters = [75]`. The handler binds `brightness =
+75`, builds an `$On` compartment with `state_args = [75]`, calls
+`__transition` and returns. The kernel fires `<$` on `$Off`,
+switches compartment, fires `$>` on `$On`. `$On.$>` binds
+`brightness = 75` from the compartment and prints "lamp is on at
+brightness 75". Calling `get_brightness()` afterward reads the
+same `state_args` slot and returns `75`. The brightness is part
+of the state's identity until the lamp transitions away.
+
+---
+
+## Step 11 — Enter args
 
 ```frame
-// In Python — both forms produce a wrapper that returns the slot:
-get_count(): int { @@:(self.n) }     // wrapper returns `_return`
-get_count() { @@:(self.n) }          // wrapper still returns `_return`
-peek()                               // wrapper returns the default null
+@@system Lamp {
+    interface:
+        turn_on(brightness: int)
+        is_on(): bool
+        get_brightness(): int
+
+    machine:
+        $Off {
+            <$() {
+                print("lamp going on")
+            }
+            turn_on(brightness: int) {
+                **-> "switch flipped" ("hello") $On(brightness)**
+            }
+            is_on(): bool {
+                @@:(false)
+            }
+            get_brightness(): int {
+                @@:(0)
+            }
+        }
+
+        $On(brightness: int) {
+            **$>(greeting: str) {**
+                self.cycles = self.cycles + 1
+                **print(f"{greeting} — lamp is on at brightness {brightness} (cycle {self.cycles})")**
+            }
+            is_on(): bool {
+                @@:(true)
+            }
+            get_brightness(): int {
+                @@:(brightness)
+            }
+        }
+
+    domain:
+        cycles: int = 0
+}
 ```
 
-Why two rules? Strongly-typed targets enforce void-vs-typed at compile
-time and would reject a return from a void-declared method. Dynamic
-targets always return *something* — there is no void to honor — so the
-wrapper always carries the slot to the caller.
+The transition `-> ("hello") $On(brightness)` now also supplies an
+**enter arg**. `$On.$>` declares a parameter `greeting: str` to
+receive it.
 
-### Last Writer Wins
+Enter args travel to the destination state's `$>` handler. They're
+distinct from state args, which any handler in the state can read.
+Enter args are a one-time payload for the entry itself.
 
-If multiple handlers in a transition chain set `@@:return`, the last
-value wins. The context stack's top-of-stack holds the outermost
-interface call's return slot; cascade handlers all write to the same
-slot.
+The transition syntax now distinguishes three argument groups:
 
-### Reentrancy
+| Position | Goes to | Channel |
+|---|---|---|
+| `(args) -> ...` | Source state's `<$` handler | exit args |
+| `... -> (args) $State` | Destination state's `$>` handler | enter args |
+| `... $State(args)` | Destination compartment's state args | state args |
 
-Each interface call pushes its own context:
+Step 11 introduces enter args; Step 12 will introduce exit args.
+
+The Compartment class gains another field for enter args:
+
+```python
+class LampCompartment:
+    def __init__(self, state):
+        self.state = state
+        self.state_args = []
+        **self.enter_args = []**
+```
+
+The handler populates `enter_args` alongside `state_args` before
+queueing the transition:
+
+```python
+def _s_Off_hdl_user_turn_on(self, __e, compartment):
+    brightness = __e._parameters[0]
+    next_comp = LampCompartment("On")
+    next_comp.state_args = [brightness]
+    **next_comp.enter_args = ["hello"]**
+    self.__transition(next_comp)
+    return
+```
+
+Same pattern as state args, just a different field. The kernel
+needs to pass these along to the `$>` handler, so it now reads
+`enter_args` off the new compartment and packs them into the
+synthesized `$>` event:
+
+```python
+def __kernel(self, __e):
+    self.__router(__e)
+
+    if self.__next_compartment is not None:
+        next_compartment = self.__next_compartment
+        self.__next_compartment = None
+
+        exit_event = LampFrameEvent("<$", [])
+        self.__router(exit_event)
+
+        self.__compartment = next_compartment
+
+        **enter_event = LampFrameEvent("$>", next_compartment.enter_args)**
+        self.__router(enter_event)
+```
+
+From the `$>` handler's point of view, the enter args look like
+ordinary event parameters. The handler binds them at the top:
+
+```python
+def _s_On_hdl_frame_enter(self, __e, compartment):
+    **greeting = __e._parameters[0]**
+    brightness = compartment.state_args[0]
+    self.cycles = self.cycles + 1
+    print(f"{greeting} — lamp is on at brightness {brightness} (cycle {self.cycles})")
+```
+
+`greeting` is bound from `__e._parameters[0]` — the FrameEvent the
+kernel built. `brightness` is bound from `compartment.state_args[0]`
+— still on the compartment.
+
+Enter args and state args travel through different paths. Enter
+args ride on the synthesized `$>` event. State args stay on the
+compartment. But once they're bound to locals, the handler body
+doesn't care which is which.
+
+---
+
+## Step 12 — Exit args
+
+```frame
+@@system Lamp {
+    interface:
+        turn_on(brightness: int)
+        **turn_off(reason: str)**
+        is_on(): bool
+        get_brightness(): int
+
+    machine:
+        $Off {
+            **$>(last_reason: str) {
+                print(f"lamp went dark: {last_reason}")
+            }**
+            <$() {
+                print("lamp going on")
+            }
+            turn_on(brightness: int) {
+                -> "switch flipped" ("hello") $On(brightness)
+            }
+            is_on(): bool {
+                @@:(false)
+            }
+            get_brightness(): int {
+                @@:(0)
+            }
+        }
+
+        $On(brightness: int) {
+            $>(greeting: str) {
+                self.cycles = self.cycles + 1
+                print(f"{greeting} — lamp is on at brightness {brightness} (cycle {self.cycles})")
+            }
+            **<$(reason: str) {
+                print(f"turning off: {reason}")
+            }**
+            **turn_off(reason: str) {
+                (reason) -> "switch flipped" (reason) $Off
+            }**
+            is_on(): bool {
+                @@:(true)
+            }
+            get_brightness(): int {
+                @@:(brightness)
+            }
+        }
+
+    domain:
+        cycles: int = 0
+}
+```
+
+A new interface method, `turn_off(reason: str)`, lets the lamp
+turn off with a reason. The transition
+`(reason) -> (reason) $Off` carries `reason` to both
+`$On.<$` (as exit arg) and `$Off.$>` (as enter arg).
+
+`$Off.$>` is also new — until now `$Off` had no enter handler.
+With exit args flowing into `$Off`, it makes sense to have an
+enter handler that uses them.
+
+Compartments need a third arg field for exit args:
+
+```python
+class LampCompartment:
+    def __init__(self, state):
+        self.state = state
+        self.state_args = []
+        self.enter_args = []
+        **self.exit_args = []**
+```
+
+The transition populates `exit_args` on the *current*
+compartment, not the next one — the exit handler that runs is the
+source state's, so its compartment is where the args belong:
+
+```python
+def _s_On_hdl_user_turn_off(self, __e, compartment):
+    reason = __e._parameters[0]
+    **compartment.exit_args = [reason]**
+    next_comp = LampCompartment("Off")
+    next_comp.enter_args = [reason]
+    self.__transition(next_comp)
+    return
+```
+
+The handler sets `compartment.exit_args` and the destination
+compartment's `enter_args` separately, even though both hold the
+same value here. They're independent channels — a transition could
+pass different values to each.
+
+The kernel reads `exit_args` off the current compartment when
+synthesizing `<$`, and `enter_args` off the destination when
+synthesizing `$>`:
+
+```python
+def __kernel(self, __e):
+    self.__router(__e)
+
+    if self.__next_compartment is not None:
+        next_compartment = self.__next_compartment
+        self.__next_compartment = None
+
+        **exit_event = LampFrameEvent("<$", self.__compartment.exit_args)**
+        self.__router(exit_event)
+
+        self.__compartment = next_compartment
+
+        enter_event = LampFrameEvent("$>", next_compartment.enter_args)
+        self.__router(enter_event)
+```
+
+The `<$` handler binds its exit args from `__e._parameters`, the
+same prologue pattern user handlers and `$>` handlers both use:
+
+```python
+def _s_On_hdl_frame_exit(self, __e, compartment):
+    **reason = __e._parameters[0]**
+    print(f"turning off: {reason}")
+```
+
+When `turn_off("bedtime")` is called from `$On`, the wrapper
+builds the event with `_parameters = ["bedtime"]`. The handler
+binds `reason = "bedtime"`, sets `compartment.exit_args =
+["bedtime"]` on the current `$On` compartment, builds the `$Off`
+compartment with `enter_args = ["bedtime"]`, calls `__transition`,
+and returns. The kernel synthesizes a `<$` event with
+`_parameters = ["bedtime"]` and routes it; `$On.<$` runs and
+prints "turning off: bedtime". The kernel then switches the
+compartment to `$Off` and synthesizes `$>` with `_parameters =
+["bedtime"]`; `$Off.$>` runs and prints "lamp went dark:
+bedtime".
+
+Three argument channels are now active: state args, enter args,
+exit args. They're independent — a transition can use any
+combination.
+
+---
+
+## Step 13 — Actions
+
+```frame
+@@system Lamp {
+    interface:
+        turn_on(brightness: int)
+        turn_off(reason: str)
+        is_on(): bool
+        get_brightness(): int
+
+    machine:
+        $Off {
+            $>(last_reason: str) {
+                **self.log_event(f"off: {last_reason}")**
+            }
+            <$() {
+                **self.log_event("turning on")**
+            }
+            turn_on(brightness: int) {
+                -> "switch flipped" ("hello") $On(brightness)
+            }
+            is_on(): bool {
+                @@:(false)
+            }
+            get_brightness(): int {
+                @@:(0)
+            }
+        }
+
+        $On(brightness: int) {
+            $>(greeting: str) {
+                self.cycles = self.cycles + 1
+                **self.log_event(f"on at {brightness}: {greeting}")**
+            }
+            <$(reason: str) {
+                **self.log_event(f"turning off: {reason}")**
+            }
+            turn_off(reason: str) {
+                (reason) -> "switch flipped" (reason) $Off
+            }
+            is_on(): bool {
+                @@:(true)
+            }
+            get_brightness(): int {
+                @@:(brightness)
+            }
+        }
+
+    **actions:
+        log_event(msg: str) {
+            print(f"[event] {msg}")
+            self.event_count = self.event_count + 1
+        }**
+
+    domain:
+        cycles: int = 0
+        **event_count: int = 0**
+}
+```
+
+The lamp now has an **action**: `log_event(msg)`. Actions are
+private helper methods. Handlers call them when the same code
+needs to run from multiple places — every lifecycle handler in the
+lamp now logs through `log_event` rather than printing inline.
+
+The action becomes a regular method on the system class:
+
+```python
+**def log_event(self, msg: str):
+    print(f"[event] {msg}")
+    self.event_count = self.event_count + 1**
+```
+
+No special wrapping, no context stack, no kernel involvement —
+just code that handlers can call. The handlers call it directly:
+
+```python
+def _s_On_hdl_frame_enter(self, __e, compartment):
+    greeting = __e._parameters[0]
+    brightness = compartment.state_args[0]
+    self.cycles = self.cycles + 1
+    **self.log_event(f"on at {brightness}: {greeting}")**
+```
+
+`log_event(...)` in Frame source compiles to `self.log_event(...)`
+in Python. Same as any method call.
+
+### What actions can and can't do
+
+Actions can:
+
+- Read and write domain fields (`self.event_count`)
+- Call `@@:return`, `@@:params`, `@@:event`, `@@:data` (we'll see
+  these in Step 15)
+- Call other actions and operations
+- Call `@@:self.method()` to invoke interface methods
+
+Actions cannot use any of Frame's state-machine syntax:
+
+- No `-> $State` — actions can't transition.
+- No `push$` or `pop$` — actions can't manipulate the state stack.
+- No `$.varName` — actions can't access state variables.
+
+The last restriction is structural. State variables live on a
+specific compartment. Handlers receive their compartment as a
+parameter (we'll see why in later steps). Actions don't — they're
+called from handlers in any state, so there's no single
+compartment that's theirs to receive. `$.varName` has nothing to
+resolve against in an action, so the framepiler rejects it (E401).
+
+If an action needs a value that only a handler has access to, the
+handler passes it as an argument. For state variables (which we
+haven't seen yet — they're introduced in Step 18), this is the
+standard pattern:
+
+```
+handler reads its state var → passes value to action → action uses it
+```
+
+Actions read domain fields directly (`self.x`) and context data
+through `@@:data`. State variables are the one store actions can't
+reach without help.
+
+### `@@:event`
+
+Inside an action, `@@:event` evaluates to the name of the
+interface method that's currently being processed. It's read
+through the context stack:
+
+```python
+@@:event   →   self._context_stack[-1].event._message
+```
+
+Useful when an action needs to know which interface method called
+it — for diagnostic logging, conditional behavior, etc.
+
+---
+
+## Step 14 — Operations
+
+```frame
+@@system Lamp {
+    **operations:
+        static version(): str {
+            return "1.0.0"
+        }
+
+        get_event_count(): int {
+            return self.event_count
+        }**
+
+    interface:
+        turn_on(brightness: int)
+        turn_off(reason: str)
+        is_on(): bool
+        get_brightness(): int
+
+    machine:
+        // ... (unchanged)
+
+    actions:
+        log_event(msg: str) {
+            print(f"[event] {msg}")
+            self.event_count = self.event_count + 1
+        }
+
+    domain:
+        cycles: int = 0
+        event_count: int = 0
+}
+```
+
+**Operations** are public methods that bypass the state machine
+entirely. They don't dispatch through the kernel, don't push a
+context, and don't go through any state's dispatcher. They're just
+plain methods on the system class.
+
+The lamp adds two operations:
+
+- `version()` — a static method that returns the lamp's version
+  string. Useful for diagnostic queries.
+- `get_event_count()` — a non-static method that returns the
+  current event count from the domain.
+
+The operations compile straight to methods on the system class:
+
+```python
+**@staticmethod
+def version() -> str:
+    return "1.0.0"
+
+def get_event_count(self) -> int:
+    return self.event_count**
+```
+
+Static operations get `@staticmethod` (or the target's equivalent)
+and don't take `self`. Non-static operations take `self` and can
+access domain fields directly. The body uses native `return` —
+operations bypass the state machine, so `@@:return` doesn't apply.
+
+### Operations vs interface methods
+
+Both are public, but they differ in what they can do:
+
+| | Interface method | Operation |
+|---|---|---|
+| Dispatches through kernel | Yes | No |
+| Behavior depends on state | Yes | No |
+| Can transition | Yes (in handler) | No |
+| Can access state vars | Yes (in handler) | No |
+| Has FrameContext | Yes | No |
+| Uses `@@:return` | Yes | No (native return) |
+
+Operations are the right choice for diagnostics, configuration
+queries, and utilities that don't depend on which state the system
+is in. Interface methods are the right choice for events the
+state machine should react to.
+
+---
+
+## Step 15 — Context data
+
+```frame
+@@system Lamp {
+    operations:
+        static version(): str {
+            return "1.0.0"
+        }
+        get_event_count(): int {
+            return self.event_count
+        }
+
+    interface:
+        turn_on(brightness: int)
+        turn_off(reason: str)
+        is_on(): bool
+        get_brightness(): int
+
+    machine:
+        $Off {
+            $>(last_reason: str) {
+                **@@:data.timestamp = self.timestamp_now()
+                self.log_event(f"off: {last_reason}")**
+            }
+            <$() {
+                **@@:data.timestamp = self.timestamp_now()**
+                self.log_event("turning on")
+            }
+            turn_on(brightness: int) {
+                -> "switch flipped" ("hello") $On(brightness)
+            }
+            is_on(): bool {
+                @@:(false)
+            }
+            get_brightness(): int {
+                @@:(0)
+            }
+        }
+
+        $On(brightness: int) {
+            $>(greeting: str) {
+                self.cycles = self.cycles + 1
+                **@@:data.timestamp = self.timestamp_now()**
+                self.log_event(f"on at {brightness}: {greeting}")
+            }
+            <$(reason: str) {
+                **@@:data.timestamp = self.timestamp_now()**
+                self.log_event(f"turning off: {reason}")
+            }
+            turn_off(reason: str) {
+                (reason) -> "switch flipped" (reason) $Off
+            }
+            is_on(): bool {
+                @@:(true)
+            }
+            get_brightness(): int {
+                @@:(brightness)
+            }
+        }
+
+    actions:
+        log_event(msg: str) {
+            **print(f"[{@@:data.timestamp}] [event] {msg}")**
+            self.event_count = self.event_count + 1
+        }
+        **timestamp_now(): str {
+            import datetime
+            return datetime.datetime.now().isoformat()
+        }**
+
+    domain:
+        cycles: int = 0
+        event_count: int = 0
+}
+```
+
+The lamp now records timestamps for every event. Each lifecycle
+handler stashes the current time into `@@:data.timestamp` before
+calling `log_event`. The action reads `@@:data.timestamp` to
+include the time in its log message.
+
+This shows what `@@:data` is for: **call-scoped scratch space
+shared between a handler and the actions or lifecycle handlers it
+triggers.**
+
+The timestamp could have been a domain field, but it shouldn't
+be — it's specific to one interface call. The next call gets its
+own timestamp. Domain would mean every action sees whatever
+timestamp the most recent handler happened to set, which is
+fragile.
+
+The timestamp could have been passed as an argument to
+`log_event`. That works for one action, but as more actions need
+the timestamp, every call site has to pass it. `@@:data` lets the
+handler set it once and all the actions in the dispatch chain see
+it.
+
+FrameContext gains a dict for call-scoped data:
+
+```python
+class LampFrameContext:
+    def __init__(self, event):
+        self.event = event
+        self._return = None
+        **self._data = {}**
+```
+
+`_data` is a string-keyed dict, empty when the context is
+constructed and populated by handlers and actions during the
+call. Handlers and actions read and write it through the context
+stack:
+
+```python
+def _s_On_hdl_frame_enter(self, __e, compartment):
+    greeting = __e._parameters[0]
+    brightness = compartment.state_args[0]
+    self.cycles = self.cycles + 1
+    **self._context_stack[-1]._data["timestamp"] = self.timestamp_now()**
+    self.log_event(f"on at {brightness}: {greeting}")
+
+def log_event(self, msg: str):
+    **print(f"[{self._context_stack[-1]._data['timestamp']}] [event] {msg}")**
+    self.event_count = self.event_count + 1
+```
+
+`@@:data.timestamp = expr` compiles to
+`self._context_stack[-1]._data["timestamp"] = expr`.
+`@@:data.timestamp` (read) compiles to the corresponding lookup.
+
+The handler and the action both reach the same `_data` dict
+because both run during the same interface call, with the same
+context on top of the stack.
+
+### Context data spans the dispatch chain
+
+`@@:data` lives for one full dispatch — the original handler, any
+exit/enter cascade triggered by transitions, and any actions
+called by any of those. Once the interface call returns, the
+context is popped and `_data` is discarded.
+
+This means a handler can stash data, transition, and the
+destination state's `$>` handler will see the same `_data`. The
+context stays on top of the stack for the entire call.
+
+A new interface call creates a fresh FrameContext with empty
+`_data`. The store is per-call, not per-system.
+
+### Why `_data` is dynamic
+
+Domain fields and state variables have declared types. `_data`
+doesn't. Keys are created on write; values are stored as the
+target language's "any" type — `dict` in Python,
+`HashMap<String, Box<dyn Any>>` in Rust, `Map<String, Object>` in
+Java.
+
+This is intentional. `_data` is reachable from any handler,
+action, or lifecycle handler that runs during a dispatch. The set
+of keys depends on which callables get reached and what they
+decide to write. There's no static schema that captures this
+without devolving to a dynamic map anyway. Frame represents the
+store as what it actually is.
+
+> **In statically-typed targets** — Reads from `_data` return the
+> target's "any" type. When the value is assigned to a typed
+> local or compared against a typed expression, the framepiler
+> emits the cast automatically based on the use site's expected
+> type. Direct uses (`if @@:data.flag`) work without a cast in
+> targets that auto-coerce; otherwise the framepiler inserts the
+> cast. Authors write the same `@@:data.x` syntax regardless of
+> target.
+
+### The three data stores
+
+The lamp now uses all three of Frame's data stores:
+
+| Store | Lifetime | Scope | Access |
+|---|---|---|---|
+| Domain | System lifetime | All states, all handlers | `self.field` |
+| State variables | While the state is active | One state's handlers | `$.x` (Step 18) |
+| Context data | One interface call | All handlers in the dispatch | `@@:data.k` |
+
+State variables are the one we haven't seen yet. The lamp doesn't
+need them — none of its data is "specific to a session of being
+on." When we move to the Circuit Breaker in Step 18, state
+variables will be the central feature.
+
+---
+
+## Step 16 — System parameters
+
+```frame
+**@@system Lamp(name: str = "Lamp") {**
+    operations:
+        static version(): str {
+            return "1.0.0"
+        }
+        get_event_count(): int {
+            return self.event_count
+        }
+
+    interface:
+        turn_on(brightness: int)
+        turn_off(reason: str)
+        is_on(): bool
+        get_brightness(): int
+        **get_name(): str**
+
+    machine:
+        $Off {
+            $>(last_reason: str) {
+                @@:data.timestamp = self.timestamp_now()
+                self.log_event(f"off: {last_reason}")
+            }
+            <$() {
+                @@:data.timestamp = self.timestamp_now()
+                self.log_event("turning on")
+            }
+            turn_on(brightness: int) {
+                -> "switch flipped" ("hello") $On(brightness)
+            }
+            is_on(): bool {
+                @@:(false)
+            }
+            get_brightness(): int {
+                @@:(0)
+            }
+            **get_name(): str {
+                @@:(self.name)
+            }**
+        }
+
+        $On(brightness: int) {
+            $>(greeting: str) {
+                self.cycles = self.cycles + 1
+                @@:data.timestamp = self.timestamp_now()
+                **self.log_event(f"{self.name} on at {brightness}: {greeting}")**
+            }
+            <$(reason: str) {
+                @@:data.timestamp = self.timestamp_now()
+                self.log_event(f"turning off: {reason}")
+            }
+            turn_off(reason: str) {
+                (reason) -> "switch flipped" (reason) $Off
+            }
+            is_on(): bool {
+                @@:(true)
+            }
+            get_brightness(): int {
+                @@:(brightness)
+            }
+            **get_name(): str {
+                @@:(self.name)
+            }**
+        }
+
+    actions:
+        // ... (unchanged)
+
+    domain:
+        cycles: int = 0
+        event_count: int = 0
+        **name: str = name**
+}
+```
+
+The lamp can now be named at construction time:
+
+```python
+kitchen = @@Lamp("kitchen")
+desk = @@Lamp()             # default: "Lamp"
+```
+
+`name` is a **domain parameter** — a constructor argument that's
+in scope when domain field initializers run. The domain block
+declares `name: str = name`, which compiles to `self.name = name`
+in the constructor. The same identifier means parameter on the
+right, field on the left. The constructor signature picks up the
+parameter:
+
+```python
+def __init__(self**, name: str = "Lamp"**):
+    self.cycles = 0
+    self.event_count = 0
+    **self.name = name**
+    self._context_stack = []
+    self.__compartment = LampCompartment("Off")
+    self.__next_compartment = None
+
+    enter_event = LampFrameEvent("$>", [])
+    enter_ctx = LampFrameContext(enter_event)
+    self._context_stack.append(enter_ctx)
+    self.__router(enter_event)
+    self._context_stack.pop()
+```
+
+The default value (`"Lamp"`) is filled in by the framepiler at the
+call site, so the constructor signature shows it as a default.
+This works even in target languages that don't support parameter
+defaults — the assembler substitutes the default into the call.
+
+### Three groups of system parameters
+
+The lamp uses only domain parameters. Frame supports three groups
+total:
+
+```frame
+@@system Foo($(slot: int), $>(timeout: int), name: str) { ... }
+```
+
+| Group | Sigil | Lands in |
+|---|---|---|
+| State arg | `$(name: type)` | Start state's `compartment.state_args` |
+| Enter arg | `$>(name: type)` | Start state's `compartment.enter_args` |
+| Domain arg | `name: type` | Constructor parameter, used in domain initializers |
+
+The sigils tell the framepiler where to route the value. State
+args go into the start state's compartment so handlers can read
+them. Enter args go to the start state's `$>` handler.
+
+Call site:
+
+```python
+foo = @@Foo($(0), $>(1000), "primary")
+```
+
+The lamp doesn't use state or enter args at the system level — its
+start state (`$Off`) doesn't take parameters, so there's nothing
+to wire up.
+
+---
+
+## Step 17 — `const` domain fields and `@@:system.state`
+
+```frame
+@@system Lamp(name: str = "Lamp"**, max_brightness: int = 100**) {
+    operations:
+        static version(): str {
+            return "1.0.0"
+        }
+        get_event_count(): int {
+            return self.event_count
+        }
+        **get_state(): str {
+            return @@:system.state
+        }**
+
+    interface:
+        turn_on(brightness: int)
+        turn_off(reason: str)
+        is_on(): bool
+        get_brightness(): int
+        get_name(): str
+
+    machine:
+        $Off {
+            $>(last_reason: str) {
+                @@:data.timestamp = self.timestamp_now()
+                self.log_event(f"off: {last_reason}")
+            }
+            <$() {
+                @@:data.timestamp = self.timestamp_now()
+                self.log_event("turning on")
+            }
+            turn_on(brightness: int) {
+                **actual = brightness
+                if actual > self.max_brightness:
+                    actual = self.max_brightness
+                -> "switch flipped" ("hello") $On(actual)**
+            }
+            // ... (rest unchanged)
+        }
+
+        // ... ($On unchanged)
+
+    actions:
+        // ... (unchanged)
+
+    domain:
+        cycles: int = 0
+        event_count: int = 0
+        name: str = name
+        **const max_brightness: int = max_brightness**
+}
+```
+
+Two additions:
+
+- `max_brightness` is a `const` domain field. It's set from a
+  system parameter at construction and can never be reassigned.
+  Handlers that try will be rejected at compile time (E615).
+- A new operation, `get_state()`, returns the current state name
+  via `@@:system.state`.
+
+The constructor emits the const field with a marker for its
+immutability:
+
+```python
+def __init__(self, name: str = "Lamp"**, max_brightness: int = 100**):
+    self.cycles = 0
+    self.event_count = 0
+    self.name = name
+    **# const: max_brightness
+    self.max_brightness = max_brightness**
+    # ... rest of constructor
+```
+
+In Python, `const` is a comment-only marker — Python doesn't have
+true field immutability. In other targets, the framepiler emits
+the language's idiomatic keyword:
+
+| Target | Emitted as |
+|---|---|
+| Java | `final int max_brightness = ...` |
+| C# | `readonly int max_brightness = ...` |
+| Swift | `let max_brightness: Int = ...` |
+| Kotlin | `val max_brightness: Int = ...` |
+| TypeScript | `readonly max_brightness: number = ...` |
+| C++ | `const int max_brightness;` |
+| Rust | (fields are immutable by default) |
+| Python, JS, PHP, Ruby, Lua, Erlang, GDScript, C, Go | comment-only |
+
+The framepiler enforces single-assignment at compile time
+regardless of target — even in Python, assigning to a `const`
+field in a handler body is E615.
+
+`@@:system.state` compiles to a direct read off the current
+compartment:
+
+```python
+def get_state(self) -> str:
+    **return self.__compartment.state**
+```
+
+The state name string is just `self.__compartment.state`.
+Read-only; you can't write to it.
+
+Useful in operations (which don't go through the kernel) and in
+diagnostic code that wants to know what state the system is in
+without dispatching an event to find out.
+
+### Other `@@:system` and `@@:self` access
+
+Two prefixes worth knowing about:
+
+- `@@:system.state` — the only `@@:system` reference currently
+  defined. Reads the current state name.
+- `@@:self.method(args)` — calls the system's own interface
+  method. Goes through the full dispatch pipeline. We'll see this
+  in Step 19 (Self-Calibrating Sensor).
+
+Both are syntactic prefixes, not values. Bare `@@:self` or
+`@@:system` is an error (E603/E604). Always chain a member.
+
+---
+
+## End of the lamp
+
+The lamp has shown all the light it can on how the runtime
+implements Frame's core features: states, transitions, lifecycle
+handlers, return values, parameters in three categories, actions,
+operations, context data, system parameters, and `const` fields.
+We'll now progress to more complex examples to explore the more
+sophisticated capabilities of Frame: state variables, self-calls,
+push/pop, HSM, and persistence.
+
+---
+
+## Step 18 — Circuit Breaker (state variables)
+
+A **circuit breaker** is a system that tolerates a few failures
+but trips open after too many in a row, counts down a cooldown
+period, then probes whether the downstream service has recovered.
+
+```frame
+@@target python_3
+
+@@system CircuitBreaker {
+    interface:
+        call(): str = "error"
+        success()
+        failure()
+        tick()
+        status(): str = ""
+
+    machine:
+        $Closed {
+            **$.failures: int = 0**
+
+            call(): str { @@:("allowed") }
+            success() { **$.failures = 0** }
+            failure() {
+                **$.failures = $.failures + 1
+                if $.failures >= self.threshold:**
+                    -> "tripped" $Open
+            }
+            status(): str { @@:(f"closed (**{$.failures}** failures)") }
+        }
+        $Open {
+            **$.cooldown_remaining: int = 0**
+
+            $>() {
+                **$.cooldown_remaining = self.cooldown**
+                print(f"Circuit OPEN — cooling down for {self.cooldown} ticks")
+            }
+            call(): str { @@:("blocked") }
+            tick() {
+                **$.cooldown_remaining = $.cooldown_remaining - 1
+                if $.cooldown_remaining <= 0:**
+                    -> "cooled down" $HalfOpen
+            }
+            status(): str { @@:(f"open (**{$.cooldown_remaining}** ticks left)") }
+        }
+        $HalfOpen {
+            call(): str { @@:("testing") }
+            success() {
+                print("Circuit recovered")
+                -> "recovered" $Closed
+            }
+            failure() {
+                print("Still failing")
+                -> "relapse" $Open
+            }
+            status(): str { @@:("half-open") }
+        }
+
+    domain:
+        threshold: int = 3
+        cooldown: int = 5
+}
+```
+
+`$Closed` declares a **state variable** with `$.failures: int = 0`.
+`$Open` declares its own state variable `$.cooldown_remaining`.
+Both variables live on their state's compartment — they exist
+while that state is current and go away when the state exits.
+
+The headline behavior: when the breaker trips and later recovers,
+`$.failures` resets to 0 automatically. The breaker doesn't
+remember failures from the previous session of being closed.
+That's because state variables are per-compartment, and entering
+`$Closed` builds a new compartment.
+
+Compartments need to carry state variables, so the Compartment
+class gains a fourth field:
+
+```python
+class CircuitBreakerCompartment:
+    def __init__(self, state):
+        self.state = state
+        self.state_args = []
+        self.enter_args = []
+        self.exit_args = []
+        **self.state_vars = {}**
+```
+
+`state_vars` is a string-keyed dict, empty when the compartment is
+constructed and populated by the state's `$>` handler.
+
+> **In statically-typed targets** — `state_vars` is typed as a map
+> of "any": `Map<String, Object>` in Java, `HashMap<String, Box<dyn Any>>`
+> in Rust. Same access pattern, with casts at the read site
+> emitted by the framepiler from the declared variable type:
+>
+> ```java
+> int failures = (Integer) compartment.state_vars.get("failures");
+> compartment.state_vars.put("failures", failures + 1);
+> ```
+>
+> Static targets *without* type erasure (Rust, C, C++) can't use
+> a string-keyed map cleanly because there's no "any" type that
+> compiles efficiently. These targets generate a typed-struct-
+> per-state with a tagged union across states:
+>
+> ```rust
+> enum CompartmentVars {
+>     Closed { failures: i32 },
+>     Open { cooldown_remaining: i32 },
+>     HalfOpen,
+> }
+> ```
+>
+> State variable access is direct field access through generated
+> accessor methods rather than dictionary lookup. Same Frame
+> source, different generated representation, same semantics.
+
+`$Open`'s `$>` handler starts with an initialization block:
+
+```python
+def _s_Open_hdl_frame_enter(self, __e, compartment):
+    **if "cooldown_remaining" not in compartment.state_vars:
+        compartment.state_vars["cooldown_remaining"] = 0**
+    compartment.state_vars["cooldown_remaining"] = self.cooldown
+    print(f"Circuit OPEN — cooling down for {self.cooldown} ticks")
+```
+
+The `if "x" not in compartment.state_vars` guard is the
+initialization pattern. Every state variable gets one — the
+framepiler emits the guard at the top of every state's `$>`
+handler.
+
+The guard looks redundant: the compartment was just built with an
+empty `state_vars`, so the check always succeeds. The guard
+matters for `pop$`, which we'll see in Step 20 — popped
+compartments come back with their `state_vars` already populated,
+and the guard is what prevents re-initialization. The same
+pattern also applies in HSM cascades (Step 21) where every layer
+in a chain runs its own `$>` initialization independently.
+
+`$Closed` doesn't declare a `$>` handler in the source, but it has
+a state variable to initialize. The framepiler emits one anyway:
+
+```python
+def _s_Closed_hdl_frame_enter(self, __e, compartment):
+    **if "failures" not in compartment.state_vars:
+        compartment.state_vars["failures"] = 0**
+```
+
+When a state declares state variables, it gets a `$>` handler even
+if the source didn't write one. The handler does whatever
+initialization the variables need.
+
+Handlers read and write state variables through the compartment
+parameter:
+
+```python
+def _s_Closed_hdl_user_failure(self, __e, compartment):
+    **compartment.state_vars["failures"] = compartment.state_vars["failures"] + 1
+    if compartment.state_vars["failures"] >= self.threshold:**
+        next_comp = CircuitBreakerCompartment("Open")
+        self.__transition(next_comp)
+        return
+
+def _s_Open_hdl_user_tick(self, __e, compartment):
+    **compartment.state_vars["cooldown_remaining"] = compartment.state_vars["cooldown_remaining"] - 1
+    if compartment.state_vars["cooldown_remaining"] <= 0:**
+        next_comp = CircuitBreakerCompartment("HalfOpen")
+        self.__transition(next_comp)
+        return
+```
+
+`$.failures` in Frame source compiles to
+`compartment.state_vars["failures"]` — direct lookup in the dict
+on the compartment parameter. `$.cooldown_remaining` works the
+same way against `$Open`'s compartment.
+
+This is why handlers receive a `compartment` parameter. State
+variables live on a specific compartment; handlers need a
+reference to that compartment to read or write them. The
+framepiler ensures every handler gets passed the right one — the
+router calls each state's dispatcher with the system's current
+compartment, which is the dispatcher's own state's compartment.
+
+### State variables reset on re-entry
+
+Trace the breaker through a full cycle. Three `failure()` calls
+climb `$.failures` from 0 to 3, hit threshold, and transition to
+`$Open`. `$Open.$>` runs on a fresh compartment with empty
+`state_vars`; the guard initializes `$.cooldown_remaining = 0`
+and the handler body sets it to `self.cooldown` (5). Five
+`tick()` calls count `$.cooldown_remaining` down from 5 to 0,
+transitioning to `$HalfOpen`. A `success()` call in `$HalfOpen`
+transitions to `$Closed`. `$Closed.$>` runs on a fresh
+compartment with empty `state_vars`; the guard initializes
+`$.failures = 0`.
+
+The breaker is back to a clean slate. The previous session's
+failure count is gone — it lived on the previous `$Closed`
+compartment, which was discarded when the breaker transitioned to
+`$Open`. Same for `$.cooldown_remaining`: the `$Open` compartment
+is discarded when the breaker transitions to `$HalfOpen`, taking
+the variable with it.
+
+This is the difference between domain (lifetime: system) and
+state variables (lifetime: this entry into the state). If
+`failures` were a domain field, the count would survive `$Open`
+and recovery would have to clear it explicitly. As a state
+variable, it's automatic — the compartment is rebuilt on every
+entry.
+
+### Why state variables are per-compartment
+
+State variables live on the compartment for two reasons.
+
+**Lifetime matches the state's activity.** While the state is
+current, its compartment exists and its variables are reachable.
+When the state exits, the compartment is discarded (or pushed to
+the state stack) and the variables go with it. Re-entering the
+state builds a fresh compartment with fresh variables. There's no
+cleanup the runtime has to do — the compartment lifecycle handles
+it.
+
+**Scope is hard to escape.** Frame source has `$.varName` syntax
+for state variables but no syntax for "the variable in some other
+state." Each handler can only reach its own state's variables
+through its own compartment parameter. The framepiler enforces
+this at compile time. There's no way to accidentally read or write
+another state's variables.
+
+Domain fields and context data exist for cases where data needs
+to cross state boundaries. State variables are deliberately the
+narrowest of the three stores.
+
+---
+
+## Step 19 — Self-Calibrating Sensor (self-calls)
+
+A sensor whose calibration logic needs to read the current sensor
+value through its own interface method.
+
+```frame
+@@target python_3
+
+@@system Sensor {
+    interface:
+        calibrate(): bool
+        reading(): int
+        attempt_post_shutdown()
+        trigger_shutdown()
+        get_trace(): str
+
+    machine:
+        $Active {
+            calibrate(): bool {
+                **baseline = @@:self.reading()**
+                self.offset = baseline * -1
+                @@:(true)
+            }
+            reading(): int {
+                @@:(self.sensor_value + self.offset)
+            }
+            attempt_post_shutdown() {
+                **@@:self.trigger_shutdown()
+                self.trace = self.trace + "after-call;"**
+            }
+            trigger_shutdown() {
+                self.trace = self.trace + "shutdown-handler;"
+                -> $Shutdown
+            }
+            get_trace(): str {
+                @@:(self.trace)
+            }
+        }
+
+        $Shutdown {
+            calibrate(): bool { @@:(false) }
+            reading(): int { @@:(0) }
+            attempt_post_shutdown() { }
+            trigger_shutdown() { }
+            get_trace(): str { @@:(self.trace) }
+        }
+
+    domain:
+        sensor_value: int = 100
+        offset: int = 0
+        trace: str = ""
+}
+```
+
+The example shows two patterns. `calibrate()` calls
+`@@:self.reading()` to get the baseline value, then computes the
+offset — the basic self-call where a handler invokes one of its
+own system's interface methods. `attempt_post_shutdown()` calls
+`@@:self.trigger_shutdown()` and then tries to update `self.trace`
+afterward; the shutdown handler transitions to `$Shutdown`, which
+has consequences for the line that runs after the self-call.
+That's the transition guard problem we'll work through after the
+basic mechanics.
+
+### Self-call mechanics
+
+`@@:self.reading()` compiles to `self.reading()` — a normal Python
+method call:
+
+```python
+def _s_Active_hdl_user_calibrate(self, __e, compartment):
+    **baseline = self.reading()**
+    self.offset = baseline * -1
+    self._context_stack[-1]._return = True
+```
+
+The framepiler validates at compile time that the method exists
+in the system's interface (E601 otherwise) and that the argument
+count matches (E602 otherwise). After validation, the emission is
+straightforward — it really is just a method call.
+
+What `self.reading()` reaches is the same wrapper an external
+caller would invoke:
+
+```python
+def reading(self) -> int:
+    __e = SensorFrameEvent("reading", [])
+    __ctx = SensorFrameContext(__e, 0)
+    **self._context_stack.append(__ctx)**
+    self.__kernel(__e)
+    return self._context_stack.pop()._return
+```
+
+Builds a FrameEvent, builds a FrameContext, pushes the context
+onto the stack, runs the kernel, pops the context, returns the
+value. This is where the context stack finally grows past depth
+1: the wrapper for `calibrate()` pushed a context when the
+external call started, and now `reading()`'s wrapper pushes
+another. The stack has two entries:
 
 ```
 _context_stack: [
-    FrameContext(event="outer", _return="outer_value", _data={"k":"v"}),
-    FrameContext(event="inner", _return="inner_value", _data={})
+    FrameContext(event=calibrate, _return=None, _data={}),
+    FrameContext(event=reading,   _return=0,    _data={}),
 ]
 ```
 
-Inner `@@:return` / `@@:data` do not affect outer contexts. Each
-layer's `@@` accessors resolve against its own top-of-stack entry.
+The wrapper's `append` and `pop` operations have always been
+there; with self-calls they finally do what they were designed
+for.
 
----
+Context isolation falls out of the stack structure. Inside
+`reading()`, code that reads `@@:return`, `@@:event`, or
+`@@:data` resolves against the top of the stack — the inner
+FrameContext. Code that sets `@@:return` writes to the inner
+slot:
 
-## Self Interface Calls
+```python
+def _s_Active_hdl_user_reading(self, __e, compartment):
+    self._context_stack[-1]._return = self.sensor_value + self.offset
+```
 
-`@@:self.method(args)` allows a system to call its own interface
-methods from within handlers and actions. The transpiler expands this
-into a native self-call on the generated interface method.
+`@@:(...)` compiles to `self._context_stack[-1]._return = ...`.
+The `[-1]` access takes the top of the stack, which is whatever
+context was pushed most recently — `reading()`'s context.
 
-### Codegen Expansion
+When `reading()`'s wrapper pops that context, the stack returns
+to just `calibrate()`'s context. Any subsequent code in
+`calibrate()`'s handler sees its own `_return`, `_data`, and
+`_message` again — the inner call's writes can't bleed out.
 
-| Target | `@@:self.getStatus()` expands to |
-|---|---|
-| Python | `self.getStatus()` |
-| TypeScript | `this.getStatus()` |
-| Rust | `self.getStatus()` |
-| C | `SystemName_getStatus(self)` |
-| C++ | `this->getStatus()` |
-| Go | `s.GetStatus()` |
-| Java | `this.getStatus()` |
-
-### Dispatch Pipeline
-
-The expansion calls the generated interface method, which follows the
-standard pipeline. The self-call pushes a new FrameContext onto the
-stack; the outer context is preserved:
+The full execution trace when external code calls
+`sensor.calibrate()` (indentation tracks call depth):
 
 ```
-Handler processing "analyze":
-    _context_stack: [ctx_analyze]
-
-    @@:self.getStatus()
-        _context_stack: [ctx_analyze, ctx_getStatus]
-        // inside getStatus: @@:event == "getStatus"
-        // @@:return refers to ctx_getStatus._return
-        _context_stack: [ctx_analyze]   // ctx_getStatus popped
-
-    // back in analyze handler
-    // @@:event == "analyze" (ctx_analyze is top again)
+1.  calibrate() wrapper called
+2.    push ctx_calibrate
+3.    kernel → router → _state_Active → _s_Active_hdl_user_calibrate
+4.      handler runs:
+5.        baseline = self.reading()
+6.          push ctx_reading
+7.          kernel → router → _state_Active → _s_Active_hdl_user_reading
+8.            sets ctx_reading._return = 100 + 0 = 100
+9.          pop ctx_reading, return 100
+10.       baseline = 100
+11.       self.offset = -100
+12.       sets ctx_calibrate._return = True
+13.   pop ctx_calibrate, return True
 ```
+
+Two context pushes, two context pops, two kernel runs — one for
+each interface call. The outer call's state is preserved while
+the inner call runs.
+
+### Transitions during self-calls
+
+`attempt_post_shutdown()` is more interesting because the
+self-call it makes triggers a transition:
+
+```python
+def _s_Active_hdl_user_attempt_post_shutdown(self, __e, compartment):
+    **self.trigger_shutdown()**
+    self.trace = self.trace + "after-call;"
+```
+
+When the self-call returns, what state is the system in?
+
+The kernel's deferred-transition model means transitions don't
+happen during handler execution — they're queued and processed
+after the handler returns. Self-calls are no exception: when
+`trigger_shutdown()` queues `-> $Shutdown`, the kernel still
+runs. `__transition` set `__next_compartment`, the handler
+returned, and the kernel processed the transition before
+returning to the outer caller. The full trace makes this
+sequence visible:
+
+```
+1.  attempt_post_shutdown() wrapper called
+2.    push ctx_attempt
+3.    kernel → router → _state_Active → _s_Active_hdl_user_attempt_post_shutdown
+4.      handler runs:
+5.        self.trigger_shutdown()
+6.          push ctx_trigger
+7.          kernel → router → _state_Active → _s_Active_hdl_user_trigger_shutdown
+8.            self.trace += "shutdown-handler;"
+9.            __next_compartment = Shutdown compartment
+10.         router returns
+11.         __next_compartment is set → kernel processes the transition
+12.         (no <$ or $> declared, but the compartment switch happens)
+13.         __compartment is now $Shutdown's compartment
+14.       pop ctx_trigger
+15.     trigger_shutdown returns
+16.     self.trace += "after-call;"   ← this still runs
+17.   pop ctx_attempt
+```
+
+After `trigger_shutdown()` returns at line 15, the system is
+already in `$Shutdown`. The line `self.trace = self.trace +
+"after-call;"` on line 16 still runs — it's native Python in the
+`attempt_post_shutdown` handler method, and Python doesn't know
+the system has transitioned. The trace ends up
+`"shutdown-handler;after-call;"`.
+
+This is sometimes the right behavior. But it's often a bug:
+
+- Code after the self-call may read state variables that no longer
+  exist (their compartment was just discarded).
+- Code after the self-call may transition again, layering on top
+  of the self-call's transition.
+- Code after the self-call may not make sense in the new state.
+
+### The transition guard pattern
+
+When a handler does work after a self-call that might transition,
+guard the work with a state check:
+
+```frame
+attempt_post_shutdown() {
+    @@:self.trigger_shutdown()
+    if @@:system.state == "Active":
+        self.trace = self.trace + "after-call;"
+}
+```
+
+`@@:system.state` reads the current state name from the
+compartment. After the self-call, this evaluates whatever state
+the system is in *now* — if a transition happened, it'll be the
+destination state, not the original.
+
+The guard explicitly says "only run this if we're still where we
+were." A handler that wants to be transition-safe can use this
+pattern around any self-call that might transition.
+
+This is a tradeoff in Frame's design. Self-calls go through the
+full dispatch pipeline so they behave consistently with external
+calls — transitions, lifecycle handlers, everything. The cost is
+that a self-call can change the system's state out from under the
+calling handler. Frame doesn't try to hide this; the guard pattern
+makes it explicit when it matters.
+
+For self-calls that don't transition (like `@@:self.reading()` in
+this sensor), no guard is needed — the post-call code is fine.
+The guard pattern only matters when the called method might
+transition.
 
 ### Validation
 
+Self-calls have compile-time checks:
+
 | Code | Check |
 |---|---|
-| E601 | Method does not exist in `interface:` block |
-| E602 | Argument count mismatch |
+| E601 | Method doesn't exist in `interface:` |
+| E602 | Argument count doesn't match |
+| E603 | Bare `@@:self` (must be `@@:self.method(args)`) |
+| E604 | Bare `@@:system` (must be `@@:system.state`) |
 
-These validations are not possible with native self-calls, which the
-transpiler treats as opaque native code.
+The validation runs at the same stage as other interface
+references. By the time the framepiler emits code, all self-calls
+have been resolved against real interface declarations.
 
 ---
 
-## State Variables
+## Step 20 — Modal Dialog Stack (push and pop)
 
-### Storage
+A modal dialog stack: when a dialog opens on top of an existing
+context, the system needs to remember the previous state and
+return to it when the dialog closes.
 
-State variables are stored in `compartment.state_vars`, keyed by
-declared name. Because HSM forwards pre-shift the compartment
-parameter one level at each `=> $^`, a handler method's `compartment`
-parameter is **always** its own state's compartment:
+```frame
+@@target python_3
 
-```python
-# Inside a handler method for state A (flat or HSM, doesn't matter).
-value = compartment.state_vars["counter"]
-compartment.state_vars["counter"] = value + 1
+@@system Workflow {
+    interface:
+        start()
+        interrupt(reason: str)
+        resume()
+        complete()
+        tick()
+        status(): str = ""
+
+    machine:
+        $Idle {
+            start() {
+                -> $Working
+            }
+            status(): str { @@:("idle") }
+        }
+
+        $Working {
+            $.progress: int = 0
+
+            $>() {
+                print("started working")
+            }
+
+            interrupt(reason: str) {
+                **push$
+                -> $Interrupted(reason)**
+            }
+
+            complete() {
+                $.progress = 100
+                print(f"complete: {$.progress}%")
+                -> $Idle
+            }
+
+            tick() {
+                $.progress = $.progress + 10
+            }
+
+            status(): str { @@:(f"working ({$.progress}%)") }
+        }
+
+        $Interrupted(reason: str) {
+            $>() {
+                print(f"interrupted: {reason}")
+            }
+
+            resume() {
+                **-> pop$**
+            }
+
+            status(): str { @@:(f"interrupted: {reason}") }
+        }
+}
 ```
 
-There is no HSM walk inside handler methods. The walk happens at each
-forward site via `compartment.parent_compartment`, so by the time the
-parent's handler runs, `compartment` is already pointing at the
-parent's own compartment.
+`push$` saves the current compartment onto a stack. `-> pop$`
+transitions back to the saved compartment.
 
-### Initialization
+The use case: the system is in `$Working` with some progress
+accumulated (say `$.progress = 30`). An interrupt arrives, so
+`push$` saves the `$Working` compartment, then `-> $Interrupted(reason)`
+moves to the interrupted state. When `resume()` is called,
+`-> pop$` restores the saved `$Working` compartment — including
+`$.progress = 30` — and the workflow continues from where it left
+off. Without `push$`/`pop$`, returning to `$Working` would build a
+fresh compartment with `$.progress = 0` and the work in progress
+would be lost.
 
-State variables initialize inside the lifecycle `$>` handler method,
-guarded by `if not in`:
+The system needs a place to save compartments, so the constructor
+gains a state stack:
 
 ```python
-def _s_MyState_hdl_frame_enter(self, __e, compartment):
-    if "counter" not in compartment.state_vars:
-        compartment.state_vars["counter"] = 0
-    if "data" not in compartment.state_vars:
-        compartment.state_vars["data"] = {}
+def __init__(self):
+    self._context_stack = []
+    **self._state_stack = []**
+    self.__compartment = WorkflowCompartment("Idle")
+    self.__next_compartment = None
+    enter_event = WorkflowFrameEvent("$>", [])
+    enter_ctx = WorkflowFrameContext(enter_event)
+    self._context_stack.append(enter_ctx)
+    self.__router(enter_event)
+    self._context_stack.pop()
 ```
 
-The guard preserves state-var content on `pop$` restoration — the
-initializer runs only when the var doesn't already exist.
+`_state_stack` is a Python list. It holds saved compartments —
+references, not copies. Empty when the system starts.
 
-### Lifecycle
+`push$` appends the current compartment to that list:
 
-| Event | Behavior |
+```python
+def _s_Working_hdl_user_interrupt(self, __e, compartment):
+    reason = __e._parameters[0]
+    **self._state_stack.append(self.__compartment)**
+    next_comp = WorkflowCompartment("Interrupted")
+    next_comp.state_args = [reason]
+    self.__transition(next_comp)
+    return
+```
+
+The saved compartment object — including its `state_vars` dict
+with all the work-in-progress values — gets a new reference on
+the stack. The compartment itself isn't copied; the stack and the
+system both point at the same object.
+
+After `push$`, the handler builds an `$Interrupted` compartment
+and calls `__transition`. The kernel runs the exit cascade for
+`$Working`, then enters `$Interrupted` — but the `$Working`
+compartment isn't garbage collected because the state stack still
+has a reference to it.
+
+`-> pop$` reverses the operation:
+
+```python
+def _s_Interrupted_hdl_user_resume(self, __e, compartment):
+    **next_comp = self._state_stack.pop()**
+    self.__transition(next_comp)
+    return
+```
+
+The list's `pop()` removes and returns the last item — the saved
+`$Working` compartment. The handler then calls `__transition`
+with it as the destination, and the kernel processes the
+transition normally: fire `<$` on `$Interrupted`, switch
+`__compartment`, fire `$>` on `$Working`.
+
+This is where the initialization guard from Step 18 matters.
+`$Working.$>` runs as if entering normally:
+
+```python
+def _s_Working_hdl_frame_enter(self, __e, compartment):
+    **if "progress" not in compartment.state_vars:
+        compartment.state_vars["progress"] = 0**
+    print("started working")
+```
+
+On a fresh entry via `start()`, the compartment is new and
+`state_vars` is empty — the guard sees `"progress"` is missing
+and initializes it to 0. On a `pop$` re-entry, the compartment is
+the saved one and `state_vars` already has `{"progress": 30}` —
+the guard sees `"progress"` *is* there and skips initialization,
+so `$.progress` keeps its value.
+
+| Operation | `state_vars` at `$>` entry | Initialization runs? |
+|---|---|---|
+| `-> $Working` (fresh) | `{}` | yes |
+| `-> pop$` (restored) | `{"progress": 30, ...}` | no |
+
+Without the guard, `pop$` would reset state variables and the
+work-in-progress would be lost. With it, restoration preserves
+them. This is the whole reason the guard exists.
+
+### Push/pop is a stack
+
+Multiple `push$` calls layer compartments and `pop$` retrieves
+them in last-in-first-out order:
+
+```
+state: $A           stack: []
+push$               stack: [$A]
+-> $B               state: $B
+push$               stack: [$A, $B]
+-> $C               state: $C
+-> pop$             state: $B (popped from stack)  stack: [$A]
+-> pop$             state: $A (popped from stack)  stack: []
+```
+
+The state stack is a separate concept from the context stack
+(`_context_stack`) we saw in Step 19. They have different
+purposes: the state stack holds compartments and is manipulated
+explicitly through `push$` and `pop$` — it's used for save/restore
+patterns. The context stack holds FrameContexts and is managed
+automatically by interface method wrappers — it's used for nested
+call isolation.
+
+A handler can push state with `push$`, fire a self-call (which
+pushes and pops a context), and the state stack is unaffected.
+The two stacks operate independently.
+
+### When the stack is empty
+
+`-> pop$` on an empty `_state_stack` is undefined. Python raises
+`IndexError`; other targets fail with their language's equivalent.
+The framepiler doesn't check at compile time — keeping push/pop
+balanced is the author's responsibility, like keeping any other
+stack discipline.
+
+---
+
+## Step 21 — Thermostat (hierarchical state machines)
+
+A thermostat that has multiple operating modes — heating, cooling,
+and fan-only — but shares logic for power on/off across all of
+them.
+
+```frame
+@@target python_3
+
+@@system Thermostat {
+    interface:
+        power_off()
+        adjust(setpoint: int)
+        get_mode(): str
+
+    machine:
+        $Active {
+            $.setpoint: int = 70
+
+            $>() {
+                print("thermostat active")
+            }
+
+            <$() {
+                print("powering down")
+            }
+
+            adjust(setpoint: int) {
+                $.setpoint = setpoint
+            }
+
+            power_off() {
+                -> $Off
+            }
+        }
+
+        **$Heating => $Active {**
+            $>() {
+                print("heating mode")
+            }
+
+            get_mode(): str {
+                @@:("heating")
+            }
+        }
+
+        **$Cooling => $Active {**
+            $>() {
+                print("cooling mode")
+            }
+
+            get_mode(): str {
+                @@:("cooling")
+            }
+        }
+
+        $Off {
+            get_mode(): str {
+                @@:("off")
+            }
+        }
+}
+```
+
+`$Heating => $Active` declares `$Heating` as a child of `$Active`.
+Same with `$Cooling`. The arrow points from child to parent. When
+the system is in `$Heating`, it's *also* in `$Active` — the parent
+state's compartment is part of the active chain, and parent
+handlers participate in the lifecycle.
+
+Three things become visible with HSM:
+
+1. When the system enters `$Heating`, both `$Active.$>` and
+   `$Heating.$>` fire — parent first, child second.
+2. When the system leaves `$Heating`, both `$Heating.<$` and
+   `$Active.<$` fire — child first, parent second.
+3. The parent's compartment is reachable from the child's
+   compartment.
+
+The first two are the *cascade*. The third is what makes parameter
+propagation and event forwarding work in later steps.
+
+Compartments need to know their parent in the chain, so the
+Compartment class gains a field:
+
+```python
+class ThermostatCompartment:
+    def __init__(self, state):
+        self.state = state
+        self.state_args = []
+        self.enter_args = []
+        self.exit_args = []
+        self.state_vars = {}
+        **self.parent_compartment = None**
+```
+
+`parent_compartment` is `None` for states without an HSM parent
+(`$Active`, `$Off`) and points at the parent's compartment for
+HSM children (`$Heating`, `$Cooling`).
+
+The framepiler emits a static topology table that knows which
+states have parents:
+
+```python
+**_HSM_CHAIN = {
+    "Active":  ["Active"],
+    "Heating": ["Active", "Heating"],
+    "Cooling": ["Active", "Cooling"],
+    "Off":     ["Off"],
+}**
+```
+
+Each entry maps a leaf state name to the chain from root to leaf.
+`$Heating`'s chain is `["Active", "Heating"]` — the parent first,
+the leaf last. `$Active` has just itself. The table is generated
+once at compile time from the source's `=> $Parent` declarations.
+
+The transition into an HSM state needs to build the whole chain,
+not just the leaf compartment. A new helper does this:
+
+```python
+**def __prepareEnter(self, leaf, state_args, enter_args):
+    previous = None
+    for name in _HSM_CHAIN[leaf]:
+        comp = ThermostatCompartment(name)
+        comp.state_args = list(state_args)
+        comp.enter_args = list(enter_args)
+        comp.parent_compartment = previous
+        previous = comp
+    return comp**
+```
+
+For a transition to `$Heating`, the loop runs twice: builds an
+`$Active` compartment, then builds a `$Heating` compartment with
+`parent_compartment` pointing at the `$Active` one. The leaf
+compartment is what gets returned.
+
+Handlers that transition into an HSM state use `__prepareEnter`
+instead of building the compartment directly:
+
+```python
+def _s_Off_hdl_user_adjust(self, __e, compartment):
+    setpoint = __e._parameters[0]
+    **next_comp = self.__prepareEnter("Heating", [], [])**
+    self.__transition(next_comp)
+    return
+```
+
+Same pattern as before — build the next compartment, hand it to
+`__transition`, return — but the construction goes through the
+helper.
+
+The kernel needs to fire the cascade in the right order. On entry,
+top-down (parent's `$>` first, then child's). On exit, bottom-up
+(child's `<$` first, then parent's). The kernel's transition
+processing picks up two helpers:
+
+```python
+def __kernel(self, __e):
+    self.__router(__e)
+
+    if self.__next_compartment is not None:
+        next_compartment = self.__next_compartment
+        self.__next_compartment = None
+
+        **self.__fire_exit_cascade()**
+
+        self.__compartment = next_compartment
+
+        **self.__fire_enter_cascade()**
+```
+
+The exit cascade walks up from the current leaf compartment,
+firing `<$` on each:
+
+```python
+**def __fire_exit_cascade(self):
+    comp = self.__compartment
+    while comp is not None:
+        exit_event = ThermostatFrameEvent("<$", comp.exit_args)
+        self.__route_to_state(comp.state, exit_event, comp)
+        comp = comp.parent_compartment**
+```
+
+It starts at `self.__compartment` (the leaf), fires `<$` against
+that compartment, walks up via `parent_compartment`, fires `<$`
+against the next one, and so on until it hits `None`. For
+`$Heating`, this fires `$Heating.<$` then `$Active.<$`.
+
+The enter cascade walks down from the new chain's root, firing
+`$>` on each:
+
+```python
+**def __fire_enter_cascade(self):
+    chain = []
+    comp = self.__compartment
+    while comp is not None:
+        chain.append(comp)
+        comp = comp.parent_compartment
+
+    for comp in reversed(chain):
+        enter_event = ThermostatFrameEvent("$>", comp.enter_args)
+        self.__route_to_state(comp.state, enter_event, comp)**
+```
+
+It collects the chain by walking up, then iterates in reverse
+(root first, leaf last). For an entry into `$Heating`, this fires
+`$Active.$>` then `$Heating.$>`.
+
+Both cascades route through a small helper that calls a specific
+state's dispatcher with a specific compartment, rather than the
+system's current compartment:
+
+```python
+**def __route_to_state(self, state_name, __e, compartment):
+    if state_name == "Active":
+        self._state_Active(__e, compartment)
+    elif state_name == "Heating":
+        self._state_Heating(__e, compartment)
+    elif state_name == "Cooling":
+        self._state_Cooling(__e, compartment)
+    elif state_name == "Off":
+        self._state_Off(__e, compartment)**
+```
+
+This is a variant of the router from earlier steps. The original
+router always uses `self.__compartment`; this one takes the
+compartment as a parameter so cascades can route to ancestors.
+
+When a handler runs during a cascade, it gets *its own state's
+compartment* — not the leaf's. `$Active.$>` runs against the
+`$Active` compartment; `$Heating.$>` runs against the `$Heating`
+compartment. State variables stay per-state because each
+compartment in the chain is its own object.
+
+Trace what happens when external code calls `adjust(72)` from
+`$Off`. The wrapper queues the event; the router calls
+`_state_Off`'s dispatcher, which calls `_s_Off_hdl_user_adjust`.
+The handler calls `__prepareEnter("Heating", [], [])`, which
+builds an `$Active` compartment, then a `$Heating` compartment
+with `parent_compartment` pointing at the `$Active` one, and
+returns the `$Heating` compartment. The handler calls
+`__transition(next_comp)` and returns. The kernel sees
+`__next_compartment` is set; it calls `__fire_exit_cascade()`,
+but the current compartment is `$Off` (no parent), so this fires
+`$Off.<$` and stops — and since `$Off` has no exit handler,
+nothing actually runs. The kernel sets `__compartment` to the new
+leaf (`$Heating`), then calls `__fire_enter_cascade()`. This
+walks up the chain from `$Heating` to find `$Active` at the root,
+then iterates in reverse: fires `$Active.$>` (prints "thermostat
+active") against the `$Active` compartment, then fires
+`$Heating.$>` (prints "heating mode") against the `$Heating`
+compartment.
+
+The system is now in `$Heating`, with an `$Active` compartment
+underneath. `__compartment` points at the leaf.
+`__compartment.parent_compartment` points at `$Active`.
+
+Calling `power_off()` from `$Heating` works because the dispatcher
+pattern needs an extension. We'll cover that — and parameter
+propagation between layers — in Step 22.
+
+### Every transition rebuilds the destination chain
+
+Worth being explicit about this: `__prepareEnter` builds *every*
+compartment in the destination chain from scratch, regardless of
+which compartments existed before. There's no compartment reuse,
+no LCA (lowest common ancestor) optimization, no "stay where you
+already are."
+
+This means a transition between siblings under a shared parent —
+say `$Heating` to `$Cooling`, both children of `$Active` — does
+the following:
+
+1. Exit cascade fires bottom-up on the source chain: `$Heating.<$`,
+   then `$Active.<$`. Both run.
+2. The kernel switches `__compartment` to the new chain's leaf.
+3. Enter cascade fires top-down on the destination chain:
+   `$Active.$>` (on a *new* `$Active` compartment), then
+   `$Cooling.$>`. Both run.
+
+The previous `$Active` compartment is discarded. Any state
+variables it held are gone. Its `<$` ran on exit; the new
+`$Active` compartment's `$>` runs on entry.
+
+This differs from UML statecharts, which suppress the parent's
+lifecycle on intra-subtree moves to preserve composite-state
+identity. Frame's runtime treats every transition uniformly —
+build the destination chain, fire the cascades, no exceptions.
+The model is simpler (one rule, applied uniformly) at the cost
+of composite-state persistence within a subtree.
+
+If you need state to persist across sibling transitions, put it
+in domain (it survives all transitions) rather than on the parent
+state. Domain is the right tool for "this value belongs to the
+system, not to any particular state's lifecycle."
+
+The example above puts `$.setpoint` on `$Active` — which means
+switching modes loses the setpoint between transitions. Step 22
+revises this: `setpoint` becomes a state arg passed at every
+transition, with `self.last_setpoint` (a domain field) recording
+the most recent value. The state variable on the parent state
+turned out to be the wrong tool for the job — exactly the kind
+of mistake the rebuild-on-every-transition rule makes visible.
+
+### Self-calls and HSM
+
+The transition guard pattern from Step 19 (checking
+`@@:system.state` after a self-call that might transition) still
+works with HSM. `@@:system.state` reads the leaf state's name —
+which is what you want. After a self-call that transitions from
+`$Heating` to `$Cooling`, `@@:system.state` returns `"Cooling"`.
+The guard pattern is unaffected by HSM depth.
+
+---
+
+## Step 22 — Thermostat (parameter propagation)
+
+The thermostat's `$Active` parent state needs more than just
+lifecycle handlers — it needs to receive and act on parameters.
+A real thermostat would want the setpoint to be passed in at
+every transition into a mode, not just via `adjust()` after the
+fact.
+
+```frame
+@@target python_3
+
+@@system Thermostat {
+    interface:
+        switch_to_heating(setpoint: int, reason: str)
+        switch_to_cooling(setpoint: int, reason: str)
+        power_off(reason: str)
+        get_setpoint(): int
+
+    machine:
+        $Off {
+            switch_to_heating(setpoint: int, reason: str) {
+                **(reason) -> ("starting up") $Heating(setpoint)**
+            }
+            switch_to_cooling(setpoint: int, reason: str) {
+                **(reason) -> ("starting up") $Cooling(setpoint)**
+            }
+        }
+
+        **$Active(setpoint: int) {**
+            **$>(message: str) {**
+                print(f"thermostat active: {message}")
+                self.last_setpoint = setpoint
+            }
+
+            **<$(reason: str) {**
+                print(f"powering down: {reason}")
+            }
+
+            power_off(reason: str) {
+                **(reason) -> $Off**
+            }
+
+            get_setpoint(): int {
+                **@@:(setpoint)**
+            }
+        }
+
+        **$Heating(setpoint: int) => $Active {**
+            **$>(message: str) {**
+                print(f"heating mode: {message}, target {setpoint}")
+            }
+
+            **<$(reason: str) {**
+                print(f"heating off: {reason}")
+            }
+        }
+
+        **$Cooling(setpoint: int) => $Active {**
+            **$>(message: str) {**
+                print(f"cooling mode: {message}, target {setpoint}")
+            }
+
+            **<$(reason: str) {**
+                print(f"cooling off: {reason}")
+            }
+        }
+
+    domain:
+        last_setpoint: int = 0
+}
+```
+
+Three things changed structurally:
+
+1. `$Active` now declares `(setpoint: int)` as its state
+   parameter, and a matching enter handler `$>(message: str)` and
+   exit handler `<$(reason: str)`.
+2. `$Heating` and `$Cooling` declare the *same* signatures:
+   `(setpoint: int)` for the state, `$>(message: str)`,
+   `<$(reason: str)`. This is required.
+3. The transition syntax now passes args through all three
+   channels: state arg `(setpoint)`, enter arg `("starting up")`,
+   exit arg `(reason)`.
+
+The signature-match requirement is the headline new constraint.
+Let's see why it matters.
+
+### The signature-match rule
+
+When a transition targets `$Heating(72)`, both `$Active.$>` and
+`$Heating.$>` need to run. If `$Active` declares
+`$>(message: str)`, then the kernel needs to deliver a `message`
+string to it. If `$Heating` declares `$>(message: str)`, the
+kernel needs to deliver one to it too. The transition supplies
+*one* enter arg list, and that same list flows to every layer of
+the chain.
+
+For this to be type-safe, every state in the chain has to declare
+the same signature. Mismatched signatures would mean a parent
+expects different arguments than what the transition provides,
+or a child expects different arguments than what propagated to
+it. The framepiler rejects this at compile time.
+
+The rule applies to all three channels:
+
+| Channel | Constraint |
 |---|---|
-| `-> $State` (normal entry) | Variables initialized to declared values |
-| `-> pop$` (history entry) | Variables restored from saved compartment |
-| Within state | Variables persist until state exits |
-| Self-transition (`-> $CurrentState`) | Variables reset (full lifecycle: `<$`, state switch, `$>`) |
+| `state_args` | `$Child(args)` must match `$Parent(args)` exactly |
+| `enter_args` | Child's `$>(args)` must match parent's `$>(args)` exactly, or both states declare none |
+| `exit_args` | Child's `<$(args)` must match parent's `<$(args)` exactly, or both states declare none |
 
-### Per-target representation
+By "match" we mean same parameter names and same types. Order
+matters. "Or both declare none" handles the case where neither
+state declares the lifecycle handler — propagation is vacuous if
+neither side reads anything.
 
-State_vars storage varies meaningfully between target category:
+State args follow a different runtime mechanism than enter and
+exit args, but the same propagation rule applies. Enter and exit
+args ride on synthesized `$>` and `<$` events — the kernel builds
+one event per layer, each carrying the same args list. State
+args don't ride on events; they sit on the compartment as a
+persistent field that any handler in the state can read.
+`__prepareEnter` writes the same values into each layer's
+`state_args` because the signatures match, so a parent's user
+handler reading `compartment.state_args[0]` sees the same value
+the transition supplied. The signature-match rule applies to
+state args for the same structural reason as enter args: a
+handler reading `compartment.state_args[0]` must see a value of
+the type its declaration claims.
 
-**Dynamic targets** (Python, JavaScript, Ruby, Lua, PHP, GDScript)
-represent state_vars as string-keyed maps. This matches native
-idiom — dict, object, hash, table — and integrates naturally with the
-target's type system.
+Future work may relax this to a prefix-match rule (parent's
+signature is a prefix of child's — child may extend with
+additional parameters), but v4 enforces exact match.
 
-**Static targets with type erasure** (Java, Kotlin, C#, Swift, Dart,
-TypeScript) use string-keyed maps of the target's "any" type
-(`Map<String, Object>`, `[String: Any]`, etc.). State_var access
-requires casts; the framepiler inserts them where types are known at
-the Frame source level.
+### How propagation works in the runtime
 
-**Static targets without type erasure** (Rust, C, C++) use
-typed-struct-per-state representations with a tagged union across
-states. State_var access is direct field access through generated
-accessor methods. This preserves compile-time type safety and matches
-the native idiom for these languages.
+`__prepareEnter` already walked the chain and set `state_args`
+and `enter_args` on every compartment. With matching signatures,
+every layer receives the same values in the same positions:
 
-The three representations are semantically equivalent — same set of
-state_vars, same scoping rules, same initialization semantics,
-identical canonical serialization under `@@persist`. They differ only
-in how they're encoded in the target's type system.
+```python
+def __prepareEnter(self, leaf, state_args, enter_args):
+    previous = None
+    for name in _HSM_CHAIN[leaf]:
+        comp = ThermostatCompartment(name)
+        **comp.state_args = list(state_args)**
+        **comp.enter_args = list(enter_args)**
+        comp.parent_compartment = previous
+        previous = comp
+    return comp
+```
+
+For `__prepareEnter("Heating", [72], ["starting up"])`, both the
+`$Active` compartment and the `$Heating` compartment get
+`state_args = [72]` and `enter_args = ["starting up"]`.
+
+Each layer holds its own list (`list(state_args)` makes a copy).
+They're independent objects with the same contents — modifications
+to one wouldn't affect the others. In practice handlers don't
+modify the args lists; treating them as immutable per-layer
+copies is the cleanest mental model.
+
+Exit args propagate the same way, but they're populated on the
+*current* chain at transition time, not on the new chain. A new
+helper `__prepareExit` walks up from the current leaf and
+populates `exit_args` on every compartment in the chain:
+
+```python
+**def __prepareExit(self, exit_args):
+    comp = self.__compartment
+    while comp is not None:
+        comp.exit_args = list(exit_args)
+        comp = comp.parent_compartment**
+```
+
+Handlers that pass exit args call this helper before
+transitioning:
+
+```python
+def _s_Active_hdl_user_power_off(self, __e, compartment):
+    reason = __e._parameters[0]
+    **self.__prepareExit([reason])**
+    next_comp = self.__prepareEnter("Off", [], [])
+    self.__transition(next_comp)
+    return
+```
+
+By the time the kernel fires the exit cascade, every compartment
+in the source chain has `exit_args` populated. The cascade reads
+`comp.exit_args` from each compartment (which it was already
+doing — that line was generic from Step 21), so each layer's `<$`
+handler receives the values.
+
+### Each layer binds its own copy
+
+Lifecycle handlers use the standard parameter binding pattern —
+they read from `__e._parameters`, which the kernel populates from
+the compartment's args. The handler at each layer binds `message`
+(or `reason`, or whatever) at the top:
+
+```python
+def _s_Active_hdl_frame_enter(self, __e, compartment):
+    **message = __e._parameters[0]
+    setpoint = compartment.state_args[0]**
+    print(f"thermostat active: {message}")
+    self.last_setpoint = setpoint
+
+def _s_Heating_hdl_frame_enter(self, __e, compartment):
+    **message = __e._parameters[0]
+    setpoint = compartment.state_args[0]**
+    print(f"heating mode: {message}, target {setpoint}")
+```
+
+Both handlers bind `message` from `__e._parameters[0]` — the
+kernel synthesized one `$>` event per layer, each carrying the
+same enter args list as `_parameters`. Both bind `setpoint` from
+`compartment.state_args[0]` — but each handler's `compartment` is
+its own layer's compartment (`$Active`'s compartment for
+`$Active.$>`, `$Heating`'s compartment for `$Heating.$>`). The
+kernel's cascade routing made sure of this in Step 21.
+
+The user handler `get_setpoint()` reads from its own state's
+compartment too:
+
+```python
+def _s_Active_hdl_user_get_setpoint(self, __e, compartment):
+    **setpoint = compartment.state_args[0]**
+    self._context_stack[-1]._return = setpoint
+```
+
+Because `get_setpoint` is declared on `$Active`, the dispatcher
+that picks this handler is `_state_Active`'s, which receives the
+`$Active` compartment when called. We'll see in Step 23 how a
+call to `get_setpoint` from `$Heating` actually reaches
+`$Active`'s dispatcher — that's the event forwarding mechanism.
+
+### Cascade and context data
+
+The cascade fires multiple lifecycle handlers — but it's still
+one interface call, so they all share the same FrameContext on
+top of the `_context_stack`. That has consequences for
+`@@:data`. If `$Active.$>` writes `@@:data.timestamp = "T1"` and
+then `$Heating.$>` writes `@@:data.timestamp = "T2"`, the second
+write wins. The dict is shared; last writer takes the slot.
+
+Same for `@@:return` set during a cascade — though setting return
+values from lifecycle handlers is unusual. The point is just that
+cascade layers aren't isolated from each other through the
+context stack the way self-calls are. They're all part of one
+dispatch.
+
+In practice this rarely surprises anyone. Lifecycle handlers
+across cascade layers usually write to disjoint keys when they
+write to `@@:data` at all, and the inheritance is what authors
+want — a parent's `$>` setting up `@@:data.session_id` so the
+child's `$>` can use it is a reasonable pattern. But if you find
+two layers both writing the same key, the later layer (closer to
+the leaf on entry, closer to the leaf on exit) wins.
+
+### Trace through a transition
+
+Calling `switch_to_heating(72, "morning")` from `$Off`:
+
+The wrapper builds the event with `_parameters = [72, "morning"]`.
+The router calls `_state_Off`'s dispatcher, which calls the
+handler. The handler binds `setpoint = 72` and `reason =
+"morning"`. It calls `__prepareEnter("Heating", [72], ["starting
+up"])`, which builds the `$Active` compartment with `state_args =
+[72]` and `enter_args = ["starting up"]`, then builds the
+`$Heating` compartment with the same args, and returns the
+`$Heating` compartment.
+
+The handler calls `__transition` and returns. The kernel sees
+`__next_compartment` is set. The exit cascade fires `<$` on the
+source chain — just `$Off`, which has no exit handler. Then the
+kernel switches `__compartment` to the new `$Heating`
+compartment.
+
+The enter cascade walks up to find `$Active` at the root, then
+iterates in reverse. First it fires `$Active.$>` against the
+`$Active` compartment with `_parameters = ["starting up"]`. The
+handler binds `message = "starting up"` from the event and
+`setpoint = 72` from `compartment.state_args[0]`. It prints
+"thermostat active: starting up" and sets `self.last_setpoint =
+72`.
+
+Then it fires `$Heating.$>` against the `$Heating` compartment
+with `_parameters = ["starting up"]`. The handler binds `message
+= "starting up"` from the event and `setpoint = 72` from
+`compartment.state_args[0]`. It prints "heating mode: starting
+up, target 72".
+
+Two prints; two lifecycle handlers; same args at every layer.
+
+### Switching modes (sibling transition)
+
+Step 21 introduced the rule that every transition rebuilds the
+destination chain. With parameter propagation now in play, that
+rule has visible consequences for sibling transitions. Trace
+through `switch_to_cooling(68, "evening")` while the system is
+in `$Heating`:
+
+The wrapper builds the event with `_parameters = [68,
+"evening"]`. How the router reaches a handler in `$Heating`
+(which doesn't declare `switch_to_cooling` directly) is covered
+in Step 23 via `=> $^`. For this trace, the focus is on what
+the kernel does once `__transition` has been called — the
+dispatcher routing that got us there is settled.
+
+The handler binds `setpoint = 68`, `reason = "evening"`. It
+calls `__prepareExit(["evening"])`, which walks the current chain
+and writes `["evening"]` to both `$Heating`'s and `$Active`'s
+`exit_args`. It calls `__prepareEnter("Cooling", [68], ["starting
+up"])`, building a fresh `$Active` compartment with `state_args =
+[68]` and a `$Cooling` compartment with the same. The handler
+calls `__transition` and returns.
+
+The kernel processes the transition:
+
+1. Exit cascade, bottom-up on the source chain. Fire
+   `$Heating.<$` with `_parameters = ["evening"]`: prints
+   "heating off: evening". Walk up to `$Active`. Fire
+   `$Active.<$` with `_parameters = ["evening"]`: prints
+   "powering down: evening".
+2. Switch `__compartment` to the new `$Cooling` leaf.
+3. Enter cascade, top-down on the destination chain. Fire
+   `$Active.$>` with `_parameters = ["starting up"]`: prints
+   "thermostat active: starting up", sets `self.last_setpoint =
+   68`. Fire `$Cooling.$>` with `_parameters = ["starting up"]`:
+   prints "cooling mode: starting up, target 68".
+
+Four prints, in order:
+
+```
+heating off: evening
+powering down: evening
+thermostat active: starting up
+cooling mode: starting up, target 68
+```
+
+Two of those — `$Active.<$` and `$Active.$>` — are the parent
+state's lifecycle running on the way out and back in. The
+previous `$Active` compartment is gone. Any state variables it
+held are gone with it. The new `$Active` compartment is freshly
+constructed.
+
+If `$Active` had a state variable like `$.uptime`, switching from
+`$Heating` to `$Cooling` would reset it. Authors who expect the
+parent to "stay active" while switching modes are working from a
+mental model Frame doesn't share. The runtime treats the parent
+as part of the chain, and chains are rebuilt on every transition.
+
+Use domain for cross-mode persistence (`self.uptime` survives
+every transition). Use state vars for state-local concerns. The
+distinction is sharper here than in flat state machines because
+HSM creates the temptation to put "shared" data on the parent;
+Frame's runtime model says that temptation should be resisted.
 
 ---
 
-## Actions and Operations
+## Step 23 — Thermostat (event forwarding with `=> $^`)
 
-### Actions
+Step 22 left a question hanging: the thermostat's `$Active` parent
+declares `power_off()` and `get_setpoint()` handlers, but the
+system can be in `$Heating` or `$Cooling` when a caller invokes
+those methods. How does the event reach the parent's handler?
 
-Private helpers with access to domain fields and context data:
+Add a single line to each child to find out:
 
-```python
-def __my_action(self, param):
-    self.domain_var = param        # Can access domain vars
-    @@:data.timestamp = now()      # Can access context data
-    # CANNOT use: -> $State, push$, pop$, $.varName
+```frame
+$Heating(setpoint: int) => $Active {
+    **=> $^**
+
+    $>(message: str) {
+        print(f"heating mode: {message}, target {setpoint}")
+    }
+
+    <$(reason: str) {
+        print(f"heating off: {reason}")
+    }
+}
+
+$Cooling(setpoint: int) => $Active {
+    **=> $^**
+
+    $>(message: str) {
+        print(f"cooling mode: {message}, target {setpoint}")
+    }
+
+    <$(reason: str) {
+        print(f"cooling off: {reason}")
+    }
+}
 ```
 
-**Actions have no compartment parameter.** Handler methods receive
-`compartment` because each one is statically bound to exactly one
-state — the framepiler knows at codegen time which state's
-compartment to pass. Actions are called from handlers in any state,
-so no single compartment is theirs to receive.
+`=> $^` declares that unhandled events in this state forward to
+the parent state's dispatcher. Without it, events that don't match
+any of `$Heating`'s declared handlers fall off the end and are
+ignored.
 
-This is why `$.varName` is E401 inside actions: the name has no
-static referent the symbol table can resolve. If an action needs a
-state variable's value, the caller passes it as a plain argument.
+Forwarding is opt-in. A child without `=> $^` is genuinely sealed
+— even if its parent declares a handler for an event, calling that
+event while in the child does nothing. This is deliberate. State
+machines often have child states that should *not* respond to
+parent events (think of an `$Editing` mode where `save()` is
+suppressed because there's nothing to save yet). Frame doesn't
+assume forwarding; it requires the author to declare it.
 
-Actions can still reach context data (`@@:data`) because the context
-is per-call, not per-state. The call-scoped stack is `self`-attached;
-actions inherit it from the calling handler's context.
+### How the dispatcher changes
 
-### Operations
-
-Public methods bypassing the state machine:
+The state dispatcher in Step 3 ended after the last handler match.
+With `=> $^`, the dispatcher gains a fall-through that routes to
+the parent:
 
 ```python
-def my_operation(self, param) -> int:
-    return self.domain_var + param  # Direct domain access, no kernel
+def _state_Heating(self, __e, compartment):
+    if __e._message == "$>":
+        self._s_Heating_hdl_frame_enter(__e, compartment); return
+    if __e._message == "<$":
+        self._s_Heating_hdl_frame_exit(__e, compartment); return
+    **# => $^ — fall through to parent
+    self._state_Active(__e, compartment.parent_compartment)**
 ```
 
-Operations don't dispatch through the state machine. They can declare
-return types using the target language's native syntax. Since the
-body is native code, `return value` works as expected.
+The fall-through line at the bottom calls the parent's dispatcher
+(`_state_Active`) with the parent's compartment
+(`compartment.parent_compartment`). No condition — anything that
+didn't match a declared handler reaches this line.
+
+The compartment swap is critical. The parent's dispatcher and its
+handlers expect to see the parent's compartment, not the child's.
+`$Heating`'s `compartment` parameter holds the `$Heating`
+compartment; its `parent_compartment` field points at the
+`$Active` compartment. Passing that up means `$Active`'s handlers
+can read `compartment.state_args[0]` and get `$Active`'s setpoint
+(which is the same value, by the propagation rule from Step 22 —
+but the principle is that each layer reads from its own
+compartment).
+
+`$Cooling`'s dispatcher gets the same fall-through line:
+
+```python
+def _state_Cooling(self, __e, compartment):
+    if __e._message == "$>":
+        self._s_Cooling_hdl_frame_enter(__e, compartment); return
+    if __e._message == "<$":
+        self._s_Cooling_hdl_frame_exit(__e, compartment); return
+    **self._state_Active(__e, compartment.parent_compartment)**
+```
+
+`$Active`'s dispatcher doesn't change. It already has handlers for
+`power_off`, `get_setpoint`, `$>`, and `<$`. It doesn't have a
+fall-through because `$Active` itself has no parent — `$Active`'s
+unhandled events are genuinely ignored.
+
+`=> $^` is only legal in states that declare an HSM parent. A
+state without a parent has nothing to forward to, so the
+declaration is meaningless. The framepiler rejects it at compile
+time.
+
+### Trace a forwarded event
+
+Calling `get_setpoint()` while the system is in `$Heating`:
+
+The wrapper builds the event with `_message = "get_setpoint"`. The
+router reads `self.__compartment.state` — that's `"Heating"` — so
+it calls `_state_Heating(event, self.__compartment)`. The
+dispatcher checks `$>` (no match) and `<$` (no match) and falls
+through to `self._state_Active(event, compartment.parent_compartment)`.
+
+This reaches `$Active`'s dispatcher with the `$Active`
+compartment. The dispatcher matches `get_setpoint` and calls
+`_s_Active_hdl_user_get_setpoint(event, compartment)` — where
+`compartment` is now the `$Active` compartment, not the original
+`$Heating` one. The handler binds `setpoint =
+compartment.state_args[0]` from the `$Active` compartment, sets
+`@@:return = setpoint`, returns.
+
+The wrapper pops the context and returns the value. The caller
+gets the setpoint.
+
+The same call from `$Cooling` would route through `$Cooling`'s
+dispatcher's fall-through, reach `$Active` the same way, and
+produce the same result. The parent's handler is the one source
+of truth, regardless of which child the system is in.
+
+### Forwarding doesn't change the system's state
+
+Worth being explicit about this: `=> $^` forwards an event up the
+chain at *dispatch* time. It doesn't transition the system. The
+system is still in `$Heating` after `get_setpoint()` returns. No
+exit cascade fires; no enter cascade fires; `__compartment`
+doesn't change.
+
+This is different from a transition that targets the parent. If
+the source said `-> $Active`, that *would* transition — leaving
+`$Heating` (firing `$Heating.<$`) and entering `$Active` (firing
+`$Active.$>`). The cascade would also trigger because of the HSM
+relationship.
+
+`=> $^` is purely a dispatch-routing construct. The state stays
+where it is; the event just gets dispatched to the parent's
+handlers.
+
+### Multi-level chains
+
+If the thermostat had a third level — say `$EcoHeating => $Heating
+=> $Active` — `=> $^` declared on `$EcoHeating` would forward to
+`$Heating`. If `$Heating` also declared `=> $^`, those events
+would forward again to `$Active`. The walk continues until either
+a handler matches or the chain runs out.
+
+In the dispatcher, this looks like:
+
+```python
+def _state_EcoHeating(self, __e, compartment):
+    # ... handlers ...
+    self._state_Heating(__e, compartment.parent_compartment)
+```
+
+`$Heating`'s dispatcher (also with `=> $^` declared) ends with:
+
+```python
+def _state_Heating(self, __e, compartment):
+    # ... handlers ...
+    self._state_Active(__e, compartment.parent_compartment)
+```
+
+The unhandled event walks up one level per dispatcher call, with
+`compartment.parent_compartment` swapping in the right compartment
+at each level. By the time `$Active`'s dispatcher runs, the
+compartment is the `$Active` compartment. If `$Active` also fails
+to handle the event and has no parent, the event is ignored.
+
+Each `=> $^` declaration costs one line in one dispatcher. The
+mechanism is shallow on purpose: it does exactly what it says,
+nothing more.
 
 ---
 
-## Persistence
+## Step 24 — Approval Chain (event forwarding via transition)
 
-### Canonical state format
+A document approval workflow that routes through reviewers based
+on the document type. The key trick: when the request arrives,
+the workflow needs to figure out which reviewer to use, transition
+to that state, and then dispatch the request to the new state's
+handler.
 
-A persisted Frame system serializes the following structure:
+```frame
+@@target python_3
+
+@@system Approval {
+    interface:
+        submit(doc_type: str, content: str)
+        approve()
+        reject(reason: str)
+        get_status(): str = "unknown"
+
+    machine:
+        $Triage {
+            submit(doc_type: str, content: str) {
+                if doc_type == "expense":
+                    **-> => $ExpenseReview**
+                elif doc_type == "policy":
+                    **-> => $PolicyReview**
+                else:
+                    -> $Rejected("unknown type")
+            }
+
+            get_status(): str { @@:("triage") }
+        }
+
+        $ExpenseReview {
+            $>() {
+                print("expense reviewer assigned")
+            }
+            submit(doc_type: str, content: str) {
+                self.content = content
+                print(f"expense review starting: {len(content)} chars")
+            }
+            approve() { -> $Approved }
+            reject(reason: str) { -> $Rejected(reason) }
+            get_status(): str { @@:("expense review") }
+        }
+
+        $PolicyReview {
+            $>() {
+                print("policy reviewer assigned")
+            }
+            submit(doc_type: str, content: str) {
+                self.content = content
+                print(f"policy review starting: {len(content)} chars")
+            }
+            approve() { -> $Approved }
+            reject(reason: str) { -> $Rejected(reason) }
+            get_status(): str { @@:("policy review") }
+        }
+
+        $Approved {
+            get_status(): str { @@:("approved") }
+        }
+
+        $Rejected(reason: str) {
+            $>() {
+                print(f"rejected: {reason}")
+            }
+            get_status(): str { @@:("rejected") }
+        }
+
+    domain:
+        content: str = ""
+}
+```
+
+`$Triage`'s `submit` handler does something we haven't seen
+before: `-> => $ExpenseReview`. The arrow combination means
+"transition to `$ExpenseReview` *and* re-dispatch the current
+event to the new state's handler."
+
+Without this, `$Triage` would have to either handle `submit`
+itself (storing the document and triggering the transition some
+other way) or transition to `$ExpenseReview` and lose the
+`submit` event entirely. Neither matches the natural flow:
+"figure out who reviews this, hand the document to them."
+
+Compare to Step 23's `=> $^`. That construct dispatched an event
+to a parent state without changing the current state.
+`-> =>` does the opposite: changes the current state *and*
+re-dispatches the event to it. The two solve different problems
+and use different mechanisms.
+
+### How the runtime forwards the event
+
+The compartment needs to carry the event that should fire after
+entry. A new field appears on the compartment:
+
+```python
+class ApprovalCompartment:
+    def __init__(self, state):
+        self.state = state
+        self.state_args = []
+        self.enter_args = []
+        self.exit_args = []
+        self.state_vars = {}
+        self.parent_compartment = None
+        **self.forward_event = None**
+```
+
+`forward_event` holds a FrameEvent that the kernel should
+re-dispatch after entering the new state. `None` for normal
+transitions; populated for `-> =>` transitions.
+
+The handler that uses `-> =>` populates the field on the new
+compartment before transitioning:
+
+```python
+def _s_Triage_hdl_user_submit(self, __e, compartment):
+    doc_type = __e._parameters[0]
+    content = __e._parameters[1]
+    if doc_type == "expense":
+        next_comp = self.__prepareEnter("ExpenseReview", [], [])
+        **next_comp.forward_event = __e**
+        self.__transition(next_comp)
+        return
+    elif doc_type == "policy":
+        next_comp = self.__prepareEnter("PolicyReview", [], [])
+        **next_comp.forward_event = __e**
+        self.__transition(next_comp)
+        return
+    else:
+        next_comp = self.__prepareEnter("Rejected", ["unknown type"], [])
+        self.__transition(next_comp)
+        return
+```
+
+The handler builds the destination compartment, sets
+`forward_event` to the current event (`__e`), then calls
+`__transition` and returns. The kernel will see the
+`forward_event` and act on it.
+
+The kernel's transition processing checks for the forward and
+re-dispatches it after the entry cascade:
+
+```python
+def __kernel(self, __e):
+    self.__router(__e)
+
+    if self.__next_compartment is not None:
+        next_compartment = self.__next_compartment
+        self.__next_compartment = None
+
+        self.__fire_exit_cascade()
+
+        self.__compartment = next_compartment
+
+        **if next_compartment.forward_event is None:**
+            self.__fire_enter_cascade()
+        **else:
+            forward_event = next_compartment.forward_event
+            next_compartment.forward_event = None
+            self.__fire_enter_cascade()
+            self.__router(forward_event)**
+```
+
+If `forward_event` is `None`, the kernel fires the enter cascade
+normally — same as before. If `forward_event` is set, the kernel
+extracts it (clearing the field so it doesn't trigger again),
+fires the enter cascade, and then calls the router with the
+saved event. The router routes through the new state's
+dispatcher, which now has the chance to handle the event.
+
+The order matters: enter cascade first, then forward. By the
+time the new state sees the event, its `$>` handler has already
+run. State variables are initialized; the state is fully set up.
+
+### Trace a forwarded transition
+
+Calling `submit("expense", "Receipt for travel...")` from
+`$Triage`:
+
+The wrapper builds the event with `_parameters = ["expense",
+"Receipt for travel..."]`. The router calls `_state_Triage`'s
+dispatcher, which calls `_s_Triage_hdl_user_submit`. The handler
+binds `doc_type = "expense"` and `content = "Receipt for
+travel..."`, takes the first branch, builds an `$ExpenseReview`
+compartment, sets `next_comp.forward_event = __e`, calls
+`__transition`, and returns.
+
+The kernel sees `__next_compartment` is set. Exit cascade runs
+on `$Triage` — no handler, nothing prints. The kernel switches
+`__compartment` to the new `$ExpenseReview` compartment. It sees
+`forward_event` is set, so it pulls it out, clears the field,
+fires the enter cascade ($ExpenseReview.$> prints "expense
+reviewer assigned"), then calls the router with the saved event.
+
+The router now routes the original `submit` event with
+`__compartment` being the `$ExpenseReview` compartment. It calls
+`_state_ExpenseReview`'s dispatcher, which matches `submit` and
+calls `_s_ExpenseReview_hdl_user_submit`. The handler binds
+`doc_type` and `content` again, stores `self.content = content`,
+prints "expense review starting: ... chars".
+
+The wrapper pops the context. The caller's `submit()` call is
+done. The system is in `$ExpenseReview`, the document is stored,
+and both states had a chance to print.
+
+### `-> =>` versus `=> $^`
+
+These two arrow forms look similar but solve different problems:
+
+| Construct | Changes state? | Re-dispatches event? | Where used? |
+|---|---|---|---|
+| `=> $^` | No | Yes (to parent) | In a state's dispatcher fall-through |
+| `-> =>` | Yes | Yes (to new state) | In a transition |
+
+`=> $^` is for "this state doesn't handle this; the parent does."
+The system stays where it is. Used for HSM event delegation.
+
+`-> =>` is for "transition to a new state, and let it handle this
+event." The system moves; the event moves with it. Used for
+dispatch-and-handoff patterns like the approval chain.
+
+Both rely on the compartment carrying just enough information for
+the kernel to do the right thing. `=> $^` doesn't need any
+runtime support beyond `parent_compartment` (which already exists
+for the cascade). `-> =>` needs the `forward_event` field on the
+compartment, populated at the transition site, consumed by the
+kernel after entry.
+
+---
+
+## Step 25 — Session Persistence (`@@persist` and restore)
+
+A counter that survives process restarts. Save its state to a
+blob; restart the process; restore from the blob; the counter
+keeps counting from where it left off.
+
+```frame
+@@target python_3
+
+**@@persist**
+@@system Counter {
+    interface:
+        tick()
+        get_count(): int
+
+    machine:
+        $Active {
+            $.session_ticks: int = 0
+
+            tick() {
+                $.session_ticks = $.session_ticks + 1
+                self.total = self.total + 1
+            }
+
+            get_count(): int { @@:(self.total) }
+        }
+
+    domain:
+        total: int = 0
+}
+```
+
+`@@persist` at the top is the only source change. Everything else
+is the system as it would normally be written. This single
+declaration triggers two new methods on the generated class.
+
+`@@persist` doesn't add any new runtime mechanism in the kernel
+or the dispatch pipeline. The system runs identically with or
+without it. What `@@persist` adds is two methods that walk the
+existing data structures and serialize them: `save_state()`
+returns a blob, and `restore_state(blob)` rebuilds the system
+from one.
+
+### What gets saved
+
+Persistence serializes the data that defines the system's
+position. It doesn't serialize transient call state.
+
+| What | Saved? | Why |
+|---|---|---|
+| Domain (`self.total`) | Yes | System-lifetime state |
+| State variables (`compartment.state_vars`) | Yes — per layer | State-lifetime state |
+| Current state name (and HSM chain) | Yes | Where the system is |
+| State stack (saved compartments) | Yes | Pending pop targets |
+| State args, enter args, exit args (per compartment) | Yes | Each compartment's parameters |
+| `parent_compartment` pointers | No | Rebuilt from `_HSM_CHAIN` |
+| `_context_stack` | No | Empty between calls |
+| `__next_compartment` | No | Null between calls |
+| `forward_event` on compartments | No | In-flight; null between calls |
+
+The "between calls" rule shapes the cutoff. A system at rest —
+one not currently dispatching an event — has empty
+`_context_stack`, null `__next_compartment`, and null
+`forward_event` everywhere. These exist only during a call.
+Persistence assumes save happens at rest, and restore brings the
+system back to a rest state.
+
+### The canonical format
+
+Every backend produces the same structure when serializing,
+regardless of target language:
 
 ```
 StateBlob {
@@ -1121,254 +3883,244 @@ CompartmentBlob {
     state_vars: map<string, Value>
     enter_args: [Value]
     exit_args: [Value]
-    # forward_event omitted: should be null at save time
-    # parent_compartment omitted: reconstructed from static HSM chain
 }
 ```
 
-**Parent compartment pointers are NOT serialized.** They reconstruct
-from the static `_HSM_CHAIN` topology table on restore, using the
-saved `hsm_chain` list.
+A Python backend produces this as JSON or MessagePack; a Java
+backend produces it via Jackson; a Rust backend uses serde. The
+output is interchangeable across backends — a Python system's
+saved blob can be restored by a Java system compiled from the
+same Frame source.
 
-**`_context_stack` is NOT serialized.** Context is per-call; a system
-in steady state (between interface calls) has an empty context stack.
+This is the cross-host migration property the runtime promises:
+the format is Frame's contract, not any backend's.
 
-**`__next_compartment` is NOT serialized.** Should be null at save
-time; saving mid-dispatch is not supported.
+### Save
 
-### What gets serialized
+`save_state()` walks the system and produces the blob:
 
-| Component | Description |
-|---|---|
-| Current HSM chain | Leaf compartment plus each ancestor's compartment |
-| State stack | All pushed compartments, each with their own chain |
-| Domain variables | All current values |
-| Metadata | Frame version, schema version, system name |
+```python
+**def save_state(self) -> str:
+    chain = []
+    comp = self.__compartment
+    while comp is not None:
+        chain.append(comp.state)
+        comp = comp.parent_compartment
 
-Each compartment serializes its full field set: `state`, `state_args`,
-`state_vars`, `enter_args`, `exit_args`. All four args/vars channels
-must be preserved because they affect what handlers see on restore.
+    compartments = []
+    comp = self.__compartment
+    while comp is not None:
+        compartments.append({
+            "state": comp.state,
+            "state_args": list(comp.state_args),
+            "state_vars": dict(comp.state_vars),
+            "enter_args": list(comp.enter_args),
+            "exit_args": list(comp.exit_args),
+        })
+        comp = comp.parent_compartment
 
-### Restore semantics
+    state_stack = []
+    for saved in self._state_stack:
+        layer = []
+        comp = saved
+        while comp is not None:
+            layer.append({
+                "state": comp.state,
+                "state_args": list(comp.state_args),
+                "state_vars": dict(comp.state_vars),
+                "enter_args": list(comp.enter_args),
+                "exit_args": list(comp.exit_args),
+            })
+            comp = comp.parent_compartment
+        state_stack.append(list(reversed(layer)))
 
-Restore does NOT invoke `$>`. The state is being *restored*, not
-*entered*.
+    blob = {
+        "frame_version": "4.0",
+        "schema_version": "1",
+        "system_name": "Counter",
+        "current_state": self.__compartment.state,
+        "hsm_chain": list(reversed(chain)),
+        "compartments": list(reversed(compartments)),
+        "state_stack": state_stack,
+        "domain": {"total": self.total},
+    }
+    return json.dumps(blob)**
+```
 
-| Operation | Enter Handler | State Vars |
+The method walks `__compartment` and its `parent_compartment`
+chain to capture the active HSM. It walks `_state_stack` for any
+pushed compartments. It collects domain fields by name. The
+blob is the entire saveable state in canonical form.
+
+Both the active chain and each state stack layer are stored
+root-first in the canonical format. The walks naturally produce
+leaf-first lists (each starts at a leaf and follows
+`parent_compartment` upward), so each list is reversed before
+being added to the blob. Root-first ordering matches the natural
+reading order and matches what `_HSM_CHAIN` uses.
+
+### Restore
+
+`restore_state(blob)` rebuilds the system from a blob:
+
+```python
+**def restore_state(self, blob_str: str):
+    blob = json.loads(blob_str)
+
+    # Rebuild domain
+    self.total = blob["domain"]["total"]
+
+    # Rebuild HSM chain using _HSM_CHAIN as source of truth
+    leaf_state = blob["current_state"]
+    expected_chain = _HSM_CHAIN[leaf_state]
+    saved_chain = [c["state"] for c in blob["compartments"]]
+    if saved_chain != expected_chain:
+        raise RestoreError(
+            f"saved chain {saved_chain} doesn't match "
+            f"_HSM_CHAIN[{leaf_state}] = {expected_chain}"
+        )
+
+    by_state = {c["state"]: c for c in blob["compartments"]}
+    previous = None
+    for state_name in expected_chain:
+        comp_data = by_state[state_name]
+        comp = CounterCompartment(state_name)
+        comp.state_args = list(comp_data["state_args"])
+        comp.state_vars = dict(comp_data["state_vars"])
+        comp.enter_args = list(comp_data["enter_args"])
+        comp.exit_args = list(comp_data["exit_args"])
+        comp.parent_compartment = previous
+        previous = comp
+    self.__compartment = previous
+
+    # Rebuild state stack the same way
+    self._state_stack = []
+    for layer_data in blob["state_stack"]:
+        layer_leaf = layer_data[-1]["state"]
+        layer_chain = _HSM_CHAIN[layer_leaf]
+        layer_by_state = {c["state"]: c for c in layer_data}
+        previous = None
+        for state_name in layer_chain:
+            comp_data = layer_by_state[state_name]
+            comp = CounterCompartment(state_name)
+            comp.state_args = list(comp_data["state_args"])
+            comp.state_vars = dict(comp_data["state_vars"])
+            comp.enter_args = list(comp_data["enter_args"])
+            comp.exit_args = list(comp_data["exit_args"])
+            comp.parent_compartment = previous
+            previous = comp
+        self._state_stack.append(previous)
+
+    self.__next_compartment = None**
+```
+
+The method parses the blob, validates that each saved chain
+matches the topology in `_HSM_CHAIN`, rebuilds the compartments
+in root-to-leaf order from the table, links `parent_compartment`
+pointers (which weren't serialized but are determined by the
+chain), and restores the domain.
+
+`@@persist` emits a `RestoreError` exception class (or the
+target's idiomatic equivalent — `RestoreException` in Java, a
+`Result::Err` variant in Rust, etc.) when restore detects a
+structural mismatch between the saved blob and the current
+system's topology. It's the only error class `@@persist` adds;
+the `save_state` and `restore_state` methods plus this one
+exception are the entire `@@persist` surface.
+
+`_HSM_CHAIN` is the source of truth on restore, not the saved
+chain. This is deliberate. If the destination's Frame source has
+a different HSM topology than the source's — say `$Cooling` was
+moved under a different parent in a later release — the saved
+blob's chain won't match `_HSM_CHAIN[leaf]` and restore raises
+rather than silently producing a system with wrong topology. The
+saved `compartments` list provides the per-compartment data
+(state vars, args), but the chain structure comes from the
+running code.
+
+`hsm_chain` in the blob (the standalone string list) is
+informational. Diagnostic tools can read it without instantiating
+a system; restore doesn't need it because it has `_HSM_CHAIN`.
+
+### What restore deliberately doesn't do
+
+Restore does *not* fire `$>`. Restoring isn't entering — the
+system was already in this state when saved; bringing it back
+shouldn't trigger lifecycle handlers as if the state were being
+entered fresh.
+
+Compare:
+
+| Operation | `$>` runs? | State variables |
 |---|---|---|
-| `-> $State` | Invoked | Reset (then initialized by handler) |
-| `-> pop$` | Invoked | Preserved (guard in handler skips init) |
-| `restore_state()` | NOT invoked | Restored from save blob |
+| `-> $State` | Yes | Reset, then `$>` initializes |
+| `-> pop$` | Yes | Preserved (guard skips re-init) |
+| `restore_state(blob)` | No | Restored from blob |
 
-Restore algorithm:
+A system constructed normally calls `$>` on the start state from
+the constructor. A system restored from a blob doesn't — its
+constructor still runs (which builds the basic class skeleton),
+but `restore_state()` overwrites `__compartment` with the
+serialized one, and no lifecycle handler fires.
 
-1. Parse the save blob.
-2. Verify `frame_version` and `schema_version` compatibility.
-3. Reconstruct each compartment in the HSM chain using
-   `_HSM_CHAIN[leaf_state]`, populating fields from the saved
-   CompartmentBlobs.
-4. Link `parent_compartment` pointers using the reconstructed chain.
-5. Reconstruct the state stack similarly.
-6. Populate domain fields.
-7. System is now in the restored state; the next interface call
-   dispatches normally.
+The user's host code is responsible for choosing between fresh
+construction and restore at startup. Typical pattern:
 
-### Per-language serialization
+```python
+try:
+    blob = open("counter.state").read()
+    counter = Counter()
+    counter.restore_state(blob)
+except FileNotFoundError:
+    counter = Counter()  # fresh start
+```
 
-Every target's `@@persist` emitter must produce the canonical format
-above when cross-host migration is enabled. Native-format fallback
-(pickle for Python, native binary for other targets) may be
-available for single-host persistence where interop isn't required.
+### Cross-host migration
 
-| Language | Canonical codec | Native fallback |
-|---|---|---|
-| Python | MessagePack or JSON | pickle |
-| TypeScript / JavaScript | JSON | JSON |
-| Rust | serde_json / rmp-serde | serde_json |
-| C | cJSON | cJSON |
-| C++ | nlohmann/json | nlohmann/json |
-| Java | Jackson | Jackson |
-| Kotlin | kotlinx.serialization | kotlinx.serialization |
-| Go | encoding/json | encoding/json |
-| Swift | JSONEncoder / Codable | JSONEncoder |
-| C# | System.Text.Json | System.Text.Json |
-| Dart | dart:convert | dart:convert |
-| PHP | json_encode | json_encode |
-| Ruby | JSON | JSON |
-| Lua | manual JSON | manual JSON |
-| GDScript | JSON built-in | JSON |
-| Erlang | jsx or manual | jsx |
+The canonical format is the same regardless of target backend.
+This means a system saved on one host can be loaded on another:
 
----
+- A Java service serializes its state and sends the blob to a
+  worker process compiled from the same Frame source but running
+  in Rust. The Rust process restores from the blob and continues.
+- A Python development environment saves a system's state mid-
+  test. A Go production service (same Frame source, different
+  backend) loads the blob to reproduce the failure conditions.
+- A Kubernetes pod running a Frame-generated state machine is
+  drained. Its state is saved, the pod terminates, a new pod
+  spins up (possibly compiled for a different OS/arch), and
+  resumes from the saved state.
 
-## Per-Language Patterns
+This works because the format is Frame's contract, not any
+backend's. The state machine moves between hosts, preserving its
+logical state.
 
-This section documents how Frame's runtime concepts map to each
-target. Use it when writing Frame specs for a specific target — the
-native code inside handlers, actions, and epilog must follow the
-target's patterns.
+The property depends on source agreement. Both endpoints must be
+compiled from the same Frame source — same states, same HSM
+topology, same domain fields, same state variables. The
+`_HSM_CHAIN` validation on restore catches topology drift; the
+`schema_version` field in the blob is reserved for future
+versioning, but v4 has no protocol-version negotiation. If the
+destination's Frame source has diverged from the source's,
+restore may succeed structurally but produce wrong behavior, or
+fail with a topology mismatch. Cross-host migration in v4
+assumes coordinated deployment: ship the same Frame source to
+every host that might handle a blob.
 
-### Instantiation
+### What `@@persist` doesn't change
 
-`@@SystemName()` expands to the target language's construction
-pattern:
+The kernel doesn't change. The router doesn't change. Dispatchers
+don't change. Compartment fields don't change. State variable
+storage doesn't change. Everything we built up over the previous
+24 steps still works exactly the same way.
 
-| Language | Declaration + instantiation | Cleanup |
-|---|---|---|
-| Python | `s = @@System()` | garbage collected |
-| TypeScript | `const s = @@System()` | garbage collected |
-| JavaScript | `const s = @@System()` | garbage collected |
-| Rust | `let mut s = @@System()` | ownership / drop |
-| C | `System* s = @@System()` | `System_destroy(s)` |
-| C++ | `auto s = @@System()` | destructor / RAII |
-| Java | `var s = @@System()` | garbage collected |
-| Kotlin | `val s = @@System()` | garbage collected |
-| Swift | `let s = @@System()` | ARC |
-| C# | `var s = @@System()` | garbage collected |
-| Go | `s := @@System()` | garbage collected |
-| Dart | `final s = @@System()` | garbage collected |
-| PHP | `$s = @@System()` | reference counted |
-| Ruby | `s = @@System()` | garbage collected |
-| Lua | `local s = @@System()` | garbage collected |
-| GDScript | `var s = @@System()` | reference counted |
+`@@persist` adds two methods. That's the entire mechanism. The
+runtime that supports persistence is the same runtime that
+supports any other Frame system — persistence is a property of
+the data, not the dispatch.
 
-C is the only backend requiring explicit cleanup via
-`System_destroy(s)`. Rust uses ownership semantics — no explicit
-destroy needed.
-
-### Interface Method Calls
-
-| Language | Call syntax |
-|---|---|
-| Python | `s.method(args)` |
-| TypeScript/JS | `s.method(args)` |
-| Rust | `s.method(args)` |
-| C | `System_method(s, args)` |
-| C++ | `s->method(args)` or `s.method(args)` |
-| Java/Kotlin/C#/Dart | `s.method(args)` |
-| Swift | `s.method(args)` |
-| Go | `s.Method(args)` (exported) |
-| PHP | `$s->method(args)` |
-| Ruby | `s.method(args)` |
-| Lua | `s:method(args)` |
-| GDScript | `s.method(args)` |
-
-### Action and Operation Calls (inside handlers)
-
-| Language | Call syntax |
-|---|---|
-| Python | `self.action(args)` |
-| TypeScript/JS | `this.action(args)` |
-| Rust | `self.action(args)` |
-| C | `System_action(self, args)` |
-| C++ | `this->action(args)` |
-| Java/Kotlin/C#/Dart | `this.action(args)` |
-| Swift | `self.action(args)` |
-| Go | `s.action(args)` |
-| PHP | `$this->action(args)` |
-| Ruby | `self.action(args)` |
-| Lua | `self:action(args)` |
-| GDScript | `self.action(args)` |
-
-C actions are generated as free functions prefixed with the system
-name. All other languages generate them as methods.
-
-### Domain Field Declarations
-
-Domain fields are declared as `name: type` or `name: type = init`.
-The type and initializer pass through verbatim to the target:
-
-| Language | Example |
-|---|---|
-| Python | `count: int = 0` |
-| TypeScript | `count: number = 0` |
-| Rust | `count: i64 = 0` |
-| C | `count: int = 0` (generates `int count;`) |
-| C++ | `count: int = 0` |
-| Java | `count: int = 0` (generates `int count = 0;`) |
-| Kotlin | `count: Int = 0` |
-| Go | `count: int = 0` |
-
-**C arrays:** Declare as `name: type` where type includes the array
-size. Example: `buffer: char[64]` generates `char buffer[64];`.
-
-**Rust domain fields** become struct fields. Use Rust types directly:
-`items: Vec<String> = Vec::new()`.
-
-**Init is optional** for static targets that zero-initialize (C, C++,
-Go). Required for dynamic targets where uninitialized fields would
-be undefined.
-
-### String Comparison in Native Code
-
-When comparing strings in handler native code, use the target's
-string comparison:
-
-| Language | Equality check |
-|---|---|
-| Python | `s == "value"` |
-| TypeScript/JS | `s === "value"` |
-| Rust | `s == "value"` |
-| C | `strcmp(s, "value") == 0` |
-| C++ | `s == "value"` |
-| Java | `s.equals("value")` |
-| Kotlin | `s == "value"` |
-| Go | `s == "value"` |
-| Others | `s == "value"` |
-
-### String Interpolation Support
-
-Frame constructs (`$.varName`, `@@:`) work inside string interpolation
-expressions for 8 languages:
-
-| Language | Interpolation syntax | Supported |
-|---|---|---|
-| Python | `f"...{expr}..."` | yes |
-| TypeScript/JS | `` `...${expr}...` `` | yes |
-| Kotlin/Dart | `"...${expr}..."` | yes |
-| C# | `$"...{expr}..."` | yes |
-| Ruby | `"...#{expr}..."` | yes |
-| Swift | `"...\(expr)..."` | yes |
-| C, C++, Java, Go, Lua, Erlang, PHP | n/a | no interpolation syntax |
-
----
-
-## Runtime Edge Cases
-
-### Stack Underflow
-
-`-> pop$` on an empty state stack is undefined behavior. The
-generated code does not check — the pop will fail with a
-language-specific error (IndexError in Python, panic in Rust, etc.).
-Frame does not guarantee graceful handling.
-
-### Self-Transitions
-
-A transition to the current state (`-> $CurrentState`) fires the full
-lifecycle: `<$` (exit), state switch, `$>` (enter). State variables
-are reset to their initial values. This is intentional —
-self-transitions are a reinitialization mechanism.
-
-### Exceptions in Handlers
-
-If native code throws an exception inside a handler, the pending
-transition (if any) does NOT execute. The `__next_compartment` field
-is set but the kernel loop never processes it. The context stack
-entry is NOT popped — the interface wrapper's `finally` or equivalent
-handles cleanup. Behavior varies by target language.
-
-### Context Data Scope
-
-`@@:data` is scoped to the current interface call's context. It
-exists for the duration of the dispatch chain (handler → exit cascade
-→ transition → enter cascade) and is discarded when the interface
-method returns. All handlers within the same dispatch chain share
-the same context data. A new interface call creates a fresh context
-with empty data.
-
-### HSM Depth
-
-Frame does not cap HSM chain depth. Pathological chains (e.g.,
-`$A => $B => $C => ... => $Z`) allocate N compartments per transition
-and walk N levels for each cascade. This is the user's responsibility
-— Frame emits what the source declares.
+This is the property the doc has been building toward: a state
+machine's behavior is fully captured by its source. The runtime
+makes that data observable, restorable, and portable, but doesn't
+change the meaning of the source. Two compiled versions of the
+same system on different hosts are the same machine.
