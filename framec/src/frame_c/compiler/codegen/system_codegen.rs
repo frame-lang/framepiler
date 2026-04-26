@@ -322,7 +322,6 @@ pub(crate) fn make_system_async(
                     continue;
                 }
                 // Skip __transition (synchronous compartment swap, no dispatch)
-                // But NOT __push_transition (has dispatch calls that need await)
                 if name == "__transition" {
                     continue;
                 }
@@ -2166,12 +2165,6 @@ pub(crate) fn generate_frame_machinery(
         )),
         TargetLanguage::GDScript => methods.extend(generate_gdscript_machinery(system, &event_class, &compartment_class)),
         TargetLanguage::Graphviz => unreachable!(),
-    }
-
-    // Generate __push_transition method for Rust when there's a machine
-    // Uses mem::replace to move the current compartment to the stack (no clone)
-    if matches!(lang, TargetLanguage::Rust) && system.machine.is_some() {
-        methods.push(super::rust_system::generate_rust_push_transition(system));
     }
 
     methods

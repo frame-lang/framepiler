@@ -614,49 +614,6 @@ self.__process_transition_loop();"#
     methods
 }
 
-/// Generate `__push_transition` — saves current compartment on stack
-/// via `std::mem::replace`, then enters the new state.
-pub(crate) fn generate_rust_push_transition(system: &SystemAst) -> CodegenNode {
-    let system_name = &system.name;
-    let event_class = format!("{}FrameEvent", system_name);
-    let compartment_class = format!("{}Compartment", system_name);
-
-    let code = format!(
-        r#"// Exit current state (old compartment still in place for routing)
-let exit_event = {event_class}::new_with_params("<$", &self.__compartment.exit_args);
-self.__router(&exit_event);
-// Swap: old compartment moves to stack, new takes its place
-let old = std::mem::replace(&mut self.__compartment, new_compartment);
-self._state_stack.push(old);
-// Enter new state (or forward event) — matches kernel logic
-if self.__compartment.forward_event.is_none() {{
-    let enter_event = {event_class}::new_with_params("$>", &self.__compartment.enter_args);
-    self.__router(&enter_event);
-}} else {{
-    let forward_event = self.__compartment.forward_event.take().unwrap();
-    if forward_event.message == "$>" {{
-        self.__router(&forward_event);
-    }} else {{
-        let enter_event = {event_class}::new_with_params("$>", &self.__compartment.enter_args);
-        self.__router(&enter_event);
-        self.__router(&forward_event);
-    }}
-}}"#,
-        event_class = event_class
-    );
-
-    CodegenNode::Method {
-        name: "__push_transition".to_string(),
-        params: vec![Param::new("new_compartment").with_type(&compartment_class)],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock { code, span: None }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    }
-}
-
 // ─── Dispatch ────────────────────────────────────────────────────────
 
 /// Generate Rust router dispatch — match on compartment state name.
@@ -1437,15 +1394,22 @@ pub(crate) fn rust_parent_forward(indent_str: &str, parent: &str) -> String {
     format!("{}self._state_{}(__e);", indent_str, parent)
 }
 
-/// Push-with-transition: `self.__push_transition(XyzCompartment::new("State"))`
+/// Push-with-transition: clone current compartment onto the state
+/// stack (preserving its full HSM chain), build the destination
+/// chain via __prepareEnter, then queue the new compartment via
+/// __transition. The kernel's __process_transition_loop fires the
+/// exit/enter cascades — same pipeline as a normal transition.
 pub(crate) fn rust_push_transition(
     indent_str: &str,
     ctx: &super::codegen_utils::HandlerContext,
     target: &str,
 ) -> String {
     format!(
-        "{}self.__push_transition({}Compartment::new(\"{}\"));\n{}return;",
-        indent_str, ctx.system_name, target, indent_str
+        "{0}self._state_stack.push(self.__compartment.clone());\n\
+         {0}let __compartment = self.__prepareEnter(\"{1}\", Vec::new());\n\
+         {0}self.__transition(__compartment);\n\
+         {0}return;",
+        indent_str, target
     )
 }
 
