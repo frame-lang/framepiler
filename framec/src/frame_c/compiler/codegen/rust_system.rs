@@ -1205,9 +1205,11 @@ pub(crate) fn rust_expand_state_var_read(ctx: &HandlerContext, var_name: &str) -
     )
 }
 
-/// Rust state variable write — uses unsafe raw pointers to navigate the
-/// parent_compartment chain and mutate. RHS evaluated first to avoid
-/// borrow conflicts.
+/// Rust state variable write — walks the compartment chain via
+/// `Option::as_deref_mut` to find the layer that owns the variable
+/// (matched by state name), then writes through its typed
+/// `StateContext` variant. RHS is evaluated first so it doesn't
+/// race the cursor's mutable borrow of `self.__compartment`.
 pub(crate) fn rust_expand_state_var_write(
     indent_str: &str,
     ctx: &HandlerContext,
@@ -1216,16 +1218,21 @@ pub(crate) fn rust_expand_state_var_write(
 ) -> String {
     format!(
         concat!(
-            "{}{{\n",
-            "{0}    let __rhs = {};\n",
-            "{0}    let mut __sv_comp: *mut {}Compartment = &mut self.__compartment;\n",
-            "{0}    unsafe {{ while (*__sv_comp).state != \"{}\" {{ __sv_comp = (*__sv_comp).parent_compartment.as_mut().unwrap().as_mut(); }} }}\n",
-            "{0}    unsafe {{ if let {}StateContext::{}(ref mut ctx) = (*__sv_comp).state_context {{ ctx.{} = __rhs; }} }}\n",
+            "{0}{{\n",
+            "{0}    let __rhs = {1};\n",
+            "{0}    let mut __cursor: Option<&mut {2}Compartment> = Some(&mut self.__compartment);\n",
+            "{0}    while let Some(__c) = __cursor {{\n",
+            "{0}        if __c.state == \"{3}\" {{\n",
+            "{0}            if let {2}StateContext::{3}(ref mut ctx) = __c.state_context {{\n",
+            "{0}                ctx.{4} = __rhs;\n",
+            "{0}            }}\n",
+            "{0}            break;\n",
+            "{0}        }}\n",
+            "{0}        __cursor = __c.parent_compartment.as_deref_mut();\n",
+            "{0}    }}\n",
             "{0}}}"
         ),
-        indent_str, expanded_expr,
-        ctx.system_name, ctx.state_name,
-        ctx.system_name, ctx.state_name, var_name
+        indent_str, expanded_expr, ctx.system_name, ctx.state_name, var_name
     )
 }
 
