@@ -2461,9 +2461,9 @@ pub(crate) fn generate_erlang_system(
     // Frame infrastructure (Path D hybrid)
     all_fields.push("    frame_stack = []".to_string());
     all_fields.push(format!("    frame_current_state = {}", first_state));
-    all_fields.push("    frame_enter_args = #{}".to_string());
-    all_fields.push("    frame_exit_args = #{}".to_string());
-    all_fields.push("    frame_state_args = #{}".to_string());
+    all_fields.push("    frame_enter_args = []".to_string());
+    all_fields.push("    frame_exit_args = []".to_string());
+    all_fields.push("    frame_state_args = []".to_string());
     all_fields.push("    frame_context_stack = []".to_string());
     all_fields.push("    frame_return_val = undefined".to_string());
 
@@ -2540,36 +2540,64 @@ pub(crate) fn generate_erlang_system(
             }
         }
     }
-    // State-param overrides go into frame_state_args as a binary-keyed map,
-    // and enter-param overrides go into frame_enter_args the same way.
+    // State-param overrides go into frame_state_args, and enter-param
+    // overrides go into frame_enter_args. After the HashMap→List
+    // migration both are positional Erlang lists, so we look up the
+    // ordering from the start state's declared params (state args)
+    // and start state's enter handler params (enter args), then emit
+    // a list literal whose Nth element is the matching system param
+    // variable or `undefined` for slots without an override.
     use crate::frame_c::compiler::frame_ast::ParamKind;
-    let state_param_entries: Vec<String> = sys_params
-        .iter()
-        .filter(|p| matches!(p.kind, ParamKind::StateArg))
-        .map(|p| {
-            let cap = erlang_safe_capitalize(&p.name);
-            format!("<<\"{}\">> => {}", p.name, cap)
-        })
-        .collect();
-    if !state_param_entries.is_empty() {
-        record_overrides.push(format!(
-            "frame_state_args = #{{{}}}",
-            state_param_entries.join(", ")
-        ));
-    }
-    let enter_param_entries: Vec<String> = sys_params
-        .iter()
-        .filter(|p| matches!(p.kind, ParamKind::EnterArg))
-        .map(|p| {
-            let cap = erlang_safe_capitalize(&p.name);
-            format!("<<\"{}\">> => {}", p.name, cap)
-        })
-        .collect();
-    if !enter_param_entries.is_empty() {
-        record_overrides.push(format!(
-            "frame_enter_args = #{{{}}}",
-            enter_param_entries.join(", ")
-        ));
+    let start_state_obj = system
+        .machine
+        .as_ref()
+        .and_then(|m| m.states.first());
+
+    // Build the positional state_args list from the start state's
+    // declared params (e.g. `$Start(x: int, y: str)` → 2 slots).
+    if let Some(start) = start_state_obj {
+        if !start.params.is_empty() {
+            let entries: Vec<String> = start
+                .params
+                .iter()
+                .map(|sp| {
+                    sys_params
+                        .iter()
+                        .find(|p| {
+                            matches!(p.kind, ParamKind::StateArg) && p.name == sp.name
+                        })
+                        .map(|p| erlang_safe_capitalize(&p.name))
+                        .unwrap_or_else(|| "undefined".to_string())
+                })
+                .collect();
+            record_overrides.push(format!(
+                "frame_state_args = [{}]",
+                entries.join(", ")
+            ));
+        }
+        // Build the positional enter_args list from the start state's
+        // `$>` handler params, if it has one.
+        if let Some(ref enter) = start.enter {
+            if !enter.params.is_empty() {
+                let entries: Vec<String> = enter
+                    .params
+                    .iter()
+                    .map(|ep| {
+                        sys_params
+                            .iter()
+                            .find(|p| {
+                                matches!(p.kind, ParamKind::EnterArg) && p.name == ep.name
+                            })
+                            .map(|p| erlang_safe_capitalize(&p.name))
+                            .unwrap_or_else(|| "undefined".to_string())
+                    })
+                    .collect();
+                record_overrides.push(format!(
+                    "frame_enter_args = [{}]",
+                    entries.join(", ")
+                ));
+            }
+        }
     }
     let record_literal = if record_overrides.is_empty() {
         "#data{}".to_string()
@@ -2654,12 +2682,14 @@ pub(crate) fn generate_erlang_system(
             // assuming `Data`; substitute when emitting.
             let leaf_data_in = data_var.clone();
             if let Some(ref enter) = state.enter {
-                // Extract enter params from frame_enter_args
+                // Extract enter params from frame_enter_args (positional list).
                 for (i, p) in enter.params.iter().enumerate() {
                     let var_name = erlang_safe_capitalize(&p.name);
                     code.push_str(&format!(
-                        "    {} = maps:get(<<\"{}\">>, {}#data.frame_enter_args, undefined),\n",
-                        var_name, i, leaf_data_in
+                        "    {} = frame_arg_at__({}, {}#data.frame_enter_args),\n",
+                        var_name,
+                        i + 1,
+                        leaf_data_in
                     ));
                 }
                 // Use splicer for proper $.var expansion
@@ -2812,15 +2842,18 @@ pub(crate) fn generate_erlang_system(
                     state_name, call_pattern
                 ));
 
-                // State params: bind frame_state_args[name] to a local
+                // State params: bind frame_state_args[i] to a local
                 // Erlang variable so handler bodies can read state params
-                // by their declared name. Mirrors the Python dispatch
-                // preamble that prepends `name = compartment.state_args[name]`.
-                for sp in &state.params {
+                // by their declared name. Index matches the parameter's
+                // declaration order in `$State(p1, p2, ...)`. Mirrors the
+                // Python dispatch preamble that prepends
+                // `name = compartment.state_args[index]`.
+                for (i, sp) in state.params.iter().enumerate() {
                     let cap = erlang_safe_capitalize(&sp.name);
                     code.push_str(&format!(
-                        "    {} = maps:get(<<\"{}\">>, Data#data.frame_state_args, undefined),\n",
-                        cap, sp.name
+                        "    {} = frame_arg_at__({}, Data#data.frame_state_args),\n",
+                        cap,
+                        i + 1
                     ));
                 }
 
@@ -3351,12 +3384,13 @@ pub(crate) fn generate_erlang_system(
             code.push_str(&format!("frame_enter__{}(Data) ->\n", state_atom_name));
 
             if let Some(ref enter) = state.enter {
-                // Extract enter params from frame_enter_args.
+                // Extract enter params from frame_enter_args (positional).
                 for (i, p) in enter.params.iter().enumerate() {
                     let var_name = erlang_safe_capitalize(&p.name);
                     code.push_str(&format!(
-                        "    {} = maps:get(<<\"{}\">>, Data#data.frame_enter_args, undefined),\n",
-                        var_name, i
+                        "    {} = frame_arg_at__({}, Data#data.frame_enter_args),\n",
+                        var_name,
+                        i + 1
                     ));
                 }
                 let enter_ctx = HandlerContext {
@@ -3432,6 +3466,21 @@ pub(crate) fn generate_erlang_system(
             }
         }
     }
+
+    // Positional argument accessor — safe `lists:nth/2` that returns
+    // `undefined` if the list is too short or N is out of range.
+    // Used by enter/exit/state arg unpacking. The 1-based index N
+    // matches Erlang's list convention; framec emits N = i+1 for
+    // a 0-based parameter index `i`.
+    //
+    // We special-case N=1 with a list-pattern match for the common
+    // single-arg case (faster than calling lists:nth/2). The
+    // multi-clause function form keeps each clause cheap.
+    code.push_str("frame_arg_at__(_, []) -> undefined;\n");
+    code.push_str("frame_arg_at__(N, _) when N < 1 -> undefined;\n");
+    code.push_str("frame_arg_at__(1, [H | _]) -> H;\n");
+    code.push_str("frame_arg_at__(N, L) when length(L) >= N -> lists:nth(N, L);\n");
+    code.push_str("frame_arg_at__(_, _) -> undefined.\n\n");
 
     // Frame transition helper — orchestrates exit → arg passing → gen_statem transition
     code.push_str(
@@ -3563,12 +3612,13 @@ pub(crate) fn generate_erlang_system(
                 let sname = state_atom(&state.name);
                 code.push_str(&format!("frame_exit__{}(Data) ->\n", sname));
 
-                // Extract exit params
+                // Extract exit params (positional from frame_exit_args).
                 for (i, p) in exit.params.iter().enumerate() {
                     let var_name = erlang_safe_capitalize(&p.name);
                     code.push_str(&format!(
-                        "    {} = maps:get(<<\"{}\">>, Data#data.frame_exit_args, undefined),\n",
-                        var_name, i
+                        "    {} = frame_arg_at__({}, Data#data.frame_exit_args),\n",
+                        var_name,
+                        i + 1
                     ));
                 }
 

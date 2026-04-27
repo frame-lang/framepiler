@@ -854,7 +854,7 @@ pub(crate) fn generate_frame_expansion(
                         // three arg maps are empty.
                         let erlang_state = to_snake_case(&target);
                         format!(
-                            "{}frame_forward_transition__({}, __Event, Data, #{{}}, #{{}}, #{{}}, From)",
+                            "{}frame_forward_transition__({}, __Event, Data, [], [], [], From)",
                             indent_str, erlang_state
                         )
                     }
@@ -1939,74 +1939,44 @@ pub(crate) fn generate_frame_expansion(
                         code
                     }
                     TargetLanguage::Erlang => {
-                        // Path D: use __frame_transition for full lifecycle
+                        // Path D: use frame_transition__ for full lifecycle.
+                        //
+                        // Args are emitted as positional Erlang lists (per the
+                        // HashMap→Vec migration). For `name=value` entries
+                        // the name is dropped and only `value` is included —
+                        // the codegen relies on Frame source authors providing
+                        // args in declaration order, same convention as
+                        // Python/TS/Rust/etc.
                         let erlang_state = to_snake_case(&target);
                         let mut code = String::new();
 
-                        // Build exit_args map
-                        let exit_map = if let Some(ref exit) = exit_str {
-                            let args: Vec<&str> = exit
-                                .split(',')
-                                .map(|x| x.trim())
-                                .filter(|x| !x.is_empty())
-                                .collect();
-                            let entries: Vec<String> = args
-                                .iter()
-                                .enumerate()
-                                .map(|(i, a)| format!("<<\"{}\">> => {}", i, a))
-                                .collect();
-                            format!("#{{{}}}", entries.join(", "))
-                        } else {
-                            "#{}".to_string()
+                        let to_list_lit = |s: &Option<String>| -> String {
+                            match s {
+                                Some(joined) => {
+                                    let vals: Vec<&str> = joined
+                                        .split(',')
+                                        .map(|x| x.trim())
+                                        .filter(|x| !x.is_empty())
+                                        .map(|arg| {
+                                            if let Some(eq_pos) = arg.find('=') {
+                                                arg[eq_pos + 1..].trim()
+                                            } else {
+                                                arg
+                                            }
+                                        })
+                                        .collect();
+                                    format!("[{}]", vals.join(", "))
+                                }
+                                None => "[]".to_string(),
+                            }
                         };
-
-                        // Build enter_args map
-                        let enter_map = if let Some(ref enter) = enter_str {
-                            let args: Vec<&str> = enter
-                                .split(',')
-                                .map(|x| x.trim())
-                                .filter(|x| !x.is_empty())
-                                .collect();
-                            let entries: Vec<String> = args
-                                .iter()
-                                .enumerate()
-                                .map(|(i, a)| format!("<<\"{}\">> => {}", i, a))
-                                .collect();
-                            format!("#{{{}}}", entries.join(", "))
-                        } else {
-                            "#{}".to_string()
-                        };
-
-                        // Build state_args map
-                        let state_map = if let Some(ref state) = state_str {
-                            let args: Vec<&str> = state
-                                .split(',')
-                                .map(|x| x.trim())
-                                .filter(|x| !x.is_empty())
-                                .collect();
-                            let entries: Vec<String> = args
-                                .iter()
-                                .enumerate()
-                                .map(|(i, a)| {
-                                    if let Some(eq_pos) = a.find('=') {
-                                        format!(
-                                            "<<\"{}\">> => {}",
-                                            a[..eq_pos].trim(),
-                                            a[eq_pos + 1..].trim()
-                                        )
-                                    } else {
-                                        format!("<<\"{}\">> => {}", i, a)
-                                    }
-                                })
-                                .collect();
-                            format!("#{{{}}}", entries.join(", "))
-                        } else {
-                            "#{}".to_string()
-                        };
+                        let exit_list = to_list_lit(&exit_str);
+                        let enter_list = to_list_lit(&enter_str);
+                        let state_list = to_list_lit(&state_str);
 
                         code.push_str(&format!(
                             "{}frame_transition__({}, Data, {}, {}, {}, From)",
-                            indent_str, erlang_state, exit_map, enter_map, state_map
+                            indent_str, erlang_state, exit_list, enter_list, state_list
                         ));
                         code
                     }
