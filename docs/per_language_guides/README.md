@@ -22,6 +22,7 @@ They complement (rather than replace):
 | GDScript | [gdscript.md](gdscript.md) — Godot engine / E501 reserved names |
 | C        | [c.md](c.md) — pointer-based handle / typedef list workaround |
 | C++      | [cpp.md](cpp.md) — `shared_ptr<T>` / `co_await` / RAII |
+| Java     | [java.md](java.md) — one class per file / `CompletableFuture<T>` async |
 | Lua      | [lua.md](lua.md) — metatable class / `:` method dispatch / 1-indexed |
 
 ## Roadmap
@@ -40,7 +41,7 @@ idioms diverge furthest from C-family default first.
 | Go          | Pointer receivers / interface satisfaction    | pending  |
 | Swift       | `async` / Result / nil-safety                 | pending  |
 | Kotlin      | `suspend fun` / coroutine scopes              | pending  |
-| Java        | One class per file / CompletableFuture        | pending  |
+| **Java**    | One class per file / CompletableFuture        | ✅ done  |
 | C#          | `Task<T>` / `partial class`                   | pending  |
 | Dart        | Future / kernel snapshot vs AOT               | pending  |
 | PHP         | `$this` reference / closure use clauses       | pending  |
