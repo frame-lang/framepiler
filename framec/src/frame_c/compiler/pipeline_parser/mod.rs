@@ -350,6 +350,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_state(&mut self) -> Result<StateAst, ParseError> {
+        // Drain section-level comments captured before the `$State`
+        // token — same trivia plumbing as `parse_interface_method` /
+        // `parse_action` / `parse_operation`. Codegen emits these
+        // before the per-target state-dispatch function definition.
+        let leading_comments = self.lexer.take_pending_comments();
         let spanned = self.advance()?;
         let state_name = match spanned.token {
             Token::StateRef(name) => name,
@@ -393,6 +398,7 @@ impl<'a> Parser<'a> {
         let mut state = StateAst::new(state_name, Span::new(start, body_close + 1));
         state.parent = parent;
         state.params = params;
+        state.leading_comments = leading_comments;
         state.body_span = Span::new(body_start + 1, body_close);
 
         // Parse state body contents

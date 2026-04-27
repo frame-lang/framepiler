@@ -207,6 +207,11 @@ pub struct StateAst {
     pub exit: Option<ExitHandler>,
     /// State-level default forward to parent (bare `=> $^` at state level)
     pub default_forward: bool,
+    /// Source comments encountered before this `$State { ... }`
+    /// declaration in the `machine:` block. Captured by the lexer's
+    /// `take_pending_comments()` and emitted by codegen before the
+    /// state-dispatch function definition.
+    pub leading_comments: Vec<String>,
     pub span: Span,
     /// Body span (inside braces only, for precise error reporting)
     pub body_span: Span,
@@ -713,6 +718,7 @@ impl StateAst {
             enter: None,
             exit: None,
             default_forward: false,
+            leading_comments: Vec::new(),
             span: span.clone(),
             body_span: span,
         }

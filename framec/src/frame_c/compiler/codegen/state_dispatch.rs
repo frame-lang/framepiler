@@ -1251,6 +1251,17 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             &defined_systems,
             is_start_state,
         );
+        // State-level leading comments emit as NativeBlock nodes
+        // before the dispatch method itself. Same shape as
+        // interface / action / operation comment plumbing.
+        if let Some(state) = state_ast {
+            for comment in &state.leading_comments {
+                methods.push(CodegenNode::NativeBlock {
+                    code: comment.clone(),
+                    span: None,
+                });
+            }
+        }
         methods.push(method);
     }
 
