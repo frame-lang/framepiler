@@ -629,6 +629,7 @@ fn erlang_process_body_lines_full(
             || l.starts_with("{stop,")
             || l.starts_with("[__Popped")
             || l.starts_with("frame_transition__(")
+            || l.starts_with("frame_forward_transition__(")
             || is_forward_call;
         if is_structural {
             // Case-arm unification — see CaseFrame doc for the full rationale.
@@ -685,6 +686,7 @@ fn erlang_process_body_lines_full(
                     let is_terminal_line = |l: &str| -> bool {
                         let t = l.trim();
                         t.starts_with("frame_transition__(")
+                            || t.starts_with("frame_forward_transition__(")
                             || t.starts_with("{next_state,")
                             || t.starts_with("{keep_state,")
                             || t.starts_with("{stop,")
@@ -1518,6 +1520,7 @@ fn erlang_wrap_self_call_guards(
                 t.starts_with("{keep_state,")
                     || t.starts_with("{next_state,")
                     || t.starts_with("frame_transition__(")
+                    || t.starts_with("frame_forward_transition__(")
                     || t == "end"
                     || t == "end,"
                     || t == "end;"
@@ -1528,6 +1531,7 @@ fn erlang_wrap_self_call_guards(
             t.starts_with("{keep_state,")
                 || t.starts_with("{next_state,")
                 || t.starts_with("frame_transition__(")
+                || t.starts_with("frame_forward_transition__(")
         });
         let arm_final_data: String = inner_wrapped
             .iter()
@@ -2049,7 +2053,9 @@ fn analyze_case_arms(
         if depth != 1 {
             // Still track content for current arm at nested depths
             if let Some(ref mut arm) = current_arm {
-                if t.starts_with("frame_transition__(") {
+                if t.starts_with("frame_transition__(")
+                    || t.starts_with("frame_forward_transition__(")
+                {
                     arm.has_transition = true;
                 }
                 if t.starts_with("__ReturnVal = ") {
@@ -2095,7 +2101,9 @@ fn analyze_case_arms(
 
         // Content within current arm
         if let Some(ref mut arm) = current_arm {
-            if t.starts_with("frame_transition__(") {
+            if t.starts_with("frame_transition__(")
+                || t.starts_with("frame_forward_transition__(")
+            {
                 arm.has_transition = true;
             }
             if t.starts_with("__ReturnVal = ") {
@@ -2297,7 +2305,8 @@ fn erlang_inject_orphan_reply_tuples(lines: &[String], default_data: &str) -> Ve
 
         let already_has_reply = next_trimmed.starts_with("{keep_state,")
             || next_trimmed.starts_with("{next_state,")
-            || next_trimmed.starts_with("frame_transition__(");
+            || next_trimmed.starts_with("frame_transition__(")
+            || next_trimmed.starts_with("frame_forward_transition__(");
 
         if arm_closes && !already_has_reply {
             let lead_len = line.len() - line.trim_start().len();
@@ -2778,16 +2787,24 @@ pub(crate) fn generate_erlang_system(
             for handler in &state.handlers {
                 let event_atom = to_snake_case(&handler.event);
 
-                // Build parameter pattern for gen_statem call
+                // Build parameter pattern for gen_statem call. Bind
+                // the entire matched event to `__Event` so handler
+                // bodies that perform a forward transition (`-> =>
+                // $State`) can re-dispatch it via `frame_forward_transition__`.
+                // The leading `__` follows Erlang's underscore-prefix
+                // convention (suppresses unused-variable warnings for
+                // handlers that don't reference it). Same convention
+                // as the existing catch-all clauses below
+                // (`__Event` for parent-forward dispatch).
                 let call_pattern = if handler.params.is_empty() {
-                    event_atom.clone()
+                    format!("__Event = {}", event_atom)
                 } else {
                     let param_names: Vec<String> = handler
                         .params
                         .iter()
                         .map(|p| erlang_safe_capitalize(&p.name))
                         .collect();
-                    format!("{{{}, {}}}", event_atom, param_names.join(", "))
+                    format!("__Event = {{{}, {}}}", event_atom, param_names.join(", "))
                 };
 
                 code.push_str(&format!(
@@ -2858,7 +2875,8 @@ pub(crate) fn generate_erlang_system(
 
                 // Check if the spliced body contains a gen_statem return tuple, forward, or frame_transition
                 let has_forward_call = spliced_body.contains("({call, From},");
-                let has_frame_transition = spliced_body.contains("frame_transition__(");
+                let has_frame_transition = spliced_body.contains("frame_transition__(")
+                    || spliced_body.contains("frame_forward_transition__(");
                 let has_return_tuple = spliced_body.contains("{next_state,")
                     || spliced_body.contains("{keep_state,")
                     || has_forward_call
@@ -2968,6 +2986,7 @@ pub(crate) fn generate_erlang_system(
                                 let t = l.trim();
                                 (t.contains("({call, From},") && !t.starts_with("{"))
                                     || t.starts_with("frame_transition__(")
+                                    || t.starts_with("frame_forward_transition__(")
                                     || t.starts_with("{next_state,")
                                     || t.starts_with("{keep_state,")
                             };
@@ -3422,6 +3441,29 @@ pub(crate) fn generate_erlang_system(
     code.push_str("    Data2 = frame_exit_dispatch__(Data1),\n");
     code.push_str("    Data3 = Data2#data{frame_enter_args = EnterArgs, frame_state_args = StateArgs, frame_current_state = TargetState},\n");
     code.push_str("    {next_state, TargetState, Data3, [{reply, From, ok}]}.\n\n");
+
+    // Forward transition helper — same exit/enter cascade as
+    // `frame_transition__`, plus a `next_event` action that
+    // re-dispatches the originating event to the new leaf after
+    // gen_statem fires its `state_enter` callback there.
+    //
+    // Per docs/frame_runtime.md Step 24, `-> => $State` performs a
+    // full transition (cascade exit, switch, cascade enter) AND
+    // re-dispatches the in-flight event so the destination handles
+    // it from scratch in the new state. Other backends model this
+    // via a `forward_event` field on the destination compartment;
+    // gen_statem's natural mechanism for "process this event next"
+    // is the `next_event` enter-action, which is enqueued ahead of
+    // any pending external events. We omit `{reply, From, ok}` —
+    // the re-dispatched event's handler in the destination state
+    // is responsible for producing the reply.
+    code.push_str(
+        "frame_forward_transition__(TargetState, ForwardEvent, Data, ExitArgs, EnterArgs, StateArgs, From) ->\n",
+    );
+    code.push_str("    Data1 = Data#data{frame_exit_args = ExitArgs},\n");
+    code.push_str("    Data2 = frame_exit_dispatch__(Data1),\n");
+    code.push_str("    Data3 = Data2#data{frame_enter_args = EnterArgs, frame_state_args = StateArgs, frame_current_state = TargetState},\n");
+    code.push_str("    {next_state, TargetState, Data3, [{next_event, {call, From}, ForwardEvent}]}.\n\n");
 
     // HSM parent-forward unwrap. When a child's `=> $^` has post-forward code
     // (e.g., `=> $^; self.x = self.x + 1`), we can't emit the parent call as

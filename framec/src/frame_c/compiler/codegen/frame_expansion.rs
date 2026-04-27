@@ -839,7 +839,25 @@ pub(crate) fn generate_frame_expansion(
                         code.push_str(&format!("{}return", indent_str));
                         code
                     }
-                    TargetLanguage::Erlang => String::new(),
+                    TargetLanguage::Erlang => {
+                        // Forward transition: cascade exit/enter (same
+                        // shape as `frame_transition__`) plus a
+                        // `next_event` action that re-dispatches the
+                        // originating event (`__Event`) to the new
+                        // leaf after gen_statem fires its `state_enter`
+                        // callback there. `__Event` is bound by the
+                        // handler clause's pattern (see
+                        // erlang_system.rs handler emission). Forward
+                        // transitions can't carry their own
+                        // exit/enter/state args at the Frame level
+                        // (the syntax is just `-> => $State`), so all
+                        // three arg maps are empty.
+                        let erlang_state = to_snake_case(&target);
+                        format!(
+                            "{}frame_forward_transition__({}, __Event, Data, #{{}}, #{{}}, #{{}}, From)",
+                            indent_str, erlang_state
+                        )
+                    }
                     TargetLanguage::Graphviz => unreachable!(),
                 }
             } else {
