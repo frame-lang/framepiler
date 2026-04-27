@@ -876,7 +876,7 @@ pub(crate) fn generate_rust_handler_methods(
         // state_dispatch.rs comment for context (matrix ccache hit
         // rate dropped to ~70% on C without this).
         let mut sorted_state_handlers: Vec<_> = state_entry.handlers.iter().collect();
-        sorted_state_handlers.sort_by_key(|(event, _)| event.clone());
+        sorted_state_handlers.sort_by(|a, b| a.0.cmp(b.0));
         for (_event, handler_entry) in sorted_state_handlers {
             let empty: Vec<String> = Vec::new();
             let sys_param_locals = if is_start_state {
