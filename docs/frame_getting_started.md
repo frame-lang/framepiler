@@ -1576,7 +1576,7 @@ Sync methods on an async system still work correctly — awaiting a synchronous 
 
     machine:
         $Idle {
-            async fetch(url: str): str {
+            fetch(url: str): str {
                 self.last_url = url
                 response = await http_get(url)
                 @@:(response)
@@ -1588,7 +1588,7 @@ Sync methods on an async system still work correctly — awaiting a synchronous 
         }
 
         $Done {
-            async fetch(url: str): str {
+            fetch(url: str): str {
                 self.last_url = url
                 response = await http_get(url)
                 @@:return = response
