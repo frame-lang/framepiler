@@ -892,7 +892,16 @@ pub(crate) fn generate_fields(
         let strip_unconditionally =
             matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C);
         let strip_collision = init_references_param(init_text_str, &sys_param_names);
-        if !(strip_unconditionally || strip_collision) {
+        // PHP rejects non-const expressions in class-field defaults:
+        // `public $inner = new Counter();` is a parse error
+        // ("New expressions are not supported in this context"). Strip
+        // any tagged-system-instantiation default and let the
+        // constructor body initialize it instead. Detected by the
+        // presence of `@@` in the initializer text — only sibling-
+        // system instantiations use that token in domain init exprs.
+        let strip_php_non_const = matches!(syntax.language, TargetLanguage::Php)
+            && init_text_str.contains("@@");
+        if !(strip_unconditionally || strip_collision || strip_php_non_const) {
             if let Some(ref init_text) = &domain_var.initializer_text {
                 let expanded_init = expand_tagged_in_domain(init_text, syntax.language);
                 field = field.with_initializer(CodegenNode::Ident(expanded_init));
@@ -1037,11 +1046,17 @@ fn should_emit_constructor_body_init(
     lang: TargetLanguage,
     is_const: bool,
     init_refs_param: bool,
+    init_has_tagged: bool,
 ) -> bool {
     use TargetLanguage::*;
     match lang {
         C | Go | Python3 | Ruby | Lua | Rust => true,
-        Cpp | Java | Swift | CSharp | Dart | GDScript | TypeScript | JavaScript | Php => {
+        // PHP rejects non-const class-field defaults at parse time, so
+        // any `@@<System>()` initializer has to move to the constructor
+        // body — same flag the field-emission path uses to strip the
+        // inline init.
+        Php => init_refs_param || init_has_tagged,
+        Cpp | Java | Swift | CSharp | Dart | GDScript | TypeScript | JavaScript => {
             init_refs_param
         }
         Kotlin => init_refs_param && !is_const,
@@ -1148,9 +1163,14 @@ pub(crate) fn generate_constructor(
             None => continue,
         };
         let init_refs_param = init_references_param(init_text, &sys_param_names_for_init);
+        let init_has_tagged = init_text.contains("@@");
 
-        if !should_emit_constructor_body_init(syntax.language, domain_var.is_const, init_refs_param)
-        {
+        if !should_emit_constructor_body_init(
+            syntax.language,
+            domain_var.is_const,
+            init_refs_param,
+            init_has_tagged,
+        ) {
             continue;
         }
 
