@@ -544,7 +544,13 @@ impl GoBackend {
             .as_ref()
             .map(|s| s.as_str())
             .unwrap_or("any");
-        let type_str = self.map_type(raw_type);
+        let mut type_str = self.map_type(raw_type);
+        // Cross-system domain reference (`inner: Counter = @@Counter()`):
+        // Go's `New<System>()` constructor returns `*<System>`, so the
+        // field has to be a pointer for the assignment to type-check.
+        if ctx.defined_systems.contains(raw_type) {
+            type_str = format!("*{}", type_str);
+        }
         format!("{}{} {}\n", ctx.get_indent(), field.name, type_str)
     }
 }

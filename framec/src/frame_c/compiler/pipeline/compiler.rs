@@ -403,6 +403,12 @@ pub fn compile_ast_based(
     // Pass 2: Validate + codegen each system with the shared arcanum
     let backend = get_backend(config.target);
     let mut ctx = EmitContext::new();
+    // Make the names of every defined system available to the
+    // per-backend `emit_field` so it can recognize cross-system
+    // domain references (`logger: Logger = @@Logger()`) and emit
+    // the right field type per target — Go needs `*Logger`, others
+    // use the bare name.
+    ctx.defined_systems = arcanum.systems.keys().cloned().collect();
     let mut generated_systems: Vec<(String, String)> = Vec::new();
 
     // Collect runtime imports once (will be emitted at the start by assembler)

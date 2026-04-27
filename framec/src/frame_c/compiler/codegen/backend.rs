@@ -23,6 +23,13 @@ pub struct EmitContext {
     pub output: String,
     /// Language-specific extra data (e.g., class name for Lua method definitions)
     pub extra: std::collections::HashMap<String, String>,
+    /// Names of every system defined in the current module. Used by
+    /// per-backend `emit_field` to recognize when a domain field's
+    /// type annotation is a sibling system reference (`inner: Counter
+    /// = @@Counter()`) — needed by Go to emit `*Counter` (pointer)
+    /// instead of `Counter` (by value), since `NewCounter()` returns
+    /// a pointer.
+    pub defined_systems: std::collections::HashSet<String>,
 }
 
 impl Default for EmitContext {
@@ -35,6 +42,7 @@ impl Default for EmitContext {
             in_class: false,
             output: String::new(),
             extra: std::collections::HashMap::new(),
+            defined_systems: std::collections::HashSet::new(),
         }
     }
 }
