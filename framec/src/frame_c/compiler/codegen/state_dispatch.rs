@@ -1200,10 +1200,19 @@ pub(crate) fn generate_state_handlers_via_arcanum(
         .map(|s| s.name.clone())
         .unwrap_or_default();
 
-    // Generate one _state_{StateName} dispatch method per state for ALL languages
-    for state_entry in arcanum.get_enhanced_states(system_name) {
-        // Find state variables and default_forward for this state from the machine AST
-        let state_ast = machine.states.iter().find(|s| s.name == state_entry.name);
+    // Generate one _state_{StateName} dispatch method per state for ALL
+    // languages. We iterate the AST's `machine.states` (Vec, declaration
+    // order) rather than `arcanum.get_enhanced_states` (HashMap, iteration
+    // order is nondeterministic between framec runs). Determinism is a
+    // hard requirement for downstream caches (ccache hits to ~70% before
+    // this fix, since the C backend's forward-decl section reordered
+    // between runs).
+    for state_ast in machine.states.iter() {
+        let state_entry = match arcanum.get_enhanced_state(system_name, &state_ast.name) {
+            Some(e) => e,
+            None => continue,
+        };
+        let state_ast = Some(state_ast);
         let state_vars = state_ast.map(|s| &s.state_vars[..]).unwrap_or(&[]);
         // State params (e.g. `$Start(x: int)`) — needed so the dispatch can
         // bind compartment.state_args[name] to a local at the top of the
@@ -1325,7 +1334,13 @@ pub(crate) fn generate_per_handler_methods(
         .map(|s| s.name.clone())
         .unwrap_or_default();
 
-    for state_entry in arcanum.get_enhanced_states(system_name) {
+    // Iterate via machine.states (Vec, deterministic) and look up the
+    // enhanced state by name. See comment above the first iteration.
+    for state_ast_iter in machine.states.iter() {
+        let state_entry = match arcanum.get_enhanced_state(system_name, &state_ast_iter.name) {
+            Some(e) => e,
+            None => continue,
+        };
         let is_start_state = state_entry.name == start_state_name;
         let handler_state_var_types: std::collections::HashMap<String, String> = machine
             .states
@@ -1395,7 +1410,15 @@ pub(crate) fn generate_per_handler_methods(
             methods.push(method);
         }
 
-        for (_event, handler_entry) in &state_entry.handlers {
+        // Sort by event name so per-handler method emission order is
+        // deterministic — matches the existing `sorted_handlers`
+        // pattern in this file (lines 777, 966) and prevents the C
+        // backend from emitting forward-decls in HashMap iteration
+        // order (which varies between framec runs and defeated
+        // ccache hits in the matrix runner).
+        let mut sorted_state_handlers: Vec<_> = state_entry.handlers.iter().collect();
+        sorted_state_handlers.sort_by_key(|(event, _)| event.clone());
+        for (_event, handler_entry) in sorted_state_handlers {
             let empty: Vec<String> = Vec::new();
             let method = generate_per_handler_method_for_lang(
                 lang,

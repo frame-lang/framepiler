@@ -839,7 +839,15 @@ pub(crate) fn generate_rust_handler_methods(
         .map(|s| s.params.iter().map(|p| p.name.clone()).collect())
         .unwrap_or_default();
 
-    for state_entry in arcanum.get_enhanced_states(system_name) {
+    // Iterate via machine.states (Vec, deterministic declaration order)
+    // and look up the enhanced state by name. arcanum.get_enhanced_states
+    // returns HashMap-iteration-ordered values which differ between
+    // framec runs and break downstream caches (ccache).
+    for state_ast_iter in machine.states.iter() {
+        let state_entry = match arcanum.get_enhanced_state(system_name, &state_ast_iter.name) {
+            Some(e) => e,
+            None => continue,
+        };
         let is_start_state = state_entry.name == start_state_name;
         let non_start_state_param_names: Vec<String> = if !is_start_state {
             state_entry.params.iter().map(|p| p.name.clone()).collect()
@@ -864,7 +872,12 @@ pub(crate) fn generate_rust_handler_methods(
             })
             .unwrap_or_default();
 
-        for (_event, handler_entry) in &state_entry.handlers {
+        // Sort by event name for deterministic emission order — see
+        // state_dispatch.rs comment for context (matrix ccache hit
+        // rate dropped to ~70% on C without this).
+        let mut sorted_state_handlers: Vec<_> = state_entry.handlers.iter().collect();
+        sorted_state_handlers.sort_by_key(|(event, _)| event.clone());
+        for (_event, handler_entry) in sorted_state_handlers {
             let empty: Vec<String> = Vec::new();
             let sys_param_locals = if is_start_state {
                 &start_state_param_names
