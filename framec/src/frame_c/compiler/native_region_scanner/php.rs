@@ -78,6 +78,60 @@ impl SyntaxSkipper for PhpSkipper {
             None
         }
     }
+
+    fn skip_nested_scope(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // PHP closure: `function(args) [use(...)] { body }`. Trigger
+        // on `f` and require `function` keyword start at a token
+        // boundary. We don't try to detect the arrow form
+        // `fn(args) => expr` because its body is always an
+        // expression and can't contain Frame statements.
+        if i + 8 >= end || &bytes[i..i + 8] != b"function" {
+            return None;
+        }
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                return None;
+            }
+        }
+        let mut j = i + 8;
+        while j < end && matches!(bytes[j], b' ' | b'\t') {
+            j += 1;
+        }
+        if j >= end || bytes[j] != b'(' {
+            return None;
+        }
+        let after_args = self.balanced_paren_end(bytes, j, end)?;
+        let mut k = after_args;
+        // Optional `use(...)` clause before the body brace.
+        while k < end && matches!(bytes[k], b' ' | b'\t' | b'\n' | b'\r') {
+            k += 1;
+        }
+        if k + 3 < end && &bytes[k..k + 3] == b"use" {
+            let mut m = k + 3;
+            while m < end && matches!(bytes[m], b' ' | b'\t') {
+                m += 1;
+            }
+            if m < end && bytes[m] == b'(' {
+                k = self.balanced_paren_end(bytes, m, end)?;
+                while k < end && matches!(bytes[k], b' ' | b'\t' | b'\n' | b'\r') {
+                    k += 1;
+                }
+            }
+        }
+        // Optional `: ReturnType` (PHP 7+)
+        if k < end && bytes[k] == b':' {
+            k += 1;
+            while k < end && bytes[k] != b'{' && bytes[k] != b'\n' {
+                k += 1;
+            }
+        }
+        if k >= end || bytes[k] != b'{' {
+            return None;
+        }
+        let mut closer = BodyCloserPhp;
+        closer.close_byte(bytes, k).ok().map(|c| c + 1)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerPhp {

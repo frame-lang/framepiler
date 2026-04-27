@@ -21,6 +21,11 @@
 //!   is the target state's state-param list; defaults are not currently
 //!   supported on `StateParam`, so the check is exact.
 //! - E406: Interface handler parameter count mismatch
+//! - E407: Frame statement (`->`, `=>`, `push$`, `pop$`) inside a nested
+//!   function scope (closure / lambda). Detected by the unified scanner
+//!   via each backend's `skip_nested_scope` implementation; the error is
+//!   raised from the scanner rather than the post-parse validator
+//!   because the scope detection has to happen during byte-walking.
 //! - E410: Duplicate state variable in state ($.varName)
 //! - E413: Cyclic HSM parent relationship
 //! - E416: Start params must match start state params
@@ -2394,6 +2399,102 @@ mod tests {
         let errors = validate_frame_source(source, TargetLanguage::Python3)
             .expect_err("E417 must fire on transition oversupply");
         assert!(errors.iter().any(|e| e.code == "E417"));
+    }
+
+    #[test]
+    fn test_e407_java_lambda_with_frame_stmt() {
+        // Java lambda body containing a Frame transition. The unified
+        // scanner's `skip_nested_scope` (Java) detects `-> {`, the
+        // scope-content check finds `-> $B`, and E407 surfaces through
+        // the enrichment pass before validation.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            run() {
+                Runnable r = () -> {
+                    -> $B
+                };
+                r.run();
+            }
+        }
+        $B { run() {} }
+}"#;
+        let errors = validate_frame_source(source, TargetLanguage::Java)
+            .expect_err("E407 must fire for Java lambda body containing Frame stmt");
+        assert!(
+            errors.iter().any(|e| e.code == "E407"),
+            "expected E407, got {:?}",
+            errors.iter().map(|e| e.code.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_e407_typescript_arrow_with_frame_stmt() {
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            run() {
+                const cb = () => {
+                    -> $B
+                };
+                cb();
+            }
+        }
+        $B { run() {} }
+}"#;
+        let errors = validate_frame_source(source, TargetLanguage::TypeScript)
+            .expect_err("E407 must fire for TS arrow body");
+        assert!(errors.iter().any(|e| e.code == "E407"));
+    }
+
+    #[test]
+    fn test_e407_rust_closure_with_frame_stmt() {
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            run() {
+                let cb = || {
+                    -> $B
+                };
+                cb();
+            }
+        }
+        $B { run() {} }
+}"#;
+        let errors = validate_frame_source(source, TargetLanguage::Rust)
+            .expect_err("E407 must fire for Rust closure body");
+        assert!(errors.iter().any(|e| e.code == "E407"));
+    }
+
+    #[test]
+    fn test_e407_no_false_positive_on_function_arrow_native() {
+        // Rust closure with an expression body that returns a value:
+        // `|| 1` (no `{`) is *not* skipped by `skip_nested_scope`,
+        // and the body has no Frame markers. Compiles clean.
+        // Catches the regression where `-> ` (3-byte check) would
+        // have flagged any function-pointer / arrow-bearing source.
+        let source = r#"
+@@system Test {
+    interface:
+        e()
+    machine:
+        $A {
+            e() {
+                let _f: fn() -> i32 = || 1;
+            }
+        }
+}"#;
+        let result = validate_frame_source(source, TargetLanguage::Rust);
+        if let Err(errors) = &result {
+            assert!(
+                !errors.iter().any(|e| e.code == "E407"),
+                "E407 must not fire for native arrow syntax: {:?}",
+                errors
+            );
+        }
     }
 
     #[test]

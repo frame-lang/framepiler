@@ -87,6 +87,24 @@ impl SyntaxSkipper for CSharpSkipper {
     ) -> Option<(usize, Vec<InterpRegion>)> {
         scan_dollar_string_regions(bytes, i, end, b'$')
     }
+
+    fn skip_nested_scope(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // C# lambda with statement body: `(args) => { body }` or
+        // `args => { body }`. Same shape as TS/JS arrow, distinct from
+        // Frame `=> $State` (forward).
+        if i + 2 >= end || bytes[i] != b'=' || bytes[i + 1] != b'>' {
+            return None;
+        }
+        let mut j = i + 2;
+        while j < end && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+            j += 1;
+        }
+        if j >= end || bytes[j] != b'{' {
+            return None;
+        }
+        let mut closer = BodyCloserCs;
+        closer.close_byte(bytes, j).ok().map(|c| c + 1)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerCs {

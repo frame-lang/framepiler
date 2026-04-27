@@ -87,6 +87,29 @@ impl SyntaxSkipper for TypeScriptSkipper {
     ) -> Option<(usize, Vec<InterpRegion>)> {
         scan_template_literal_regions(bytes, i, end)
     }
+
+    fn skip_nested_scope(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // TS arrow lambda with block body: `(args) => { body }` /
+        // `args => { body }` / `() => { body }`. Trigger on `=>`.
+        // Distinguish from Frame `=> $State` (forward) by what follows
+        // whitespace after the arrow:
+        //   `=> {` → TS arrow body  (skip)
+        //   `=> $` → Frame forward  (let unified scanner handle)
+        // Expression-bodied arrows (`=> expr`) carry no Frame markers
+        // we care about, so falling through is fine.
+        if i + 2 >= end || bytes[i] != b'=' || bytes[i + 1] != b'>' {
+            return None;
+        }
+        let mut j = i + 2;
+        while j < end && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+            j += 1;
+        }
+        if j >= end || bytes[j] != b'{' {
+            return None;
+        }
+        let mut closer = BodyCloserTs;
+        closer.close_byte(bytes, j).ok().map(|c| c + 1)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerTs {

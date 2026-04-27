@@ -370,6 +370,22 @@ pub fn regions_to_statements(
     stmts
 }
 
+/// Carrier for scanner-surfaced errors (currently E407 — Frame
+/// statement inside a nested function scope). The pipeline lifts these
+/// into `CompileError`s before validation continues, so the user sees
+/// E407 as a top-level compile failure rather than as confusing
+/// follow-on garbage from a half-scanned handler body.
+#[derive(Debug, Clone)]
+pub struct EnrichmentError {
+    /// `"E407"` etc. — pulled from the scanner error message.
+    pub code: String,
+    /// Full message from the scanner.
+    pub message: String,
+    /// Span of the handler body the scanner was processing when the
+    /// error fired. Lets the pipeline give the user a useful location.
+    pub body_span: crate::frame_c::compiler::frame_ast::Span,
+}
+
 /// Enrich a handler body's transition statements with scanner metadata
 /// (`exit_args`, `enter_args`, `state_args`).
 ///
@@ -398,6 +414,7 @@ pub fn enrich_handler_body_metadata(
     body: &mut crate::frame_c::compiler::frame_ast::HandlerBody,
     source: &[u8],
     lang: TargetLanguage,
+    errors: &mut Vec<EnrichmentError>,
 ) {
     use crate::frame_c::compiler::frame_ast::Statement;
 
@@ -416,7 +433,28 @@ pub fn enrich_handler_body_metadata(
     let mut scanner = create_native_scanner(lang);
     let scan_result = match scanner.scan(body_bytes, open_brace) {
         Ok(r) => r,
-        Err(_) => return,
+        Err(e) => {
+            // Lift scanner-surfaced errors so the pipeline can present
+            // them as proper compile failures. Today the scanner only
+            // emits one numbered code (E407 for Frame stmts in nested
+            // scope); the prefix split keeps this structure if more
+            // codes are added later.
+            // The scanner formats messages as `"E<code>: <text>"`. Split
+            // off the code so the pipeline can present it through its
+            // own formatting (the resulting CompileError already
+            // prepends `<code>:`, so the body should not).
+            let (code, msg) = if let Some(rest) = e.message.strip_prefix("E407:") {
+                ("E407".to_string(), rest.trim_start().to_string())
+            } else {
+                ("E000".to_string(), e.message.clone())
+            };
+            errors.push(EnrichmentError {
+                code,
+                message: msg,
+                body_span: body.span.clone(),
+            });
+            return;
+        }
     };
 
     // Collect transition metadata from scanner, preserving source order.
@@ -457,28 +495,30 @@ pub fn enrich_handler_body_metadata(
 }
 
 /// Walk an entire `SystemAst`, enriching every handler body with scanner
-/// metadata. This is the single entry point the pipeline calls between
-/// parse and validate.
+/// metadata. Returns scanner-surfaced errors (E407 etc.) so the pipeline
+/// can present them as compile failures before validation runs.
 pub fn enrich_system_metadata(
     system: &mut crate::frame_c::compiler::frame_ast::SystemAst,
     source: &[u8],
     lang: TargetLanguage,
-) {
+) -> Vec<EnrichmentError> {
+    let mut errors: Vec<EnrichmentError> = Vec::new();
     if let Some(machine) = system.machine.as_mut() {
         for state in machine.states.iter_mut() {
             for handler in state.handlers.iter_mut() {
-                enrich_handler_body_metadata(&mut handler.body, source, lang);
+                enrich_handler_body_metadata(&mut handler.body, source, lang, &mut errors);
             }
             if let Some(enter) = state.enter.as_mut() {
-                enrich_handler_body_metadata(&mut enter.body, source, lang);
+                enrich_handler_body_metadata(&mut enter.body, source, lang, &mut errors);
             }
             if let Some(exit) = state.exit.as_mut() {
-                enrich_handler_body_metadata(&mut exit.body, source, lang);
+                enrich_handler_body_metadata(&mut exit.body, source, lang, &mut errors);
             }
         }
     }
     // Action/Operation bodies are raw native text (no Frame statements to
     // enrich), so they're skipped here.
+    errors
 }
 
 /// Create the appropriate `NativeRegionScanner` for a target language.

@@ -89,6 +89,54 @@ impl SyntaxSkipper for GoSkipper {
             None
         }
     }
+
+    fn skip_nested_scope(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // Go function literal: `func(args) [returnType] { body }`.
+        // Trigger on `f` and require it to start the `func` keyword
+        // followed immediately by `(`. Distinguishes from `func name(...)`
+        // (top-level / method declarations don't appear inside handler
+        // bodies) and from identifiers like `funcParam` (next byte
+        // wouldn't be `(`).
+        if i + 4 >= end || &bytes[i..i + 4] != b"func" {
+            return None;
+        }
+        // Token boundary: `func` shouldn't be the tail of a longer ident.
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                return None;
+            }
+        }
+        let after_kw = i + 4;
+        let mut j = after_kw;
+        while j < end && matches!(bytes[j], b' ' | b'\t') {
+            j += 1;
+        }
+        if j >= end || bytes[j] != b'(' {
+            return None;
+        }
+        let after_args = self.balanced_paren_end(bytes, j, end)?;
+        let mut k = after_args;
+        // Skip return type up to the next `{` at depth 0. Go return
+        // types may be `(a, b)` or a bare identifier, so we walk until
+        // we find a top-level `{`.
+        let mut depth = 0i32;
+        while k < end {
+            match bytes[k] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b'{' if depth == 0 => break,
+                b'\n' if depth == 0 => return None,
+                _ => {}
+            }
+            k += 1;
+        }
+        if k >= end || bytes[k] != b'{' {
+            return None;
+        }
+        let mut closer = BodyCloserGo;
+        closer.close_byte(bytes, k).ok().map(|c| c + 1)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerGo {

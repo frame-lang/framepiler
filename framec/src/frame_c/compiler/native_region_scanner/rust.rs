@@ -78,6 +78,52 @@ impl SyntaxSkipper for RustSkipper {
             None
         }
     }
+
+    fn skip_nested_scope(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // Rust closure with block body: `|args| { body }` (also
+        // `move |args| { body }`). Trigger on `|`. We must be careful
+        // not to swallow a boolean OR (`a || b`) — the closure shape
+        // is `|` directly followed by 0+ args then a closing `|` and
+        // a `{`. Boolean `||` is two adjacent `|` with no args
+        // between, but the *next* token after `||` is an expression,
+        // not a `{`. Logical `|` (bitwise) takes operands too, never
+        // followed by `{` syntactically.
+        //
+        // Match strategy:
+        //   `|` at position i, find matching `|` at depth 0
+        //   (skipping nested `(...)` and `<...>` for type ascriptions),
+        //   then whitespace, then `{`. Return matching `}` + 1.
+        if bytes[i] != b'|' {
+            return None;
+        }
+        let mut j = i + 1;
+        let mut paren = 0i32;
+        let mut angle = 0i32;
+        while j < end {
+            match bytes[j] {
+                b'(' => paren += 1,
+                b')' => paren -= 1,
+                b'<' if paren == 0 => angle += 1,
+                b'>' if paren == 0 && angle > 0 => angle -= 1,
+                b'|' if paren == 0 && angle == 0 => break,
+                b'\n' if paren == 0 && angle == 0 => return None,
+                _ => {}
+            }
+            j += 1;
+        }
+        if j >= end || bytes[j] != b'|' {
+            return None;
+        }
+        let mut k = j + 1;
+        while k < end && matches!(bytes[k], b' ' | b'\t') {
+            k += 1;
+        }
+        if k >= end || bytes[k] != b'{' {
+            return None;
+        }
+        let mut closer = BodyCloserRust;
+        closer.close_byte(bytes, k).ok().map(|c| c + 1)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerRust {

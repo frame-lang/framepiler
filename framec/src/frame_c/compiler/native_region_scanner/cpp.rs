@@ -78,6 +78,72 @@ impl SyntaxSkipper for CppSkipper {
             None
         }
     }
+
+    fn skip_nested_scope(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // C++ lambda: `[capture](args) [mutable] [-> ret] { body }`.
+        // Trigger on `[` followed (after capture-list close) by `(`.
+        // We must distinguish lambda capture from array indexing
+        // (`vec[0]`) and from attribute syntax (`[[nodiscard]]`):
+        //
+        //   `[<capture>](<args>) [...] {` → lambda  (skip body)
+        //   `vec[0]`                       → indexing  (no `(` after `]`)
+        //   `[[attr]]`                     → attribute  (`[[`)
+        //
+        // The lambda check: match `[`, find matching `]` at depth 0,
+        // require `(` immediately after, find matching `)`, allow
+        // optional `mutable`, optional `-> ret_type`, then `{`.
+        if bytes[i] != b'[' || (i + 1 < end && bytes[i + 1] == b'[') {
+            return None;
+        }
+        let mut j = i + 1;
+        let mut depth = 1i32;
+        while j < end && depth > 0 {
+            match bytes[j] {
+                b'[' => depth += 1,
+                b']' => depth -= 1,
+                _ => {}
+            }
+            j += 1;
+        }
+        if depth != 0 || j >= end {
+            return None;
+        }
+        // Skip whitespace, expect `(`
+        while j < end && matches!(bytes[j], b' ' | b'\t') {
+            j += 1;
+        }
+        if j >= end || bytes[j] != b'(' {
+            return None;
+        }
+        // Find matching `)` for the args list — reuse the skipper's
+        // own paren matcher so string/comment handling is consistent.
+        let after_args = self.balanced_paren_end(bytes, j, end)?;
+        let mut k = after_args;
+        // Skip whitespace and optional `mutable`, optional `-> type`
+        while k < end {
+            while k < end && matches!(bytes[k], b' ' | b'\t' | b'\n' | b'\r') {
+                k += 1;
+            }
+            if k + 7 < end && &bytes[k..k + 7] == b"mutable" {
+                k += 7;
+                continue;
+            }
+            if k + 1 < end && bytes[k] == b'-' && bytes[k + 1] == b'>' {
+                // `-> ret_type` — consume up to the next `{`
+                k += 2;
+                while k < end && bytes[k] != b'{' {
+                    k += 1;
+                }
+                continue;
+            }
+            break;
+        }
+        if k >= end || bytes[k] != b'{' {
+            return None;
+        }
+        let mut closer = BodyCloserCpp;
+        closer.close_byte(bytes, k).ok().map(|c| c + 1)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerCpp {

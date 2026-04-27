@@ -78,6 +78,36 @@ impl SyntaxSkipper for JavaSkipper {
             None
         }
     }
+
+    fn skip_nested_scope(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // Detect Java block-bodied lambda preamble.
+        //
+        //   (args) -> { body }
+        //   args -> { body }
+        //   () -> { body }
+        //
+        // Trigger: `->` token. Distinguished from Frame's `-> $State`
+        // (which the unified scanner handles via match_frame_statement)
+        // by the byte that follows whitespace after the arrow:
+        //   `-> {` → Java lambda body  (skip)
+        //   `-> $` → Frame transition  (let match_frame_statement run)
+        //
+        // Expression-bodied lambdas (`(x, y) -> x + y`) don't terminate
+        // in `{` and therefore can't contain statement-level Frame
+        // markers; we leave them as native text, which is correct.
+        if i + 2 >= end || bytes[i] != b'-' || bytes[i + 1] != b'>' {
+            return None;
+        }
+        let mut j = i + 2;
+        while j < end && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+            j += 1;
+        }
+        if j >= end || bytes[j] != b'{' {
+            return None;
+        }
+        let mut closer = BodyCloserJava;
+        closer.close_byte(bytes, j).ok().map(|c| c + 1)
+    }
 }
 
 impl NativeRegionScanner for NativeRegionScannerJava {

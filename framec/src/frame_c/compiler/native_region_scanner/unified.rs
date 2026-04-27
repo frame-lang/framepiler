@@ -128,13 +128,19 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
         // Skip closures/lambdas that would trap Frame statement return values.
         // Frame statements inside nested scopes are rejected with E407.
         if let Some(scope_end) = skipper.skip_nested_scope(bytes, i, end) {
-            // Check if the skipped scope contains any Frame statement patterns
+            // Check if the skipped scope contains any Frame statement
+            // markers. We require the trailing `$` so that target-
+            // language `->` forms (Erlang `fun() -> Expr end`, Java
+            // method references `obj::method`, Rust function pointer
+            // returns `fn() -> T`, etc.) don't trip a false positive
+            // on the bare `-> ` byte sequence — only `-> $` and
+            // `=> $` are Frame transition / forward syntax.
             let scope_bytes = &bytes[i..scope_end];
-            let has_frame_stmt = scope_bytes.windows(3).any(|w| {
-                // -> $ (transition)
-                (w[0] == b'-' && w[1] == b'>' && w[2] == b' ')
-                // => $ (forward)
-                || (w[0] == b'=' && w[1] == b'>' && w[2] == b' ')
+            let has_frame_stmt = scope_bytes.windows(4).any(|w| {
+                // `-> $X` (transition)
+                (w[0] == b'-' && w[1] == b'>' && w[2] == b' ' && w[3] == b'$')
+                // `=> $X` (forward)
+                || (w[0] == b'=' && w[1] == b'>' && w[2] == b' ' && w[3] == b'$')
             }) || scope_bytes.windows(5).any(|w| {
                 // push$
                 (w[0] == b'p' && w[1] == b'u' && w[2] == b's' && w[3] == b'h' && w[4] == b'$')

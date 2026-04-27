@@ -271,11 +271,31 @@ pub fn compile_ast_based(
             // re-runs the scanner to recover them, but the validator
             // runs *before* codegen and needs them too — e.g. E419
             // (exit args without a matching `<$()` exit handler).
-            crate::frame_c::compiler::native_region_scanner::enrich_system_metadata(
-                &mut system_ast,
-                &source_map.source,
-                config.target,
-            );
+            //
+            // The same scanner pass also surfaces structural errors the
+            // user must see as compile failures — currently E407 (Frame
+            // statement inside a nested function scope, detected via
+            // each backend's `skip_nested_scope`). These are propagated
+            // here as `CompileError`s so the user gets a clean rejection
+            // before validation runs against a partially-scanned AST.
+            let enrich_errors =
+                crate::frame_c::compiler::native_region_scanner::enrich_system_metadata(
+                    &mut system_ast,
+                    &source_map.source,
+                    config.target,
+                );
+            if !enrich_errors.is_empty() {
+                let errors = enrich_errors
+                    .into_iter()
+                    .map(|e| CompileError::new(&e.code, &e.message))
+                    .collect();
+                return Ok(CompileResult {
+                    code: String::new(),
+                    errors,
+                    warnings: vec![],
+                    source_map: None,
+                });
+            }
 
             if config.debug {
                 eprintln!(
@@ -294,13 +314,17 @@ pub fn compile_ast_based(
         }
     }
 
-    // Erlang: one module per file — reject multi-system files
+    // Erlang: one module per file — reject multi-system files.
+    // E431, distinct from validator's E406 ("Interface handler parameter
+    // count mismatch") which lives in `frame_validator.rs`. Both are
+    // file-structure issues but they reach the user via different code
+    // paths, so they need distinct codes.
     if matches!(config.target, TargetLanguage::Erlang) && system_asts.len() > 1 {
         let names: Vec<&str> = system_asts.iter().map(|s| s.name.as_str()).collect();
         return Ok(CompileResult {
             code: String::new(),
             errors: vec![CompileError::new(
-                "E406",
+                "E431",
                 &format!(
                     "Erlang requires one module per file, but this file contains {} systems: {}. \
                      Split into separate files (one @@system per file).",
@@ -313,13 +337,17 @@ pub fn compile_ast_based(
         });
     }
 
-    // Java: one public class per file — reject multi-system files
+    // Java: one public class per file — reject multi-system files.
+    // E430, distinct from validator's E407 ("Frame statement in nested
+    // function scope") which fires from the unified scanner via
+    // `skip_nested_scope`. Both apply to source structure but on
+    // entirely separate axes, so they need distinct codes.
     if matches!(config.target, TargetLanguage::Java) && system_asts.len() > 1 {
         let names: Vec<&str> = system_asts.iter().map(|s| s.name.as_str()).collect();
         return Ok(CompileResult {
             code: String::new(),
             errors: vec![CompileError::new(
-                "E407",
+                "E430",
                 &format!(
                     "Java allows only one public class per file, but this file contains {} systems: {}. \
                      Split into separate files (one @@system per file).",
