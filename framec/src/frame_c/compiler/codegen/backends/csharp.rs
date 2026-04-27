@@ -494,6 +494,9 @@ impl LanguageBackend for CSharpBackend {
         vec![
             "using System;".to_string(),
             "using System.Collections.Generic;".to_string(),
+            // Tasks is required for any async system; harmless when
+            // unused (sync systems don't reference Task / Task<T>).
+            "using System.Threading.Tasks;".to_string(),
         ]
     }
 
