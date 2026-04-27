@@ -283,17 +283,11 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     let mut has_frame_construct = false;
                     for region in &interp_regions {
                         for k in region.start..region.end {
-                            if k + 1 < region.end
-                                && bytes[k] == b'$'
-                                && bytes[k + 1] == b'.'
-                            {
+                            if k + 1 < region.end && bytes[k] == b'$' && bytes[k + 1] == b'.' {
                                 has_frame_construct = true;
                                 break;
                             }
-                            if k + 1 < region.end
-                                && bytes[k] == b'@'
-                                && bytes[k + 1] == b'@'
-                            {
+                            if k + 1 < region.end && bytes[k] == b'@' && bytes[k + 1] == b'@' {
                                 has_frame_construct = true;
                                 break;
                             }
@@ -1432,7 +1426,11 @@ pub fn skip_ruby_percent_literal(bytes: &[u8], i: usize, end: usize) -> Option<u
 
 /// Scan a Python f-string: `f"...{expr}..."` or `f'...{expr}...'`.
 /// Handles `{{` escape (not interpolation) and nested braces in expressions.
-pub fn scan_fstring_regions(bytes: &[u8], i: usize, end: usize) -> Option<(usize, Vec<InterpRegion>)> {
+pub fn scan_fstring_regions(
+    bytes: &[u8],
+    i: usize,
+    end: usize,
+) -> Option<(usize, Vec<InterpRegion>)> {
     // Must start with f" or f' (case-insensitive F also valid)
     if i + 1 >= end {
         return None;
@@ -1559,20 +1557,19 @@ pub fn scan_dollar_string_regions(
         return None;
     }
 
-    let start_pos;
-    if prefix_char != 0 {
+    let start_pos = if prefix_char != 0 {
         // C# style: $"..."
         if bytes[i] != prefix_char || i + 1 >= end || bytes[i + 1] != b'"' {
             return None;
         }
-        start_pos = i + 2;
+        i + 2
     } else {
         // Kotlin/Dart style: "..." with ${ inside
         if bytes[i] != b'"' {
             return None;
         }
-        start_pos = i + 1;
-    }
+        i + 1
+    };
 
     let mut regions = Vec::new();
     let mut j = start_pos;

@@ -151,9 +151,9 @@ impl LanguageBackend for CppBackend {
                 // handle is destroyed. This matches Frame's semantics:
                 // the dispatch chain has no true async I/O — `co_await`
                 // just threads return values.
-                let has_async = methods.iter().any(|m| {
-                    matches!(m, CodegenNode::Method { is_async: true, .. })
-                });
+                let has_async = methods
+                    .iter()
+                    .any(|m| matches!(m, CodegenNode::Method { is_async: true, .. }));
                 if has_async {
                     result.push_str(FRAME_TASK_PRELUDE);
                 }

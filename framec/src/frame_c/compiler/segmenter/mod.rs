@@ -315,7 +315,8 @@ pub fn segment<S: SyntaxSkipper>(skipper: &S, source: &[u8]) -> Result<SourceMap
                     }
                     _ if kind == PragmaKind::Other && is_system_pragma(source, i) => {
                         // @@system Name(optional params) { ... }
-                        let (system_name, system_visibility, name_end) = extract_system_name(source, i);
+                        let (system_name, system_visibility, name_end) =
+                            extract_system_name(source, i);
 
                         // After the name we may have an optional parameter list `(...)`.
                         // Skip whitespace, and if `(` is next, capture the span between
@@ -375,12 +376,11 @@ pub fn segment<S: SyntaxSkipper>(skipper: &S, source: &[u8]) -> Result<SourceMap
                         }
                         if after_bases < n && source[after_bases] == b':' {
                             after_bases += 1; // skip :
-                            // Parse comma-separated identifiers until {
+                                              // Parse comma-separated identifiers until {
                             loop {
                                 // Skip whitespace
                                 while after_bases < n
-                                    && (source[after_bases] == b' '
-                                        || source[after_bases] == b'\t')
+                                    && (source[after_bases] == b' ' || source[after_bases] == b'\t')
                                 {
                                     after_bases += 1;
                                 }
@@ -407,8 +407,7 @@ pub fn segment<S: SyntaxSkipper>(skipper: &S, source: &[u8]) -> Result<SourceMap
                                 }
                                 // Skip whitespace after identifier
                                 while after_bases < n
-                                    && (source[after_bases] == b' '
-                                        || source[after_bases] == b'\t')
+                                    && (source[after_bases] == b' ' || source[after_bases] == b'\t')
                                 {
                                     after_bases += 1;
                                 }

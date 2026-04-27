@@ -273,7 +273,10 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 s
             },
             fmt_bind_param: |name, _type_str, _sys, index| {
-                format!("local {name} = self.__compartment.state_args[{}]\n", index + 1)
+                format!(
+                    "local {name} = self.__compartment.state_args[{}]\n",
+                    index + 1
+                )
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -389,7 +392,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_bind_param: |name, type_str, _sys, index| {
                 let java_type = java_map_type(type_str);
-                format!("{java_type} {name} = ({java_type}) __compartment.state_args.get({index});\n")
+                format!(
+                    "{java_type} {name} = ({java_type}) __compartment.state_args.get({index});\n"
+                )
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -597,7 +602,9 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 if cpp_type == "std::any" {
                     format!("{indent}auto {name} = {list}[{index}];\n")
                 } else {
-                    format!("{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>({list}[{index}]);\n")
+                    format!(
+                        "{indent}{cpp_type} {name} = std::any_cast<{cpp_type}>({list}[{index}]);\n"
+                    )
                 }
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
@@ -656,57 +663,59 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 }
             }
             Some(DispatchSyntax {
-            lang,
-            semi: ";",
-            empty_body: "",
-            indent: "    ",
-            close_final: "}\n",
-            else_start: "} else {\n",
-            self_prefix: "self->",
-            fmt_if: |msg| format!("if (strcmp(__e->_message, \"{}\") == 0) {{\n", msg),
-            fmt_elif: |msg| format!("}} else if (strcmp(__e->_message, \"{}\") == 0) {{\n", msg),
-            fmt_hsm_nav: |state, sys| {
-                let mut s = String::new();
-                s.push_str("// HSM: Navigate to this state's compartment for state var access\n");
-                s.push_str(&format!(
-                    "{}_Compartment* __sv_comp = self->__compartment;\n",
-                    sys
-                ));
-                s.push_str(&format!(
-                    "while (__sv_comp != NULL && strcmp(__sv_comp->state, \"{}\") != 0) {{\n",
-                    state
-                ));
-                s.push_str("    __sv_comp = __sv_comp->parent_compartment;\n");
-                s.push_str("}\n");
-                s
-            },
-            fmt_bind_param: |name, type_str, _sys, index| {
-                let (c_type, cast) = c_param_type_and_cast(type_str);
-                // state_args is now a FrameVec*, so access via ->items[N].
-                format!("{c_type} {name} = {cast}self->__compartment->state_args->items[{index}];\n")
-            },
-            fmt_init_sv: |var_name, init_val, indent, sys| {
-                format!(
+                lang,
+                semi: ";",
+                empty_body: "",
+                indent: "    ",
+                close_final: "}\n",
+                else_start: "} else {\n",
+                self_prefix: "self->",
+                fmt_if: |msg| format!("if (strcmp(__e->_message, \"{}\") == 0) {{\n", msg),
+                fmt_elif: |msg| {
+                    format!("}} else if (strcmp(__e->_message, \"{}\") == 0) {{\n", msg)
+                },
+                fmt_hsm_nav: |state, sys| {
+                    let mut s = String::new();
+                    s.push_str(
+                        "// HSM: Navigate to this state's compartment for state var access\n",
+                    );
+                    s.push_str(&format!(
+                        "{}_Compartment* __sv_comp = self->__compartment;\n",
+                        sys
+                    ));
+                    s.push_str(&format!(
+                        "while (__sv_comp != NULL && strcmp(__sv_comp->state, \"{}\") != 0) {{\n",
+                        state
+                    ));
+                    s.push_str("    __sv_comp = __sv_comp->parent_compartment;\n");
+                    s.push_str("}\n");
+                    s
+                },
+                fmt_bind_param: |name, type_str, _sys, index| {
+                    let (c_type, cast) = c_param_type_and_cast(type_str);
+                    // state_args is now a FrameVec*, so access via ->items[N].
+                    format!("{c_type} {name} = {cast}self->__compartment->state_args->items[{index}];\n")
+                },
+                fmt_init_sv: |var_name, init_val, indent, sys| {
+                    format!(
                     "{indent}if (!{sys}_FrameDict_has(__sv_comp->state_vars, \"{var_name}\")) {{\n\
                      {indent}    {sys}_FrameDict_set(__sv_comp->state_vars, \"{var_name}\", (void*)(intptr_t)({init_val}));\n\
                      {indent}}}\n"
                 )
-            },
-            fmt_unpack: |name, type_str, indent, _sys, source, _default, index| {
-                let list = match source {
-                    "enter" => "self->__compartment->enter_args",
-                    "exit" => "self->__compartment->exit_args",
-                    _ => "__e->_parameters",
-                };
-                let (c_type, cast) = c_param_type_and_cast(type_str);
-                // _parameters / enter_args / exit_args are FrameVec*; dereference ->items[N].
-                format!(
-                    "{indent}{c_type} {name} = {cast}{list}->items[{index}];\n"
-                )
-            },
-            fmt_forward: |parent, indent, sys| {
-                format!("{indent}{sys}_state_{parent}(self, __e);\n")
-            },
+                },
+                fmt_unpack: |name, type_str, indent, _sys, source, _default, index| {
+                    let list = match source {
+                        "enter" => "self->__compartment->enter_args",
+                        "exit" => "self->__compartment->exit_args",
+                        _ => "__e->_parameters",
+                    };
+                    let (c_type, cast) = c_param_type_and_cast(type_str);
+                    // _parameters / enter_args / exit_args are FrameVec*; dereference ->items[N].
+                    format!("{indent}{c_type} {name} = {cast}{list}->items[{index}];\n")
+                },
+                fmt_forward: |parent, indent, sys| {
+                    format!("{indent}{sys}_state_{parent}(self, __e);\n")
+                },
             })
         }
         // Rust and Erlang stay separate (different dispatch patterns)
@@ -1002,9 +1011,7 @@ fn generate_thin_dispatcher_generic(
             // Compartment.parent_compartment type is `Compartment | null`
             // under strict null checks.
             let bang = match syn.lang {
-                TargetLanguage::Dart
-                | TargetLanguage::Swift
-                | TargetLanguage::TypeScript => "!",
+                TargetLanguage::Dart | TargetLanguage::Swift | TargetLanguage::TypeScript => "!",
                 TargetLanguage::Kotlin => "!!",
                 _ => "",
             };
@@ -1169,7 +1176,8 @@ pub(crate) fn generate_state_handlers_via_arcanum(
 
     // Build event→param-names lookup for @@:params.name → positional index resolution.
     // Built from the machine AST's interface handler params.
-    let mut event_param_names: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut event_param_names: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for state in &machine.states {
         for handler in &state.handlers {
             if !handler.params.is_empty() && !event_param_names.contains_key(&handler.event) {
@@ -1352,9 +1360,7 @@ pub(crate) fn generate_per_handler_methods(
                     .map(|sv| {
                         let type_str = match &sv.var_type {
                             crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
-                            crate::frame_c::compiler::frame_ast::Type::Unknown => {
-                                "int".to_string()
-                            }
+                            crate::frame_c::compiler::frame_ast::Type::Unknown => "int".to_string(),
                         };
                         (sv.name.clone(), type_str)
                     })
@@ -1362,10 +1368,7 @@ pub(crate) fn generate_per_handler_methods(
             })
             .unwrap_or_default();
 
-        let state_ast = machine
-            .states
-            .iter()
-            .find(|s| s.name == state_entry.name);
+        let state_ast = machine.states.iter().find(|s| s.name == state_entry.name);
         let state_vars_for_init: &[StateVarAst] =
             state_ast.map(|s| &s.state_vars[..]).unwrap_or(&[]);
 
@@ -2004,10 +2007,7 @@ fn generate_php_handler_method(
 
     if let Some(sp_names) = state_param_names.get(state_name) {
         for (i, name) in sp_names.iter().enumerate() {
-            body.push_str(&format!(
-                "${} = $compartment->state_args[{}];\n",
-                name, i
-            ));
+            body.push_str(&format!("${} = $compartment->state_args[{}];\n", name, i));
         }
     }
 
@@ -2019,10 +2019,7 @@ fn generate_php_handler_method(
         "$__e->_parameters"
     };
     for (i, param) in handler.params.iter().enumerate() {
-        body.push_str(&format!(
-            "${} = {}[{}];\n",
-            param.name, param_source, i
-        ));
+        body.push_str(&format!("${} = {}[{}];\n", param.name, param_source, i));
     }
 
     if handler.is_enter {
@@ -2634,10 +2631,7 @@ fn generate_cpp_handler_method(
         let type_str = param.symbol_type.as_deref().unwrap_or("int");
         let cpp_type = cpp_map_type(type_str);
         if cpp_type == "std::any" {
-            body.push_str(&format!(
-                "auto {} = {}[{}];\n",
-                param.name, param_source, i
-            ));
+            body.push_str(&format!("auto {} = {}[{}];\n", param.name, param_source, i));
         } else {
             body.push_str(&format!(
                 "auto {} = std::any_cast<{}>({}[{}]);\n",
@@ -2656,9 +2650,7 @@ fn generate_cpp_handler_method(
             } else {
                 state_var_init_value(&var.var_type, lang)
             };
-            let wrapped = if init_val.trim().starts_with('"')
-                && init_val.trim().ends_with('"')
-            {
+            let wrapped = if init_val.trim().starts_with('"') && init_val.trim().ends_with('"') {
                 format!("std::string({})", init_val)
             } else {
                 init_val
@@ -3004,7 +2996,10 @@ fn generate_dart_handler_method(
     // State-param binding.
     if let Some(sp_names) = state_param_names.get(state_name) {
         for (i, name) in sp_names.iter().enumerate() {
-            body.push_str(&format!("final {} = compartment.state_args[{}];\n", name, i));
+            body.push_str(&format!(
+                "final {} = compartment.state_args[{}];\n",
+                name, i
+            ));
         }
     }
 
@@ -3240,7 +3235,10 @@ fn generate_typescript_handler_method(
     // top of every handler so handler bodies can reference them by name.
     if let Some(sp_names) = state_param_names.get(state_name) {
         for (i, name) in sp_names.iter().enumerate() {
-            body.push_str(&format!("const {} = compartment.state_args[{}];\n", name, i));
+            body.push_str(&format!(
+                "const {} = compartment.state_args[{}];\n",
+                name, i
+            ));
         }
     }
 
@@ -3410,12 +3408,8 @@ fn generate_python_handler_method(
     // User-written handler body. Frame expansion uses ctx.per_handler=true,
     // so state-var access emits compartment.state_vars[…] and HSM forwards
     // emit self._state_Parent(__e, compartment.parent_compartment).
-    let body_src = emit_handler_body_via_statements(
-        &handler.body_span,
-        source,
-        TargetLanguage::Python3,
-        &ctx,
-    );
+    let body_src =
+        emit_handler_body_via_statements(&handler.body_span, source, TargetLanguage::Python3, &ctx);
     body.push_str(&body_src);
 
     // Empty body placeholder — Python requires a statement.
@@ -3425,10 +3419,7 @@ fn generate_python_handler_method(
 
     CodegenNode::Method {
         name: method_name,
-        params: vec![
-            Param::new("__e"),
-            Param::new("compartment"),
-        ],
+        params: vec![Param::new("__e"), Param::new("compartment")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
             code: body,

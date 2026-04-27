@@ -463,9 +463,8 @@ mod tests {
         // own label (which sits between `label = <` and the first `>`).
         // Inner leaf nodes may legitimately render empty handler rows.
         let cluster_start = dot.find("subgraph cluster_Open {").unwrap();
-        let label_open = cluster_start
-            + dot[cluster_start..].find("label = <").unwrap()
-            + "label = <".len();
+        let label_open =
+            cluster_start + dot[cluster_start..].find("label = <").unwrap() + "label = <".len();
         let label_close = label_open + dot[label_open..].find(">").unwrap();
         let cluster_label = &dot[label_open..label_close];
         assert!(

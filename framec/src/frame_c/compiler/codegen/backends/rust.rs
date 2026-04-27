@@ -68,7 +68,12 @@ impl LanguageBackend for RustBackend {
                     Visibility::Public => "pub ",
                     _ => "",
                 };
-                result.push_str(&format!("{}{}struct {} {{\n", ctx.get_indent(), vis_kw, name));
+                result.push_str(&format!(
+                    "{}{}struct {} {{\n",
+                    ctx.get_indent(),
+                    vis_kw,
+                    name
+                ));
                 ctx.push_indent();
                 for field in fields {
                     result.push_str(&self.emit_field(field, ctx));

@@ -608,7 +608,9 @@ pub fn run_with(args: Cli) {
                         if matches!(lang, TargetLanguage::Java) {
                             if let Some(cap) = code.find("public class ") {
                                 let after = &code[cap + 13..];
-                                let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
+                                let end = after
+                                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                                    .unwrap_or(after.len());
                                 let class_name = &after[..end];
                                 if !class_name.is_empty() {
                                     outp.set_file_name(format!("{}.java", class_name));
@@ -881,13 +883,18 @@ pub fn run_with(args: Cli) {
                                     TargetLanguage::GDScript => ".gd",
                                     TargetLanguage::Graphviz => ".dot",
                                 };
-                                let mut stem =
-                                    file.file_stem().and_then(|s| s.to_str()).unwrap_or("out").to_string();
+                                let mut stem = file
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("out")
+                                    .to_string();
                                 // Java requires filename to match the public class name
                                 if matches!(lang, TargetLanguage::Java) {
                                     if let Some(cap) = code.find("public class ") {
                                         let after = &code[cap + 13..];
-                                        let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
+                                        let end = after
+                                            .find(|c: char| !c.is_alphanumeric() && c != '_')
+                                            .unwrap_or(after.len());
                                         let class_name = &after[..end];
                                         if !class_name.is_empty() {
                                             stem = class_name.to_string();

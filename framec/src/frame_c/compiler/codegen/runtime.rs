@@ -1244,7 +1244,9 @@ pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
     code.push_str("public:\n");
     code.push_str("    std::string _message;\n");
     code.push_str("    std::vector<std::any> _parameters;\n");
-    code.push_str(&format!("\n    {sys}FrameEvent(const std::string& message, std::vector<std::any> params = {{}})\n"));
+    code.push_str(&format!(
+        "\n    {sys}FrameEvent(const std::string& message, std::vector<std::any> params = {{}})\n"
+    ));
     code.push_str("        : _message(message), _parameters(std::move(params)) {}\n");
     code.push_str("};\n\n");
 
@@ -1892,7 +1894,10 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
         sys, sys
     ));
     code.push_str("    for (int i = 0; i < src->size; i++) {\n");
-    code.push_str(&format!("        {}_FrameVec_push(v, src->items[i]);\n", sys));
+    code.push_str(&format!(
+        "        {}_FrameVec_push(v, src->items[i]);\n",
+        sys
+    ));
     code.push_str("    }\n");
     code.push_str("    return v;\n");
     code.push_str("}\n\n");
@@ -2087,15 +2092,11 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     code.push_str(&format!(
         "        {sys}_Compartment_unref(c->parent_compartment);\n"
     ));
-    code.push_str(&format!(
-        "        {sys}_FrameVec_destroy(c->state_args);\n"
-    ));
+    code.push_str(&format!("        {sys}_FrameVec_destroy(c->state_args);\n"));
     code.push_str(&format!(
         "        {sys}_FrameDict_destroy(c->state_vars);\n"
     ));
-    code.push_str(&format!(
-        "        {sys}_FrameVec_destroy(c->enter_args);\n"
-    ));
+    code.push_str(&format!("        {sys}_FrameVec_destroy(c->enter_args);\n"));
     code.push_str(&format!("        {sys}_FrameVec_destroy(c->exit_args);\n"));
     code.push_str("        free(c);\n");
     code.push_str("    }\n");

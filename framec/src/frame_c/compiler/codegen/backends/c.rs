@@ -95,9 +95,7 @@ impl LanguageBackend for CBackend {
                         name: method_name, ..
                     } = method
                     {
-                        if method_name.starts_with("_state_")
-                            || method_name.starts_with("_s_")
-                        {
+                        if method_name.starts_with("_state_") || method_name.starts_with("_s_") {
                             result.push_str(&format!(
                                 "static void {}_{}({}* self, {}_FrameEvent* __e, {}_Compartment* compartment);\n",
                                 name,

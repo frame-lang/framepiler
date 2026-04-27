@@ -159,12 +159,7 @@ impl LanguageBackend for GDScriptBackend {
                         format!(" extends {}", base_classes[0])
                     };
 
-                    result.push_str(&format!(
-                        "{}class {}{}:\n",
-                        ctx.get_indent(),
-                        name,
-                        bases
-                    ));
+                    result.push_str(&format!("{}class {}{}:\n", ctx.get_indent(), name, bases));
 
                     ctx.push_indent();
 

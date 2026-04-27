@@ -361,10 +361,7 @@ pub(crate) fn generate_rust_machinery(
             .map(|n| format!("\"{}\"", n))
             .collect::<Vec<_>>()
             .join(", ");
-        chain_body.push_str(&format!(
-            "    \"{}\" => &[{}],\n",
-            leaf, entries
-        ));
+        chain_body.push_str(&format!("    \"{}\" => &[{}],\n", leaf, entries));
     }
     chain_body.push_str("    _ => &[],\n}");
     methods.push(CodegenNode::Method {
@@ -925,11 +922,16 @@ pub(crate) fn generate_rust_interface_body(
     let mut code = if method.params.is_empty() {
         format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name)
     } else {
-        let param_items: Vec<String> = method.params.iter()
+        let param_items: Vec<String> = method
+            .params
+            .iter()
             .map(|p| format!("Box::new({}.to_string()) as Box<dyn std::any::Any>", p.name))
             .collect();
         let mut s = format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name);
-        s.push_str(&format!("__e.parameters = vec![{}];\n", param_items.join(", ")));
+        s.push_str(&format!(
+            "__e.parameters = vec![{}];\n",
+            param_items.join(", ")
+        ));
         s
     };
 
@@ -1372,8 +1374,7 @@ pub(crate) fn rust_context_return_read() -> String {
 /// arg to a self-call. Falls back to the untyped `Option<&Box>`
 /// form when the handler's return type is unknown/unsupported.
 pub(crate) fn rust_context_return_read_typed(frame_type: &str) -> String {
-    let base =
-        "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())";
+    let base = "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())";
     match frame_type {
         "int" => format!(
             "({}.and_then(|b| b.downcast_ref::<i64>()).copied().unwrap_or(0))",

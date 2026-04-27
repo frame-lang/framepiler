@@ -640,9 +640,14 @@ impl<'a> Parser<'a> {
                 let mut depth = 0i32;
                 while pos < src.len() {
                     match src[pos] {
-                        b'(' | b'[' | b'{' => { depth += 1; pos += 1; }
+                        b'(' | b'[' | b'{' => {
+                            depth += 1;
+                            pos += 1;
+                        }
                         b')' | b']' | b'}' => {
-                            if depth == 0 { break; }
+                            if depth == 0 {
+                                break;
+                            }
                             depth -= 1;
                             pos += 1;
                         }
@@ -708,10 +713,8 @@ impl<'a> Parser<'a> {
             match tok.token {
                 Token::Eof => break,
 
-                Token::NativeCode(code) => {
-                    if !code.trim().is_empty() {
-                        statements.push(Statement::NativeCode(code));
-                    }
+                Token::NativeCode(code) if !code.trim().is_empty() => {
+                    statements.push(Statement::NativeCode(code));
                 }
 
                 Token::Arrow => {

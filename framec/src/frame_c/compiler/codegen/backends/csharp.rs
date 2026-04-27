@@ -108,8 +108,7 @@ impl LanguageBackend for CSharpBackend {
                 let vis = self.emit_visibility(*visibility);
                 let static_kw = if *is_static { "static " } else { "" };
                 let async_kw = if *is_async { "async " } else { "" };
-                let raw_return =
-                    self.map_type(return_type.as_ref().unwrap_or(&"void".to_string()));
+                let raw_return = self.map_type(return_type.as_ref().unwrap_or(&"void".to_string()));
                 // C#: `async` methods must return `Task`, `Task<T>`, or
                 // `ValueTask<T>`. Wrap accordingly.
                 let return_str = if *is_async {

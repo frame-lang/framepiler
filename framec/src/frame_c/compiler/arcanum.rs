@@ -43,7 +43,7 @@ pub struct FrameSymbol {
     pub name: String,
     pub kind: FrameSymbolKind,
     pub declared_at: Span,
-    pub symbol_type: Option<String>, // Type annotation if present
+    pub symbol_type: Option<String>,   // Type annotation if present
     pub default_value: Option<String>, // Default for enter/exit handler params
 }
 

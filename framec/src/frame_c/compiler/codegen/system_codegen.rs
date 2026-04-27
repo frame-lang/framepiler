@@ -294,12 +294,12 @@ fn make_java_interface_async(class_node: &mut CodegenNode, system: &SystemAst) {
         .filter(|m| m.is_async)
         .map(|m| m.name.clone())
         .collect();
-    if let CodegenNode::Class { ref mut methods, .. } = class_node {
+    if let CodegenNode::Class {
+        ref mut methods, ..
+    } = class_node
+    {
         for method in methods.iter_mut() {
-            if let CodegenNode::Method {
-                is_async, name, ..
-            } = method
-            {
+            if let CodegenNode::Method { is_async, name, .. } = method {
                 if async_names.contains(name) {
                     *is_async = true;
                 }
@@ -314,9 +314,8 @@ fn make_java_interface_async(class_node: &mut CodegenNode, system: &SystemAst) {
             params: vec![],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
-                code:
-                    "return java.util.concurrent.CompletableFuture.completedFuture(null);"
-                        .to_string(),
+                code: "return java.util.concurrent.CompletableFuture.completedFuture(null);"
+                    .to_string(),
                 span: None,
             }],
             is_async: true,
@@ -371,10 +370,7 @@ pub(crate) fn make_system_async(
                 // operations on Compartment objects, no event dispatch.
                 // Keeping them sync lets the constructor (which can't be
                 // async in JS/TS) call __prepareEnter directly.
-                if name == "__prepareEnter"
-                    || name == "__prepareExit"
-                    || name == "__hsm_chain"
-                {
+                if name == "__prepareEnter" || name == "__prepareExit" || name == "__hsm_chain" {
                     continue;
                 }
                 *is_async = true;
@@ -532,9 +528,11 @@ fn ensure_cpp_coroutine_terminator(body: &mut Vec<CodegenNode>) {
     if has_coroutine_keyword {
         return;
     }
-    if let Some(CodegenNode::NativeBlock { code, .. }) = body.iter_mut().rev().find(|n| {
-        matches!(n, CodegenNode::NativeBlock { .. })
-    }) {
+    if let Some(CodegenNode::NativeBlock { code, .. }) = body
+        .iter_mut()
+        .rev()
+        .find(|n| matches!(n, CodegenNode::NativeBlock { .. }))
+    {
         if !code.ends_with('\n') {
             code.push('\n');
         }
@@ -1459,10 +1457,8 @@ pub(crate) fn generate_constructor(
                         ));
                     }
                     if !enter_args_vec.is_empty() {
-                        init_code.push_str(&format!(
-                            "{sys}_FrameVec_destroy(__ea);",
-                            sys = system.name
-                        ));
+                        init_code
+                            .push_str(&format!("{sys}_FrameVec_destroy(__ea);", sys = system.name));
                     }
                     body.push(CodegenNode::NativeBlock {
                         code: init_code,
@@ -1617,14 +1613,10 @@ pub(crate) fn generate_constructor(
                         })
                         .map(|p| format!("std::any({})", cpp_wrap_any_arg(&p.name)))
                         .collect();
-                    let state_arg = format!(
-                        "std::vector<std::any>{{{}}}",
-                        state_args_wrapped.join(", ")
-                    );
-                    let enter_arg = format!(
-                        "std::vector<std::any>{{{}}}",
-                        enter_args_wrapped.join(", ")
-                    );
+                    let state_arg =
+                        format!("std::vector<std::any>{{{}}}", state_args_wrapped.join(", "));
+                    let enter_arg =
+                        format!("std::vector<std::any>{{{}}}", enter_args_wrapped.join(", "));
                     body.push(CodegenNode::NativeBlock {
                         code: format!(
                             "__compartment = __prepareEnter(\"{}\", {}, {});",
@@ -1796,18 +1788,12 @@ pub(crate) fn generate_constructor(
                     let state_arg = if state_args_vec.is_empty() {
                         "new List<object>()".to_string()
                     } else {
-                        format!(
-                            "new List<object> {{ {} }}",
-                            state_args_vec.join(", ")
-                        )
+                        format!("new List<object> {{ {} }}", state_args_vec.join(", "))
                     };
                     let enter_arg = if enter_args_vec.is_empty() {
                         "new List<object>()".to_string()
                     } else {
-                        format!(
-                            "new List<object> {{ {} }}",
-                            enter_args_vec.join(", ")
-                        )
+                        format!("new List<object> {{ {} }}", enter_args_vec.join(", "))
                     };
                     body.push(CodegenNode::NativeBlock {
                         code: format!(
@@ -1941,12 +1927,26 @@ pub(crate) fn generate_constructor(
                 // table.pack(...) / nil instead of `{}` literals
                 // (block-transformer workaround).
                 TargetLanguage::Lua => {
-                    let state_args_vec: Vec<String> = system.params.iter()
-                        .filter(|p| matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::StateArg))
+                    let state_args_vec: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::StateArg
+                            )
+                        })
                         .map(|p| p.name.clone())
                         .collect();
-                    let enter_args_vec: Vec<String> = system.params.iter()
-                        .filter(|p| matches!(p.kind, crate::frame_c::compiler::frame_ast::ParamKind::EnterArg))
+                    let enter_args_vec: Vec<String> = system
+                        .params
+                        .iter()
+                        .filter(|p| {
+                            matches!(
+                                p.kind,
+                                crate::frame_c::compiler::frame_ast::ParamKind::EnterArg
+                            )
+                        })
                         .map(|p| p.name.clone())
                         .collect();
                     let state_arg = if state_args_vec.is_empty() {
@@ -2158,12 +2158,24 @@ pub(crate) fn generate_frame_machinery(
     let event_class = format!("{}FrameEvent", system.name);
 
     match lang {
-        TargetLanguage::Python3 => methods.extend(generate_python3_machinery(system, &event_class, &compartment_class)),
+        TargetLanguage::Python3 => methods.extend(generate_python3_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => methods.extend(
             generate_javascript_machinery(system, lang, &event_class, &compartment_class),
         ),
-        TargetLanguage::Php => methods.extend(generate_php_machinery(system, &event_class, &compartment_class)),
-        TargetLanguage::Ruby => methods.extend(generate_ruby_machinery(system, &event_class, &compartment_class)),
+        TargetLanguage::Php => methods.extend(generate_php_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
+        TargetLanguage::Ruby => methods.extend(generate_ruby_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
         TargetLanguage::Rust => methods.extend(super::rust_system::generate_rust_machinery(
             system,
             &event_class,
@@ -2199,13 +2211,21 @@ pub(crate) fn generate_frame_machinery(
         TargetLanguage::Erlang => {
             // gen_statem: kernel/router/transition are built into OTP — no custom methods needed
         }
-        TargetLanguage::Lua => methods.extend(generate_lua_machinery(system, &event_class, &compartment_class)),
+        TargetLanguage::Lua => methods.extend(generate_lua_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
         TargetLanguage::Dart => methods.extend(generate_dart_machinery(
             system,
             &event_class,
             &compartment_class,
         )),
-        TargetLanguage::GDScript => methods.extend(generate_gdscript_machinery(system, &event_class, &compartment_class)),
+        TargetLanguage::GDScript => methods.extend(generate_gdscript_machinery(
+            system,
+            &event_class,
+            &compartment_class,
+        )),
         TargetLanguage::Graphviz => unreachable!(),
     }
 
@@ -2522,7 +2542,11 @@ fn generate_javascript_machinery(
     methods.push(CodegenNode::Method {
         name: "__prepareEnter".to_string(),
         params: prepare_enter_params,
-        return_type: if is_ts { Some(compartment_class.to_string()) } else { None },
+        return_type: if is_ts {
+            Some(compartment_class.to_string())
+        } else {
+            None
+        },
         body: vec![CodegenNode::NativeBlock {
             code: format!(
                 r#"let comp{cast} = null;
@@ -2534,7 +2558,11 @@ for (const name of {sys}._HSM_CHAIN[leaf]) {{
     comp = new_comp;
 }}
 return comp{nonnull};"#,
-                cast = if is_ts { format!(": {} | null", compartment_class) } else { String::new() },
+                cast = if is_ts {
+                    format!(": {} | null", compartment_class)
+                } else {
+                    String::new()
+                },
                 sys = system.name,
                 comp = compartment_class,
                 nonnull = if is_ts { "!" } else { "" }
@@ -2564,7 +2592,11 @@ while (comp !== null) {{
     comp.exit_args = [...exit_args];
     comp = comp.parent_compartment;
 }}"#,
-                cast = if is_ts { format!(": {} | null", compartment_class) } else { String::new() },
+                cast = if is_ts {
+                    format!(": {} | null", compartment_class)
+                } else {
+                    String::new()
+                },
             ),
             span: None,
         }],
@@ -2628,7 +2660,11 @@ while (comp !== null) {{
     this.__route_to_state(comp.state, exit_event, comp);
     comp = comp.parent_compartment;
 }}"#,
-                cast = if is_ts { format!(": {} | null", compartment_class) } else { String::new() },
+                cast = if is_ts {
+                    format!(": {} | null", compartment_class)
+                } else {
+                    String::new()
+                },
                 evt = event_class
             ),
             span: None,
@@ -2657,8 +2693,16 @@ for (let i = chain.length - 1; i >= 0; i--) {{
     const enter_event = new {evt}("$>", layer.enter_args);
     this.__route_to_state(layer.state, enter_event, layer);
 }}"#,
-                cast = if is_ts { format!(": {}[]", compartment_class) } else { String::new() },
-                cast2 = if is_ts { format!(": {} | null", compartment_class) } else { String::new() },
+                cast = if is_ts {
+                    format!(": {}[]", compartment_class)
+                } else {
+                    String::new()
+                },
+                cast2 = if is_ts {
+                    format!(": {} | null", compartment_class)
+                } else {
+                    String::new()
+                },
                 evt = event_class
             ),
             span: None,
@@ -2698,7 +2742,7 @@ for (let i = chain.length - 1; i >= 0; i--) {{
         ctx._transitioned = true;
     }
 }"#
-                .to_string(),
+            .to_string(),
             span: None,
         }],
         is_async: false,
@@ -2732,7 +2776,8 @@ this.__process_transition_loop();"#
         params: vec![Param::new("__e").with_type(event_class)],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: "this.__route_to_state(this.__compartment.state, __e, this.__compartment);".to_string(),
+            code: "this.__route_to_state(this.__compartment.state, __e, this.__compartment);"
+                .to_string(),
             span: None,
         }],
         is_async: false,
@@ -2962,7 +3007,9 @@ for ($i = count($chain) - 1; $i >= 0; $i--) {{
         params: vec![Param::new("__e")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: "$this->__route_to_state($this->__compartment->state, $__e, $this->__compartment);".to_string(),
+            code:
+                "$this->__route_to_state($this->__compartment->state, $__e, $this->__compartment);"
+                    .to_string(),
             span: None,
         }],
         is_async: false,
@@ -3548,10 +3595,7 @@ fn generate_cpp_machinery(
             .map(|n| format!("\"{}\"", n))
             .collect::<Vec<_>>()
             .join(", ");
-        chain_method.push_str(&format!(
-            "        {{\"{}\", {{{}}} }},\n",
-            leaf, chain_str
-        ));
+        chain_method.push_str(&format!("        {{\"{}\", {{{}}} }},\n", leaf, chain_str));
     }
     chain_method.push_str("    };\n}");
     methods.push(CodegenNode::NativeBlock {
@@ -4053,19 +4097,15 @@ fn generate_kotlin_machinery(
     });
 
     // hsm_chain — instance method returning the topology table.
-    let mut chain_method = String::from(
-        "private fun hsm_chain(): Map<String, List<String>> {\n    return mapOf(\n",
-    );
+    let mut chain_method =
+        String::from("private fun hsm_chain(): Map<String, List<String>> {\n    return mapOf(\n");
     for (leaf, chain) in &chains {
         let chain_str = chain
             .iter()
             .map(|n| format!("\"{}\"", n))
             .collect::<Vec<_>>()
             .join(", ");
-        chain_method.push_str(&format!(
-            "        \"{}\" to listOf({}),\n",
-            leaf, chain_str
-        ));
+        chain_method.push_str(&format!("        \"{}\" to listOf({}),\n", leaf, chain_str));
     }
     chain_method.push_str("    )\n}");
     methods.push(CodegenNode::NativeBlock {
@@ -4309,9 +4349,8 @@ fn generate_swift_machinery(
     // hsm_chain — class method (so it's callable from init before all
     // stored properties are initialized; Swift forbids instance-method
     // calls on `self` until that point).
-    let mut chain_method = String::from(
-        "private static func hsm_chain() -> [String: [String]] {\n    return [\n",
-    );
+    let mut chain_method =
+        String::from("private static func hsm_chain() -> [String: [String]] {\n    return [\n");
     for (leaf, chain) in &chains {
         let chain_str = chain
             .iter()
@@ -4801,10 +4840,7 @@ fn generate_go_machinery(system: &SystemAst) -> Vec<CodegenNode> {
             .map(|n| format!("\"{}\"", n))
             .collect::<Vec<_>>()
             .join(", ");
-        chain_method.push_str(&format!(
-            "        \"{}\": {{{}}},\n",
-            leaf, chain_str
-        ));
+        chain_method.push_str(&format!("        \"{}\": {{{}}},\n", leaf, chain_str));
     }
     chain_method.push_str("    }\n}");
     methods.push(CodegenNode::NativeBlock {
@@ -5247,7 +5283,8 @@ end"#
         params: vec![Param::new("__e")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: "self:__route_to_state(self.__compartment.state, __e, self.__compartment)".to_string(),
+            code: "self:__route_to_state(self.__compartment.state, __e, self.__compartment)"
+                .to_string(),
             span: None,
         }],
         is_async: false,
@@ -5283,9 +5320,7 @@ fn generate_dart_machinery(
     let chains = compute_hsm_chains(system);
 
     // hsm_chain — instance method returning the topology table.
-    let mut chain_method = String::from(
-        "Map<String, List<String>> hsm_chain() {\n    return {\n",
-    );
+    let mut chain_method = String::from("Map<String, List<String>> hsm_chain() {\n    return {\n");
     for (leaf, chain) in &chains {
         let chain_str = chain
             .iter()
@@ -5716,7 +5751,8 @@ for i in range(chain.size() - 1, -1, -1):
         params: vec![Param::new("__e")],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: "self.__route_to_state(self.__compartment.state, __e, self.__compartment)".to_string(),
+            code: "self.__route_to_state(self.__compartment.state, __e, self.__compartment)"
+                .to_string(),
             span: None,
         }],
         is_async: false,
@@ -5748,9 +5784,7 @@ fn generate_c_router_dispatch(system: &SystemAst) -> String {
     // Thin __router that delegates to __route_to_state with the
     // active compartment.
     let sys = &system.name;
-    format!(
-        "{sys}_route_to_state(self, self->__compartment->state, __e, self->__compartment);"
-    )
+    format!("{sys}_route_to_state(self, self->__compartment->state, __e, self->__compartment);")
 }
 
 fn generate_c_route_to_state_dispatch(system: &SystemAst) -> String {

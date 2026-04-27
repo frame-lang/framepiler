@@ -115,9 +115,7 @@ pub(crate) fn context_return_read_typed(
         TargetLanguage::Python3 | TargetLanguage::GDScript => {
             "self._context_stack[-1]._return".to_string()
         }
-        TargetLanguage::TypeScript
-        | TargetLanguage::Dart
-        | TargetLanguage::JavaScript => {
+        TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => {
             "this._context_stack[this._context_stack.length - 1]._return".to_string()
         }
         TargetLanguage::C => {
@@ -136,10 +134,7 @@ pub(crate) fn context_return_read_typed(
                 "str" => "std::string",
                 _ => "std::string", // legacy default
             };
-            format!(
-                "std::any_cast<{}>(_context_stack.back()._return)",
-                cpp_type
-            )
+            format!("std::any_cast<{}>(_context_stack.back()._return)", cpp_type)
         }
         TargetLanguage::Java => {
             let raw = "_context_stack.get(_context_stack.size() - 1)._return";
@@ -189,12 +184,8 @@ pub(crate) fn context_return_read_typed(
         TargetLanguage::Php => {
             "$this->_context_stack[count($this->_context_stack) - 1]->_return".to_string()
         }
-        TargetLanguage::Ruby => {
-            "@_context_stack[@_context_stack.length - 1]._return".to_string()
-        }
-        TargetLanguage::Lua => {
-            "self._context_stack[#self._context_stack]._return".to_string()
-        }
+        TargetLanguage::Ruby => "@_context_stack[@_context_stack.length - 1]._return".to_string(),
+        TargetLanguage::Lua => "self._context_stack[#self._context_stack]._return".to_string(),
         TargetLanguage::Erlang => "__ReturnVal".to_string(),
         TargetLanguage::Graphviz => unreachable!(),
     }
@@ -335,9 +326,7 @@ pub(crate) fn emit_handler_body_via_statements(
                                 let next_frame_idx = frame_idx + 1;
                                 for j in (stmt_idx + 1)..statements.len() {
                                     match &statements[j] {
-                                        Statement::NativeCode(text)
-                                            if text.trim().is_empty() =>
-                                        {
+                                        Statement::NativeCode(text) if text.trim().is_empty() => {
                                             continue
                                         }
                                         Statement::ContextReturnExpr { .. }
@@ -352,8 +341,13 @@ pub(crate) fn emit_handler_body_via_statements(
                                                 {
                                                     if *ret_indent == *indent {
                                                         let ret_exp = generate_frame_expansion(
-                                                            body_bytes, ret_span, *ret_kind,
-                                                            *ret_indent, lang, ctx, ret_meta,
+                                                            body_bytes,
+                                                            ret_span,
+                                                            *ret_kind,
+                                                            *ret_indent,
+                                                            lang,
+                                                            ctx,
+                                                            ret_meta,
                                                         );
                                                         out.push('\n');
                                                         out.push_str(&ret_exp);
@@ -378,9 +372,9 @@ pub(crate) fn emit_handler_body_via_statements(
                             }
                             // Self-call: bare call expression needs indent
                             // prefix (standalone) or statement terminator.
-                            let is_standalone_self_call =
-                                *kind == FrameSegmentKind::ContextSelfCall
-                                    && (out.is_empty() || out.ends_with('\n'));
+                            let is_standalone_self_call = *kind
+                                == FrameSegmentKind::ContextSelfCall
+                                && (out.is_empty() || out.ends_with('\n'));
                             if is_standalone_self_call {
                                 out.push_str(&" ".repeat(*indent));
                             }
@@ -782,10 +776,7 @@ pub(crate) fn generate_frame_expansion(
                             "{}{{ {}Compartment __next = __prepareEnter(\"{}\", new List<object>(), new List<object>());\n",
                             indent_str, ctx.system_name, target
                         ));
-                        code.push_str(&format!(
-                            "{}__next.forward_event = __e;\n",
-                            indent_str
-                        ));
+                        code.push_str(&format!("{}__next.forward_event = __e;\n", indent_str));
                         code.push_str(&format!("{}__transition(__next); }}\n", indent_str));
                         code.push_str(&format!("{}return;", indent_str));
                         code
@@ -798,10 +789,7 @@ pub(crate) fn generate_frame_expansion(
                             "{}__compartment := s.__prepareEnter(\"{}\", []any{{}}, []any{{}})\n",
                             indent_str, target
                         ));
-                        code.push_str(&format!(
-                            "{}__compartment.forwardEvent = __e\n",
-                            indent_str
-                        ));
+                        code.push_str(&format!("{}__compartment.forwardEvent = __e\n", indent_str));
                         code.push_str(&format!("{}s.__transition(__compartment)\n", indent_str));
                         code.push_str(&format!("{}return", indent_str));
                         code
@@ -1720,8 +1708,7 @@ pub(crate) fn generate_frame_expansion(
                             .get(&ctx.event_name)
                             .cloned()
                             .unwrap_or_default();
-                        let php_fix =
-                            |expr: &str| php_prefix_params(expr, &current_params);
+                        let php_fix = |expr: &str| php_prefix_params(expr, &current_params);
 
                         let state_args_list = if let Some(ref state) = state_str {
                             let vals: Vec<String> = state
@@ -1994,7 +1981,10 @@ pub(crate) fn generate_frame_expansion(
                             // Per-handler architecture: shift compartment up one
                             // level at the forward site so the parent dispatcher
                             // sees its own compartment as the param.
-                            format!("{}self._state_{}(__e, compartment.parent_compartment)", indent_str, parent)
+                            format!(
+                                "{}self._state_{}(__e, compartment.parent_compartment)",
+                                indent_str, parent
+                            )
                         } else {
                             format!("{}self._state_{}(__e)", indent_str, parent)
                         }
@@ -2610,7 +2600,10 @@ pub(crate) fn generate_frame_expansion(
                             q, var_name, q, sw_type
                         )
                     } else if ctx.use_sv_comp {
-                        format!("(__sv_comp.state_vars[{}{}{}] as! {})", q, var_name, q, sw_type)
+                        format!(
+                            "(__sv_comp.state_vars[{}{}{}] as! {})",
+                            q, var_name, q, sw_type
+                        )
                     } else {
                         format!(
                             "(__compartment.state_vars[{}{}{}] as! {})",
@@ -2634,7 +2627,10 @@ pub(crate) fn generate_frame_expansion(
                     } else if ctx.use_sv_comp {
                         format!("__sv_comp.stateVars[{}{}{}]{}", q, var_name, q, assertion)
                     } else {
-                        format!("s.__compartment.stateVars[{}{}{}]{}", q, var_name, q, assertion)
+                        format!(
+                            "s.__compartment.stateVars[{}{}{}]{}",
+                            q, var_name, q, assertion
+                        )
                     }
                 }
                 TargetLanguage::CSharp => {
@@ -3187,11 +3183,9 @@ pub(crate) fn generate_frame_expansion(
                         expanded_expr
                     )
                 }
-                TargetLanguage::C => c_return_assign(
-                    &ctx.system_name,
-                    &expanded_expr,
-                    &ctx.current_return_type,
-                ),
+                TargetLanguage::C => {
+                    c_return_assign(&ctx.system_name, &expanded_expr, &ctx.current_return_type)
+                }
                 TargetLanguage::Rust => super::rust_system::rust_expand_box_return_bare(
                     &indent_str,
                     &expanded_expr,
@@ -3511,11 +3505,9 @@ pub(crate) fn generate_frame_expansion(
                         expanded_expr
                     )
                 }
-                TargetLanguage::C => c_return_assign(
-                    &ctx.system_name,
-                    &expanded_expr,
-                    &ctx.current_return_type,
-                ),
+                TargetLanguage::C => {
+                    c_return_assign(&ctx.system_name, &expanded_expr, &ctx.current_return_type)
+                }
                 TargetLanguage::Rust => super::rust_system::rust_expand_box_return_bare(
                     &indent_str,
                     &expanded_expr,
@@ -3843,11 +3835,39 @@ pub(crate) fn php_prefix_params(expr: &str, params: &[String]) -> String {
             // Skip PHP keywords
             let is_keyword = matches!(
                 ident,
-                "true" | "false" | "null" | "and" | "or" | "xor" | "new" | "return"
-                | "if" | "else" | "elseif" | "while" | "for" | "foreach" | "do"
-                | "switch" | "case" | "break" | "continue" | "function" | "class"
-                | "public" | "private" | "protected" | "static" | "use" | "namespace"
-                | "as" | "throw" | "try" | "catch" | "finally" | "instanceof"
+                "true"
+                    | "false"
+                    | "null"
+                    | "and"
+                    | "or"
+                    | "xor"
+                    | "new"
+                    | "return"
+                    | "if"
+                    | "else"
+                    | "elseif"
+                    | "while"
+                    | "for"
+                    | "foreach"
+                    | "do"
+                    | "switch"
+                    | "case"
+                    | "break"
+                    | "continue"
+                    | "function"
+                    | "class"
+                    | "public"
+                    | "private"
+                    | "protected"
+                    | "static"
+                    | "use"
+                    | "namespace"
+                    | "as"
+                    | "throw"
+                    | "try"
+                    | "catch"
+                    | "finally"
+                    | "instanceof"
             );
             // Next non-space char: if it's `(`, this is a function call,
             // not a variable reference — leave it alone.
@@ -4118,10 +4138,8 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         format!(" as {}", kt_type)
                     };
                     if ctx.per_handler {
-                        result.push_str(&format!(
-                            "compartment.state_vars[\"{}\"]{}",
-                            var_name, cast
-                        ))
+                        result
+                            .push_str(&format!("compartment.state_vars[\"{}\"]{}", var_name, cast))
                     } else if ctx.use_sv_comp {
                         result.push_str(&format!("__sv_comp.state_vars[\"{}\"]{}", var_name, cast))
                     } else {
@@ -4139,10 +4157,7 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         .unwrap_or_else(|| "Int".to_string());
                     if sw_type == "Any" {
                         if ctx.per_handler {
-                            result.push_str(&format!(
-                                "compartment.state_vars[\"{}\"]",
-                                var_name
-                            ))
+                            result.push_str(&format!("compartment.state_vars[\"{}\"]", var_name))
                         } else if ctx.use_sv_comp {
                             result.push_str(&format!("__sv_comp.state_vars[\"{}\"]", var_name))
                         } else {
@@ -4177,10 +4192,8 @@ fn expand_state_vars_in_expr(expr: &str, lang: TargetLanguage, ctx: &HandlerCont
                         format!("({}) ", cs_type)
                     };
                     if ctx.per_handler {
-                        result.push_str(&format!(
-                            "{}compartment.state_vars[\"{}\"]",
-                            cast, var_name
-                        ))
+                        result
+                            .push_str(&format!("{}compartment.state_vars[\"{}\"]", cast, var_name))
                     } else if ctx.use_sv_comp {
                         result.push_str(&format!("{}__sv_comp.state_vars[\"{}\"]", cast, var_name))
                     } else {
@@ -4437,22 +4450,13 @@ fn generate_pop_transition(
             let value = value_owned.as_str();
             match lang {
                 TargetLanguage::Python3 | TargetLanguage::GDScript => {
-                    code.push_str(&format!(
-                        "{}__saved.enter_args.append({})\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}__saved.enter_args.append({})\n", indent, value));
                 }
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-                    code.push_str(&format!(
-                        "{}__saved.enter_args.push({});\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}__saved.enter_args.push({});\n", indent, value));
                 }
                 TargetLanguage::Dart => {
-                    code.push_str(&format!(
-                        "{}__saved.enter_args.add({});\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}__saved.enter_args.add({});\n", indent, value));
                 }
                 TargetLanguage::Rust => {
                     code.push_str(&super::rust_system::rust_pop_enter_arg(indent, value));
@@ -4470,28 +4474,16 @@ fn generate_pop_transition(
                     ));
                 }
                 TargetLanguage::Java => {
-                    code.push_str(&format!(
-                        "{}__saved.enter_args.add({});\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}__saved.enter_args.add({});\n", indent, value));
                 }
                 TargetLanguage::Kotlin => {
-                    code.push_str(&format!(
-                        "{}__saved.enter_args.add({})\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}__saved.enter_args.add({})\n", indent, value));
                 }
                 TargetLanguage::Swift => {
-                    code.push_str(&format!(
-                        "{}__saved.enter_args.append({})\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}__saved.enter_args.append({})\n", indent, value));
                 }
                 TargetLanguage::CSharp => {
-                    code.push_str(&format!(
-                        "{}__saved.enter_args.Add({});\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}__saved.enter_args.Add({});\n", indent, value));
                 }
                 TargetLanguage::Go => {
                     code.push_str(&format!(
@@ -4500,16 +4492,10 @@ fn generate_pop_transition(
                     ));
                 }
                 TargetLanguage::Php => {
-                    code.push_str(&format!(
-                        "{}$__saved->enter_args[] = {};\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}$__saved->enter_args[] = {};\n", indent, value));
                 }
                 TargetLanguage::Ruby => {
-                    code.push_str(&format!(
-                        "{}__saved.enter_args.append({})\n",
-                        indent, value
-                    ));
+                    code.push_str(&format!("{}__saved.enter_args.append({})\n", indent, value));
                 }
                 TargetLanguage::Lua => {
                     code.push_str(&format!(

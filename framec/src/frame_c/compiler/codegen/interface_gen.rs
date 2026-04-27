@@ -2663,12 +2663,10 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("        'state': comp.state,\n");
             // state_args / enter_args / exit_args are List<dynamic> (positional)
             // since the HashMap→Vec migration. state_vars stays a Map keyed by var name.
-            save_body
-                .push_str("        'state_args': List<dynamic>.from(comp.state_args),\n");
+            save_body.push_str("        'state_args': List<dynamic>.from(comp.state_args),\n");
             save_body
                 .push_str("        'state_vars': Map<String, dynamic>.from(comp.state_vars),\n");
-            save_body
-                .push_str("        'enter_args': List<dynamic>.from(comp.enter_args),\n");
+            save_body.push_str("        'enter_args': List<dynamic>.from(comp.enter_args),\n");
             save_body.push_str("        'exit_args': List<dynamic>.from(comp.exit_args),\n");
             save_body.push_str("        'forward_event': comp.forward_event,\n");
             save_body.push_str(
@@ -2772,7 +2770,9 @@ pub(crate) fn generate_persistence_methods(
                         name = var.name,
                         inner = inner.trim(),
                     ));
-                } else if let Some(inner) = ty.strip_prefix("Map<").and_then(|s| s.strip_suffix('>')) {
+                } else if let Some(inner) =
+                    ty.strip_prefix("Map<").and_then(|s| s.strip_suffix('>'))
+                {
                     restore_body.push_str(&format!(
                         "instance.{name} = (data['{name}'] as Map).cast<{inner}>();\n",
                         name = var.name,

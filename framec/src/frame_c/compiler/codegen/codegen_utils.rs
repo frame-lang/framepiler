@@ -100,7 +100,9 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                 "list" | "array" => match lang {
                     TargetLanguage::Python3 | TargetLanguage::GDScript => "[]".to_string(),
                     TargetLanguage::Rust => "Vec::new()".to_string(),
-                    TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => "[]".to_string(),
+                    TargetLanguage::TypeScript
+                    | TargetLanguage::JavaScript
+                    | TargetLanguage::Dart => "[]".to_string(),
                     TargetLanguage::Java => "new ArrayList<>()".to_string(),
                     TargetLanguage::Kotlin => "mutableListOf()".to_string(),
                     TargetLanguage::Swift => "[]".to_string(),
@@ -122,7 +124,9 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                     TargetLanguage::Kotlin => "mutableMapOf()".to_string(),
                     TargetLanguage::Swift => "[:]".to_string(),
                     TargetLanguage::CSharp => "new Dictionary<string, object>()".to_string(),
-                    TargetLanguage::Cpp => "std::unordered_map<std::string, std::any>()".to_string(),
+                    TargetLanguage::Cpp => {
+                        "std::unordered_map<std::string, std::any>()".to_string()
+                    }
                     TargetLanguage::Go => "map[string]interface{}{}".to_string(),
                     TargetLanguage::Php => "[]".to_string(),
                     TargetLanguage::Ruby => "{}".to_string(),
@@ -136,7 +140,9 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                     TargetLanguage::Python3 => "set()".to_string(),
                     TargetLanguage::GDScript => "{}".to_string(),
                     TargetLanguage::Rust => "HashSet::new()".to_string(),
-                    TargetLanguage::TypeScript | TargetLanguage::JavaScript => "new Set()".to_string(),
+                    TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
+                        "new Set()".to_string()
+                    }
                     TargetLanguage::Java => "new HashSet<>()".to_string(),
                     TargetLanguage::Kotlin => "mutableSetOf()".to_string(),
                     TargetLanguage::Swift => "Set<AnyHashable>()".to_string(),
@@ -947,9 +953,6 @@ mod tests {
             TargetLanguage::Erlang,
             &[("self.", "Data#data.")],
         );
-        assert_eq!(
-            out,
-            "X = Data#data.a, % self.in_comment\nY = Data#data.b."
-        );
+        assert_eq!(out, "X = Data#data.a, % self.in_comment\nY = Data#data.b.");
     }
 }

@@ -1140,17 +1140,16 @@ impl FrameValidator {
         let mut queue: Vec<String> = vec![start_state.clone()];
         reachable.insert(start_state.clone());
 
-        let visit_body = |body: &HandlerBody,
-                          reachable: &mut HashSet<String>,
-                          queue: &mut Vec<String>| {
-            for stmt in &body.statements {
-                if let Statement::Transition(trans) = stmt {
-                    if trans.target != "pop$" && reachable.insert(trans.target.clone()) {
-                        queue.push(trans.target.clone());
+        let visit_body =
+            |body: &HandlerBody, reachable: &mut HashSet<String>, queue: &mut Vec<String>| {
+                for stmt in &body.statements {
+                    if let Statement::Transition(trans) = stmt {
+                        if trans.target != "pop$" && reachable.insert(trans.target.clone()) {
+                            queue.push(trans.target.clone());
+                        }
                     }
                 }
-            }
-        };
+            };
 
         while let Some(current) = queue.pop() {
             if let Some(state) = state_map.get(&current) {

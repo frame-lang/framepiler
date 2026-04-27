@@ -85,9 +85,8 @@ fn erlang_rewrite_native_classified_full(
                 // Only match when the LHS is a bare `self.<field>` (no
                 // further dots / calls) — a domain or state-var write.
                 let lhs_field = lhs.strip_prefix("self.").unwrap_or("");
-                let lhs_is_simple_field = !lhs_field.is_empty()
-                    && !lhs_field.contains('.')
-                    && !lhs_field.contains('(');
+                let lhs_is_simple_field =
+                    !lhs_field.is_empty() && !lhs_field.contains('.') && !lhs_field.contains('(');
                 if lhs_is_simple_field && rhs.starts_with(&call_pat) {
                     // rhs = `self.<iface>(<args>)` — strip the wrapper
                     // to get just `<args>`.
@@ -187,18 +186,12 @@ fn erlang_rewrite_native_classified_full(
         if l.starts_with("self.") && l.contains('=') && l.contains(&call_pattern) {
             if let Some(eq_pos) = l[5..].find('=') {
                 let field = l[5..5 + eq_pos].trim().to_string();
-                let rhs = l[5 + eq_pos + 1..]
-                    .trim()
-                    .trim_end_matches(';')
-                    .trim();
+                let rhs = l[5 + eq_pos + 1..].trim().trim_end_matches(';').trim();
                 if rhs.contains(&call_pattern) {
                     let action_lc = erlang_op_name(action);
                     let rewritten_call = rhs
                         .replace(&call_pattern, &format!("{}({}, ", action_lc, data_var))
-                        .replace(
-                            &format!("({}, )", data_var),
-                            &format!("({})", data_var),
-                        );
+                        .replace(&format!("({}, )", data_var), &format!("({})", data_var));
                     return ErlangRewrite::ActionCallWithBind {
                         field,
                         call: rewritten_call,
@@ -236,10 +229,7 @@ fn erlang_rewrite_native_classified_full(
         let rest = &l[5..]; // skip "self."
         if let Some(eq_pos) = rest.find('=') {
             let field = rest[..eq_pos].trim().to_string();
-            let rhs = rest[eq_pos + 1..]
-                .trim()
-                .trim_end_matches(';')
-                .trim();
+            let rhs = rest[eq_pos + 1..].trim().trim_end_matches(';').trim();
             let replacement = format!("{}#data.", data_var);
             let value = replace_outside_strings_and_comments(
                 rhs,
@@ -304,9 +294,7 @@ fn erlang_op_name(name: &str) -> String {
     let mut chars = name.chars();
     match chars.next() {
         None => String::new(),
-        Some(c) if c.is_ascii_uppercase() => {
-            c.to_ascii_lowercase().to_string() + chars.as_str()
-        }
+        Some(c) if c.is_ascii_uppercase() => c.to_ascii_lowercase().to_string() + chars.as_str(),
         Some(_) => name.to_string(),
     }
 }
@@ -369,7 +357,7 @@ fn erlang_capitalize_params(line: &str, param_names: &[(&str, String)]) -> Strin
     let mut result = line.to_string();
     // Replace longest names first to avoid partial matches
     let mut sorted_params: Vec<_> = param_names.to_vec();
-    sorted_params.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    sorted_params.sort_by_key(|p| std::cmp::Reverse(p.0.len()));
     for (original, capitalized) in &sorted_params {
         // Word-boundary replacement: only replace standalone identifiers
         let mut new_result = String::new();
@@ -721,9 +709,7 @@ fn erlang_process_body_lines_full(
                                     let rest = &result[i][idx..];
                                     let name: String = rest
                                         .chars()
-                                        .take_while(|c| {
-                                            c.is_ascii_alphanumeric() || *c == '_'
-                                        })
+                                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                                         .collect();
                                     if !name.is_empty() && !vars.contains(&name) {
                                         vars.push(name);
@@ -784,9 +770,7 @@ fn erlang_process_body_lines_full(
                         for (idx, arm_pads) in pads {
                             if idx < result.len() {
                                 let trimmed = result[idx].trim_end();
-                                if !trimmed.ends_with(',')
-                                    && !trimmed.ends_with(';')
-                                {
+                                if !trimmed.ends_with(',') && !trimmed.ends_with(';') {
                                     result[idx] = format!("{},", result[idx]);
                                 }
                             }
@@ -909,10 +893,7 @@ fn erlang_process_body_lines_full(
                 // The caller's final clause then emits a conditional tuple
                 // that honors whichever the parent returned — matching the
                 // 16-backend consensus that post-forward code always runs.
-                let stripped = rewritten
-                    .trim_end_matches([',', ';'])
-                    .trim()
-                    .to_string();
+                let stripped = rewritten.trim_end_matches([',', ';']).trim().to_string();
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
                 let fwd_var = format!("__FwdNext{}", data_gen);
@@ -961,10 +942,7 @@ fn erlang_process_body_lines_full(
                 data_gen += 1;
                 let call_var = format!("Data{}", data_gen);
                 let result_name = format!("__ActionResult{}", data_gen);
-                result.push(format!(
-                    "    {{{}, {}}} = {}",
-                    call_var, result_name, call
-                ));
+                result.push(format!("    {{{}, {}}} = {}", call_var, result_name, call));
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
                 result.push(format!(
@@ -1042,14 +1020,8 @@ fn erlang_process_body_lines_full(
                                     }
                                 }
                                 if end > open {
-                                    let inner_args =
-                                        args_rewritten[open + 1..end].to_string();
-                                    matched = Some((
-                                        iface.clone(),
-                                        start,
-                                        end + 1,
-                                        inner_args,
-                                    ));
+                                    let inner_args = args_rewritten[open + 1..end].to_string();
+                                    matched = Some((iface.clone(), start, end + 1, inner_args));
                                     best_pos = start;
                                 }
                             }
@@ -1158,14 +1130,8 @@ fn erlang_process_body_lines_full(
                                     }
                                 }
                                 if end > open {
-                                    let inner_args =
-                                        args_rewritten[open + 1..end].to_string();
-                                    matched = Some((
-                                        iface.clone(),
-                                        start,
-                                        end + 1,
-                                        inner_args,
-                                    ));
+                                    let inner_args = args_rewritten[open + 1..end].to_string();
+                                    matched = Some((iface.clone(), start, end + 1, inner_args));
                                     best_pos = start;
                                 }
                             }
@@ -1265,9 +1231,7 @@ fn erlang_process_body_lines_full(
             t.starts_with("__ReturnVal = ")
         }
         fn is_tuple_bind(t: &str) -> bool {
-            t.starts_with('{')
-                && t.contains(", __ReturnVal}")
-                && t.contains(" = ")
+            t.starts_with('{') && t.contains(", __ReturnVal}") && t.contains(" = ")
         }
         // Pass 1: collect top-level write indices.
         let mut depth: i32 = 0;
@@ -1342,20 +1306,15 @@ fn erlang_process_body_lines_full(
                             }
                         } else {
                             let sentinel = "__RVLhsSentinel";
-                            let hidden = line.replacen(
-                                ", __ReturnVal}",
-                                &format!(", {}}}", sentinel),
-                                1,
-                            );
+                            let hidden =
+                                line.replacen(", __ReturnVal}", &format!(", {}}}", sentinel), 1);
                             let rewritten = replace_outside_strings_and_comments(
                                 &hidden,
                                 TargetLanguage::Erlang,
                                 &[("__ReturnVal", prev_name.as_str())],
                             );
-                            *line = rewritten.replace(
-                                &format!(", {}}}", sentinel),
-                                ", __ReturnVal}",
-                            );
+                            *line =
+                                rewritten.replace(&format!(", {}}}", sentinel), ", __ReturnVal}");
                         }
                     }
                     // Rename the LHS to `__ReturnVal_{write_idx+1}`.
@@ -1367,11 +1326,7 @@ fn erlang_process_body_lines_full(
                     if is_direct_write(&t) {
                         *line = line.replacen("__ReturnVal", &new_name, 1);
                     } else {
-                        *line = line.replacen(
-                            ", __ReturnVal}",
-                            &format!(", {}}}", new_name),
-                            1,
-                        );
+                        *line = line.replacen(", __ReturnVal}", &format!(", {}}}", new_name), 1);
                     }
                     write_idx += 1;
                 } else {
@@ -1420,10 +1375,7 @@ fn erlang_process_body_lines_full(
 /// (e.g., `active`, `logged_out`). `reply_expr` is whatever the handler
 /// would return in the transition arm (use the latest `__ReturnVal`
 /// binding if one was set before the @@:self, else `undefined`).
-fn erlang_wrap_self_call_guards(
-    lines: &[String],
-    state_atom: &str,
-) -> Vec<String> {
+fn erlang_wrap_self_call_guards(lines: &[String], state_atom: &str) -> Vec<String> {
     fn is_dispatch_call(line: &str) -> bool {
         line.contains("= frame_dispatch__(")
     }
@@ -1497,7 +1449,8 @@ fn erlang_wrap_self_call_guards(
         let ind = "    ";
         result.push(format!(
             "{ind}case {dv}#data.frame_current_state of",
-            ind = ind, dv = data_var
+            ind = ind,
+            dv = data_var
         ));
         result.push(format!("{ind}    {atom} ->", ind = ind, atom = state_atom));
 
@@ -1540,10 +1493,7 @@ fn erlang_wrap_self_call_guards(
                 let t = l.trim();
                 if t.starts_with("Data") {
                     let rest = &t[4..];
-                    let n: usize = rest
-                        .chars()
-                        .take_while(|c| c.is_ascii_digit())
-                        .count();
+                    let n: usize = rest.chars().take_while(|c| c.is_ascii_digit()).count();
                     if n > 0 && rest[n..].trim_start().starts_with('=') {
                         return Some(t[..4 + n].to_string());
                     }
@@ -1612,11 +1562,7 @@ fn erlang_rewrite_expr(line: &str, action_names: &[String]) -> String {
             return replaced.replace("(Data, )", "(Data)");
         }
     }
-    replace_outside_strings_and_comments(
-        l,
-        TargetLanguage::Erlang,
-        &[("self.", "Data#data.")],
-    )
+    replace_outside_strings_and_comments(l, TargetLanguage::Erlang, &[("self.", "Data#data.")])
 }
 
 /// Transform C-family `if/else { }` block syntax to Erlang `case/of/end`.
@@ -2101,8 +2047,7 @@ fn analyze_case_arms(
 
         // Content within current arm
         if let Some(ref mut arm) = current_arm {
-            if t.starts_with("frame_transition__(")
-                || t.starts_with("frame_forward_transition__(")
+            if t.starts_with("frame_transition__(") || t.starts_with("frame_forward_transition__(")
             {
                 arm.has_transition = true;
             }
@@ -2217,12 +2162,10 @@ fn rewrite_mixed_case_arms(
         // injector may have planted one at a nested leaf that's the only
         // exit of this arm).
         if !arm.has_transition {
-            let arm_has_reply = processed[arm.body_start..arm.body_end]
-                .iter()
-                .any(|l| {
-                    let t = l.trim();
-                    t.starts_with("{keep_state,") || t.starts_with("{next_state,")
-                });
+            let arm_has_reply = processed[arm.body_start..arm.body_end].iter().any(|l| {
+                let t = l.trim();
+                t.starts_with("{keep_state,") || t.starts_with("{next_state,")
+            });
             if !arm_has_reply {
                 let data = arm.final_data_var.as_deref().unwrap_or(default_data);
                 let reply = arm.return_val.as_deref().unwrap_or("ok");
@@ -2279,9 +2222,8 @@ fn erlang_inject_orphan_reply_tuples(lines: &[String], default_data: &str) -> Ve
             depth += 1;
         }
 
-        let is_orphan_candidate = t.starts_with("__ReturnVal = ")
-            && !t.ends_with(',')
-            && !t.ends_with(';');
+        let is_orphan_candidate =
+            t.starts_with("__ReturnVal = ") && !t.ends_with(',') && !t.ends_with(';');
 
         if !is_orphan_candidate || depth < 2 {
             result.push(line.clone());
@@ -2548,10 +2490,7 @@ pub(crate) fn generate_erlang_system(
     // a list literal whose Nth element is the matching system param
     // variable or `undefined` for slots without an override.
     use crate::frame_c::compiler::frame_ast::ParamKind;
-    let start_state_obj = system
-        .machine
-        .as_ref()
-        .and_then(|m| m.states.first());
+    let start_state_obj = system.machine.as_ref().and_then(|m| m.states.first());
 
     // Build the positional state_args list from the start state's
     // declared params (e.g. `$Start(x: int, y: str)` → 2 slots).
@@ -2563,17 +2502,12 @@ pub(crate) fn generate_erlang_system(
                 .map(|sp| {
                     sys_params
                         .iter()
-                        .find(|p| {
-                            matches!(p.kind, ParamKind::StateArg) && p.name == sp.name
-                        })
+                        .find(|p| matches!(p.kind, ParamKind::StateArg) && p.name == sp.name)
                         .map(|p| erlang_safe_capitalize(&p.name))
                         .unwrap_or_else(|| "undefined".to_string())
                 })
                 .collect();
-            record_overrides.push(format!(
-                "frame_state_args = [{}]",
-                entries.join(", ")
-            ));
+            record_overrides.push(format!("frame_state_args = [{}]", entries.join(", ")));
         }
         // Build the positional enter_args list from the start state's
         // `$>` handler params, if it has one.
@@ -2585,17 +2519,12 @@ pub(crate) fn generate_erlang_system(
                     .map(|ep| {
                         sys_params
                             .iter()
-                            .find(|p| {
-                                matches!(p.kind, ParamKind::EnterArg) && p.name == ep.name
-                            })
+                            .find(|p| matches!(p.kind, ParamKind::EnterArg) && p.name == ep.name)
                             .map(|p| erlang_safe_capitalize(&p.name))
                             .unwrap_or_else(|| "undefined".to_string())
                     })
                     .collect();
-                record_overrides.push(format!(
-                    "frame_enter_args = [{}]",
-                    entries.join(", ")
-                ));
+                record_overrides.push(format!("frame_enter_args = [{}]", entries.join(", ")));
             }
         }
     }
@@ -2933,17 +2862,14 @@ pub(crate) fn generate_erlang_system(
                     // `case` expressions so a state change inside the called
                     // handler short-circuits the rest of the caller's body.
                     // No-op if the body has no `= frame_dispatch__(` lines.
-                    let processed = erlang_wrap_self_call_guards(
-                        &processed,
-                        &to_snake_case(&state.name),
-                    );
+                    let processed =
+                        erlang_wrap_self_call_guards(&processed, &to_snake_case(&state.name));
                     // Inject gen_statem reply tuples at any orphan
                     // `__ReturnVal = "..."` leaves (innermost else branches
                     // of nested if/else that don't transition). Fixes the
                     // "bad_return_from_state_function" crash when a handler
                     // has a non-transitioning terminal case arm.
-                    let processed =
-                        erlang_inject_orphan_reply_tuples(&processed, &_final_data);
+                    let processed = erlang_inject_orphan_reply_tuples(&processed, &_final_data);
                     if !processed.is_empty() {
                         // Use structured case arm analysis when a case block exists
                         if let Some((classification, arms, case_start, case_end)) =
@@ -2980,10 +2906,8 @@ pub(crate) fn generate_erlang_system(
                                     // that honors whichever transition (if any) the parent
                                     // performed — mirroring the no-case-block path below.
                                     erlang_smart_join(&processed, &mut code);
-                                    let last_fwd_var: Option<String> = processed
-                                        .iter()
-                                        .rev()
-                                        .find_map(|line| {
+                                    let last_fwd_var: Option<String> =
+                                        processed.iter().rev().find_map(|line| {
                                             line.find("__FwdNext").map(|i| {
                                                 let rest = &line[i..];
                                                 rest.chars()
@@ -3037,10 +2961,8 @@ pub(crate) fn generate_erlang_system(
                                 // a conditional tuple that propagates the parent's transition
                                 // (if any) after post-forward statements have run.
                                 erlang_smart_join(&processed, &mut code);
-                                let last_fwd_var: Option<String> = processed
-                                    .iter()
-                                    .rev()
-                                    .find_map(|line| {
+                                let last_fwd_var: Option<String> =
+                                    processed.iter().rev().find_map(|line| {
                                         line.find("__FwdNext").map(|i| {
                                             let rest = &line[i..];
                                             rest.chars()
@@ -3213,10 +3135,8 @@ pub(crate) fn generate_erlang_system(
                                 "    {{keep_state, {}, [{{reply, From, {}}}]}}",
                                 final_data, reply_val
                             ));
-                            let wrapped = erlang_wrap_self_call_guards(
-                                &full,
-                                &to_snake_case(&state.name),
-                            );
+                            let wrapped =
+                                erlang_wrap_self_call_guards(&full, &to_snake_case(&state.name));
                             erlang_smart_join(&wrapped, &mut code);
                             code.push_str(";\n");
                         }
@@ -3239,8 +3159,7 @@ pub(crate) fn generate_erlang_system(
                 }
                 let op_lc = erlang_op_name(&op.name);
                 let n = op.params.len();
-                let arg_vars: Vec<String> =
-                    (0..n).map(|i| format!("A{}", i + 1)).collect();
+                let arg_vars: Vec<String> = (0..n).map(|i| format!("A{}", i + 1)).collect();
                 let pattern_args = if arg_vars.is_empty() {
                     "[]".to_string()
                 } else {
@@ -3512,7 +3431,9 @@ pub(crate) fn generate_erlang_system(
     code.push_str("    Data1 = Data#data{frame_exit_args = ExitArgs},\n");
     code.push_str("    Data2 = frame_exit_dispatch__(Data1),\n");
     code.push_str("    Data3 = Data2#data{frame_enter_args = EnterArgs, frame_state_args = StateArgs, frame_current_state = TargetState},\n");
-    code.push_str("    {next_state, TargetState, Data3, [{next_event, {call, From}, ForwardEvent}]}.\n\n");
+    code.push_str(
+        "    {next_state, TargetState, Data3, [{next_event, {call, From}, ForwardEvent}]}.\n\n",
+    );
 
     // HSM parent-forward unwrap. When a child's `=> $^` has post-forward code
     // (e.g., `=> $^; self.x = self.x + 1`), we can't emit the parent call as
@@ -3794,10 +3715,7 @@ pub(crate) fn generate_erlang_system(
                             .last()
                             .map(|(i, _)| i + 1)
                             .unwrap_or(0);
-                        num_end > 0
-                            && rest[num_end..]
-                                .trim_start()
-                                .starts_with('=')
+                        num_end > 0 && rest[num_end..].trim_start().starts_with('=')
                     } else {
                         false
                     }
@@ -3993,7 +3911,9 @@ pub(crate) fn generate_erlang_system(
                                 let mut chars = raw.chars();
                                 match chars.next() {
                                     None => "_".to_string(),
-                                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                                    Some(c) => {
+                                        c.to_uppercase().collect::<String>() + chars.as_str()
+                                    }
                                 }
                             } else {
                                 "_".to_string()
@@ -4048,14 +3968,19 @@ pub(crate) fn generate_erlang_system(
                         let lhs = l[..eq_pos].trim();
                         if lhs.starts_with("Data#data.") {
                             let field = &lhs["Data#data.".len()..];
-                            let rhs = l[eq_pos + 3..].trim().trim_end_matches(|c: char| c == ',' || c == '.');
+                            let rhs = l[eq_pos + 3..]
+                                .trim()
+                                .trim_end_matches(|c: char| c == ',' || c == '.');
                             data_bind_counter += 1;
                             let prev = if data_bind_counter == 1 {
                                 "Data".to_string()
                             } else {
                                 format!("Data{}", data_bind_counter - 1)
                             };
-                            format!("Data{} = {}#data{{{} = {}}}", data_bind_counter, prev, field, rhs)
+                            format!(
+                                "Data{} = {}#data{{{} = {}}}",
+                                data_bind_counter, prev, field, rhs
+                            )
                         } else {
                             l
                         }
@@ -4105,10 +4030,7 @@ pub(crate) fn generate_erlang_system(
                             .last()
                             .map(|(i, _)| i + 1)
                             .unwrap_or(0);
-                        num_end > 0
-                            && rest[num_end..]
-                                .trim_start()
-                                .starts_with('=')
+                        num_end > 0 && rest[num_end..].trim_start().starts_with('=')
                     } else {
                         false
                     }
@@ -4159,10 +4081,7 @@ pub(crate) fn generate_erlang_system(
                             .last()
                             .map(|(i, _)| i + 1)
                             .unwrap_or(0);
-                        num_end > 0
-                            && rest[num_end..]
-                                .trim_start()
-                                .starts_with('=')
+                        num_end > 0 && rest[num_end..].trim_start().starts_with('=')
                     } else {
                         false
                     }
@@ -4171,8 +4090,7 @@ pub(crate) fn generate_erlang_system(
                     let lc = erlang_op_name(a.as_str());
                     let pat_no_args = format!("{}(Data)", lc);
                     let pat_with_args = format!("{}(Data,", lc);
-                    last_line == pat_no_args
-                        || last_line.starts_with(&pat_with_args)
+                    last_line == pat_no_args || last_line.starts_with(&pat_with_args)
                 });
                 let last_is_value = !is_data_rebind
                     && !is_tail_tuple_call
