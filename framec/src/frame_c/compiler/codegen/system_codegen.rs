@@ -1067,10 +1067,40 @@ fn should_emit_constructor_body_init(
 /// domain-field init lines for every language EXCEPT Rust (which uses
 /// the structured `CodegenNode::assign` instead) and the C++ const-init
 /// case (which uses a member initializer list).
-fn format_field_assignment(lang: TargetLanguage, field_name: &str, init_value: &str) -> String {
+///
+/// `field_type` is the user-declared type from the Frame source (an
+/// opaque string per Frame's "no type system" rule). Most language
+/// arms ignore it; **C** uses it to disambiguate brace-initialized
+/// arrays/structs (`{0}`, `{1, 2}`) from scalar inits — array
+/// assignment is illegal in C, so a brace init has to be emitted as
+/// a `memcpy` from a compound literal rather than a plain `=`.
+fn format_field_assignment(
+    lang: TargetLanguage,
+    field_name: &str,
+    init_value: &str,
+    field_type: &str,
+) -> String {
     use TargetLanguage::*;
     match lang {
-        C => format!("self->{} = {};", field_name, init_value),
+        C => {
+            // C arrays aren't assignable: `arr = {0};` is a syntax
+            // error even though `<Type> arr = {0};` is fine in
+            // declaration position. Detect brace-initializers and
+            // emit the equivalent via a typed compound literal +
+            // memcpy. Works for arrays AND structs; scalar inits
+            // (the common case) keep the simple `=` form.
+            if init_value.trim_start().starts_with('{') {
+                format!(
+                    "{{ {ty} __init_{name} = {init}; \
+                     memcpy(&self->{name}, &__init_{name}, sizeof(self->{name})); }}",
+                    ty = field_type,
+                    name = field_name,
+                    init = init_value,
+                )
+            } else {
+                format!("self->{} = {};", field_name, init_value)
+            }
+        }
         Cpp => format!("this->{} = {};", field_name, init_value),
         Go => format!("s.{} = {}", field_name, init_value),
         Java | CSharp | Dart | TypeScript | JavaScript => {
@@ -1212,8 +1242,22 @@ pub(crate) fn generate_constructor(
                 CodegenNode::Ident(final_init),
             ));
         } else {
+            // The user-declared type is opaque (`Type::Custom(..)` for
+            // most cases, `Type::Unknown` for bare-form fields in
+            // dynamic targets). Render to a string so the C arm can
+            // recognize array/struct types when the init is a brace
+            // initializer.
+            let type_str = match &domain_var.var_type {
+                crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
+                _ => String::new(),
+            };
             body.push(CodegenNode::NativeBlock {
-                code: format_field_assignment(syntax.language, &domain_var.name, &final_init),
+                code: format_field_assignment(
+                    syntax.language,
+                    &domain_var.name,
+                    &final_init,
+                    &type_str,
+                ),
                 span: None,
             });
         }
