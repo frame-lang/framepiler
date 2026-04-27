@@ -481,12 +481,16 @@ return __result;"#,
                 let return_type_str = method.return_type.as_ref()
                     .map(|t| type_to_string(t))
                     .unwrap_or_else(|| "void".to_string());
-                // Java has no native async/await; `async` methods return
-                // `CompletableFuture<T>` with the body running synchronously
-                // and wrapping its result via `completedFuture(...)`. If any
-                // interface method is async, all interface methods share
-                // the wrapping (like how other languages' async cascade).
-                let system_is_async = system.interface.iter().any(|m| m.is_async);
+                // Java has no native async/await; methods declared
+                // `async` in the Frame interface return
+                // `CompletableFuture<T>` with the body running
+                // synchronously and wrapping its result via
+                // `completedFuture(...)`. Sync methods in the same
+                // interface keep their plain return — Java doesn't
+                // cascade async-ness across the whole interface
+                // (unlike e.g. TypeScript or Kotlin). The user opts
+                // each method in by declaring it `async`.
+                let method_is_async = method.is_async;
 
                 let mut code = String::new();
 
@@ -517,14 +521,14 @@ return __result;"#,
                     let java_type = java_map_type(&return_type_str);
                     code.push_str(&format!("{} __result = ({}) _context_stack.get(_context_stack.size() - 1)._return;\n", java_type, java_type));
                     code.push_str("_context_stack.remove(_context_stack.size() - 1);\n");
-                    if system_is_async {
+                    if method_is_async {
                         code.push_str("return java.util.concurrent.CompletableFuture.completedFuture(__result);");
                     } else {
                         code.push_str("return __result;");
                     }
                 } else {
                     code.push_str("_context_stack.remove(_context_stack.size() - 1);");
-                    if system_is_async {
+                    if method_is_async {
                         code.push_str("\nreturn java.util.concurrent.CompletableFuture.completedFuture(null);");
                     }
                 }
