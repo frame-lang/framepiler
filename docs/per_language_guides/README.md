@@ -15,10 +15,11 @@ They complement (rather than replace):
 
 ## Status
 
-| Backend | Guide |
-|---------|-------|
-| Erlang  | [erlang.md](erlang.md) — actor / `gen_statem` / functional |
-| Rust    | [rust.md](rust.md) — typed `StateContext` / ownership |
+| Backend  | Guide |
+|----------|-------|
+| Erlang   | [erlang.md](erlang.md) — actor / `gen_statem` / functional |
+| Rust     | [rust.md](rust.md) — typed `StateContext` / ownership |
+| GDScript | [gdscript.md](gdscript.md) — Godot engine / E501 reserved names |
 
 ## Roadmap
 
@@ -29,7 +30,7 @@ idioms diverge furthest from C-family default first.
 |-------------|-----------------------------------------------|----------|
 | **Erlang**  | Actor / `gen_statem` / no `while`             | ✅ done  |
 | **Rust**    | Typed StateContext / ownership / `&String`    | ✅ done  |
-| GDScript    | Godot integration / engine lifecycle hooks    | pending  |
+| **GDScript**| Godot integration / E501 reserved names       | ✅ done  |
 | C           | Raw pointers / `typedef` for list types       | pending  |
 | C++         | `shared_ptr<T>` / `co_await`                  | pending  |
 | Lua         | No `class` / metatable patterns               | pending  |
