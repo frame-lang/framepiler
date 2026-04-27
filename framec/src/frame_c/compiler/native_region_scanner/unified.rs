@@ -231,8 +231,22 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                     }
                 }
 
-                // Find end of Frame statement
-                let stmt_end = skipper.find_line_end(bytes, i, end);
+                // Find end of Frame statement.
+                let raw_stmt_end = skipper.find_line_end(bytes, i, end);
+                // Trim trailing inline whitespace from the Frame segment
+                // span so it stays in the *following* NativeText region.
+                // Without this, a same-line trailing comment after a Frame
+                // statement (`-> $B  # note`) emits as `return# note` —
+                // valid but ugly — because `find_line_end` stops at the
+                // `#` so the two spaces between the statement and the
+                // comment land inside the segment span and get consumed
+                // by the multi-line expansion.
+                let mut stmt_end = raw_stmt_end;
+                while stmt_end > i
+                    && (bytes[stmt_end - 1] == b' ' || bytes[stmt_end - 1] == b'\t')
+                {
+                    stmt_end -= 1;
+                }
 
                 let stmt_bytes = &bytes[i..stmt_end];
                 let stmt_text = String::from_utf8_lossy(stmt_bytes);
