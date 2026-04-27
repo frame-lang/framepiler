@@ -26,6 +26,7 @@ They complement (rather than replace):
 | Go       | [go.md](go.md) — pointer receivers / capitalized exports / no async |
 | Kotlin   | [kotlin.md](kotlin.md) — `suspend fun` / type inference / companion object |
 | Swift    | [swift.md](swift.md) — `async throws` / optionals / `init()` |
+| C#       | [csharp.md](csharp.md) — `Task<T>` / async / `using` directives |
 | Lua      | [lua.md](lua.md) — metatable class / `:` method dispatch / 1-indexed |
 
 ## Roadmap
@@ -45,7 +46,7 @@ idioms diverge furthest from C-family default first.
 | **Swift**   | `async throws` / optionals / nil-safety       | ✅ done  |
 | **Kotlin**  | `suspend fun` / coroutine scopes              | ✅ done  |
 | **Java**    | One class per file / CompletableFuture        | ✅ done  |
-| C#          | `Task<T>` / `partial class`                   | pending  |
+| **C#**      | `Task<T>` / `partial class`                   | ✅ done  |
 | Dart        | Future / kernel snapshot vs AOT               | pending  |
 | PHP         | `$this` reference / closure use clauses       | pending  |
 | Ruby        | `self.` / mixins / no static typing           | pending  |
