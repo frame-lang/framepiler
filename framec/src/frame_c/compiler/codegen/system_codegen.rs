@@ -257,13 +257,36 @@ pub fn generate_system_shared(
     class_node
 }
 
-/// Java-specific async handling: only the public interface methods get
-/// `is_async = true` (triggering `CompletableFuture<T>` return-type wrapping
-/// in the Java backend). The internal dispatch chain (__kernel, __router,
-/// _state_X, __transition, init) stays synchronous — callers would have to
-/// `.get()` each internal call otherwise, and deep chains become noisy
-/// without buying real concurrency. Users call `worker.get_status().get()`
-/// to await an interface result.
+/// Java-specific async handling. Java has no native async/await; the
+/// approximation is:
+///
+/// - Public interface methods declared `async` get `is_async = true`,
+///   which the Java backend honors by wrapping the return type in
+///   `CompletableFuture<T>` and the body in
+///   `CompletableFuture.completedFuture(...)`.
+/// - The internal dispatch chain (`__kernel`, `__router`, state
+///   functions, transitions, cascades) stays synchronous. Users pay
+///   `.get()` only at the interface boundary; deep
+///   `.get()`-everywhere chains would be noisy and would not buy
+///   concurrency since `CompletableFuture.completedFuture` is
+///   already-resolved by construction.
+/// - The constructor fires the start-state's `$>` synchronously (the
+///   default Java emission). Other async backends defer this to a
+///   separate `init()` so the caller can `await` it; Java's sync
+///   internals make that two-phase split unnecessary.
+/// - An `init()` method is still emitted for API parity with the
+///   other async backends — so a user can write
+///   `system.init().get()` portably across languages — but its body
+///   is a no-op (returns an already-completed future). The
+///   constructor has already done the work.
+///
+/// Users invoke async methods like:
+///
+/// ```java
+/// MySystem s = new MySystem();   // constructor fires $> synchronously
+/// s.init().get();                // optional, for cross-language API parity
+/// String r = s.fetch("k").get(); // .get() blocks on the (already-completed) future
+/// ```
 fn make_java_interface_async(class_node: &mut CodegenNode, system: &SystemAst) {
     let async_names: std::collections::HashSet<String> = system
         .interface
@@ -282,6 +305,25 @@ fn make_java_interface_async(class_node: &mut CodegenNode, system: &SystemAst) {
                 }
             }
         }
+
+        // Emit `init()` as an API-parity no-op. The constructor
+        // already drove the start-state cascade.
+        let _ = system; // (system unused beyond async_names; keep param for future shape)
+        methods.push(CodegenNode::Method {
+            name: "init".to_string(),
+            params: vec![],
+            return_type: None,
+            body: vec![CodegenNode::NativeBlock {
+                code:
+                    "return java.util.concurrent.CompletableFuture.completedFuture(null);"
+                        .to_string(),
+                span: None,
+            }],
+            is_async: true,
+            is_static: false,
+            visibility: Visibility::Public,
+            decorators: vec![],
+        });
     }
 }
 
