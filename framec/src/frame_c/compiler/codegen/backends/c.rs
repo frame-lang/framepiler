@@ -152,7 +152,18 @@ impl LanguageBackend for CBackend {
                 result.push_str(&format!("{}struct {} {{\n", ctx.get_indent(), name));
                 ctx.push_indent();
                 for field in fields {
-                    let c_type = self.convert_type_to_c(&field.type_annotation, &system_name);
+                    // Cross-system domain reference (`inner: Counter
+                    // = @@Counter()`): the assembler emits
+                    // `Counter_new()` which returns `Counter*`, so
+                    // the field has to be a pointer for the assignment
+                    // to type-check. Same shape as the Go fix —
+                    // recognized via `ctx.defined_systems`.
+                    let raw_type = field.type_annotation.as_deref().unwrap_or("");
+                    let c_type = if ctx.defined_systems.contains(raw_type) {
+                        format!("{}*", raw_type)
+                    } else {
+                        self.convert_type_to_c(&field.type_annotation, &system_name)
+                    };
                     result.push_str(&format!("{}{} {};\n", ctx.get_indent(), c_type, field.name));
                 }
                 ctx.pop_indent();
