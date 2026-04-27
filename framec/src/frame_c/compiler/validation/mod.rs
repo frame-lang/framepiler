@@ -67,3 +67,35 @@ pub mod passes;
 
 // Re-export passes for convenience
 pub use passes::{default_runner, SemanticPass, StructuralPass};
+
+use crate::frame_c::compiler::arcanum::Arcanum;
+use crate::frame_c::compiler::frame_ast::FrameAst;
+
+/// Codes that are emitted by `validation::passes::*` AND are NOT
+/// already covered by the monolithic `frame_validator::FrameValidator`.
+/// These are the only codes we surface from the pass system today —
+/// everything else would duplicate a frame_validator-emitted issue.
+///
+/// As frame_validator's coverage migrates into the pass system, codes
+/// can be added here (and removed from frame_validator) without
+/// changing the integration point in `pipeline/compiler.rs`.
+pub const PASS_ONLY_CODES: &[&str] = &["W414"];
+
+/// Run the pass-based validation system and return only the issues
+/// whose codes are listed in `PASS_ONLY_CODES`. The pipeline calls
+/// this after `FrameValidator::validate_with_arcanum` to pick up the
+/// unique checks (currently W414, unreachable-state warnings) without
+/// double-emitting the codes both validators implement.
+pub fn run_supplementary(
+    ast: &FrameAst,
+    arcanum: &Arcanum,
+) -> Vec<ValidationIssue> {
+    let runner = default_runner(ValidationConfig::default());
+    let report = runner.run(ast, arcanum);
+    report
+        .issues()
+        .iter()
+        .filter(|i| PASS_ONLY_CODES.contains(&i.code.as_str()))
+        .cloned()
+        .collect()
+}

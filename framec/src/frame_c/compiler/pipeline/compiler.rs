@@ -462,6 +462,16 @@ pub fn compile_ast_based(
             module_warnings.push(CompileError::new(&w.code, &w.message));
         }
 
+        // Supplementary pass-based validation. Adds checks the monolithic
+        // FrameValidator doesn't implement (currently W414 — unreachable
+        // states). Filtered to codes in `PASS_ONLY_CODES` so the two
+        // validators don't double-emit shared E1xx/E4xx codes.
+        for issue in
+            crate::frame_c::compiler::validation::run_supplementary(&frame_ast, &arcanum)
+        {
+            module_warnings.push(CompileError::new(&issue.code, &issue.message));
+        }
+
         // Warn if async is used with C target (no native async support)
         let has_async = system_ast.interface.iter().any(|m| m.is_async)
             || system_ast.actions.iter().any(|a| a.is_async)
