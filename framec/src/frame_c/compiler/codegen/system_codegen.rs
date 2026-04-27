@@ -5902,8 +5902,12 @@ pub(crate) fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> S
                     | TargetLanguage::Java
                     | TargetLanguage::CSharp
                     | TargetLanguage::Dart
-                    | TargetLanguage::Kotlin
                     | TargetLanguage::Php => format!("new {}({})", name, args),
+                    // Kotlin: no `new` keyword — `Counter()` is the
+                    // constructor call. Matches assembler's
+                    // `generate_constructor` Kotlin arm
+                    // (assembler/mod.rs:331).
+                    TargetLanguage::Kotlin => format!("{}({})", name, args),
                     TargetLanguage::Rust => format!("{}::new({})", name, args),
                     TargetLanguage::C => format!("{}_new({})", name, args),
                     TargetLanguage::Go => format!("New{}({})", name, args),
