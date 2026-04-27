@@ -1122,7 +1122,10 @@ impl FrameValidator {
     /// body. BFS from machine.states[0] (Frame's start-state convention)
     /// over Transition statements only — `pop$` returns are treated as
     /// non-transitions (the destination is wherever the runtime stack
-    /// last held, not a static target). States only reached through
+    /// last held, not a static target). HSM parents of reachable states
+    /// are also considered reachable: the runtime visits a parent on
+    /// every enter/exit cascade through its child even though no direct
+    /// `-> $Parent` transition exists. States only reached through
     /// stack pop/push from outside the BFS frontier are best-effort
     /// flagged; the warning is advisory, not a build error.
     fn validate_reachable_states(
@@ -1161,6 +1164,20 @@ impl FrameValidator {
                 }
                 if let Some(exit) = &state.exit {
                     visit_body(&exit.body, &mut reachable, &mut queue);
+                }
+                // HSM: walk the parent chain. Every ancestor of a
+                // reachable state is itself reachable through enter/
+                // exit cascades — no direct `-> $Parent` transition
+                // is required.
+                let mut ancestor = state.parent.clone();
+                while let Some(parent_name) = ancestor {
+                    if !reachable.insert(parent_name.clone()) {
+                        break;
+                    }
+                    queue.push(parent_name.clone());
+                    ancestor = state_map
+                        .get(&parent_name)
+                        .and_then(|s| s.parent.clone());
                 }
             }
         }
