@@ -25,6 +25,7 @@ They complement (rather than replace):
 | Java     | [java.md](java.md) — one class per file / `CompletableFuture<T>` async |
 | Go       | [go.md](go.md) — pointer receivers / capitalized exports / no async |
 | Kotlin   | [kotlin.md](kotlin.md) — `suspend fun` / type inference / companion object |
+| Swift    | [swift.md](swift.md) — `async throws` / optionals / `init()` |
 | Lua      | [lua.md](lua.md) — metatable class / `:` method dispatch / 1-indexed |
 
 ## Roadmap
@@ -41,7 +42,7 @@ idioms diverge furthest from C-family default first.
 | **C++**     | `shared_ptr<T>` / `co_await`                  | ✅ done  |
 | **Lua**     | No `class` / metatable patterns               | ✅ done  |
 | **Go**      | Pointer receivers / interface satisfaction    | ✅ done  |
-| Swift       | `async` / Result / nil-safety                 | pending  |
+| **Swift**   | `async throws` / optionals / nil-safety       | ✅ done  |
 | **Kotlin**  | `suspend fun` / coroutine scopes              | ✅ done  |
 | **Java**    | One class per file / CompletableFuture        | ✅ done  |
 | C#          | `Task<T>` / `partial class`                   | pending  |
