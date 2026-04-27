@@ -905,14 +905,17 @@ self._context_stack.pop_back()"#,
     }).collect()
 }
 
-/// Generate action method
+/// Generate action method (and any leading-comment trivia).
 ///
-/// Extracts native code from source using the body span
+/// Returns a `Vec<CodegenNode>`: zero-or-more `NativeBlock` comment
+/// nodes followed by the action's `Method` node. Callers `.extend`
+/// the result into the class's `methods` list. Extracts native code
+/// from source using the body span (Oceans Model).
 pub(crate) fn generate_action(
     action: &ActionAst,
     _syntax: &super::backend::ClassSyntax,
     source: &[u8],
-) -> CodegenNode {
+) -> Vec<CodegenNode> {
     let params: Vec<Param> = action
         .params
         .iter()
@@ -930,7 +933,15 @@ pub(crate) fn generate_action(
         t => Some(type_to_string(t)),
     };
 
-    CodegenNode::Method {
+    let mut nodes: Vec<CodegenNode> = action
+        .leading_comments
+        .iter()
+        .map(|c| CodegenNode::NativeBlock {
+            code: c.clone(),
+            span: None,
+        })
+        .collect();
+    nodes.push(CodegenNode::Method {
         name: action.name.clone(),
         params,
         return_type: ret_type,
@@ -942,7 +953,8 @@ pub(crate) fn generate_action(
         is_static: false,
         visibility: Visibility::Private,
         decorators: vec![],
-    }
+    });
+    nodes
 }
 
 /// Generate operation method
@@ -952,7 +964,7 @@ pub(crate) fn generate_operation(
     operation: &OperationAst,
     syntax: &super::backend::ClassSyntax,
     source: &[u8],
-) -> CodegenNode {
+) -> Vec<CodegenNode> {
     let params: Vec<Param> = operation
         .params
         .iter()
@@ -969,8 +981,16 @@ pub(crate) fn generate_operation(
     // @@:system.state requires `self` (non-static only), but @@:(expr) works in both.
     code = super::frame_expansion::expand_system_state_in_code(&code, syntax.language);
 
+    let mut nodes: Vec<CodegenNode> = operation
+        .leading_comments
+        .iter()
+        .map(|c| CodegenNode::NativeBlock {
+            code: c.clone(),
+            span: None,
+        })
+        .collect();
     // Backend handles is_static flag for @staticmethod decorator
-    CodegenNode::Method {
+    nodes.push(CodegenNode::Method {
         name: operation.name.clone(),
         params,
         return_type: match &operation.return_type {
@@ -985,7 +1005,8 @@ pub(crate) fn generate_operation(
         is_static: operation.is_static,
         visibility: Visibility::Public,
         decorators: vec![],
-    }
+    });
+    nodes
 }
 
 /// Extract body content from source using span

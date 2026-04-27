@@ -204,6 +204,7 @@ mod tests {
             },
             is_async: false,
             is_static: false,
+            leading_comments: Vec::new(),
             span: FrameSpan::new(30, 40),
         });
 
@@ -218,6 +219,7 @@ mod tests {
             },
             is_static: false,
             is_async: false,
+            leading_comments: Vec::new(),
             span: FrameSpan::new(40, 50),
         });
 

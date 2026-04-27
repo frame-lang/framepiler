@@ -526,6 +526,11 @@ pub struct ActionAst {
     pub is_async: bool,
     /// Parsed but invalid on actions (E420)
     pub is_static: bool,
+    /// Source comments encountered before this declaration in
+    /// `actions:`. Captured by the lexer's `take_pending_comments()`
+    /// after each significant token; codegen emits them verbatim
+    /// before the per-target action method definition.
+    pub leading_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -557,6 +562,11 @@ pub struct OperationAst {
     pub is_static: bool,
     /// Whether this operation is declared async
     pub is_async: bool,
+    /// Source comments encountered before this declaration in
+    /// `operations:`. Captured by the lexer's
+    /// `take_pending_comments()` and emitted by codegen before the
+    /// per-target operation method definition.
+    pub leading_comments: Vec<String>,
     pub span: Span,
 }
 

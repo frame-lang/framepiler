@@ -648,7 +648,8 @@ impl LanguageBackend for CppBackend {
 
             CodegenNode::NativeBlock { code, .. } => {
                 let indent = ctx.get_indent();
-                code.lines()
+                let mut out = code
+                    .lines()
                     .map(|line| {
                         if line.trim().is_empty() {
                             String::new()
@@ -657,7 +658,16 @@ impl LanguageBackend for CppBackend {
                         }
                     })
                     .collect::<Vec<_>>()
-                    .join("\n")
+                    .join("\n");
+                // Ensure trailing newline. `code.lines()` strips it; the
+                // class emitter relies on each item ending its own line
+                // so the closing `};` doesn't glue onto the last
+                // emitted token. Idempotent — already-newline-ended
+                // content stays unchanged.
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out
             }
             CodegenNode::SplicePoint { id } => format!("// SPLICE_POINT: {}", id),
         }

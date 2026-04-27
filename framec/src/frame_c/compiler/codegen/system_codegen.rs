@@ -213,14 +213,16 @@ pub fn generate_system_shared(
         ));
     }
 
-    // Actions - extract native code from source using spans
+    // Actions - extract native code from source using spans.
+    // `generate_action` returns a `Vec<CodegenNode>` so trivia
+    // (action `leading_comments`) can prepend the method node.
     for action in &system.actions {
-        methods.push(generate_action(action, &syntax, source));
+        methods.extend(generate_action(action, &syntax, source));
     }
 
-    // Operations - extract native code from source using spans
+    // Operations - same pattern as actions.
     for operation in &system.operations {
-        methods.push(generate_operation(operation, &syntax, source));
+        methods.extend(generate_operation(operation, &syntax, source));
     }
 
     // Persistence methods (when @@persist is present)

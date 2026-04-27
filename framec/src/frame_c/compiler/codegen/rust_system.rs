@@ -69,14 +69,17 @@ pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]
         ));
     }
 
-    // Actions + operations (shared — native passthrough)
+    // Actions + operations (shared — native passthrough).
+    // `generate_action`/`generate_operation` return `Vec<CodegenNode>`
+    // so trivia (leading-comment NativeBlocks) can prepend the
+    // method node.
     for action in &system.actions {
-        methods.push(super::interface_gen::generate_action(
+        methods.extend(super::interface_gen::generate_action(
             action, &syntax, source,
         ));
     }
     for operation in &system.operations {
-        methods.push(super::interface_gen::generate_operation(
+        methods.extend(super::interface_gen::generate_operation(
             operation, &syntax, source,
         ));
     }

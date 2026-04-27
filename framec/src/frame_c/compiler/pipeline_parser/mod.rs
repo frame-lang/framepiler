@@ -972,6 +972,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_action(&mut self) -> Result<ActionAst, ParseError> {
+        // Drain section-level comments captured since the last
+        // significant token — same trivia plumbing as
+        // `parse_interface_method` / `parse_operation`. The captured
+        // text is the user's docstring preceding this action.
+        let leading_comments = self.lexer.take_pending_comments();
         // Check for `static` and `async` modifiers (in any order)
         let mut is_static = false;
         let mut is_async = false;
@@ -1028,6 +1033,7 @@ impl<'a> Parser<'a> {
             },
             is_async,
             is_static,
+            leading_comments,
             span: Span::new(start, self.lexer.cursor()),
         })
     }
@@ -1086,6 +1092,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_operation(&mut self) -> Result<OperationAst, ParseError> {
+        // Drain section-level comments captured since the last
+        // significant token — same trivia plumbing as
+        // `parse_interface_method` / `parse_action`.
+        let leading_comments = self.lexer.take_pending_comments();
         // Check for `static` and `async` modifiers (in any order)
         let mut is_static = false;
         let mut is_async = false;
@@ -1142,6 +1152,7 @@ impl<'a> Parser<'a> {
             },
             is_static,
             is_async,
+            leading_comments,
             span: Span::new(start, self.lexer.cursor()),
         })
     }
