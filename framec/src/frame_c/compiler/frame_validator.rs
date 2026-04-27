@@ -1160,6 +1160,28 @@ impl FrameValidator {
             }
         }
 
+        // E117: Validate no duplicate handlers in a state. Two handlers
+        // with the same event name in the same state would silently
+        // shadow each other in codegen — surface as a hard error so
+        // authors don't end up with the unreachable-handler footgun.
+        {
+            let mut seen_events: HashSet<String> = HashSet::new();
+            for handler in &state.handlers {
+                if !seen_events.insert(handler.event.clone()) {
+                    self.errors.push(
+                        ValidationError::new(
+                            "E117",
+                            format!(
+                                "Duplicate handler '{}' in state '{}'",
+                                handler.event, state.name
+                            ),
+                        )
+                        .with_span(handler.span.clone()),
+                    );
+                }
+            }
+        }
+
         // Validate handlers
         for handler in &state.handlers {
             self.validate_handler(
