@@ -4265,7 +4265,8 @@ pub(crate) fn generate_erlang_system(
             {
                 method_end += 1;
             }
-            if method_end == method_start || method_end >= bytes.len() || bytes[method_end] != b'(' {
+            if method_end == method_start || method_end >= bytes.len() || bytes[method_end] != b'('
+            {
                 // Not a method call (e.g. just a field read). Pass through.
                 out.push_str(&code[abs..method_end]);
                 cursor = method_end;
