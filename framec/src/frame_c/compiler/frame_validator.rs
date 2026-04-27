@@ -1175,9 +1175,7 @@ impl FrameValidator {
                         break;
                     }
                     queue.push(parent_name.clone());
-                    ancestor = state_map
-                        .get(&parent_name)
-                        .and_then(|s| s.parent.clone());
+                    ancestor = state_map.get(&parent_name).and_then(|s| s.parent.clone());
                 }
             }
         }

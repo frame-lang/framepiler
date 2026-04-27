@@ -899,8 +899,8 @@ pub(crate) fn generate_fields(
         // constructor body initialize it instead. Detected by the
         // presence of `@@` in the initializer text — only sibling-
         // system instantiations use that token in domain init exprs.
-        let strip_php_non_const = matches!(syntax.language, TargetLanguage::Php)
-            && init_text_str.contains("@@");
+        let strip_php_non_const =
+            matches!(syntax.language, TargetLanguage::Php) && init_text_str.contains("@@");
         if !(strip_unconditionally || strip_collision || strip_php_non_const) {
             if let Some(ref init_text) = &domain_var.initializer_text {
                 let expanded_init = expand_tagged_in_domain(init_text, syntax.language);
@@ -1056,9 +1056,7 @@ fn should_emit_constructor_body_init(
         // body — same flag the field-emission path uses to strip the
         // inline init.
         Php => init_refs_param || init_has_tagged,
-        Cpp | Java | Swift | CSharp | Dart | GDScript | TypeScript | JavaScript => {
-            init_refs_param
-        }
+        Cpp | Java | Swift | CSharp | Dart | GDScript | TypeScript | JavaScript => init_refs_param,
         Kotlin => init_refs_param && !is_const,
         Erlang | Graphviz => false,
     }
