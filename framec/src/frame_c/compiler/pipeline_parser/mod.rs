@@ -524,6 +524,10 @@ impl<'a> Parser<'a> {
     // ========================================================================
 
     fn parse_enter_handler(&mut self, _state_close: usize) -> Result<EnterHandler, ParseError> {
+        // Drain section-level comments captured before this `$>` —
+        // same trivia plumbing as `parse_event_handler` /
+        // `parse_interface_method` etc.
+        let leading_comments = self.lexer.take_pending_comments();
         let start_tok = self.advance()?; // $>
         let start = start_tok.span.start;
 
@@ -543,11 +547,13 @@ impl<'a> Parser<'a> {
         Ok(EnterHandler {
             params,
             body,
+            leading_comments,
             span: Span::new(start, self.lexer.cursor()),
         })
     }
 
     fn parse_exit_handler(&mut self, _state_close: usize) -> Result<ExitHandler, ParseError> {
+        let leading_comments = self.lexer.take_pending_comments();
         let start_tok = self.advance()?; // <$
         let start = start_tok.span.start;
 
@@ -567,11 +573,13 @@ impl<'a> Parser<'a> {
         Ok(ExitHandler {
             params,
             body,
+            leading_comments,
             span: Span::new(start, self.lexer.cursor()),
         })
     }
 
     fn parse_event_handler(&mut self, _state_close: usize) -> Result<HandlerAst, ParseError> {
+        let leading_comments = self.lexer.take_pending_comments();
         let (event_name, name_span) = self.expect_ident()?;
         let start = name_span.start;
 
@@ -627,6 +635,7 @@ impl<'a> Parser<'a> {
             return_type,
             return_init,
             body,
+            leading_comments,
             span: Span::new(start, self.lexer.cursor()),
         })
     }

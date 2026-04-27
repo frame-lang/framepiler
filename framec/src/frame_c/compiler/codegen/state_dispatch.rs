@@ -1400,6 +1400,7 @@ pub(crate) fn generate_per_handler_methods(
                 body_statements: Vec::new(),
                 is_enter: true,
                 is_exit: false,
+                leading_comments: Vec::new(),
             };
             let empty: Vec<String> = Vec::new();
             let method = generate_per_handler_method_for_lang(
@@ -1453,6 +1454,17 @@ pub(crate) fn generate_per_handler_methods(
                 &handler_state_var_types,
                 &state_hsm_parents,
             );
+            // Per-handler leading comments (from `HandlerAst.leading_comments`
+            // / `EnterHandler.leading_comments` / `ExitHandler.leading_comments`,
+            // threaded through arcanum's `HandlerEntry`). Emit each one as a
+            // class-scope NativeBlock immediately above the per-handler
+            // method definition.
+            for comment in &handler_entry.leading_comments {
+                methods.push(CodegenNode::NativeBlock {
+                    code: comment.clone(),
+                    span: None,
+                });
+            }
             methods.push(method);
         }
     }

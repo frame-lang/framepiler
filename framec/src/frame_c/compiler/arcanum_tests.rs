@@ -297,6 +297,7 @@ mod tests {
             }],
             return_type: None,
             return_init: None,
+            leading_comments: Vec::new(),
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(70, 100),
@@ -310,6 +311,7 @@ mod tests {
             params: vec![],
             return_type: None,
             return_init: None,
+            leading_comments: Vec::new(),
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(110, 140),
@@ -383,6 +385,7 @@ mod tests {
             }],
             return_type: None,
             return_init: None,
+            leading_comments: Vec::new(),
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(90, 150),
@@ -447,6 +450,7 @@ mod tests {
             }],
             return_type: None,
             return_init: None,
+            leading_comments: Vec::new(),
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(90, 150),
@@ -536,6 +540,7 @@ mod tests {
                 statements: vec![],
                 span: FrameSpan::new(75, 100),
             },
+            leading_comments: Vec::new(),
             span: FrameSpan::new(55, 100),
         });
 
@@ -546,6 +551,7 @@ mod tests {
                 statements: vec![],
                 span: FrameSpan::new(110, 140),
             },
+            leading_comments: Vec::new(),
             span: FrameSpan::new(105, 140),
         });
 

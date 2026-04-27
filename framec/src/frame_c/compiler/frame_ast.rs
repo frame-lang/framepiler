@@ -233,6 +233,11 @@ pub struct HandlerAst {
     pub return_type: Option<Type>,
     pub return_init: Option<String>,
     pub body: HandlerBody,
+    /// Source comments encountered before this handler declaration in
+    /// a `$State { ... }` block. Captured by the lexer's
+    /// `take_pending_comments()` and emitted by codegen before the
+    /// per-handler method definition.
+    pub leading_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -241,6 +246,8 @@ pub struct HandlerAst {
 pub struct EnterHandler {
     pub params: Vec<EventParam>,
     pub body: HandlerBody,
+    /// Same trivia plumbing as `HandlerAst.leading_comments`.
+    pub leading_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -249,6 +256,8 @@ pub struct EnterHandler {
 pub struct ExitHandler {
     pub params: Vec<EventParam>,
     pub body: HandlerBody,
+    /// Same trivia plumbing as `HandlerAst.leading_comments`.
+    pub leading_comments: Vec<String>,
     pub span: Span,
 }
 

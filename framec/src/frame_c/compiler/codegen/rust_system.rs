@@ -905,6 +905,16 @@ pub(crate) fn generate_rust_handler_methods(
                 &handler_state_var_types,
                 &state_hsm_parents,
             );
+            // Per-handler leading-comment trivia. Same shape as
+            // `generate_per_handler_methods` in state_dispatch.rs:
+            // emit each comment as a class-scope NativeBlock above
+            // the handler method.
+            for comment in &handler_entry.leading_comments {
+                methods.push(CodegenNode::NativeBlock {
+                    code: comment.clone(),
+                    span: None,
+                });
+            }
             methods.push(method);
         }
     }

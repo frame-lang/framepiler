@@ -58,6 +58,13 @@ pub struct HandlerEntry {
     pub body_statements: Vec<crate::frame_c::compiler::frame_ast::Statement>, // AST body for codegen (Path A)
     pub is_enter: bool,                                                       // $>
     pub is_exit: bool,                                                        // $<
+    /// Source comments preceding the handler declaration. Threaded
+    /// through from `HandlerAst.leading_comments` /
+    /// `EnterHandler.leading_comments` / `ExitHandler.leading_comments`
+    /// by `build_handler_entry_from_ast` and the enter/exit branches.
+    /// Codegen prepends them as NativeBlock nodes before the
+    /// per-handler method emission.
+    pub leading_comments: Vec<String>,
 }
 
 /// Enhanced state entry with handlers
@@ -507,6 +514,7 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
             body_statements: enter.body.statements.clone(),
             is_enter: true,
             is_exit: false,
+            leading_comments: enter.leading_comments.clone(),
         };
         handlers.insert("$>".to_string(), handler_entry);
     }
@@ -532,6 +540,7 @@ fn build_enhanced_state_from_frame_ast(state: &FrameStateAst) -> EnhancedStateEn
             body_statements: exit.body.statements.clone(),
             is_enter: false,
             is_exit: true,
+            leading_comments: exit.leading_comments.clone(),
         };
         handlers.insert("$<".to_string(), handler_entry);
     }
@@ -576,6 +585,7 @@ fn build_handler_entry_from_ast(handler: &FrameHandlerAst) -> HandlerEntry {
         body_statements: handler.body.statements.clone(),
         is_enter: false,
         is_exit: false,
+        leading_comments: handler.leading_comments.clone(),
     }
 }
 
