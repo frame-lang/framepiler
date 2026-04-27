@@ -556,6 +556,7 @@ impl FrameValidator {
                 &interface_methods,
                 &actions,
                 &operations,
+                &system.name,
             );
         }
 
@@ -1108,9 +1109,76 @@ impl FrameValidator {
         interface_methods: &HashMap<String, &InterfaceMethod>,
         _actions: &HashSet<String>,
         _operations: &HashSet<String>,
+        system_name: &str,
     ) {
         for state in &machine.states {
             self.validate_state(state, state_map, interface_methods, _actions, _operations);
+        }
+        self.validate_reachable_states(system_name, machine, state_map);
+    }
+
+    /// W414: warn when a state is not reachable from the start state via
+    /// any direct `-> $State` transition in any handler / enter / exit
+    /// body. BFS from machine.states[0] (Frame's start-state convention)
+    /// over Transition statements only — `pop$` returns are treated as
+    /// non-transitions (the destination is wherever the runtime stack
+    /// last held, not a static target). States only reached through
+    /// stack pop/push from outside the BFS frontier are best-effort
+    /// flagged; the warning is advisory, not a build error.
+    fn validate_reachable_states(
+        &mut self,
+        system_name: &str,
+        machine: &MachineAst,
+        state_map: &HashMap<String, &StateAst>,
+    ) {
+        if machine.states.is_empty() {
+            return;
+        }
+        let start_state = &machine.states[0].name;
+
+        let mut reachable: HashSet<String> = HashSet::new();
+        let mut queue: Vec<String> = vec![start_state.clone()];
+        reachable.insert(start_state.clone());
+
+        let visit_body = |body: &HandlerBody,
+                          reachable: &mut HashSet<String>,
+                          queue: &mut Vec<String>| {
+            for stmt in &body.statements {
+                if let Statement::Transition(trans) = stmt {
+                    if trans.target != "pop$" && reachable.insert(trans.target.clone()) {
+                        queue.push(trans.target.clone());
+                    }
+                }
+            }
+        };
+
+        while let Some(current) = queue.pop() {
+            if let Some(state) = state_map.get(&current) {
+                for handler in &state.handlers {
+                    visit_body(&handler.body, &mut reachable, &mut queue);
+                }
+                if let Some(enter) = &state.enter {
+                    visit_body(&enter.body, &mut reachable, &mut queue);
+                }
+                if let Some(exit) = &state.exit {
+                    visit_body(&exit.body, &mut reachable, &mut queue);
+                }
+            }
+        }
+
+        for state in &machine.states {
+            if !reachable.contains(&state.name) {
+                self.warnings.push(
+                    ValidationError::new(
+                        "W414",
+                        format!(
+                            "State '{}' is not reachable from start state '{}' in system '{}'",
+                            state.name, start_state, system_name
+                        ),
+                    )
+                    .with_span(state.span.clone()),
+                );
+            }
         }
     }
 

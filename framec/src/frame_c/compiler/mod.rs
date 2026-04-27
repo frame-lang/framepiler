@@ -23,7 +23,6 @@ pub mod model;
 pub mod pipeline;
 pub mod pipeline_parser;
 pub mod segmenter;
-pub mod validation;
 
 pub use codegen::{generate_system, get_backend, CodegenNode, LanguageBackend};
 pub use pipeline::{compile_ast_based, CompileError, CompileMode, CompileResult, PipelineConfig};
