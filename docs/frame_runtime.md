@@ -1320,6 +1320,32 @@ Three argument channels are now active: state args, enter args,
 exit args. They're independent — a transition can use any
 combination.
 
+#### Argument-receiver contract
+
+Each of the three arg channels has a strict-match contract enforced
+by framec at compile time:
+
+| Site             | Receiver                       | Code  |
+|------------------|--------------------------------|-------|
+| `(args) -> $T`   | source state's `<$(...)`       | E419  |
+| `-> (args) $T`   | target state's `$>(...)`       | E417  |
+| `-> $T(args)`    | target state's state params    | E405  |
+
+The receiver must exist if the transition supplies args, and the
+caller's count must fit the receiver's declared signature. For
+EventParam-backed receivers (E417, E419), trailing `default_value`
+declarations relax the lower bound — `<$(a, b = "x")` accepts 1
+or 2 supplied args, with the default filling in for `b` when
+omitted. StateParam doesn't carry defaults today, so `-> $T(args)`
+requires an exact count match.
+
+The check fires only when the transition supplies args. A
+transition `-> $T` against a state with `<$(a, b)` is allowed —
+the handler then runs with its params unbound, which is a
+runtime concern, not a structural error. The strict-match
+direction is "if the caller provides, the receiver must accept",
+not "if the receiver exists, the caller must provide".
+
 ---
 
 ## Step 13 — Actions

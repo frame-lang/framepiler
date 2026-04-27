@@ -411,6 +411,28 @@ $Active {
 }
 ```
 
+### Argument-receiver contract
+
+A transition that supplies args must have a receiver that can take
+them. The framepiler enforces this at compile time:
+
+| Site             | Receiver                       | Code  |
+|------------------|--------------------------------|-------|
+| `(args) -> $T`   | source state's `<$(...)`       | E419  |
+| `-> (args) $T`   | target state's `$>(...)`       | E417  |
+| `-> $T(args)`    | target state's state params    | E405  |
+
+If the receiver is missing or its arity doesn't fit, the compile
+fails. EventParam-backed receivers (E417, E419) honor trailing
+defaults — `<$(a, b = "x")` accepts 1 or 2 supplied args. State
+params (E405) currently have no defaults, so the count must match
+exactly.
+
+The check applies only when the transition supplies args.
+`-> $T` against a state with `<$(reason)` is allowed; `<$` simply
+runs with `reason` unbound (a runtime concern, not a structural
+error).
+
 ---
 
 ## Actions Section

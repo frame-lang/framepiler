@@ -370,6 +370,147 @@ pub fn regions_to_statements(
     stmts
 }
 
+/// Enrich a handler body's transition statements with scanner metadata
+/// (`exit_args`, `enter_args`, `state_args`).
+///
+/// **Why this exists.** The pipeline parser (V3 path that builds the AST
+/// the validator sees) constructs `TransitionAst` with `exit_args = None`
+/// because exit args appear *before* the `->` token and the parser's
+/// token-by-token loop can't see them at the moment the arrow is consumed
+/// (they've already been emitted as a `NativeCode` chunk). The codegen
+/// path solves this by re-running the scanner (`regions_to_statements`)
+/// and reading the metadata out of `Region::FrameSegment::Transition`.
+/// But validation runs *before* codegen, so the validator sees `None`
+/// for all three fields and can't enforce checks like E419 (exit args
+/// without a matching exit handler).
+///
+/// **What this does.** Runs the unified scanner on the handler body
+/// span, walks the resulting transition segments in source order, and
+/// pairs them with the AST's `Statement::Transition` entries (also in
+/// source order) to copy `exit_args`/`enter_args`/`state_args` over.
+/// Other transition fields (target, label, is_pop, is_forward) are left
+/// alone — the parser already populates those correctly.
+///
+/// **Failure mode.** If the scanner errors or the body span is invalid,
+/// this is a no-op: the existing AST stays untouched and downstream
+/// stages behave exactly as before.
+pub fn enrich_handler_body_metadata(
+    body: &mut crate::frame_c::compiler::frame_ast::HandlerBody,
+    source: &[u8],
+    lang: TargetLanguage,
+) {
+    use crate::frame_c::compiler::frame_ast::Statement;
+
+    let span_start = body.span.start;
+    let span_end = body.span.end;
+    if span_start >= source.len() || span_end > source.len() || span_start >= span_end {
+        return;
+    }
+
+    let body_bytes = &source[span_start..span_end];
+    let open_brace = match body_bytes.iter().position(|&b| b == b'{') {
+        Some(pos) => pos,
+        None => return,
+    };
+
+    let mut scanner = create_native_scanner(lang);
+    let scan_result = match scanner.scan(body_bytes, open_brace) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    // Collect transition metadata from scanner, preserving source order.
+    let scanner_transitions: Vec<&SegmentMetadata> = scan_result
+        .regions
+        .iter()
+        .filter_map(|r| match r {
+            Region::FrameSegment {
+                kind: FrameSegmentKind::Transition,
+                metadata,
+                ..
+            } => Some(metadata),
+            _ => None,
+        })
+        .collect();
+
+    let mut scanner_idx = 0usize;
+    for stmt in body.statements.iter_mut() {
+        if let Statement::Transition(t) = stmt {
+            if let Some(SegmentMetadata::Transition {
+                exit_args,
+                enter_args,
+                state_args,
+                ..
+            }) = scanner_transitions.get(scanner_idx).copied()
+            {
+                t.exit_args = exit_args.clone();
+                if t.enter_args.is_none() {
+                    t.enter_args = enter_args.clone();
+                }
+                if t.state_args.is_none() {
+                    t.state_args = state_args.clone();
+                }
+            }
+            scanner_idx += 1;
+        }
+    }
+}
+
+/// Walk an entire `SystemAst`, enriching every handler body with scanner
+/// metadata. This is the single entry point the pipeline calls between
+/// parse and validate.
+pub fn enrich_system_metadata(
+    system: &mut crate::frame_c::compiler::frame_ast::SystemAst,
+    source: &[u8],
+    lang: TargetLanguage,
+) {
+    if let Some(machine) = system.machine.as_mut() {
+        for state in machine.states.iter_mut() {
+            for handler in state.handlers.iter_mut() {
+                enrich_handler_body_metadata(&mut handler.body, source, lang);
+            }
+            if let Some(enter) = state.enter.as_mut() {
+                enrich_handler_body_metadata(&mut enter.body, source, lang);
+            }
+            if let Some(exit) = state.exit.as_mut() {
+                enrich_handler_body_metadata(&mut exit.body, source, lang);
+            }
+        }
+    }
+    // Action/Operation bodies are raw native text (no Frame statements to
+    // enrich), so they're skipped here.
+}
+
+/// Create the appropriate `NativeRegionScanner` for a target language.
+/// Wraps the unified scanner with the language's `SyntaxSkipper`. This is
+/// the trait-object form of `create_skipper` — use it when you need to
+/// dispatch to a scanner without knowing the concrete skipper type at
+/// compile time.
+pub fn create_native_scanner(lang: TargetLanguage) -> Box<dyn NativeRegionScanner> {
+    match lang {
+        TargetLanguage::Python3 => Box::new(python::NativeRegionScannerPy),
+        TargetLanguage::TypeScript => Box::new(typescript::NativeRegionScannerTs),
+        TargetLanguage::JavaScript => Box::new(javascript::NativeRegionScannerJs),
+        TargetLanguage::Rust => Box::new(rust::NativeRegionScannerRust),
+        TargetLanguage::CSharp => Box::new(csharp::NativeRegionScannerCs),
+        TargetLanguage::C => Box::new(c::NativeRegionScannerC),
+        TargetLanguage::Cpp => Box::new(cpp::NativeRegionScannerCpp),
+        TargetLanguage::Java => Box::new(java::NativeRegionScannerJava),
+        TargetLanguage::Kotlin => Box::new(kotlin::NativeRegionScannerKotlin),
+        TargetLanguage::Swift => Box::new(swift::NativeRegionScannerSwift),
+        TargetLanguage::Go => Box::new(go::NativeRegionScannerGo),
+        TargetLanguage::Php => Box::new(php::NativeRegionScannerPhp),
+        TargetLanguage::Ruby => Box::new(ruby::NativeRegionScannerRuby),
+        TargetLanguage::Erlang => Box::new(erlang::NativeRegionScannerErlang),
+        TargetLanguage::Lua => Box::new(lua::NativeRegionScannerLua),
+        TargetLanguage::Dart => Box::new(dart::NativeRegionScannerDart),
+        TargetLanguage::GDScript => Box::new(gdscript::NativeRegionScannerGDScript),
+        // GraphViz is output-only; default to Python's neutral skipper for
+        // any Frame-token scanning that still happens during analysis.
+        TargetLanguage::Graphviz => Box::new(python::NativeRegionScannerPy),
+    }
+}
+
 /// Create the appropriate SyntaxSkipper for a target language.
 /// This is the single source of truth for language → skipper mapping.
 pub fn create_skipper(lang: TargetLanguage) -> Box<dyn SyntaxSkipper> {

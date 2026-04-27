@@ -262,6 +262,21 @@ pub fn compile_ast_based(
                 });
             }
 
+            // Enrich transition metadata (`exit_args`, `enter_args`,
+            // `state_args`) from the V4 unified scanner. The pipeline
+            // parser leaves these as None because exit args sit before
+            // the `->` token and are emitted by the lexer as a trailing
+            // NativeCode chunk; they are not visible during the parser's
+            // token-by-token consumption of the arrow. The codegen path
+            // re-runs the scanner to recover them, but the validator
+            // runs *before* codegen and needs them too — e.g. E419
+            // (exit args without a matching `<$()` exit handler).
+            crate::frame_c::compiler::native_region_scanner::enrich_system_metadata(
+                &mut system_ast,
+                &source_map.source,
+                config.target,
+            );
+
             if config.debug {
                 eprintln!(
                     "[compile_ast_based] Parsed system '{}': {} states, {} interface methods",

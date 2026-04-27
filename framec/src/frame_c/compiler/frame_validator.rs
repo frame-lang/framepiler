@@ -17,14 +17,30 @@
 //! - E402: Unknown state in transition
 //! - E403: Invalid parent forwards in HSM
 //! - E116: Duplicate state name in machine
-//! - E405: State parameter arity mismatch (-> $State(args))
+//! - E405: State parameter arity mismatch (-> $State(args)). Receiver
+//!   is the target state's state-param list; defaults are not currently
+//!   supported on `StateParam`, so the check is exact.
 //! - E406: Interface handler parameter count mismatch
 //! - E410: Duplicate state variable in state ($.varName)
 //! - E413: Cyclic HSM parent relationship
 //! - E416: Start params must match start state params
-//! - E417: Enter args must match $>() handler params (-> (args) $State)
+//! - E417: Enter args must match $>() handler params. Two forms — system
+//!   level (`@@system Foo($>(...))` against the start state's `$>()`)
+//!   and transition level (`-> (args) $State` against the target
+//!   state's `$>()`). Both fire E417.
 //! - E418: Domain param has no matching variable
-//! - E419: Exit args must match $<() handler params ((args) -> $State)
+//! - E419: Exit args must match `<$()` handler params ((args) -> $State).
+//!   Receiver is the source state's `<$()`.
+//!
+//! E405/E417-transition/E419 all enforce the same general rule: a
+//! transition that supplies args requires a receiver that can take
+//! them. EventParam-backed receivers (E417, E419) honor trailing
+//! `default_value` to relax the lower bound; StateParam-backed
+//! receivers (E405) require exact-count match because `StateParam`
+//! has no defaults today. All three checks are reachable in v4
+//! because `enrich_handler_body_metadata` populates
+//! `transition.{exit,enter,state}_args` from the unified scanner
+//! before validation runs.
 //! - E420: `static` is only valid on operations (not interface methods or actions)
 //! - E421: `@@:system.state` not allowed in static operations (no self/compartment access)
 //! - E410: Duplicate state variable in same state
@@ -1401,7 +1417,7 @@ impl FrameValidator {
     fn validate_transition(
         &mut self,
         transition: &TransitionAst,
-        _state: &StateAst,
+        state: &StateAst,
         state_map: &HashMap<String, &StateAst>,
     ) {
         // E402: Check target state exists
@@ -1433,26 +1449,122 @@ impl FrameValidator {
                 )
                 .with_span(transition.span.clone()),
             );
-        } else {
-            // E405: Check STATE PARAMETER arity. Skip for NativeExpr blobs
-            // (V4 lexer conflates enter_args and state_args).
-            let has_native_args = transition
-                .args
-                .iter()
-                .any(|a| matches!(a, Expression::NativeExpr(_)));
-            if !has_native_args {
-                let Some(target_state) = state_map.get(&transition.target) else {
-                    return;
-                };
-                if target_state.params.len() != transition.args.len() {
+        }
+
+        // E419 / E417 (transition form) / E405 — argument-arity validation.
+        //
+        // Three semantically distinct sites where a transition can supply
+        // arguments to a receiver, all governed by the same rule: the
+        // receiver must exist (or be omitted-without-args) and the supplied
+        // count must fit the receiver's declared signature, with trailing
+        // defaults relaxing the lower bound.
+        //
+        // | Syntax                  | Receiver                        | Code  |
+        // |-------------------------|---------------------------------|-------|
+        // | `(args) -> $T`          | source state's `<$(...)`        | E419  |
+        // | `-> (args) $T`          | target state's `$>(...)`        | E417  |
+        // | `-> $T(args)`           | target state's state params     | E405  |
+        //
+        // For E419/E417, EventParam carries `default_value: Option<String>`,
+        // so trailing defaults relax the lower bound (caller can omit those).
+        // StateParam (E405) has no defaults today; check is exact-count.
+        // V4 scanner enrichment (`enrich_handler_body_metadata`) populates
+        // `transition.exit_args/enter_args/state_args` before this validator
+        // runs — without it these checks would all be unreachable, which is
+        // why these errors were documented but unfired before now.
+        let target_state = state_map.get(&transition.target).copied();
+
+        if let Some(ref exit_args_str) = transition.exit_args {
+            let provided = count_args(exit_args_str);
+            let transition_repr = format!("({}) -> ${}", exit_args_str, transition.target);
+            match state.exit.as_ref() {
+                None => self.errors.push(
+                    ValidationError::new(
+                        "E419",
+                        format!(
+                            "Exit args provided in transition `{}` but source state '{}' has no `<$()` exit handler to receive them",
+                            transition_repr, state.name
+                        ),
+                    )
+                    .with_span(transition.span.clone()),
+                ),
+                Some(handler) => {
+                    if let Some(msg) = arity_error(
+                        provided,
+                        handler.params.len(),
+                        required_event_params(&handler.params),
+                        &format!("source state '{}' `<$()`", state.name),
+                        &format!("`{}` exit args", transition_repr),
+                    ) {
+                        self.errors.push(
+                            ValidationError::new("E419", msg)
+                                .with_span(transition.span.clone()),
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(ref enter_args_str) = transition.enter_args {
+            if let Some(target) = target_state {
+                let provided = count_args(enter_args_str);
+                let transition_repr = format!("-> ({}) ${}", enter_args_str, transition.target);
+                match target.enter.as_ref() {
+                    None => self.errors.push(
+                        ValidationError::new(
+                            "E417",
+                            format!(
+                                "Enter args provided in transition `{}` but target state '{}' has no `$>()` enter handler to receive them",
+                                transition_repr, target.name
+                            ),
+                        )
+                        .with_span(transition.span.clone()),
+                    ),
+                    Some(handler) => {
+                        if let Some(msg) = arity_error(
+                            provided,
+                            handler.params.len(),
+                            required_event_params(&handler.params),
+                            &format!("target state '{}' `$>()`", target.name),
+                            &format!("`{}` enter args", transition_repr),
+                        ) {
+                            self.errors.push(
+                                ValidationError::new("E417", msg)
+                                    .with_span(transition.span.clone()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(ref state_args_str) = transition.state_args {
+            if let Some(target) = target_state {
+                let provided = count_args(state_args_str);
+                let transition_repr = format!("-> ${}({})", transition.target, state_args_str);
+                let total = target.params.len();
+                if total == 0 {
                     self.errors.push(
                         ValidationError::new(
                             "E405",
                             format!(
-                                "State '{}' expects {} parameters but {} provided",
-                                transition.target,
-                                target_state.params.len(),
-                                transition.args.len()
+                                "State args provided in transition `{}` but target state '{}' declares no state parameters",
+                                transition_repr, target.name
+                            ),
+                        )
+                        .with_span(transition.span.clone()),
+                    );
+                } else if provided != total {
+                    // StateParam has no `default_value` field, so the
+                    // relaxation rule from E417/E419 doesn't apply here:
+                    // exact-count match required.
+                    self.errors.push(
+                        ValidationError::new(
+                            "E405",
+                            format!(
+                                "State args count mismatch in transition `{}`: target state '{}' declares {} state parameter{} but transition supplies {}",
+                                transition_repr, target.name, total,
+                                if total == 1 { "" } else { "s" }, provided
                             ),
                         )
                         .with_span(transition.span.clone()),
@@ -1686,6 +1798,45 @@ fn identifier_appears_in(text: &str, ident: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// Number of params the caller is *required* to supply (= position of
+/// the first defaulted param, or total length if none have defaults).
+///
+/// The trailing-defaults rule is implicit: every target language we
+/// generate to enforces it, and the codegen path will reject a
+/// signature like `(a, b = 1, c)` long before runtime. We mirror that
+/// assumption here so the relaxation is positional, not popcount-based.
+fn required_event_params(params: &[EventParam]) -> usize {
+    params
+        .iter()
+        .position(|p| p.default_value.is_some())
+        .unwrap_or(params.len())
+}
+
+/// Format an arity-mismatch error message, returning `Some(msg)` when
+/// `provided` falls outside `[required, total]`. Used by E417 (enter)
+/// and E419 (exit) where defaults relax the lower bound.
+fn arity_error(
+    provided: usize,
+    total: usize,
+    required: usize,
+    receiver: &str,
+    site: &str,
+) -> Option<String> {
+    if provided < required || provided > total {
+        let arity_desc = if required == total {
+            format!("{} parameter{}", total, if total == 1 { "" } else { "s" })
+        } else {
+            format!("between {} and {} parameters", required, total)
+        };
+        Some(format!(
+            "{}: {} accepts {} but transition supplies {}",
+            site, receiver, arity_desc, provided
+        ))
+    } else {
+        None
+    }
 }
 
 fn count_args(args: &str) -> usize {
@@ -2042,10 +2193,12 @@ mod tests {
     }
 
     #[test]
-    fn test_e405_state_param_mismatch_deferred() {
-        // V4 lexer conflates enter_args and state_args into the same
-        // NativeExpr blob, so E405 arity checking is skipped for
-        // NativeExpr args. The target language compiler catches this.
+    fn test_e405_state_param_count_mismatch() {
+        // E405 — transition supplies 3 state args but target declares 1.
+        // Reachable in v4 because `enrich_handler_body_metadata` writes
+        // `state_args` onto `TransitionAst` from the unified scanner,
+        // letting the validator see the count instead of treating the
+        // expression as an opaque NativeExpr blob.
         let source = r#"
 @@system Test {
     machine:
@@ -2056,16 +2209,20 @@ mod tests {
 }"#;
 
         let result = validate_frame_source(source, TargetLanguage::Python3);
-        // No E405 — deferred to target language compiler
+        let errors = result.expect_err("E405 must fire for arity mismatch");
+        let codes: Vec<&str> = errors.iter().map(|e| e.code.as_str()).collect();
         assert!(
-            result.is_ok(),
-            "V4 defers NativeExpr arity to target compiler: {:?}",
-            result.err()
+            codes.iter().any(|c| *c == "E405"),
+            "expected E405, got {:?}",
+            codes
         );
     }
 
     #[test]
-    fn test_e405_state_no_params_deferred() {
+    fn test_e405_state_no_params_but_args_supplied() {
+        // E405 — target state declares no state params but transition
+        // supplies args. Distinct sub-form: "no receiver" vs "wrong
+        // count". Validator emits a tailored message in this case.
         let source = r#"
 @@system Test {
     machine:
@@ -2076,10 +2233,12 @@ mod tests {
 }"#;
 
         let result = validate_frame_source(source, TargetLanguage::Python3);
+        let errors = result.expect_err("E405 must fire for no-receiver-with-args");
+        let codes: Vec<&str> = errors.iter().map(|e| e.code.as_str()).collect();
         assert!(
-            result.is_ok(),
-            "V4 defers NativeExpr arity to target compiler: {:?}",
-            result.err()
+            codes.iter().any(|c| *c == "E405"),
+            "expected E405, got {:?}",
+            codes
         );
     }
 
@@ -2104,6 +2263,160 @@ mod tests {
 
         let result = validate_frame_source(source, TargetLanguage::Python3);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_e419_no_exit_handler() {
+        // E419 — transition supplies exit args but source state has
+        // no `<$()` exit handler at all. Hard error.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            go() { ("reason") -> $B }
+        }
+        $B {
+            go() {}
+        }
+}"#;
+        let errors =
+            validate_frame_source(source, TargetLanguage::Python3).expect_err("E419 must fire");
+        assert!(errors.iter().any(|e| e.code == "E419"));
+    }
+
+    #[test]
+    fn test_e419_undersupply_below_required() {
+        // E419 — handler `<$(a, b)` requires 2 args, transition supplies 1.
+        // Defaults aren't declared, so required = total = 2.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            <$(a: str, b: str) {}
+            go() { ("only_one") -> $B }
+        }
+        $B { go() {} }
+}"#;
+        let errors = validate_frame_source(source, TargetLanguage::Python3)
+            .expect_err("E419 must fire on undersupply");
+        assert!(errors.iter().any(|e| e.code == "E419"));
+    }
+
+    #[test]
+    fn test_e419_oversupply_above_total() {
+        // E419 — handler `<$(a)` accepts 1, transition supplies 2.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            <$(a: str) {}
+            go() { ("a", "b") -> $B }
+        }
+        $B { go() {} }
+}"#;
+        let errors = validate_frame_source(source, TargetLanguage::Python3)
+            .expect_err("E419 must fire on oversupply");
+        assert!(errors.iter().any(|e| e.code == "E419"));
+    }
+
+    #[test]
+    fn test_e419_default_relaxes_undersupply() {
+        // Default-aware relaxation — handler `<$(a: str, b: str = "x")`
+        // has required=1 (b is defaulted). Caller may supply 1 or 2 args.
+        // Validator must NOT flag E419 here.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            <$(a: str, b: str = "x") {}
+            go() { ("only_a") -> $B }
+        }
+        $B { go() {} }
+}"#;
+        let result = validate_frame_source(source, TargetLanguage::Python3);
+        assert!(
+            result.is_ok(),
+            "default-relaxed undersupply must compile: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_e419_default_still_blocks_oversupply() {
+        // Defaults relax the lower bound only. Handler
+        // `<$(a: str, b: str = "x")` total = 2; oversupply at 3 still
+        // fires E419.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            <$(a: str, b: str = "x") {}
+            go() { ("a", "b", "c") -> $B }
+        }
+        $B { go() {} }
+}"#;
+        let errors = validate_frame_source(source, TargetLanguage::Python3)
+            .expect_err("E419 must still fire above total");
+        assert!(errors.iter().any(|e| e.code == "E419"));
+    }
+
+    #[test]
+    fn test_e417_transition_no_enter_handler() {
+        // E417 transition form — caller supplies enter args but the
+        // target state has no `$>()` handler. Hard error.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            go() { -> ("hello") $B }
+        }
+        $B { go() {} }
+}"#;
+        let errors = validate_frame_source(source, TargetLanguage::Python3)
+            .expect_err("E417 must fire transition form");
+        assert!(errors.iter().any(|e| e.code == "E417"));
+    }
+
+    #[test]
+    fn test_e417_transition_oversupply() {
+        // E417 transition form, oversupply.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            go() { -> ("a", "b") $B }
+        }
+        $B {
+            $>(a: str) {}
+            go() {}
+        }
+}"#;
+        let errors = validate_frame_source(source, TargetLanguage::Python3)
+            .expect_err("E417 must fire on transition oversupply");
+        assert!(errors.iter().any(|e| e.code == "E417"));
+    }
+
+    #[test]
+    fn test_e417_transition_default_relaxes_undersupply() {
+        // Default-aware relaxation on enter args. Handler `$>(a, b = "x")`
+        // accepts 1 or 2 args. Caller supplies 1 — must compile.
+        let source = r#"
+@@system Test {
+    machine:
+        $A {
+            go() { -> ("just_a") $B }
+        }
+        $B {
+            $>(a: str, b: str = "x") {}
+            go() {}
+        }
+}"#;
+        let result = validate_frame_source(source, TargetLanguage::Python3);
+        assert!(
+            result.is_ok(),
+            "default-relaxed enter args must compile: {:?}",
+            result.err()
+        );
     }
 
     #[test]
