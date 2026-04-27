@@ -742,13 +742,34 @@ impl CppBackend {
     ///   `<indent>[const ]<type> <name>[ = <init>];\n`
     fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
         let const_kw = if field.is_const { "const " } else { "" };
-        let type_str = field
+        let raw_type = field
             .type_annotation
             .as_ref()
             .map(|s| s.as_str())
             .unwrap_or("void*");
+        // Cross-system domain reference (`inner: Counter = @@Counter()`):
+        // the codegen emits `new Counter()` for the initializer
+        // (returns `Counter*`); a bare `Counter` field by value can't
+        // accept the pointer. The convention used by existing matrix
+        // demos (`tests/common/positive/demos/20_multi_system_composition.fcpp`)
+        // is `std::shared_ptr<T>` — wrap the type and rewrite the
+        // initializer's `new T(...)` to `std::make_shared<T>(...)`.
+        let is_system_ref = ctx.defined_systems.contains(raw_type);
+        let type_str = if is_system_ref {
+            format!("std::shared_ptr<{}>", raw_type)
+        } else {
+            raw_type.to_string()
+        };
         let init_suffix = match &field.initializer {
-            Some(init) => format!(" = {}", self.emit(init, ctx)),
+            Some(init) => {
+                let mut init_src = self.emit(init, ctx);
+                if is_system_ref {
+                    let needle = format!("new {}(", raw_type);
+                    let replacement = format!("std::make_shared<{}>(", raw_type);
+                    init_src = init_src.replace(&needle, &replacement);
+                }
+                format!(" = {}", init_src)
+            }
             None => String::new(),
         };
         format!(
