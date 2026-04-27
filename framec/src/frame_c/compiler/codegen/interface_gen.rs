@@ -111,7 +111,7 @@ pub(crate) fn generate_interface_wrappers(
             .collect()
     };
 
-    interface_methods.iter().map(|method| {
+    interface_methods.iter().flat_map(|method| {
         let params: Vec<Param> = method.params.iter().map(|p| {
             let type_str = type_to_string(&p.param_type);
             Param::new(&p.name).with_type(&type_str)
@@ -877,7 +877,21 @@ self._context_stack.pop_back()"#,
             TargetLanguage::Graphviz => unreachable!(),
         };
 
-        CodegenNode::Method {
+        // Source-level comments preceding this `interface:` method
+        // declaration emit as `NativeBlock` nodes before the
+        // `Method` itself. Per-backend `NativeBlock` rendering
+        // already handles indentation, so the comment lines land
+        // above the wrapper at the correct class-body depth. The
+        // text passes through verbatim — Frame source for a target
+        // already uses that target's comment leader (Oceans Model).
+        let mut nodes = Vec::new();
+        for comment in &method.leading_comments {
+            nodes.push(CodegenNode::NativeBlock {
+                code: comment.clone(),
+                span: None,
+            });
+        }
+        nodes.push(CodegenNode::Method {
             name: method.name.clone(),
             params,
             return_type: method.return_type.as_ref().map(|t| type_to_string(t)),
@@ -886,7 +900,8 @@ self._context_stack.pop_back()"#,
             is_static: false,
             visibility: Visibility::Public,
             decorators: vec![],
-        }
+        });
+        nodes
     }).collect()
 }
 
