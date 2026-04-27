@@ -27,7 +27,13 @@ They complement (rather than replace):
 | Kotlin   | [kotlin.md](kotlin.md) — `suspend fun` / type inference / companion object |
 | Swift    | [swift.md](swift.md) — `async throws` / optionals / `init()` |
 | C#       | [csharp.md](csharp.md) — `Task<T>` / async / `using` directives |
+| Dart     | [dart.md](dart.md) — `Future<T>` / null safety / `${expr}` |
 | Lua      | [lua.md](lua.md) — metatable class / `:` method dispatch / 1-indexed |
+| PHP      | [php.md](php.md) — `$this->`, `.` for concat, `<?php` prolog |
+| Ruby     | [ruby.md](ruby.md) — `@field` instance vars, `#{...}` interpolation |
+| Python   | [python.md](python.md) — class baseline, `async def` / `await`, f-strings |
+| TypeScript | [typescript.md](typescript.md) — typed class, `Promise<T>` async |
+| JavaScript | [javascript.md](javascript.md) — untyped class, `async`/`await` |
 
 ## Roadmap
 
@@ -47,17 +53,18 @@ idioms diverge furthest from C-family default first.
 | **Kotlin**  | `suspend fun` / coroutine scopes              | ✅ done  |
 | **Java**    | One class per file / CompletableFuture        | ✅ done  |
 | **C#**      | `Task<T>` / `partial class`                   | ✅ done  |
-| Dart        | Future / kernel snapshot vs AOT               | pending  |
-| PHP         | `$this` reference / closure use clauses       | pending  |
-| Ruby        | `self.` / mixins / no static typing           | pending  |
-| Python      | `async def` / dynamic dispatch (baseline)     | low pri  |
-| TypeScript  | Type narrowing / generics (baseline)          | low pri  |
-| JavaScript  | Prototype chain / no types (baseline)         | low pri  |
+| **Dart**    | `Future<T>` / null safety / AOT vs JIT        | ✅ done  |
+| **PHP**     | `$this->`, `.` for concat, `<?php` prolog     | ✅ done  |
+| **Ruby**    | `@field` instance vars, `#{...}` interpolation | ✅ done  |
+| **Python**  | `async def` / dynamic dispatch (baseline)     | ✅ done  |
+| **TypeScript**| Type narrowing / `Promise<T>` (baseline)    | ✅ done  |
+| **JavaScript**| Prototype chain / no types (baseline)       | ✅ done  |
 
-Python, TypeScript, and JavaScript are the baseline against which
-the other guides are usually contrasted — explicit guides for them
-are lower priority because most cookbook recipes already exercise
-their patterns.
+All 17 backends now have per-language guides. Python, TypeScript,
+and JavaScript are deliberately shorter than the more-divergent
+guides — they're the baseline against which the others are
+contrasted, and most cookbook recipes already exercise their
+patterns.
 
 ## Authoring a new guide
 
