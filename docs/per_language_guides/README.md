@@ -21,6 +21,7 @@ They complement (rather than replace):
 | Rust     | [rust.md](rust.md) — typed `StateContext` / ownership |
 | GDScript | [gdscript.md](gdscript.md) — Godot engine / E501 reserved names |
 | C        | [c.md](c.md) — pointer-based handle / typedef list workaround |
+| Lua      | [lua.md](lua.md) — metatable class / `:` method dispatch / 1-indexed |
 
 ## Roadmap
 
@@ -34,7 +35,7 @@ idioms diverge furthest from C-family default first.
 | **GDScript**| Godot integration / E501 reserved names       | ✅ done  |
 | **C**       | Raw pointers / `typedef` for list types       | ✅ done  |
 | C++         | `shared_ptr<T>` / `co_await`                  | pending  |
-| Lua         | No `class` / metatable patterns               | pending  |
+| **Lua**     | No `class` / metatable patterns               | ✅ done  |
 | Go          | Pointer receivers / interface satisfaction    | pending  |
 | Swift       | `async` / Result / nil-safety                 | pending  |
 | Kotlin      | `suspend fun` / coroutine scopes              | pending  |
