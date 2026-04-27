@@ -23,6 +23,7 @@ They complement (rather than replace):
 | C        | [c.md](c.md) — pointer-based handle / typedef list workaround |
 | C++      | [cpp.md](cpp.md) — `shared_ptr<T>` / `co_await` / RAII |
 | Java     | [java.md](java.md) — one class per file / `CompletableFuture<T>` async |
+| Go       | [go.md](go.md) — pointer receivers / capitalized exports / no async |
 | Lua      | [lua.md](lua.md) — metatable class / `:` method dispatch / 1-indexed |
 
 ## Roadmap
@@ -38,7 +39,7 @@ idioms diverge furthest from C-family default first.
 | **C**       | Raw pointers / `typedef` for list types       | ✅ done  |
 | **C++**     | `shared_ptr<T>` / `co_await`                  | ✅ done  |
 | **Lua**     | No `class` / metatable patterns               | ✅ done  |
-| Go          | Pointer receivers / interface satisfaction    | pending  |
+| **Go**      | Pointer receivers / interface satisfaction    | ✅ done  |
 | Swift       | `async` / Result / nil-safety                 | pending  |
 | Kotlin      | `suspend fun` / coroutine scopes              | pending  |
 | **Java**    | One class per file / CompletableFuture        | ✅ done  |
