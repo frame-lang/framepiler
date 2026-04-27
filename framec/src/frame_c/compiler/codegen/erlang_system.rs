@@ -1900,8 +1900,16 @@ fn erlang_nest_early_exits(lines: &[&str]) -> String {
 }
 
 /// Expand @@SystemName() in Erlang domain initializers
+///
+/// `@@Name(args)` lowers to `element(2, name:start_link(args))`. The
+/// `gen_statem:start_link/3` shape returns `{ok, Pid}`; for a domain
+/// field that holds a Pid (so subsequent `name:method(Pid, …)`
+/// calls work), we unwrap with `element(2, …)`. The user-facing
+/// `start_link/N` API still returns the tuple — `expand_tagged_in_domain_erlang`
+/// is only invoked on init expressions whose target field type is a
+/// bare Pid.
 fn expand_tagged_in_domain_erlang(text: &str) -> String {
-    // Simple pattern: @@Name(args) → name:start_link(args)
+    // Simple pattern: @@Name(args) → element(2, name:start_link(args))
     let mut result = text.to_string();
     while let Some(pos) = result.find("@@") {
         let after = pos + 2;
@@ -1913,11 +1921,29 @@ fn expand_tagged_in_domain_erlang(text: &str) -> String {
             let name = &result[after..name_end];
             let snake = to_snake_case(name);
             if name_end < result.len() && result.as_bytes()[name_end] == b'(' {
+                // Find matching `)` so we wrap exactly the
+                // `name:start_link(...)` expression in the
+                // `element(2, ...)` unwrap. Walk paren depth
+                // because user args may themselves contain parens.
+                let bytes = result.as_bytes();
+                let mut depth: i32 = 1;
+                let mut p = name_end + 1;
+                while p < bytes.len() && depth > 0 {
+                    match bytes[p] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    p += 1;
+                }
+                let args = &result[name_end + 1..p.saturating_sub(1)];
+                let tail = &result[p..];
                 result = format!(
-                    "{}{}:start_link({}",
+                    "{}element(2, {}:start_link({})){}",
                     &result[..pos],
                     snake,
-                    &result[name_end + 1..]
+                    args,
+                    tail
                 );
             } else {
                 result = format!("{}{}{}", &result[..pos], snake, &result[name_end..]);
@@ -2414,7 +2440,15 @@ pub(crate) fn generate_erlang_system(
     code.push_str("}).\n\n");
 
     // start_link/N — system params become positional args, threaded
-    // through to init/1 as a list.
+    // through to init/1 as a list. Returns `{ok, Pid}` (the standard
+    // OTP shape from `gen_statem:start_link/3`) — consumers that
+    // pattern-match `{ok, Pid}` (drivers, supervisors, smoke tests)
+    // get the conventional shape. Cross-system domain-field defaults
+    // (`inner = @@Counter()` lowered to `counter:start_link()`)
+    // unwrap the tuple at their own emission site so the field holds
+    // a bare Pid; see `lower_erlang_tagged_instantiation` and the
+    // post-pass cross-system call rewriter at the bottom of
+    // `generate_erlang_system`.
     let start_link_args = sys_param_vars.join(", ");
     let start_link_list = if sys_param_vars.is_empty() {
         "[]".to_string()
@@ -4179,6 +4213,98 @@ pub(crate) fn generate_erlang_system(
                 code.insert_str(insert_pos, &save_export);
             }
         }
+    }
+
+    // Cross-system call translation. Frame source like
+    // `self.inner.bump()` (cross-target idiomatic dot-call) gets
+    // rewritten to `Data#data.inner` by the body-level `self.X` →
+    // `Data#data.X` substitution, leaving the call as
+    // `Data#data.inner.bump(...)` — invalid Erlang (no
+    // method-call-on-value syntax). For a domain field whose
+    // initializer is `@@OtherSys()` the field holds a Pid, so the
+    // correct Erlang shape is `othersys:bump(Data#data.inner, ...)`
+    // (module-qualified call passing the Pid as the first arg).
+    //
+    // Walk `system.domain` for cross-system fields (those whose
+    // `initializer_text` starts with `@@<Name>(`) and rewrite each
+    // dot-call site at the file-text level. Same `defined_systems`
+    // pattern other backends use for type/typed-field lowering, but
+    // applied to call sites instead of field types.
+    let mut cross_sys_fields: Vec<(String, String)> = Vec::new();
+    for dv in &system.domain {
+        let init = match &dv.initializer_text {
+            Some(t) => t.trim(),
+            None => continue,
+        };
+        if let Some(rest) = init.strip_prefix("@@") {
+            if let Some(paren) = rest.find('(') {
+                let sys_name = &rest[..paren];
+                if !sys_name.is_empty() {
+                    cross_sys_fields.push((dv.name.clone(), to_snake_case(sys_name)));
+                }
+            }
+        }
+    }
+    for (field_name, sys_module) in &cross_sys_fields {
+        let needle = format!("Data#data.{}.", field_name);
+        // Each occurrence: rewrite the entire `Data#data.field.method(args)`
+        // call into `module:method(Data#data.field, args)`. Walk the
+        // string with manual index tracking so nested parens / commas
+        // inside args don't break the rewrite.
+        let mut out = String::with_capacity(code.len());
+        let mut cursor = 0;
+        while let Some(found) = code[cursor..].find(&needle) {
+            let abs = cursor + found;
+            out.push_str(&code[cursor..abs]);
+            // Find the method name (identifier) immediately after the dot.
+            let method_start = abs + needle.len();
+            let bytes = code.as_bytes();
+            let mut method_end = method_start;
+            while method_end < bytes.len()
+                && (bytes[method_end].is_ascii_alphanumeric() || bytes[method_end] == b'_')
+            {
+                method_end += 1;
+            }
+            if method_end == method_start || method_end >= bytes.len() || bytes[method_end] != b'(' {
+                // Not a method call (e.g. just a field read). Pass through.
+                out.push_str(&code[abs..method_end]);
+                cursor = method_end;
+                continue;
+            }
+            let method = &code[method_start..method_end];
+            // Find matching `)` for this call's args.
+            let args_open = method_end;
+            let mut depth: i32 = 1;
+            let mut p = args_open + 1;
+            while p < bytes.len() && depth > 0 {
+                match bytes[p] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                p += 1;
+            }
+            if depth != 0 {
+                // Unbalanced — leave as-is.
+                out.push_str(&code[abs..p.min(bytes.len())]);
+                cursor = p;
+                continue;
+            }
+            let args_inner = &code[args_open + 1..p - 1];
+            let args_inner_trim = args_inner.trim();
+            let receiver = format!("Data#data.{}", field_name);
+            if args_inner_trim.is_empty() {
+                out.push_str(&format!("{}:{}({})", sys_module, method, receiver));
+            } else {
+                out.push_str(&format!(
+                    "{}:{}({}, {})",
+                    sys_module, method, receiver, args_inner
+                ));
+            }
+            cursor = p;
+        }
+        out.push_str(&code[cursor..]);
+        code = out;
     }
 
     // Wrap in a NativeBlock — the assembler will stitch prolog + this + epilog
