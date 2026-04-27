@@ -171,6 +171,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_interface_method(&mut self) -> Result<InterfaceMethod, ParseError> {
+        // Drain section-level comments captured by the lexer's
+        // `skip_whitespace_and_comments` since the previous token —
+        // these are the user's docstrings preceding this method
+        // declaration. Codegen will emit them before the per-target
+        // wrapper. Drain *before* the modifier-loop's `peek()` so we
+        // don't pick up comments from a later method's preamble.
+        let leading_comments = self.lexer.take_pending_comments();
         // Check for `static` and `async` modifiers (in any order)
         let mut is_static = false;
         let mut is_async = false;
@@ -249,6 +256,7 @@ impl<'a> Parser<'a> {
             return_init,
             is_async,
             is_static,
+            leading_comments,
             span: Span::new(start, self.lexer.cursor()),
         })
     }
@@ -1178,6 +1186,12 @@ impl<'a> Parser<'a> {
         let src = self.lexer.source();
         let mut pos = self.lexer.cursor();
         let lang = self.lexer.lang();
+        // Domain block walks bytes manually rather than tokenizing
+        // through the lexer, so pending-comment capture lives here too.
+        // Comments accumulate in `pending_doc` while we step over
+        // comment-only lines (`# foo`); when we successfully parse a
+        // field, we drain them onto its `leading_comments`.
+        let mut pending_doc: Vec<String> = Vec::new();
 
         // Skip initial whitespace/newlines after `domain:`
         while pos < src.len()
@@ -1261,9 +1275,24 @@ impl<'a> Parser<'a> {
             };
 
             if name.is_empty() {
-                // Skip comment-only or unparseable lines
+                // Comment-only or unparseable line. Capture the
+                // comment text (if any) into `pending_doc` so the
+                // next real field declaration can claim it as a
+                // leading-comment trivia. The capture handles the
+                // common `# comment` and `// comment` forms — Frame
+                // source for a target language already uses that
+                // language's comment leader (Oceans Model), so
+                // codegen emits the captured text verbatim.
+                let line_text_start = word_start;
                 while pos < src.len() && src[pos] != b'\n' {
                     pos += 1;
+                }
+                let raw = std::str::from_utf8(&src[line_text_start..pos])
+                    .unwrap_or("")
+                    .trim_end_matches('\r')
+                    .trim_end();
+                if !raw.is_empty() {
+                    pending_doc.push(raw.to_string());
                 }
                 continue;
             }
@@ -1328,6 +1357,7 @@ impl<'a> Parser<'a> {
                     var_type,
                     initializer_text: None,
                     is_const,
+                    leading_comments: std::mem::take(&mut pending_doc),
                     span: Span::new(field_start, pos),
                 });
                 continue;
@@ -1464,6 +1494,7 @@ impl<'a> Parser<'a> {
                 var_type,
                 initializer_text: init_opt,
                 is_const,
+                leading_comments: std::mem::take(&mut pending_doc),
                 span: Span::new(field_start, pos),
             });
         }

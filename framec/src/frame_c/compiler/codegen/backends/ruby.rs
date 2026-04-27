@@ -672,7 +672,13 @@ impl RubyBackend {
     /// Ruby class fields — initialization happens in the constructor
     /// via `@name = value`.
     fn emit_field(&self, field: &Field, ctx: &mut EmitContext) -> String {
-        format!("{}attr_accessor :{}\n", ctx.get_indent(), field.name)
+        let comments = field.format_leading_comments(&ctx.get_indent());
+        format!(
+            "{}{}attr_accessor :{}\n",
+            comments,
+            ctx.get_indent(),
+            field.name
+        )
     }
 }
 

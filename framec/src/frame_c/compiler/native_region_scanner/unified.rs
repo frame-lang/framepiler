@@ -242,8 +242,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 // comment land inside the segment span and get consumed
                 // by the multi-line expansion.
                 let mut stmt_end = raw_stmt_end;
-                while stmt_end > i
-                    && (bytes[stmt_end - 1] == b' ' || bytes[stmt_end - 1] == b'\t')
+                while stmt_end > i && (bytes[stmt_end - 1] == b' ' || bytes[stmt_end - 1] == b'\t')
                 {
                     stmt_end -= 1;
                 }

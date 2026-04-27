@@ -159,7 +159,9 @@ fn generate_rust_fields(system: &SystemAst) -> Vec<Field> {
             Type::Unknown => None,
         };
 
-        let mut field = Field::new(&domain_var.name).with_visibility(Visibility::Public);
+        let mut field = Field::new(&domain_var.name)
+            .with_visibility(Visibility::Public)
+            .with_leading_comments(domain_var.leading_comments.clone());
         if let Some(ref t) = type_str_opt {
             field = field.with_type(t);
         }

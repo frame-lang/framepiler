@@ -631,8 +631,10 @@ impl JavaScriptBackend {
             Some(init) => format!(" = {}", self.emit(init, ctx)),
             None => String::new(),
         };
+        let comments = field.format_leading_comments(&ctx.get_indent());
         format!(
-            "{}{}{}{};\n",
+            "{}{}{}{}{};\n",
+            comments,
             ctx.get_indent(),
             static_kw,
             field.name,

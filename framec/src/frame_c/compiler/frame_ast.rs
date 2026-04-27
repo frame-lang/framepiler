@@ -161,6 +161,12 @@ pub struct InterfaceMethod {
     pub is_async: bool,
     /// Parsed but invalid on interface methods (E420)
     pub is_static: bool,
+    /// Source comments encountered before this declaration in
+    /// `interface:`. Captured by the lexer as
+    /// `Lexer::take_pending_comments()` after each significant token;
+    /// codegen emits them verbatim before the per-target wrapper
+    /// definition. Empty for methods with no preceding comments.
+    pub leading_comments: Vec<String>,
     pub span: Span,
 }
 
@@ -590,6 +596,12 @@ pub struct DomainVar {
     pub initializer_text: Option<String>,
     /// `const` modifier — field is immutable after construction.
     pub is_const: bool,
+    /// Source comments encountered before this declaration in
+    /// `domain:`. Captured by the lexer's
+    /// `take_pending_comments()` and emitted by codegen before the
+    /// generated struct/class field. Empty for fields with no
+    /// preceding comments.
+    pub leading_comments: Vec<String>,
     pub span: Span,
 }
 

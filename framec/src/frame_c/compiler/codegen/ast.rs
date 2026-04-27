@@ -43,6 +43,13 @@ pub struct Field {
     pub is_static: bool,
     pub is_const: bool,
     pub initializer: Option<Box<CodegenNode>>,
+    /// Source comments preceding this field's declaration in
+    /// `domain:`. Each entry is a single comment line including its
+    /// language's leader (`#`, `//`, `--`, `%`). Backends prepend
+    /// these verbatim before the field's emitted line — Frame source
+    /// for a target already uses that target's comment syntax
+    /// (Oceans Model), so no translation needed.
+    pub leading_comments: Vec<String>,
 }
 
 impl Field {
@@ -54,7 +61,33 @@ impl Field {
             is_static: false,
             is_const: false,
             initializer: None,
+            leading_comments: Vec::new(),
         }
+    }
+
+    /// Builder for attaching docstring-style leading comments captured
+    /// from the Frame source's `domain:` block.
+    pub fn with_leading_comments(mut self, comments: Vec<String>) -> Self {
+        self.leading_comments = comments;
+        self
+    }
+
+    /// Format `leading_comments` as an indented multi-line prefix,
+    /// trailing newline included so the next emitted line lands at
+    /// the same indent. Returns an empty string when there are no
+    /// comments — backends call this unconditionally and concat to
+    /// their field-emission output.
+    pub fn format_leading_comments(&self, indent: &str) -> String {
+        if self.leading_comments.is_empty() {
+            return String::new();
+        }
+        let mut out = String::new();
+        for c in &self.leading_comments {
+            out.push_str(indent);
+            out.push_str(c);
+            out.push('\n');
+        }
+        out
     }
 
     pub fn with_type(mut self, type_annotation: &str) -> Self {

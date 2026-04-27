@@ -876,7 +876,9 @@ pub(crate) fn generate_fields(
         };
         let sys_param_names: Vec<String> = system.params.iter().map(|p| p.name.clone()).collect();
 
-        let mut field = Field::new(&domain_var.name).with_visibility(Visibility::Public);
+        let mut field = Field::new(&domain_var.name)
+            .with_visibility(Visibility::Public)
+            .with_leading_comments(domain_var.leading_comments.clone());
         if let Some(ref t) = type_str_opt {
             field = field.with_type(t);
         }
@@ -1062,6 +1064,20 @@ fn should_emit_constructor_body_init(
     }
 }
 
+/// True when the target emits domain fields as constructor-body
+/// assignments (so leading comments belong inline with the body) vs
+/// as class-level field declarations (so leading comments belong on
+/// the per-backend `Field` IR's `emit_field` path). Rust is in the
+/// constructor-body camp because its emission uses
+/// `CodegenNode::assign`, but framec also emits Rust struct field
+/// declarations whose `Field` IR carries the comments — the
+/// duplication is acceptable for now since Rust's struct-decl path
+/// is the user-visible one.
+fn uses_constructor_body_init(lang: TargetLanguage) -> bool {
+    use TargetLanguage::*;
+    matches!(lang, Python3 | Ruby | Lua | Php | GDScript | Go | C | Rust)
+}
+
 /// Format `field = init_value` using the per-language self-access form
 /// and statement terminator. Used to build the constructor body's
 /// domain-field init lines for every language EXCEPT Rust (which uses
@@ -1164,6 +1180,25 @@ pub(crate) fn generate_constructor(
     let sys_param_names_for_init: Vec<String> =
         system.params.iter().map(|p| p.name.clone()).collect();
     for domain_var in &system.domain {
+        // Emit any source-level leading comments first, so they
+        // sit immediately above the field-assignment line in the
+        // generated constructor. Skipped for languages that emit
+        // domain fields as class-level declarations (Cpp, Java,
+        // CSharp, Swift, Kotlin, TypeScript, JavaScript, Dart) —
+        // there the comments live on the `Field` IR's
+        // `leading_comments` and the per-backend `emit_field`
+        // prepends them. The constructor-body path (Python, Ruby,
+        // Lua, PHP, GDScript, Go, C, Rust) does not have an
+        // emit_field hook for domain fields, so the comments
+        // attach here.
+        if !domain_var.leading_comments.is_empty() && uses_constructor_body_init(syntax.language) {
+            for comment in &domain_var.leading_comments {
+                body.push(CodegenNode::NativeBlock {
+                    code: comment.clone(),
+                    span: None,
+                });
+            }
+        }
         // Rust requires all fields initialized; handle the no-init
         // case up front before the regular path.
         if matches!(syntax.language, TargetLanguage::Rust) && domain_var.initializer_text.is_none()
@@ -6037,6 +6072,7 @@ mod tests {
             var_type: Type::Custom("int".into()),
             initializer_text: Some("0".to_string()),
             is_const: false,
+            leading_comments: Vec::new(),
             span: Span::new(0, 0),
         });
 

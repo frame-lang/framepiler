@@ -179,6 +179,7 @@ mod tests {
             return_init: None,
             is_async: false,
             is_static: false,
+            leading_comments: Vec::new(),
             span: FrameSpan::new(10, 20),
         });
         system.interface.push(InterfaceMethod {
@@ -188,6 +189,7 @@ mod tests {
             return_init: None,
             is_async: false,
             is_static: false,
+            leading_comments: Vec::new(),
             span: FrameSpan::new(20, 30),
         });
 
@@ -234,6 +236,7 @@ mod tests {
             var_type: Type::Custom("int".into()),
             initializer_text: None,
             is_const: false,
+            leading_comments: Vec::new(),
             span: FrameSpan::new(70, 80),
         });
 
@@ -355,6 +358,7 @@ mod tests {
             var_type: Type::Custom("int".into()),
             initializer_text: None,
             is_const: false,
+            leading_comments: Vec::new(),
             span: FrameSpan::new(10, 30),
         });
 

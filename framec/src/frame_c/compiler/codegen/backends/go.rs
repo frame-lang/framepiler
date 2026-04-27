@@ -551,7 +551,14 @@ impl GoBackend {
         if ctx.defined_systems.contains(raw_type) {
             type_str = format!("*{}", type_str);
         }
-        format!("{}{} {}\n", ctx.get_indent(), field.name, type_str)
+        let comments = field.format_leading_comments(&ctx.get_indent());
+        format!(
+            "{}{}{} {}\n",
+            comments,
+            ctx.get_indent(),
+            field.name,
+            type_str
+        )
     }
 }
 

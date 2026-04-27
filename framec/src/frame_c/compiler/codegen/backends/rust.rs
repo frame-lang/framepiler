@@ -706,7 +706,15 @@ impl RustBackend {
             Some(t) => self.convert_type(t),
             None => "()".to_string(),
         };
-        format!("{}{}{}: {},\n", ctx.get_indent(), vis, field.name, type_str)
+        let comments = field.format_leading_comments(&ctx.get_indent());
+        format!(
+            "{}{}{}{}: {},\n",
+            comments,
+            ctx.get_indent(),
+            vis,
+            field.name,
+            type_str
+        )
     }
 }
 

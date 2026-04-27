@@ -104,6 +104,7 @@ pub(crate) fn generate_interface_wrappers(
                     return_init: None,
                     is_async: false,
                     is_static: false,
+                    leading_comments: Vec::new(),
                     span: Span::new(0, 0),
                 }
             })

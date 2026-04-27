@@ -156,6 +156,13 @@ pub struct Lexer<'a> {
     skipper: Box<dyn SyntaxSkipper>,
     lang: TargetLanguage,
     pending: VecDeque<Spanned>,
+    /// Section-level comments captured by `skip_whitespace_and_comments`.
+    /// The parser drains this via `take_pending_comments()` after each
+    /// `next_token()` so it can attach the trivia to the AST node the
+    /// new token introduces (interface method, domain field, …). Stays
+    /// off `Spanned` so the existing 26+ Spanned constructors don't
+    /// need to change.
+    pending_comments: Vec<String>,
 }
 
 impl<'a> Lexer<'a> {
@@ -175,6 +182,7 @@ impl<'a> Lexer<'a> {
             skipper,
             lang,
             pending: VecDeque::new(),
+            pending_comments: Vec::new(),
         }
     }
 
@@ -1342,10 +1350,12 @@ impl<'a> Lexer<'a> {
             // Always handle // line comments in structural sections
             // (Frame structural syntax uses // regardless of target language)
             if b == b'/' && self.cursor + 1 < self.end && self.source[self.cursor + 1] == b'/' {
+                let start = self.cursor;
                 self.cursor += 2;
                 while self.cursor < self.end && self.source[self.cursor] != b'\n' {
                     self.cursor += 1;
                 }
+                self.capture_section_comment(start, self.cursor);
                 continue;
             }
             // Try to skip comments via SyntaxSkipper (handles #, /* */, etc.)
@@ -1353,11 +1363,39 @@ impl<'a> Lexer<'a> {
                 .skipper
                 .skip_comment(self.source, self.cursor, self.end)
             {
+                self.capture_section_comment(self.cursor, new_pos);
                 self.cursor = new_pos;
                 continue;
             }
             break;
         }
+    }
+
+    /// Stash a structural-section comment for the next significant
+    /// token. Bytes from `start..end` cover the entire comment span —
+    /// leader (`#`, `//`, `--`, `%`, …), body, and any trailing
+    /// newline the per-language skipper consumed. Trailing newlines
+    /// are trimmed so codegen can emit one per line cleanly.
+    /// Frame source for a given target already uses that target's
+    /// comment syntax (Oceans Model), so codegen emits verbatim with
+    /// no per-target translation.
+    fn capture_section_comment(&mut self, start: usize, end: usize) {
+        let bytes = &self.source[start..end];
+        let text = String::from_utf8_lossy(bytes)
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string();
+        if !text.is_empty() {
+            self.pending_comments.push(text);
+        }
+    }
+
+    /// Drain comments captured since the last call. The parser invokes
+    /// this after `next_token()` to associate trivia with the AST
+    /// node the new token introduces (interface method, domain field,
+    /// state declaration, …).
+    pub fn take_pending_comments(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_comments)
     }
 
     fn skip_inline_whitespace(&mut self) {

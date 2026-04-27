@@ -695,9 +695,11 @@ impl KotlinBackend {
             }
             (None, _, _) => String::new(),
         };
+        let comments = field.format_leading_comments(&ctx.get_indent());
         if vis.is_empty() {
             format!(
-                "{}{}{}{}{}\n",
+                "{}{}{}{}{}{}\n",
+                comments,
                 ctx.get_indent(),
                 var_kw,
                 field.name,
@@ -706,7 +708,8 @@ impl KotlinBackend {
             )
         } else {
             format!(
-                "{}{} {}{}{}{}\n",
+                "{}{}{} {}{}{}{}\n",
+                comments,
                 ctx.get_indent(),
                 vis,
                 var_kw,
