@@ -570,6 +570,82 @@ fn erlang_process_body_lines_full(
             vec![l.to_string()]
         })
         .collect();
+
+    // Normalize pattern-match case-arm headers. The body processor's
+    // existing arm-frame logic recognizes the framec-generated
+    // boolean-case shape: `true ->` (first arm) and `; false ->` /
+    // `; _ ->` (subsequent arms). User-written Erlang `case ... of`
+    // blocks use bare patterns separated by trailing `;` on each
+    // arm body, e.g.
+    //
+    //     case X of
+    //         {true, V} -> body1;
+    //         false -> body2
+    //     end
+    //
+    // The body processor needs to see the canonical "next-arm
+    // separator at line start" form to drive its CaseFrame
+    // SSA-reset logic per arm. Walk the lines tracking case
+    // nesting depth and a `first_arm_pending` flag per nesting
+    // level; on a non-first arm header, prepend `; ` so it
+    // matches the existing detection. Function clauses (lines
+    // containing `({call, From},`) are not arm headers and
+    // pass through untouched.
+    let preprocessed: Vec<String> = {
+        let mut out: Vec<String> = Vec::with_capacity(preprocessed.len());
+        let mut case_depth: i32 = 0;
+        let mut first_arm_pending: Vec<bool> = Vec::new();
+        for line in preprocessed.iter() {
+            let t = line.trim();
+            let is_case_open = (t.starts_with("case ") || t.starts_with("case("))
+                && (t.ends_with(" of") || t.ends_with(" of,"));
+            let is_case_close = t == "end" || t == "end," || t == "end;";
+            let looks_like_arm_header = case_depth > 0
+                && (t.ends_with(" ->") || t.ends_with("->"))
+                && !t.starts_with("case ")
+                && !t.starts_with("case(")
+                && !t.starts_with(";")
+                && !t.contains("({call, From},")
+                // The framec-generated boolean form already has `true ->`
+                // as the first arm; leave it untouched. Subsequent
+                // boolean arms (`; false ->` / `; _ ->`) start with `;`
+                // so they're already filtered above.
+                && t != "true ->";
+            if is_case_open {
+                out.push(line.clone());
+                case_depth += 1;
+                first_arm_pending.push(true);
+                continue;
+            }
+            if is_case_close {
+                if case_depth > 0 {
+                    case_depth -= 1;
+                    first_arm_pending.pop();
+                }
+                out.push(line.clone());
+                continue;
+            }
+            if looks_like_arm_header {
+                let is_first = first_arm_pending.last().copied().unwrap_or(true);
+                if is_first {
+                    if let Some(slot) = first_arm_pending.last_mut() {
+                        *slot = false;
+                    }
+                    out.push(line.clone());
+                } else {
+                    // Prepend `; ` to make this arm header match the
+                    // body processor's `; <pattern> ->` recognition.
+                    let leading_ws_len = line.len() - line.trim_start().len();
+                    let indent: String = line[..leading_ws_len].to_string();
+                    out.push(format!("{}; {}", indent, t));
+                }
+                continue;
+            }
+            out.push(line.clone());
+        }
+        out
+    };
+
     let lines = preprocessed
         .iter()
         .map(|s| s.as_str())
@@ -606,10 +682,32 @@ fn erlang_process_body_lines_full(
         let is_forward_call =
             l.contains("({call, From},") && !l.starts_with("case") && !l.starts_with("{");
 
+        // Subsequent arm of any pattern-match case: `; <pattern> ->`.
+        // The pre-processing pass above normalizes user-written
+        // `<pattern> ->` second-arms to this canonical form so the
+        // existing CaseFrame logic (which already handles `; false`
+        // / `; _`) can drive the SSA reset.
+        let is_general_subsequent_arm =
+            l.starts_with(';') && (l.ends_with(" ->") || l.ends_with("->"));
+
+        // First arm of a pattern-match case: `<pattern> ->` with no
+        // leading `;`. The pattern can be anything Erlang accepts —
+        // an atom (`other ->`), tuple (`{tag, V} ->`), list, var.
+        // Detected by trailing ` ->` and not matching any of the
+        // other structural shapes. `{next_state,…}` / `{keep_state,…}`
+        // tuples don't end with ` ->`, so they're naturally excluded.
+        let is_general_first_arm = !l.starts_with(';')
+            && !l.starts_with("case ")
+            && !l.starts_with("case(")
+            && !is_forward_call
+            && (l.ends_with(" ->") || l.ends_with("->"));
+
         let is_structural = l.starts_with("case ")
             || l.starts_with("case(")
             || l.starts_with("true ->")
             || l.starts_with("; false")
+            || is_general_subsequent_arm
+            || is_general_first_arm
             || l == "end"
             || l == "end,"
             || l.starts_with("{next_state,")
@@ -628,29 +726,38 @@ fn erlang_process_body_lines_full(
             //   end / end,    record final arm's tail gen; pop the frame;
             //                 pad shorter arms with `DataMax = DataN` so
             //                 all non-terminal paths converge on DataMax.
-            if l.starts_with("true ->") {
+            if l.starts_with("true ->") || is_general_first_arm {
                 case_data_stack.push(CaseFrame {
                     saved_var: data_var.clone(),
                     saved_gen: data_gen,
                     arms: Vec::new(),
-                    // The `true ->` header goes into `result` below;
-                    // the arm body starts on the NEXT line. Defer the
-                    // start_idx assignment to right after the push —
-                    // but we need the index *after* the `true ->`
-                    // header lands in result, which is result.len() + 1
-                    // at this point (since the header hasn't been
-                    // pushed yet). The next line added to result will
-                    // be `    true ->` (with an indent prefix). Use
-                    // result.len() + 1 to account for it.
+                    // The arm header goes into `result` below; the
+                    // arm body starts on the NEXT line. result.len()+1
+                    // accounts for the about-to-be-pushed header.
                     current_arm_start: result.len() + 1,
                 });
-            } else if l.starts_with("; false") || l.starts_with("; _") {
+            } else if l.starts_with("; false") || l.starts_with("; _") || is_general_subsequent_arm {
                 if let Some(frame) = case_data_stack.last_mut() {
-                    // Record the true arm's final position: index of last
-                    // emitted line (which came before this `; false ->`).
+                    // Record the previous arm's final position: index
+                    // of last emitted line (which came before this
+                    // `; <pattern> ->`).
                     let last_idx = result.len().saturating_sub(1);
                     let start = frame.current_arm_start;
                     frame.arms.push((start, last_idx, data_gen));
+                    // Strip a trailing `,` from the last emitted line —
+                    // Erlang case-arm bodies are comma-separated
+                    // expressions, but the LAST expression in an arm
+                    // is followed by `;` (next arm) or `end`, NOT by
+                    // another `,`. The body processor's per-statement
+                    // emit appends `,` to assignment lines; on an arm
+                    // boundary we drop that trailing comma.
+                    if let Some(last_line) = result.last_mut() {
+                        if last_line.trim_end().ends_with(',') {
+                            let trimmed_end = last_line.trim_end();
+                            let new_len = trimmed_end.len() - 1;
+                            *last_line = trimmed_end[..new_len].to_string();
+                        }
+                    }
                     // The separator itself lands on the next push; the
                     // new arm's body begins after that.
                     frame.current_arm_start = result.len() + 1;
@@ -662,6 +769,15 @@ fn erlang_process_body_lines_full(
                     let last_idx = result.len().saturating_sub(1);
                     let start = frame.current_arm_start;
                     frame.arms.push((start, last_idx, data_gen));
+                }
+                // Strip trailing `,` from the last arm's last expression
+                // — same rationale as on `; <pattern> ->` boundaries.
+                if let Some(last_line) = result.last_mut() {
+                    if last_line.trim_end().ends_with(',') {
+                        let trimmed_end = last_line.trim_end();
+                        let new_len = trimmed_end.len() - 1;
+                        *last_line = trimmed_end[..new_len].to_string();
+                    }
                 }
                 if let Some(frame) = case_data_stack.pop() {
                     // Compute max gen across *non-terminal* arms only.
@@ -1645,8 +1761,16 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
             // No comma before structural closers or branch starts
             let curr_is_end =
                 lt == "end" || lt == "end," || lt.starts_with("end;") || lt.starts_with("end.");
-            let curr_is_branch =
-                lt.starts_with("true ->") || lt.starts_with("; false") || lt.starts_with("; true");
+            // A "branch" in this context is any case-arm header — the
+            // line that begins a new arm. Cases used to come in only
+            // the boolean shape (`true ->` / `; false ->`); user-written
+            // pattern-match cases use bare patterns followed by `->`,
+            // and the body processor's pre-pass normalises subsequent
+            // arms to the `; <pattern> ->` form. Match any of those.
+            let curr_is_branch = lt.starts_with("true ->")
+                || lt.starts_with("; false")
+                || lt.starts_with("; true")
+                || (lt.starts_with(';') && (lt.ends_with(" ->") || lt.ends_with("->")));
 
             // Inside case blocks: suppress commas only at structural boundaries
             // (between branches, after case/of, before end). Expressions within
