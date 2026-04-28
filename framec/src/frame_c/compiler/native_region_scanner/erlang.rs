@@ -46,6 +46,31 @@ impl SyntaxSkipper for ErlangSkipper {
     }
 
     fn skip_string(&self, bytes: &[u8], i: usize, end: usize) -> Option<usize> {
+        // Erlang character literal: `$<char>` is the integer value
+        // of the byte after `$`. Without this fast path, the unified
+        // scanner walks past `$` without recognising it as the start
+        // of a literal, then the very next byte (e.g. `"`, `'`, `(`)
+        // gets misidentified as a string/atom start by the FSM and
+        // the rest of the file is swallowed up to the next matching
+        // delimiter — which is how the prolog of state_var_parser
+        // (and any handler body using `$<punct>`) corrupted the
+        // segmenter.
+        //
+        // Recognise `$<char>` here so the cursor advances by two
+        // bytes (the `$` plus the literal char). `$\<escape>` skips
+        // three bytes (`$`, `\`, escape char). Anything else falls
+        // through to the FSM's regular string/atom handling.
+        if i < end && bytes[i] == b'$' && i + 1 < end {
+            // `$.` is a Frame state-var marker handled later in the
+            // unified scanner — don't consume it here.
+            if bytes[i + 1] != b'.' {
+                if bytes[i + 1] == b'\\' && i + 2 < end {
+                    return Some(i + 3);
+                }
+                return Some(i + 2);
+            }
+        }
+
         let mut fsm = ErlangSyntaxSkipperFsm::new();
         fsm.bytes = bytes[..end].to_vec();
         fsm.pos = i;
