@@ -646,6 +646,192 @@ fn erlang_process_body_lines_full(
         out
     };
 
+    // Pre-process: split lines of the form `LHS = <prefix> self.<iface>(args) <suffix>`
+    // into a temp-bind + an assignment whenever the call is embedded
+    // inside a larger expression on the RHS. Without this the
+    // InterfaceCall classifier captures only the LHS and call args,
+    // silently dropping the surrounding arithmetic. For
+    // `__ReturnVal = self.compute() + 1` we'd lose the `+ 1` and the
+    // reply value would be wrong. Iterates so cases like
+    // `LHS = self.a() + self.b()` get fully decomposed.
+    //
+    // Skipped when the LHS starts with `self.` — those are
+    // record-update forms handled by `InterfaceCallWithBind` /
+    // `ActionCallWithBind`, which already split correctly.
+    let preprocessed: Vec<String> = if interface_names.is_empty() {
+        preprocessed
+    } else {
+        let mut out: Vec<String> = preprocessed;
+        let mut tmp_idx: usize = 0;
+        let mut iter_guard = 0;
+        loop {
+            iter_guard += 1;
+            if iter_guard > 64 {
+                break;
+            }
+            let mut next: Vec<String> = Vec::with_capacity(out.len());
+            let mut changed = false;
+            for line in out.iter() {
+                let leading_ws_len = line.len() - line.trim_start().len();
+                let indent = line[..leading_ws_len].to_string();
+                let raw = line[leading_ws_len..].to_string();
+                // Strip trailing terminator for analysis, preserve to re-attach.
+                let trail_start = raw
+                    .rfind(|c: char| c != ',' && c != ';' && !c.is_whitespace())
+                    .map(|p| p + raw[p..].chars().next().unwrap().len_utf8())
+                    .unwrap_or(raw.len());
+                let analyze = raw[..trail_start].to_string();
+                let trailing = raw[trail_start..].to_string();
+
+                // `self.<field> = self.<iface>(<args>)` — bare-call form
+                // — is handled by InterfaceCallWithBind. Skip those.
+                // Mixed expressions like `self.<field> = self.f() <op> X`
+                // need the pre-pass because InterfaceCallWithBind uses
+                // rfind(')') and would grab the wrong closing paren when
+                // the RHS has multiple call/paren tokens.
+                //
+                // Bare-call detection is via paren-balance: find the
+                // first `self.<iface>(`, walk forward matching parens,
+                // and the bare form requires the matching `)` to be the
+                // last meaningful char in the RHS. Surface checks like
+                // `rhs.ends_with(")")` are too loose because
+                // `self.f() + self.g()` also ends with `)`.
+                if analyze.starts_with("self.") {
+                    if let Some(eq_pos) = analyze.find('=') {
+                        let lhs = analyze[..eq_pos].trim();
+                        let rhs = analyze[eq_pos + 1..].trim();
+                        let lhs_is_simple_field = lhs
+                            .strip_prefix("self.")
+                            .map(|f| !f.is_empty() && !f.contains('.') && !f.contains('('))
+                            .unwrap_or(false);
+                        let rhs_is_bare_iface_call = if !lhs_is_simple_field {
+                            false
+                        } else {
+                            interface_names.iter().any(|iface| {
+                                let pat = format!("self.{}(", iface);
+                                if !rhs.starts_with(&pat) {
+                                    return false;
+                                }
+                                let bytes = rhs.as_bytes();
+                                let open_idx = pat.len() - 1;
+                                let mut depth = 0i32;
+                                let mut close = open_idx;
+                                for i in open_idx..bytes.len() {
+                                    match bytes[i] {
+                                        b'(' => depth += 1,
+                                        b')' => {
+                                            depth -= 1;
+                                            if depth == 0 {
+                                                close = i;
+                                                break;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                // Bare form: the matching `)` is the
+                                // last char of the RHS (no operator,
+                                // no second call after it).
+                                close == bytes.len() - 1
+                            })
+                        };
+                        if lhs_is_simple_field && rhs_is_bare_iface_call {
+                            next.push(line.clone());
+                            continue;
+                        }
+                    }
+                    // Otherwise fall through — the pre-pass below will
+                    // hoist any embedded self-calls out of the RHS so
+                    // the final RHS is bare and the line classifies
+                    // as RecordUpdate.
+                }
+
+                // Must be an assignment with `=` (not `==`).
+                let eq_pos = match analyze.find('=') {
+                    Some(p) if !analyze[p..].starts_with("==") => p,
+                    _ => {
+                        next.push(line.clone());
+                        continue;
+                    }
+                };
+                let rhs_start = eq_pos + 1;
+
+                // Find leftmost `self.<iface>(` in RHS.
+                let mut earliest: Option<(usize, usize)> = None;
+                for iface in interface_names {
+                    let pat = format!("self.{}(", iface);
+                    if let Some(rel) = analyze[rhs_start..].find(&pat) {
+                        let abs = rhs_start + rel;
+                        if earliest.map_or(true, |(prev, _)| abs < prev) {
+                            earliest = Some((abs, pat.len()));
+                        }
+                    }
+                }
+                let (pat_start, pat_len) = match earliest {
+                    Some(v) => v,
+                    None => {
+                        next.push(line.clone());
+                        continue;
+                    }
+                };
+
+                // Match the closing paren via depth counting.
+                let open_paren_idx = pat_start + pat_len - 1;
+                let bytes = analyze.as_bytes();
+                let mut depth = 0i32;
+                let mut close = open_paren_idx;
+                for i in open_paren_idx..bytes.len() {
+                    match bytes[i] {
+                        b'(' => depth += 1,
+                        b')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                close = i;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if close == open_paren_idx {
+                    next.push(line.clone());
+                    continue;
+                }
+
+                let prefix = analyze[rhs_start..pat_start].trim();
+                let suffix = analyze[close + 1..].trim();
+                if prefix.is_empty() && suffix.is_empty() {
+                    // `LHS = self.method(args)` — bare form, classifier handles.
+                    next.push(line.clone());
+                    continue;
+                }
+
+                let lhs = analyze[..eq_pos].trim();
+                let call_text = &analyze[pat_start..=close];
+                tmp_idx += 1;
+                let temp_var = format!("__SelfResult_{}", tmp_idx);
+                next.push(format!("{}{} = {}", indent, temp_var, call_text));
+                let mut combined = String::new();
+                if !prefix.is_empty() {
+                    combined.push_str(prefix);
+                    combined.push(' ');
+                }
+                combined.push_str(&temp_var);
+                if !suffix.is_empty() {
+                    combined.push(' ');
+                    combined.push_str(suffix);
+                }
+                next.push(format!("{}{} = {}{}", indent, lhs, combined, trailing));
+                changed = true;
+            }
+            out = next;
+            if !changed {
+                break;
+            }
+        }
+        out
+    };
+
     let lines = preprocessed
         .iter()
         .map(|s| s.as_str())
@@ -736,7 +922,8 @@ fn erlang_process_body_lines_full(
                     // accounts for the about-to-be-pushed header.
                     current_arm_start: result.len() + 1,
                 });
-            } else if l.starts_with("; false") || l.starts_with("; _") || is_general_subsequent_arm {
+            } else if l.starts_with("; false") || l.starts_with("; _") || is_general_subsequent_arm
+            {
                 if let Some(frame) = case_data_stack.last_mut() {
                     // Record the previous arm's final position: index
                     // of last emitted line (which came before this
@@ -1663,6 +1850,12 @@ fn erlang_wrap_self_call_guards(lines: &[String], state_atom: &str) -> Vec<Strin
             ));
         }
 
+        // Bare `_ ->` form: the previous arm body already has a
+        // trailing `;` from the wrap (line ~1654). Doubling the
+        // separator (`;` after body PLUS `; _ ->`) is an Erlang
+        // syntax error. The analyzer in `analyze_case_arms` was
+        // extended to recognise bare-pattern arm headers so the
+        // wrap-emitted case is correctly classified.
         result.push(format!("{ind}    _ ->", ind = ind));
         result.push(format!(
             "{ind}        {{next_state, {dv}#data.frame_current_state, {dv}, [{{reply, From, undefined}}]}}",
@@ -2203,9 +2396,28 @@ fn analyze_case_arms(
             continue;
         }
 
-        // Arm boundary detection at depth 1
-        let is_arm_header =
+        // Arm boundary detection at depth 1.
+        //
+        // Recognise both the canonical boolean-case shape (`true ->`,
+        // `; false ->`, `; _ ->`) AND bare-pattern arms emitted by
+        // `erlang_wrap_self_call_guards` (e.g. `s0 ->`, `_ ->`).
+        // The wrap function runs AFTER the body processor's pre-pass
+        // that normalises user-written subsequent arms to `; <pat> ->`,
+        // so its emitted case can have either bare or `;`-prefixed
+        // arms. Both must be detected here or the wrap-emitted case
+        // gets misclassified and `rewrite_mixed_case_arms` drops the
+        // `; _ ->` / `end` tail.
+        let is_canonical_header =
             t.starts_with("true ->") || t.starts_with("; false") || t.starts_with("; _");
+        let is_bare_pattern_header = !t.starts_with("case ")
+            && !t.starts_with("case(")
+            && !t.contains("({call, From},")
+            && (t.ends_with(" ->") || t.ends_with("->"))
+            && !t.starts_with("{");
+        let is_general_semicolon_header =
+            t.starts_with("; ") && (t.ends_with(" ->") || t.ends_with("->"));
+        let is_arm_header =
+            is_canonical_header || is_general_semicolon_header || is_bare_pattern_header;
         if is_arm_header {
             // Close previous arm
             if let Some(mut arm) = current_arm.take() {
@@ -2345,7 +2557,8 @@ fn rewrite_mixed_case_arms(
             // `ok`. Substitute the arm-captured value here so a
             // transitioning arm with an in-arm @@:return preserves
             // the value through the gen_statem reply.
-            if (t.starts_with("frame_transition__(") || t.starts_with("frame_forward_transition__("))
+            if (t.starts_with("frame_transition__(")
+                || t.starts_with("frame_forward_transition__("))
                 && nested_depth == 0
             {
                 if let Some(rv) = arm.return_val.as_deref() {
@@ -3374,13 +3587,10 @@ pub(crate) fn generate_erlang_system(
                             // strip the assignment, and emit the RHS last.
                             let arm_boundary = |t: &str| -> bool {
                                 t.ends_with("->")
-                                    && (t == "true ->"
-                                        || t.starts_with("; ")
-                                        || t == "_ ->")
+                                    && (t == "true ->" || t.starts_with("; ") || t == "_ ->")
                             };
-                            let case_end = |t: &str| -> bool {
-                                t == "end" || t == "end," || t == "end;"
-                            };
+                            let case_end =
+                                |t: &str| -> bool { t == "end" || t == "end," || t == "end;" };
 
                             let mut rewritten: Vec<String> = Vec::new();
                             let mut in_case = false;
@@ -3388,17 +3598,18 @@ pub(crate) fn generate_erlang_system(
                             let mut arm_buf: Vec<String> = Vec::new();
                             let mut arm_value: Option<String> = None;
 
-                            let flush_arm = |buf: &mut Vec<String>,
-                                             val: &mut Option<String>,
-                                             out: &mut Vec<String>| {
-                                // Emit non-return-val lines first, then the value.
-                                for l in buf.drain(..) {
-                                    out.push(l);
-                                }
-                                if let Some(v) = val.take() {
-                                    out.push(format!("    {}", v));
-                                }
-                            };
+                            let flush_arm =
+                                |buf: &mut Vec<String>,
+                                 val: &mut Option<String>,
+                                 out: &mut Vec<String>| {
+                                    // Emit non-return-val lines first, then the value.
+                                    for l in buf.drain(..) {
+                                        out.push(l);
+                                    }
+                                    if let Some(v) = val.take() {
+                                        out.push(format!("    {}", v));
+                                    }
+                                };
 
                             for line in &processed {
                                 let trimmed = line.trim();

@@ -2541,6 +2541,56 @@ this sensor), the guard sees `_transitioned == False` and the
 post-call code runs normally. The guard only short-circuits when
 the called method actually queued a transition.
 
+### Embedded self-calls and statement boundaries
+
+Frame allows `@@:self.method()` calls inside expressions:
+
+```frame
+self.n = @@:self.compute() + 5
+self.n = @@:self.foo() + @@:self.bar()
+@@:return = @@:self.value() * 2
+```
+
+The transition check fires at **statement boundaries**, not within
+statements. A statement containing one or more embedded self-calls
+runs to completion in its own execution context; after the
+statement, the handler returns if any embedded call transitioned
+the system. The guard fires once at end-of-statement, regardless of
+how many self-calls the expression contained.
+
+```python
+def _s_Active_hdl_user_combine(self, __e, compartment):
+    self.n = self.foo() + self.bar()
+    if self._context_stack[-1]._transitioned: return    # statement boundary
+    self.trace += "after-combine;"
+```
+
+Both `foo()` and `bar()` always run, even if `foo()` queued a
+transition before `bar()` was called. Once any embedded call sets
+the `_transitioned` flag, the single statement-end check catches
+it and the handler returns before the next statement.
+
+Why statement-boundary rather than per-call abort? The runtime spec
+already operates at statement boundaries — `_transitioned` is the
+hook between statements. Inserting a guard mid-expression would
+require per-target operator-precedence awareness across 17
+backends, fragile codegen for an unusual idiom. Aligning with the
+language-natural statement boundary keeps the codegen simple and
+matches Frame's "Oceans Model" delegation of expression evaluation
+to the target language.
+
+If you need finer granularity — abort *between* two embedded calls
+— split the expression into separate statements:
+
+```frame
+$.tmp = @@:self.foo()        // separate statement; if foo() queued
+self.n = $.tmp + @@:self.bar() // a transition, bar() never runs
+```
+
+The natural one-call-per-statement idiom gives you the maximum
+guard granularity Frame provides; cramming multiple self-calls into
+one expression trades fineness of control for compactness.
+
 ### Validation
 
 Self-calls have compile-time checks:

@@ -253,19 +253,31 @@ pub(crate) fn emit_handler_body_via_statements(
         match stmt {
             Statement::NativeCode(text) => {
                 if let Some(guard) = pending_guard.take() {
-                    // Insert the guard after the first line break in this
-                    // native text (the break that ends the self-call line).
+                    // Tight option 2 (D1 fix): the transition guard must
+                    // fire AT A STATEMENT BOUNDARY, not mid-expression.
+                    // The boundary is signaled by a newline in the next
+                    // NativeCode segment — when present, we've reached
+                    // end-of-line and the assignment is complete.
+                    //
+                    // If the next NativeCode lacks a newline, it's a
+                    // continuation of the same statement (e.g. ` + 5`,
+                    // `, lit`, ` && other`). Emitting the guard here
+                    // would split the expression. Re-stash the guard
+                    // and let it propagate to the NEXT NativeCode that
+                    // DOES end the line. A subsequent self-call segment
+                    // may overwrite the guard with its own — that's
+                    // correct: `_transitioned` is monotonic, so a single
+                    // statement-end check catches "any embedded call
+                    // transitioned the system".
                     if let Some(nl_pos) = text.find('\n') {
                         out.push_str(&text[..=nl_pos]);
                         out.push_str(&guard);
-                        out.push('\n'); // terminate the guard line
+                        out.push('\n');
                         out.push_str(&text[nl_pos + 1..]);
                     } else {
-                        // No newline — emit native text, then guard
+                        // No newline — keep guard pending; emit text only.
                         out.push_str(text);
-                        out.push('\n');
-                        out.push_str(&guard);
-                        out.push('\n');
+                        pending_guard = Some(guard);
                     }
                 } else {
                     out.push_str(text);
@@ -2672,12 +2684,33 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Dart => {
-                    if ctx.per_handler {
+                    // Dart's compartment.state_vars is `Map<String, dynamic>`.
+                    // Reading returns `dynamic`, which propagates `num` to
+                    // arithmetic and breaks `int` typed assignments (e.g.,
+                    // `int + dynamic = num`, can't assign to `int`). Cast
+                    // to the declared type so downstream typing holds.
+                    let dart_type = ctx
+                        .state_var_types
+                        .get(var_name.as_str())
+                        .map(|t| match t.as_str() {
+                            "int" => "int",
+                            "float" | "number" | "double" => "double",
+                            "str" | "string" | "String" => "String",
+                            "bool" | "boolean" => "bool",
+                            _ => "",
+                        })
+                        .unwrap_or("");
+                    let access = if ctx.per_handler {
                         format!("compartment.state_vars[{}{}{}]", q, var_name, q)
                     } else if ctx.use_sv_comp {
                         format!("__sv_comp.state_vars[{}{}{}]", q, var_name, q)
                     } else {
                         format!("this.__compartment.state_vars[{}{}{}]", q, var_name, q)
+                    };
+                    if dart_type.is_empty() {
+                        access
+                    } else {
+                        format!("({} as {})", access, dart_type)
                     }
                 }
                 TargetLanguage::GDScript => {
