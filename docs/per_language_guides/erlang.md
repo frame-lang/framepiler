@@ -118,7 +118,7 @@ authoring an Erlang variant that uses idiom 2.
 
 ---
 
-## One `@@system` per file
+## One `@@system` per file (and the multi-source convention)
 
 `gen_statem` modules are *modules* — there is one `-module(...)`
 declaration per `.erl` file, and the module name must match the
@@ -129,15 +129,44 @@ This means `.ferl` source must contain exactly one `@@system`. Two or
 more `@@system` blocks in a single `.ferl` file are rejected at the
 framec stage with **E431** ("Erlang requires one system per file").
 
-Cross-system composition is still supported — you split the systems
-across separate `.ferl` files, generate them separately, and
-`erlc`-compile the result as a multi-module application. The
-framepiler matrix harness today expects one `.f<ext>` per case, so
-multi-system Erlang fixtures are not exercised end-to-end in matrix
-runs (a harness convention limitation, not a framec gap). Manually
-compiling and running a two-module pair (`counter.erl + driver.erl`,
-generated separately by framec from separate `.ferl` sources) works
-out of the box.
+Cross-system composition is supported via the multi-source layout —
+each system lives in its own `.ferl`, framec generates them
+separately, and `erlc` compiles the resulting `.erl` set together
+as one Erlang application. The framepiler matrix harness has a
+**directory-as-test convention** for this:
+
+```
+tests/erlang/multi/<case_name>/
+    <module_a>.ferl       % @@system that lowers to module_a.erl
+    <module_b>.ferl       % @@system that lowers to module_b.erl
+    driver.escript        % entry point with assertions
+```
+
+The runner discovers the directory, transpiles each `.ferl`,
+renames each output to match its `-module(…)` directive, runs
+`erlc` over the set into a single work_dir, then executes the
+escript driver. Five canonical demos exercise this end-to-end:
+
+```
+tests/erlang/multi/counter_pair/              # Counter + DriverSys
+tests/erlang/multi/multi_system_composition/  # AppLogger + App
+tests/erlang/multi/auth_flow/                 # LoginManager + AuthApp
+tests/erlang/multi/game_level/                # EnemySpawner + GameLevel
+tests/erlang/multi/ai_agent/                  # ToolRunner + Agent
+tests/erlang/multi/state_var_parser/          # ExprScannerFsm + StateVarParserFsm
+```
+
+See `framepiler_test_env/docker/runners/erlang_batch.sh` for the
+runner side.
+
+**OTP module-name collisions.** Frame `@@system` names lower to
+snake_case Erlang atoms — `@@system Logger` becomes `-module(logger).`
+which collides with OTP's stdlib `logger` module (since OTP 21).
+Likely collisions to watch for: `logger`, `lists`, `string`, `binary`,
+`crypto`, `os`, `io`, `application`, `proc_lib`, `sys`, `gen_server`,
+`gen_statem`, `gen_event`, `gen_fsm`. Rename the Frame system to
+something distinctive (`AppLogger`, `MyLists`, …) — framec doesn't
+detect these collisions for you.
 
 ---
 
@@ -197,6 +226,155 @@ calls and commas don't break the rewrite.
 **You do not need to do anything special** in your Frame source —
 `self.inner.bump()` works on Erlang exactly as it does on every
 other target. The lowering is invisible.
+
+---
+
+## Native helpers in the prolog
+
+Erlang Frame source typically has native helper functions in the
+prolog (above `@@system`) for guards, predicates, recursive
+walkers, and similar utilities that don't fit cleanly into a
+state-machine handler. The Oceans Model passes the prolog through
+to the generated `.erl` verbatim — but Erlang's compile model has
+two ordering constraints that framec resolves automatically:
+
+**1. `$<char>` literals.** Erlang's `$"` (the integer 34, ASCII
+for `"`) is a single-byte literal, not a string-start. Without
+special handling the segmenter would see the `"` and start
+string-skip mode, swallowing the rest of the file up to the next
+literal `"` — which is how a prolog like
+
+```erlang
+expr_scan_loop(Bs, I, End, Depth, _InString) ->
+    B = binary:at(Bs, I),
+    if
+        B =:= $" orelse B =:= $' -> ...    % $" is a char literal
+        ...
+    end.
+```
+
+would corrupt the entire `@@system` block downstream. Framec's
+Erlang segmenter recognises `$<char>` (consume 2 bytes) and
+`$\<escape>` (consume 3 bytes) at the lexical layer before
+delegating to the FSM. `$.` (Frame state-var marker) is excluded
+from the literal recognition so state-var syntax still works.
+
+**2. Attribute hoisting.** Erlang requires `-module/-behaviour/
+-export/-record` to precede any function definition. With a
+prolog-then-system source layout:
+
+```erlang
+helper() -> ok.            % <-- native, emitted first
+
+@@system Foo { ... }       % <-- system code:
+                           %     -module(foo). -behaviour(gen_statem).
+                           %     -export([...]). callbacks() ...
+```
+
+a naive walk would emit `helper/0` BEFORE `-module(foo).`, which
+`erlc` rejects with "no module definition" + "attribute X after
+function definitions". Framec's Erlang assembler runs a post-pass
+that hoists every `-module/-behaviour/-export/-record/-define/
+-include` attribute (incl. multi-line forms like `-record(data,
+{ ... }).`, tracked by paren-depth across line boundaries) to
+the top of the assembled output, preserving relative order.
+Other lines (comments, helpers, generated callbacks) keep their
+original sequence in the remainder.
+
+You write the prolog in source order; framec re-arranges as
+needed for `erlc`.
+
+---
+
+## `@@:return + transition` on the same handler
+
+Frame's runtime spec lets a handler set a return value AND fire
+a state transition in the same body. On most backends this is
+straightforward — the wrapper extracts the return slot and the
+transition flag triggers re-dispatch:
+
+```frame
+$LoggedOut {
+    login(user: str, pass: str): str {
+        if user == "admin" andalso pass == "secret" {
+            self.current_user = user
+            @@:("ok")
+            -> $LoggedIn
+        } else {
+            @@:("denied")
+        }
+    }
+}
+```
+
+For Erlang, the runtime helper that orchestrates transitions
+(`frame_transition__`) emits `{next_state, ..., [{reply, From,
+ReplyVal}]}`. The `ReplyVal` is the 7th argument — passing the
+SSA-renamed `__ReturnVal_K` value from the handler's most recent
+`@@:return` write so the value survives the transition. Without
+this, transitioning would force-replace the user's return with
+`ok` and the gen_statem caller would never see the "ok" /
+"denied" string.
+
+Framec handles this automatically. Two specific paths are wired:
+
+- **Top-level `@@:return`** — `final_rv_name` from the body
+  processor's SSA rename gets passed to the transition call.
+- **Arm-local `@@:return`** — `rewrite_mixed_case_arms`
+  substitutes the arm-captured value into the in-arm
+  `frame_transition__/7` call's reply slot.
+
+For the rare path where neither rule fires (no `@@:return`
+preceding the transition), the literal `__ReturnVal` placeholder
+in the call is replaced with `ok` — the gen_statem default.
+
+---
+
+## User-written `case ... of` blocks
+
+Frame's `if expr { ... } else { ... }` lowers to a boolean
+`case (cond) of true -> ... ; false -> ... end` on Erlang. But
+you can also write a native pattern-match `case` directly in a
+handler body — and framec recognises the user-written form, runs
+the same SSA Data threading per arm, and emits the `;` arm
+separator + value-last positioning:
+
+```frame
+$CheckAssign {
+    $>() {
+        J = skip_ws(Data#data.bytes, Data#data.ident_end, Data#data.parse_end),
+        case check_assign(Data#data.bytes, J, Data#data.parse_end) of
+            {true, J2} ->
+                self.pos = J2,
+                self.is_assignment = true,
+                -> $ScanExpr;
+            false ->
+                self.result_end = Data#data.ident_end,
+                self.is_assignment = false,
+                -> $Done
+        end
+    }
+}
+```
+
+Framec's body processor handles three previously-tricky things
+about pattern-match cases:
+
+1. **Per-arm Data SSA reset.** Each arm is an independent scope
+   for SSA naming. Without arm-aware reset, arm 2 would reference
+   `Data2` from arm 1's last bind, which doesn't exist in arm 2.
+2. **Arm separator emission.** `; <pattern> ->` separates arms;
+   the trailing `,` from the previous arm's last expression must
+   be stripped (Erlang's grammar puts `;` before the next pattern,
+   not after the previous body).
+3. **Last case as terminal.** When a handler has multiple
+   sequential `if`/`case` blocks, the LAST one is the handler's
+   terminal expression — earlier cases pass through verbatim as
+   pre-case lines.
+
+Combined with `@@:return + transition` in arms, this lets you
+write naturally-Erlang-flavoured handlers that mix Frame
+transitions with pattern-matching control flow.
 
 ---
 
@@ -462,6 +640,10 @@ $Counting {
   self-call guard divergence and the deferred structural
   alignment path. Recommended reading if you are debugging
   unexpected post-self-call behavior.
+- `tests/erlang/multi/<case>/` — five canonical multi-source
+  fixture ports demonstrating the directory-as-test convention
+  (counter_pair, multi_system_composition, auth_flow, game_level,
+  ai_agent, state_var_parser).
 - `tests/common/positive/control_flow/while_*.ferl` —
   state-flow loop idiom canonical examples.
 - `tests/common/positive/cross_backend/53_transition_guard.ferl`
@@ -469,5 +651,14 @@ $Counting {
   test.
 - `framec/src/frame_c/compiler/codegen/erlang_system.rs` — the
   Erlang backend codegen. The cross-system instantiation
-  rewrite, `expand_tagged_in_domain_erlang`, and
-  `erlang_wrap_self_call_guards` live here.
+  rewrite, `expand_tagged_in_domain_erlang`, the case-arm
+  pre-pass, `rewrite_mixed_case_arms`, and
+  `erlang_wrap_self_call_guards` all live here.
+- `framec/src/frame_c/compiler/native_region_scanner/erlang.rs`
+  — the segmenter's `$<char>` literal recognition that protects
+  the prolog from char-literal-induced corruption.
+- `framec/src/frame_c/compiler/assembler/mod.rs` — Erlang
+  attribute hoist post-pass at the end of `assemble`.
+- `framepiler_test_env/docker/runners/erlang_batch.sh` — the
+  matrix-side multi-source test discovery + escript driver
+  generation.
