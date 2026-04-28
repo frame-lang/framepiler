@@ -1961,8 +1961,18 @@ pub(crate) fn generate_frame_expansion(
                         let enter_list = to_list_lit(&enter_str);
                         let state_list = to_list_lit(&state_str);
 
+                        // 7th arg: the @@:return value (the SSA-renamed
+                        // `__ReturnVal_K` from the body's most recent
+                        // `@@:return` write). Emit the literal token here;
+                        // the body processor's SSA pass rewrites it to
+                        // the correct SSA name when a write precedes the
+                        // transition. `erlang_finalize_transition_replies`
+                        // (run after the SSA pass) replaces any remaining
+                        // unresolved `__ReturnVal` token in this position
+                        // with `ok` — the gen_statem default reply value
+                        // for handlers that didn't set one.
                         code.push_str(&format!(
-                            "{}frame_transition__({}, Data, {}, {}, {}, From)",
+                            "{}frame_transition__({}, Data, {}, {}, {}, From, __ReturnVal)",
                             indent_str, erlang_state, exit_list, enter_list, state_list
                         ));
                         code

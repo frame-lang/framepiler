@@ -1347,6 +1347,19 @@ fn erlang_process_body_lines_full(
         }
     }
 
+    // Final pass: any remaining literal `__ReturnVal` token in a
+    // `frame_transition__(...)` argument position is unresolved
+    // (no preceding @@:return write reached it via SSA rename).
+    // Substitute `ok` so the call has a valid reply value. This
+    // closes the case where the handler transitions without ever
+    // setting a return value — the gen_statem default.
+    for line in result.iter_mut() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("frame_transition__(") && line.contains(", __ReturnVal)") {
+            *line = line.replace(", __ReturnVal)", ", ok)");
+        }
+    }
+
     (result, data_var, final_rv_name)
 }
 
@@ -1986,7 +1999,14 @@ enum CaseBlockClassification {
 
 /// Analyze a case block in processed handler lines.
 /// Returns (classification, arms, case_start_line, case_end_line).
-/// Only analyzes the first top-level case block found.
+///
+/// When a handler body contains MULTIPLE top-level case blocks
+/// (e.g., consecutive `if` statements), this analyzes the LAST
+/// one. That's the case which typically contains the handler's
+/// terminal — its transition arm or final return value — while
+/// earlier cases are just intermediate logic. The rewriter emits
+/// pre-case lines verbatim, rewrites the last case in place, and
+/// trailing-line emission handles anything after.
 fn analyze_case_arms(
     processed: &[String],
 ) -> Option<(CaseBlockClassification, Vec<CaseArmInfo>, usize, usize)> {
@@ -2002,15 +2022,24 @@ fn analyze_case_arms(
         // Track case block depth
         if (t.starts_with("case ") || t.starts_with("case(")) && t.ends_with(" of") {
             depth += 1;
-            if depth == 1 && case_start.is_none() {
+            if depth == 1 {
+                // New top-level case begins. If we've already
+                // analyzed an earlier sibling case, drop it — only
+                // the LAST top-level case is the terminal.
                 case_start = Some(idx);
+                case_end = None;
+                arms.clear();
+                current_arm = None;
             }
             continue;
         }
 
         if t == "end" || t == "end," || t == "end;" {
             if depth == 1 {
-                // Close current arm
+                // Close current arm + record case end. Don't break:
+                // a sibling case may follow, in which case we'll
+                // discard the just-closed analysis on its first
+                // header line above.
                 if let Some(mut arm) = current_arm.take() {
                     arm.body_end = idx;
                     arms.push(arm);
@@ -2182,6 +2211,29 @@ fn rewrite_mixed_case_arms(
                 continue;
             }
 
+            // Splice the arm's captured @@:return value into a
+            // transition call's reply slot. The frame_expansion site
+            // emits `frame_transition__(..., From, __ReturnVal)`; the
+            // SSA pass + transition-finalize fallback resolved that
+            // to a top-level SSA name or `ok`. But arm-local
+            // `@@:return = X` writes don't reach the SSA pass (they
+            // live at depth>0), so the transition call still has
+            // `ok`. Substitute the arm-captured value here so a
+            // transitioning arm with an in-arm @@:return preserves
+            // the value through the gen_statem reply.
+            if (t.starts_with("frame_transition__(") || t.starts_with("frame_forward_transition__("))
+                && nested_depth == 0
+            {
+                if let Some(rv) = arm.return_val.as_deref() {
+                    let line = &processed[i];
+                    if line.contains(", ok)") {
+                        let rewritten = line.replacen(", ok)", &format!(", {})", rv), 1);
+                        result.push(rewritten);
+                        continue;
+                    }
+                }
+            }
+
             result.push(processed[i].clone());
 
             if closes {
@@ -2211,6 +2263,16 @@ fn rewrite_mixed_case_arms(
 
     // Emit end
     result.push("    end".to_string());
+
+    // Emit any lines AFTER the case block. A handler with a sibling
+    // `if`/`case` after this one (e.g., a non-transitioning `if` with
+    // a follow-up transitioning `if`) needs those tail lines preserved
+    // — without this, the analyzer's `break` at first-`end` truncates
+    // the rewrite output. The original lines have already had their
+    // `__ReturnVal` SSA-renamed by the body processor.
+    for i in (case_end + 1)..processed.len() {
+        result.push(processed[i].clone());
+    }
 
     result
 }
@@ -3536,14 +3598,20 @@ pub(crate) fn generate_erlang_system(
     code.push_str("frame_arg_at__(N, L) when length(L) >= N -> lists:nth(N, L);\n");
     code.push_str("frame_arg_at__(_, _) -> undefined.\n\n");
 
-    // Frame transition helper — orchestrates exit → arg passing → gen_statem transition
+    // Frame transition helper — orchestrates exit → arg passing → gen_statem transition.
+    // The trailing `ReplyVal` argument carries the @@:return value the
+    // handler set BEFORE the transition; codegen passes either the
+    // SSA-renamed `__ReturnVal_K` from the body's most recent
+    // `@@:return` or the atom `ok` when the handler had no return value.
+    // Without this parameter, transitioning would force-replace the
+    // user's return with `ok`, dropping `@@:return + transition` values.
     code.push_str(
-        "frame_transition__(TargetState, Data, ExitArgs, EnterArgs, StateArgs, From) ->\n",
+        "frame_transition__(TargetState, Data, ExitArgs, EnterArgs, StateArgs, From, ReplyVal) ->\n",
     );
     code.push_str("    Data1 = Data#data{frame_exit_args = ExitArgs},\n");
     code.push_str("    Data2 = frame_exit_dispatch__(Data1),\n");
     code.push_str("    Data3 = Data2#data{frame_enter_args = EnterArgs, frame_state_args = StateArgs, frame_current_state = TargetState},\n");
-    code.push_str("    {next_state, TargetState, Data3, [{reply, From, ok}]}.\n\n");
+    code.push_str("    {next_state, TargetState, Data3, [{reply, From, ReplyVal}]}.\n\n");
 
     // Forward transition helper — same exit/enter cascade as
     // `frame_transition__`, plus a `next_event` action that
