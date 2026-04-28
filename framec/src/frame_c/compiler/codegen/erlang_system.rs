@@ -2116,12 +2116,18 @@ fn analyze_case_arms(
 }
 
 /// Rewrite a case block with mixed arms so each arm produces a gen_statem return tuple.
+///
+/// `default_reply` is the fallback value for non-transition arms that don't
+/// have an in-arm `__ReturnVal = …` write — typically the SSA-renamed
+/// `__ReturnVal_K` name from a top-level `@@:return` written *before* the
+/// case block. Falls back to `"ok"` when no top-level return value exists.
 fn rewrite_mixed_case_arms(
     processed: &[String],
     arms: &[CaseArmInfo],
     case_start: usize,
     case_end: usize,
     default_data: &str,
+    default_reply: &str,
 ) -> Vec<String> {
     let mut result = Vec::new();
 
@@ -2194,7 +2200,7 @@ fn rewrite_mixed_case_arms(
             });
             if !arm_has_reply {
                 let data = arm.final_data_var.as_deref().unwrap_or(default_data);
-                let reply = arm.return_val.as_deref().unwrap_or("ok");
+                let reply = arm.return_val.as_deref().unwrap_or(default_reply);
                 result.push(format!(
                     "        {{keep_state, {}, [{{reply, From, {}}}]}}",
                     data, reply
@@ -2921,13 +2927,19 @@ pub(crate) fn generate_erlang_system(
                                     }
                                 }
                                 CaseBlockClassification::Mixed => {
-                                    // Some arms transition, some don't — per-arm rewrite
+                                    // Some arms transition, some don't — per-arm rewrite.
+                                    // Thread the SSA-renamed top-level return value
+                                    // (`__ReturnVal_K`) so non-transition arms reply
+                                    // with the value @@:return wrote BEFORE the case
+                                    // block. Falls back to `"ok"` when the body has
+                                    // no top-level return.
                                     let rewritten = rewrite_mixed_case_arms(
                                         &processed,
                                         &arms,
                                         case_start,
                                         case_end,
                                         &_final_data,
+                                        final_rv.as_str(),
                                     );
                                     erlang_smart_join(&rewritten, &mut code);
                                 }
@@ -3044,14 +3056,37 @@ pub(crate) fn generate_erlang_system(
                         // Use the body processor's authoritative
                         // final return-value name. `"ok"` when no
                         // `@@:return` writes happened in the body.
-                        let has_return_val = final_rv_nr != "ok";
+                        // Top-level writes (outside any case) bubbled up via
+                        // `final_rv_nr` into a `__ReturnVal_K` SSA name. But
+                        // `@@:return` inside `if`/`case` arms emits
+                        // `__ReturnVal = …` without bumping `final_rv_nr`
+                        // (the body processor only counts top-level writes
+                        // — case-arm writes are arm-local). Detect those
+                        // so the hoist-assignment branch below picks them
+                        // up and uses the literal `__ReturnVal` in the
+                        // reply tuple.
+                        let has_top_return_val = final_rv_nr != "ok";
+                        let has_case_return_val = processed
+                            .iter()
+                            .any(|l| l.trim().starts_with("__ReturnVal = "));
+                        let has_return_val = has_top_return_val || has_case_return_val;
                         let has_transition = processed
                             .iter()
                             .any(|l| l.trim().starts_with("frame_transition__("));
                         let has_case = processed
                             .iter()
                             .any(|l| l.trim().starts_with("case ") || l.contains(" case "));
-                        let reply_val: &str = final_rv_nr.as_str();
+                        // When the only writes were inside case arms,
+                        // `final_rv_nr` is still "ok"; the hoist branch
+                        // emits `__ReturnVal = case … of … end` so the
+                        // literal name is correct for the reply.
+                        let reply_val: &str = if has_top_return_val {
+                            final_rv_nr.as_str()
+                        } else if has_case_return_val {
+                            "__ReturnVal"
+                        } else {
+                            final_rv_nr.as_str()
+                        };
 
                         if has_case && has_transition {
                             // Case block with transitions in some arms.
@@ -3059,6 +3094,13 @@ pub(crate) fn generate_erlang_system(
                             //   - Arms with frame_transition__() already produce {next_state,...}
                             //   - Arms without need {keep_state, Data, [{reply, From, ReturnVal}]}
                             // The case expression IS the handler return — no trailing {keep_state,...}
+                            //
+                            // Default per-arm reply-value: the top-level SSA name
+                            // (`reply_val`). When the user wrote @@:return BEFORE
+                            // the case, the value lives in `__ReturnVal_K` and
+                            // we need every non-transition arm to reply with it.
+                            // An in-arm @@:return overrides this default.
+                            let arm_default_rv: String = reply_val.to_string();
                             let mut rewritten = Vec::new();
                             let mut in_case = false;
                             let mut arm_has_transition = false;
@@ -3083,7 +3125,9 @@ pub(crate) fn generate_erlang_system(
                                     // Entering a new arm — flush previous arm's keep_state if needed
                                     if trimmed.starts_with("; ") && !arm_has_transition {
                                         // Previous arm had no transition — inject keep_state
-                                        let rv = arm_return_val.as_deref().unwrap_or("ok");
+                                        let rv = arm_return_val
+                                            .as_deref()
+                                            .unwrap_or(arm_default_rv.as_str());
                                         rewritten.push(format!(
                                             "        {{keep_state, {}, [{{reply, From, {}}}]}}",
                                             final_data, rv
@@ -3114,7 +3158,9 @@ pub(crate) fn generate_erlang_system(
                                 if in_case && (trimmed == "end" || trimmed == "end,") {
                                     // Last arm ending — inject keep_state if no transition
                                     if !arm_has_transition {
-                                        let rv = arm_return_val.as_deref().unwrap_or("ok");
+                                        let rv = arm_return_val
+                                            .as_deref()
+                                            .unwrap_or(arm_default_rv.as_str());
                                         rewritten.push(format!(
                                             "        {{keep_state, {}, [{{reply, From, {}}}]}}",
                                             final_data, rv
@@ -3132,26 +3178,81 @@ pub(crate) fn generate_erlang_system(
                             // The case expression is the handler return — just terminate the clause
                             code.push_str(";\n");
                         } else if has_return_val && has_case {
-                            // Case block with __ReturnVal but no transitions — hoist assignment
-                            let mut rewritten = Vec::new();
+                            // Case block with __ReturnVal but no transitions — hoist
+                            // the case as a value-producing expression. Per-arm rule:
+                            // the arm's last expression IS the arm's value, so the
+                            // `__ReturnVal = X` line must be the LAST statement in
+                            // each arm. Other statements (e.g., `Data1 = Data` that
+                            // the body processor injects to balance variable bindings
+                            // across arms) must come BEFORE it. We buffer arm bodies,
+                            // strip the assignment, and emit the RHS last.
+                            let arm_boundary = |t: &str| -> bool {
+                                t.ends_with("->")
+                                    && (t == "true ->"
+                                        || t.starts_with("; ")
+                                        || t == "_ ->")
+                            };
+                            let case_end = |t: &str| -> bool {
+                                t == "end" || t == "end," || t == "end;"
+                            };
+
+                            let mut rewritten: Vec<String> = Vec::new();
                             let mut in_case = false;
                             let mut hoisted = false;
+                            let mut arm_buf: Vec<String> = Vec::new();
+                            let mut arm_value: Option<String> = None;
+
+                            let flush_arm = |buf: &mut Vec<String>,
+                                             val: &mut Option<String>,
+                                             out: &mut Vec<String>| {
+                                // Emit non-return-val lines first, then the value.
+                                for l in buf.drain(..) {
+                                    out.push(l);
+                                }
+                                if let Some(v) = val.take() {
+                                    out.push(format!("    {}", v));
+                                }
+                            };
+
                             for line in &processed {
                                 let trimmed = line.trim();
                                 if trimmed.starts_with("case ") && !hoisted {
                                     rewritten.push(format!("    __ReturnVal = {}", trimmed));
                                     in_case = true;
                                     hoisted = true;
-                                } else if in_case && trimmed.starts_with("__ReturnVal = ") {
-                                    let val = trimmed.trim_start_matches("__ReturnVal = ");
-                                    rewritten.push(format!("    {}", val));
-                                } else if in_case && (trimmed == "end" || trimmed == "end,") {
+                                    continue;
+                                }
+                                if in_case && arm_boundary(trimmed) {
+                                    flush_arm(&mut arm_buf, &mut arm_value, &mut rewritten);
+                                    rewritten.push(line.clone());
+                                    continue;
+                                }
+                                if in_case && case_end(trimmed) {
+                                    flush_arm(&mut arm_buf, &mut arm_value, &mut rewritten);
                                     rewritten.push(line.clone());
                                     in_case = false;
+                                    continue;
+                                }
+                                if in_case && trimmed.starts_with("__ReturnVal = ") {
+                                    // Strip the assignment; capture RHS, drop a
+                                    // possible trailing comma so it's a clean
+                                    // tail expression.
+                                    let val = trimmed
+                                        .trim_start_matches("__ReturnVal = ")
+                                        .trim_end_matches(',');
+                                    arm_value = Some(val.to_string());
+                                    continue;
+                                }
+                                if in_case {
+                                    arm_buf.push(line.clone());
                                 } else {
                                     rewritten.push(line.clone());
                                 }
                             }
+                            // Defensive flush — well-formed input always ends with
+                            // `end` so this should be a no-op.
+                            flush_arm(&mut arm_buf, &mut arm_value, &mut rewritten);
+
                             erlang_smart_join(&rewritten, &mut code);
                             code.push_str(",\n");
                             code.push_str(&format!(
