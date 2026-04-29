@@ -2393,11 +2393,18 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Erlang => {
                     // Save the current compartment context (state name +
                     // state-args + enter-args) as a 3-tuple onto
-                    // frame_stack. Saving only the state atom — as the
-                    // pre-state-args codegen did — discarded the
-                    // compartment's positional args, so a `-> pop$`
-                    // back to a state declared with `(x: int)` would
-                    // see undefined args. Surfaced by Phase 19 wave 3
+                    // frame_stack. The two args fields here MUST stay
+                    // in lockstep with `ERLANG_COMPARTMENT_CONTEXT_FIELDS`
+                    // in `erlang_system.rs` — that constant is the
+                    // canonical list of context fields and persist's
+                    // save_state/load_state iterates the same list.
+                    // If you add a context field to the Data record,
+                    // update both spots.
+                    //
+                    // Pre-state-args codegen saved only the state atom,
+                    // discarding the compartment's positional args; a
+                    // `-> pop$` back to a state declared `(x: int)`
+                    // saw undefined args. Surfaced by Phase 19 wave 3
                     // P7 (state_args_round_trip).
                     let state_atom = to_snake_case(&ctx.state_name);
                     if !target.is_empty() {

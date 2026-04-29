@@ -17,6 +17,33 @@ use crate::frame_c::compiler::frame_ast::{Expression, Literal, SystemAst, Type};
 use crate::frame_c::compiler::native_region_scanner::erlang::NativeRegionScannerErlang;
 use crate::frame_c::visitors::TargetLanguage;
 
+/// Canonical list of Erlang `Data` record fields that constitute the
+/// "compartment context" — per-state positional args that survive
+/// across handler boundaries and MUST be saved+restored together
+/// by both `push$` / `pop$` (Phase 19 wave 3) and `@@persist`
+/// (Phase 24 probe). The two sites historically maintained
+/// independent hardcoded lists and both missed `frame_state_args`
+/// + `frame_enter_args` until separate fuzz waves surfaced the
+/// gap (framepiler `3f0cd24` and `b8144d1`).
+///
+/// **Adding a field here is the canonical step** when a new context
+/// field is added to the Data record. Call sites that emit save/
+/// restore code MUST iterate this list rather than hardcoding
+/// individual field names.
+///
+/// Excluded:
+/// - `frame_current_state` — gen_statem manages this directly
+///   (saved as `state` in the persist map; saved as the head atom
+///   in push/pop tuples).
+/// - `frame_stack` — saved by persist, but as the modal stack
+///   itself (NOT a per-stack-entry context), so it doesn't appear
+///   in push/pop tuples.
+/// - `frame_exit_args` / `frame_context_stack` / `frame_return_val`
+///   — transient (set by transition or per-handler-invocation;
+///   not preserved across handler boundaries).
+pub(crate) const ERLANG_COMPARTMENT_CONTEXT_FIELDS: &[&str] =
+    &["frame_state_args", "frame_enter_args"];
+
 /// Generate a complete Erlang gen_statem module from a Frame system.
 /// This bypasses the standard class-based pipeline entirely.
 /// Result of rewriting a line of native code for Erlang
@@ -4971,15 +4998,14 @@ pub(crate) fn generate_erlang_system(
 
     // Persistence methods (when @@persist is present)
     if system.persist_attr.is_some() {
-        // Collect all record field names for serialization. Domain
-        // fields, per-state state-vars, the modal stack, AND the
-        // compartment-context fields (`frame_state_args`,
-        // `frame_enter_args`) — without those the saved blob is
-        // missing the destination state's positional context, so
-        // restore brings back a state with empty state_args/enter_args
-        // and any handler reading `$.x` on a `(x: int)` state sees
-        // `undefined`. Surfaced by persist × state-args probe
-        // (Phase 24 cross-product).
+        // Collect all record field names for serialization. The
+        // list is: domain fields + per-state state-vars + the
+        // modal stack + the canonical compartment-context fields
+        // (state_args / enter_args) from
+        // `ERLANG_COMPARTMENT_CONTEXT_FIELDS`. Iterating that
+        // constant rather than hardcoding the names here keeps
+        // persist in sync with push/pop's saved context — adding
+        // a new context field there propagates here automatically.
         let mut field_names: Vec<String> = Vec::new();
         for var in &system.domain {
             field_names.push(var.name.clone());
@@ -4993,8 +5019,9 @@ pub(crate) fn generate_erlang_system(
             }
         }
         field_names.push("frame_stack".to_string());
-        field_names.push("frame_state_args".to_string());
-        field_names.push("frame_enter_args".to_string());
+        for field in ERLANG_COMPARTMENT_CONTEXT_FIELDS {
+            field_names.push(field.to_string());
+        }
 
         // save_state/1 — serializes current state + Data to a map
         code.push_str("save_state(Pid) ->\n");
