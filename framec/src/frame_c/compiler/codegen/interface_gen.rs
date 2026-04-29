@@ -1390,6 +1390,21 @@ pub(crate) fn generate_persistence_methods(
             serialize_helper.push_str("        }\n");
             serialize_helper.push_str("    }\n");
             serialize_helper.push_str("    cJSON_AddItemToObject(obj, \"state_vars\", vars);\n");
+            // state_args + enter_args — same compartment-context fix
+            // pattern as Java/Kotlin/C#/Swift/C++. C uses FrameVec<void*>
+            // for both; best-effort serialize as int (the most common
+            // arg type). Larger arg shapes need a richer FrameVec
+            // serializer — pending if found in fuzz.
+            serialize_helper.push_str("    cJSON* sa = cJSON_CreateArray();\n");
+            serialize_helper.push_str(
+                "    if (comp->state_args) { for (int i = 0; i < comp->state_args->size; i++) { cJSON_AddItemToArray(sa, cJSON_CreateNumber((double)(intptr_t)comp->state_args->items[i])); } }\n"
+            );
+            serialize_helper.push_str("    cJSON_AddItemToObject(obj, \"state_args\", sa);\n");
+            serialize_helper.push_str("    cJSON* ea = cJSON_CreateArray();\n");
+            serialize_helper.push_str(
+                "    if (comp->enter_args) { for (int i = 0; i < comp->enter_args->size; i++) { cJSON_AddItemToArray(ea, cJSON_CreateNumber((double)(intptr_t)comp->enter_args->items[i])); } }\n"
+            );
+            serialize_helper.push_str("    cJSON_AddItemToObject(obj, \"enter_args\", ea);\n");
             // Recursively serialize parent
             serialize_helper.push_str(&format!("    cJSON_AddItemToObject(obj, \"parent_compartment\", {}_serialize_compartment(comp->parent_compartment));\n", system.name));
             serialize_helper.push_str("    return obj;\n");
@@ -1649,6 +1664,17 @@ pub(crate) fn generate_persistence_methods(
             }
             save_body.push_str("    }\n");
             save_body.push_str("    __cj[\"state_vars\"] = __sv;\n");
+            // state_args + enter_args — same compartment-context fix
+            // pattern as Java/Kotlin/C#/Swift. C++ uses std::any so
+            // best-effort cast to int (the most common arg type); other
+            // types pass through as null which is a known limitation
+            // pending a richer std::any-aware serializer.
+            save_body.push_str("    nlohmann::json __sa = nlohmann::json::array();\n");
+            save_body.push_str("    for (const auto& v : c->state_args) { try { __sa.push_back(std::any_cast<int>(v)); } catch(...) { __sa.push_back(nullptr); } }\n");
+            save_body.push_str("    __cj[\"state_args\"] = __sa;\n");
+            save_body.push_str("    nlohmann::json __ea = nlohmann::json::array();\n");
+            save_body.push_str("    for (const auto& v : c->enter_args) { try { __ea.push_back(std::any_cast<int>(v)); } catch(...) { __ea.push_back(nullptr); } }\n");
+            save_body.push_str("    __cj[\"enter_args\"] = __ea;\n");
             save_body.push_str("    __cj[\"parent\"] = __ser(c->parent_compartment.get());\n");
             save_body.push_str("    return __cj;\n");
             save_body.push_str("};\n");
@@ -1705,6 +1731,17 @@ pub(crate) fn generate_persistence_methods(
                     var_name, cpp_type
                 ));
             }
+            restore_body.push_str("    }\n");
+            // Deserialize state_args + enter_args — best-effort int.
+            restore_body.push_str("    if (d.contains(\"state_args\") && d[\"state_args\"].is_array()) {\n");
+            restore_body.push_str("        for (const auto& v : d[\"state_args\"]) {\n");
+            restore_body.push_str("            if (v.is_number_integer()) c->state_args.push_back(std::any(v.get<int>()));\n");
+            restore_body.push_str("        }\n");
+            restore_body.push_str("    }\n");
+            restore_body.push_str("    if (d.contains(\"enter_args\") && d[\"enter_args\"].is_array()) {\n");
+            restore_body.push_str("        for (const auto& v : d[\"enter_args\"]) {\n");
+            restore_body.push_str("            if (v.is_number_integer()) c->enter_args.push_back(std::any(v.get<int>()));\n");
+            restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
             restore_body
                 .push_str("    if (d.contains(\"parent\") && !d[\"parent\"].is_null()) {\n");
@@ -1778,7 +1815,14 @@ pub(crate) fn generate_persistence_methods(
                 })
                 .unwrap_or_default();
 
-            // Private helper method for recursive compartment serialization
+            // Private helper method for recursive compartment serialization.
+            // Saves state name, state_vars, state_args, enter_args, and
+            // parent compartment. state_args + enter_args are required so
+            // that a state declared `(x: int)` reads back its positional
+            // context after restore — without them the popped/restored
+            // state has empty args and `$.x` reads return wrong values.
+            // Same root pattern as Erlang persist fix (framepiler b8144d1)
+            // and Erlang push/pop fix (Phase 19 wave 3, framepiler 3f0cd24).
             let mut ser_body = String::new();
             ser_body.push_str(&format!("if (comp == null) return null;\n"));
             ser_body.push_str("var j = new org.json.JSONObject();\n");
@@ -1788,6 +1832,12 @@ pub(crate) fn generate_persistence_methods(
                 "for (var e : comp.state_vars.entrySet()) { sv.put(e.getKey(), e.getValue()); }\n",
             );
             ser_body.push_str("j.put(\"state_vars\", sv);\n");
+            ser_body.push_str("var sa = new org.json.JSONArray();\n");
+            ser_body.push_str("for (var v : comp.state_args) { sa.put(v); }\n");
+            ser_body.push_str("j.put(\"state_args\", sa);\n");
+            ser_body.push_str("var ea = new org.json.JSONArray();\n");
+            ser_body.push_str("for (var v : comp.enter_args) { ea.put(v); }\n");
+            ser_body.push_str("j.put(\"enter_args\", ea);\n");
             ser_body.push_str("j.put(\"parent\", __serComp(comp.parent_compartment));\n");
             ser_body.push_str("return j;");
 
@@ -1819,6 +1869,14 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("    var sv = d.getJSONObject(\"state_vars\");\n");
             deser_body
                 .push_str("    for (var k : sv.keySet()) { c.state_vars.put(k, sv.get(k)); }\n");
+            deser_body.push_str("}\n");
+            deser_body.push_str("if (d.has(\"state_args\")) {\n");
+            deser_body.push_str("    var sa = d.getJSONArray(\"state_args\");\n");
+            deser_body.push_str("    for (int i = 0; i < sa.length(); i++) { c.state_args.add(sa.get(i)); }\n");
+            deser_body.push_str("}\n");
+            deser_body.push_str("if (d.has(\"enter_args\")) {\n");
+            deser_body.push_str("    var ea = d.getJSONArray(\"enter_args\");\n");
+            deser_body.push_str("    for (int i = 0; i < ea.length(); i++) { c.enter_args.add(ea.get(i)); }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (d.has(\"parent\") && !d.isNull(\"parent\")) {\n");
             deser_body.push_str("    c.parent_compartment = __deserComp(d.get(\"parent\"));\n");
@@ -1935,13 +1993,17 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
-            // Private helper method for recursive compartment serialization
+            // Private helper method for recursive compartment serialization.
+            // Includes state_args + enter_args (compartment-context fields)
+            // — same root pattern as Java/Kotlin fixes above.
             let mut ser_body = String::new();
             ser_body.push_str("if (comp == null) return null;\n");
             ser_body.push_str("var j = new Dictionary<string, object>();\n");
             ser_body.push_str("j[\"state\"] = comp.state;\n");
             ser_body.push_str("var sv = new Dictionary<string, object>(comp.state_vars);\n");
             ser_body.push_str("j[\"state_vars\"] = sv;\n");
+            ser_body.push_str("j[\"state_args\"] = new List<object>(comp.state_args);\n");
+            ser_body.push_str("j[\"enter_args\"] = new List<object>(comp.enter_args);\n");
             ser_body.push_str("j[\"parent\"] = __SerComp(comp.parent_compartment);\n");
             ser_body.push_str("return j;");
 
@@ -1973,6 +2035,20 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("        if (kv.Value.ValueKind == System.Text.Json.JsonValueKind.Number) c.state_vars[kv.Name] = kv.Value.GetInt32();\n");
             deser_body.push_str("        else if (kv.Value.ValueKind == System.Text.Json.JsonValueKind.String) c.state_vars[kv.Name] = kv.Value.GetString();\n");
             deser_body.push_str("        else c.state_vars[kv.Name] = kv.Value.ToString();\n");
+            deser_body.push_str("    }\n");
+            deser_body.push_str("}\n");
+            deser_body.push_str("if (el.TryGetProperty(\"state_args\", out var sa) && sa.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
+            deser_body.push_str("    foreach (var v in sa.EnumerateArray()) {\n");
+            deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) c.state_args.Add(v.GetInt32());\n");
+            deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.String) c.state_args.Add(v.GetString());\n");
+            deser_body.push_str("        else c.state_args.Add(v.ToString());\n");
+            deser_body.push_str("    }\n");
+            deser_body.push_str("}\n");
+            deser_body.push_str("if (el.TryGetProperty(\"enter_args\", out var ea) && ea.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
+            deser_body.push_str("    foreach (var v in ea.EnumerateArray()) {\n");
+            deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) c.enter_args.Add(v.GetInt32());\n");
+            deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.String) c.enter_args.Add(v.GetString());\n");
+            deser_body.push_str("        else c.enter_args.Add(v.ToString());\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (el.TryGetProperty(\"parent\", out var p) && p.ValueKind != System.Text.Json.JsonValueKind.Null) {\n");
@@ -2107,11 +2183,15 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
-            // Private helper for recursive compartment serialization
+            // Private helper for recursive compartment serialization.
+            // Includes state_args + enter_args (compartment-context fields)
+            // — same root pattern as Java/Kotlin/C#/Swift fixes.
             let mut ser_body = String::new();
             ser_body.push_str("if ($comp === null) return null;\n");
             ser_body
                 .push_str("$j = ['state' => $comp->state, 'state_vars' => $comp->state_vars];\n");
+            ser_body.push_str("$j['state_args'] = $comp->state_args;\n");
+            ser_body.push_str("$j['enter_args'] = $comp->enter_args;\n");
             ser_body.push_str("$j['parent'] = $this->__serComp($comp->parent_compartment);\n");
             ser_body.push_str("return $j;");
 
@@ -2139,6 +2219,8 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str(
                 "if (isset($data['state_vars'])) $c->state_vars = $data['state_vars'];\n",
             );
+            deser_body.push_str("if (isset($data['state_args'])) $c->state_args = $data['state_args'];\n");
+            deser_body.push_str("if (isset($data['enter_args'])) $c->enter_args = $data['enter_args'];\n");
             deser_body.push_str("if (isset($data['parent'])) $c->parent_compartment = self::__deserComp($data['parent']);\n");
             deser_body.push_str("return $c;");
 
@@ -2231,8 +2313,9 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
-            // Kotlin can use Java's org.json on JVM — same pattern as Java
-            // Private helpers as class methods
+            // Kotlin can use Java's org.json on JVM — same pattern as Java.
+            // Includes state_args + enter_args (compartment-context fields)
+            // — same root pattern as the Java fix above.
             let mut ser_body = String::new();
             ser_body.push_str("if (comp == null) return null\n");
             ser_body.push_str("val j = org.json.JSONObject()\n");
@@ -2240,6 +2323,12 @@ pub(crate) fn generate_persistence_methods(
             ser_body.push_str("val sv = org.json.JSONObject()\n");
             ser_body.push_str("for ((k, v) in comp.state_vars) { sv.put(k, v) }\n");
             ser_body.push_str("j.put(\"state_vars\", sv)\n");
+            ser_body.push_str("val sa = org.json.JSONArray()\n");
+            ser_body.push_str("for (v in comp.state_args) { sa.put(v) }\n");
+            ser_body.push_str("j.put(\"state_args\", sa)\n");
+            ser_body.push_str("val ea = org.json.JSONArray()\n");
+            ser_body.push_str("for (v in comp.enter_args) { ea.put(v) }\n");
+            ser_body.push_str("j.put(\"enter_args\", ea)\n");
             ser_body.push_str("j.put(\"parent\", __serComp(comp.parent_compartment))\n");
             ser_body.push_str("return j");
 
@@ -2268,6 +2357,14 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("if (d.has(\"state_vars\")) {\n");
             deser_body.push_str("    val sv = d.getJSONObject(\"state_vars\")\n");
             deser_body.push_str("    for (k in sv.keys()) { c.state_vars[k] = sv.get(k) }\n");
+            deser_body.push_str("}\n");
+            deser_body.push_str("if (d.has(\"state_args\")) {\n");
+            deser_body.push_str("    val sa = d.getJSONArray(\"state_args\")\n");
+            deser_body.push_str("    for (i in 0 until sa.length()) { c.state_args.add(sa.get(i)) }\n");
+            deser_body.push_str("}\n");
+            deser_body.push_str("if (d.has(\"enter_args\")) {\n");
+            deser_body.push_str("    val ea = d.getJSONArray(\"enter_args\")\n");
+            deser_body.push_str("    for (i in 0 until ea.length()) { c.enter_args.add(ea.get(i)) }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (d.has(\"parent\") && !d.isNull(\"parent\")) {\n");
             deser_body.push_str("    c.parent_compartment = __deserComp(d.get(\"parent\"))\n");
@@ -2399,8 +2496,9 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
-            // Swift uses Foundation JSONSerialization — dict-based serialization
-            // Private helpers as class methods
+            // Swift uses Foundation JSONSerialization — dict-based serialization.
+            // Includes state_args + enter_args (compartment-context fields)
+            // — same root pattern as Java/Kotlin/C# fixes.
             let mut ser_body = String::new();
             ser_body.push_str("if comp == nil { return nil }\n");
             ser_body.push_str("var j: [String: Any] = [:]\n");
@@ -2408,6 +2506,8 @@ pub(crate) fn generate_persistence_methods(
             ser_body.push_str("var sv: [String: Any] = [:]\n");
             ser_body.push_str("for (k, v) in comp!.state_vars { sv[k] = v }\n");
             ser_body.push_str("j[\"state_vars\"] = sv\n");
+            ser_body.push_str("j[\"state_args\"] = comp!.state_args\n");
+            ser_body.push_str("j[\"enter_args\"] = comp!.enter_args\n");
             ser_body.push_str("j[\"parent\"] = __serComp(comp!.parent_compartment) as Any\n");
             ser_body.push_str("return j");
 
@@ -2431,6 +2531,12 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str(&format!("let c = {}(state: state)\n", compartment_class));
             deser_body.push_str("if let sv = d[\"state_vars\"] as? [String: Any] {\n");
             deser_body.push_str("    for (k, v) in sv { c.state_vars[k] = v }\n");
+            deser_body.push_str("}\n");
+            deser_body.push_str("if let sa = d[\"state_args\"] as? [Any] {\n");
+            deser_body.push_str("    c.state_args = sa\n");
+            deser_body.push_str("}\n");
+            deser_body.push_str("if let ea = d[\"enter_args\"] as? [Any] {\n");
+            deser_body.push_str("    c.enter_args = ea\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if let parent = d[\"parent\"] as? [String: Any] {\n");
             deser_body.push_str("    c.parent_compartment = __deserComp(parent)\n");
