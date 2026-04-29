@@ -1552,7 +1552,17 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     save_body.push_str("    match ctx {\n");
     if let Some(ref machine) = system.machine {
         for state in &machine.states {
-            if state.state_vars.is_empty() {
+            // Tuple-variant states have either state-vars (`$.x = 0`)
+            // OR state-args (`$S(x: int)`) — both become fields on
+            // the Context struct. The pre-fix code iterated only
+            // state_vars, so a state declared `$S1(x: int)` (with
+            // no state_vars) was matched as a unit variant and
+            // emitted empty `json!({})`, dropping the state-arg
+            // value. Iterate BOTH so all Context fields land in
+            // the saved JSON. Same root pattern as the JSON-backend
+            // persist sweep (framepiler 8fd22d2).
+            let has_ctx_fields = !state.state_vars.is_empty() || !state.params.is_empty();
+            if !has_ctx_fields {
                 save_body.push_str(&format!(
                     "        {}StateContext::{} => serde_json::json!({{}}),\n",
                     system.name, state.name
@@ -1562,6 +1572,12 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
                     "        {}StateContext::{}(ctx) => serde_json::json!({{\n",
                     system.name, state.name
                 ));
+                for param in &state.params {
+                    save_body.push_str(&format!(
+                        "            \"{}\": ctx.{},\n",
+                        param.name, param.name
+                    ));
+                }
                 for var in &state.state_vars {
                     save_body.push_str(&format!(
                         "            \"{}\": ctx.{},\n",
@@ -1634,7 +1650,13 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     restore_body.push_str("    match state {\n");
     if let Some(ref machine) = system.machine {
         for state in &machine.states {
-            if state.state_vars.is_empty() {
+            // Mirror the save side: iterate state.params + state_vars
+            // so the Context struct's tuple-variant payload is
+            // reconstructed correctly. State-args declared via
+            // `$S(x: int)` end up in state.params with the type
+            // info needed for json extraction.
+            let has_ctx_fields = !state.state_vars.is_empty() || !state.params.is_empty();
+            if !has_ctx_fields {
                 restore_body.push_str(&format!(
                     "        \"{}\" => {}StateContext::{},\n",
                     state.name, system.name, state.name
@@ -1644,6 +1666,11 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
                     "        \"{}\" => {}StateContext::{}({}Context {{\n",
                     state.name, system.name, state.name, state.name
                 ));
+                for param in &state.params {
+                    let json_extract = rust_json_extract(&param.name, &param.param_type);
+                    restore_body
+                        .push_str(&format!("            {}: {},\n", param.name, json_extract));
+                }
                 for var in &state.state_vars {
                     let json_extract = rust_json_extract(&var.name, &var.var_type);
                     restore_body
