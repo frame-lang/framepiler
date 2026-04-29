@@ -2391,14 +2391,24 @@ pub(crate) fn generate_frame_expansion(
                     }
                 }
                 TargetLanguage::Erlang => {
+                    // Save the current compartment context (state name +
+                    // state-args + enter-args) as a 3-tuple onto
+                    // frame_stack. Saving only the state atom — as the
+                    // pre-state-args codegen did — discarded the
+                    // compartment's positional args, so a `-> pop$`
+                    // back to a state declared with `(x: int)` would
+                    // see undefined args. Surfaced by Phase 19 wave 3
+                    // P7 (state_args_round_trip).
                     let state_atom = to_snake_case(&ctx.state_name);
                     if !target.is_empty() {
                         let target_atom = to_snake_case(&target);
-                        format!("{}self.frame_stack = [{} | self.frame_stack]\n{}{{next_state, {}, Data, [{{reply, From, ok}}]}}",
-                            indent_str, state_atom, indent_str, target_atom)
+                        format!(
+                            "{}self.frame_stack = [{{{}, self.frame_state_args, self.frame_enter_args}} | self.frame_stack]\n{}{{next_state, {}, Data, [{{reply, From, ok}}]}}",
+                            indent_str, state_atom, indent_str, target_atom
+                        )
                     } else {
                         format!(
-                            "{}self.frame_stack = [{} | self.frame_stack]",
+                            "{}self.frame_stack = [{{{}, self.frame_state_args, self.frame_enter_args}} | self.frame_stack]",
                             indent_str, state_atom
                         )
                     }
@@ -2441,8 +2451,11 @@ pub(crate) fn generate_frame_expansion(
                 TargetLanguage::Ruby => format!("{}@_state_stack.pop", indent_str),
                 TargetLanguage::Lua => format!("{}table.remove(self._state_stack)", indent_str),
                 TargetLanguage::Erlang => {
+                    // Standalone `pop$` (no transition) discards the
+                    // saved compartment. Match the 3-tuple shape that
+                    // push$ emits so the pattern bind succeeds.
                     format!(
-                        "{}[_ | __RestStack] = self.frame_stack,\n{}self.frame_stack = __RestStack",
+                        "{}[{{_, _, _}} | __RestStack] = self.frame_stack,\n{}self.frame_stack = __RestStack",
                         indent_str, indent_str
                     )
                 }
@@ -4467,9 +4480,19 @@ fn generate_pop_transition(
         TargetLanguage::Ruby => code.push_str(&format!("{}__saved = @_state_stack.pop\n", indent)),
         TargetLanguage::Lua => code.push_str(&format!("{}local __saved = table.remove(self._state_stack)\n", indent)),
         TargetLanguage::Erlang => {
-            code.push_str(&format!("{}[__PoppedState | __RestStack] = Data#data.frame_stack,\n", indent));
-            // Erlang pop with decorations: handled via gen_statem pattern
-            code.push_str(&format!("{}{{next_state, __PoppedState, Data#data{{frame_stack = __RestStack}}, [{{reply, From, ok}}]}}", indent));
+            // Pop the saved compartment context: a 3-tuple of state
+            // atom + frame_state_args + frame_enter_args (push side
+            // emits the same shape). Restoring all three fields on
+            // the popped Data record fixes a defect surfaced by
+            // Phase 19 wave 3 P7 — without args restoration, popping
+            // back to a state with `(x: int)` left state_args at the
+            // PUSHED state's value (or undefined), so subsequent
+            // reads of `$.x` returned the wrong context.
+            code.push_str(&format!("{}[{{__PoppedState, __PoppedStateArgs, __PoppedEnterArgs}} | __RestStack] = Data#data.frame_stack,\n", indent));
+            code.push_str(&format!(
+                "{}{{next_state, __PoppedState, Data#data{{frame_stack = __RestStack, frame_state_args = __PoppedStateArgs, frame_enter_args = __PoppedEnterArgs}}, [{{reply, From, ok}}]}}",
+                indent
+            ));
             return code;
         }
         TargetLanguage::Graphviz => unreachable!(),

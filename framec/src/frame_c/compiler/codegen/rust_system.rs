@@ -1046,7 +1046,12 @@ pub(crate) fn rust_expand_transition(
                 } else {
                     arg
                 };
-                format!("{}.to_string()", raw)
+                // Wrap in parens before `.to_string()` so negative
+                // literals and other expressions parse correctly:
+                // `-3.to_string()` is `-(3.to_string())` (invalid),
+                // but `(-3).to_string()` is well-formed. Surfaced
+                // by Phase 19 wave 3 P8/P9 with negative LIT.
+                format!("({}).to_string()", raw)
             })
             .collect();
         if !vals.is_empty() {
@@ -1070,7 +1075,10 @@ pub(crate) fn rust_expand_transition(
                 } else {
                     arg
                 };
-                format!("{}.to_string()", raw)
+                // Same paren wrap as exit_args above — protects
+                // negative literals and operator-containing
+                // expressions from precedence ambiguity.
+                format!("({}).to_string()", raw)
             })
             .collect::<Vec<_>>()
     } else {
