@@ -2943,12 +2943,54 @@ pub(crate) fn generate_erlang_system(
         } else {
             format!("{{{}, {}}}", method_snake, params.join(", "))
         };
-        code.push_str(&format!(
-            "{}({}) ->\n    gen_statem:call(Pid, {}).\n\n",
-            method_snake,
-            all_params.join(", "),
-            call_args
-        ));
+
+        // Coerce the catch-all `ok` reply (emitted by states whose
+        // unmatched call clause replies with `ok` to satisfy gen_statem's
+        // no-deadlock requirement) to the typed-return default. Without
+        // this, dispatching to a non-handled event in a typed-return
+        // method returns the atom `ok` to the user — surprising and
+        // type-incorrect. The coercion only fires when the method
+        // declares a typed return; void methods keep the raw reply.
+        let return_type_str = method.return_type.as_ref().map(type_to_string);
+        let is_typed_return = return_type_str
+            .as_deref()
+            .map(|s| s != "void" && s != "None")
+            .unwrap_or(false);
+        if is_typed_return {
+            let type_str = return_type_str.unwrap_or_default();
+            let coerce_default = match type_str.as_str() {
+                "int" | "long" | "i32" | "i64" | "Integer" => "0",
+                "float" | "double" | "f32" | "f64" => "0.0",
+                "bool" | "boolean" | "Boolean" => "false",
+                "str" | "string" | "String" => "<<>>",
+                _ => "ok", // unknown type — pass through
+            };
+            // Only emit the case-of when the default differs from `ok`
+            // (otherwise the coercion is a no-op and adds noise).
+            if coerce_default != "ok" {
+                code.push_str(&format!(
+                    "{}({}) ->\n    case gen_statem:call(Pid, {}) of\n        ok -> {};\n        __V -> __V\n    end.\n\n",
+                    method_snake,
+                    all_params.join(", "),
+                    call_args,
+                    coerce_default
+                ));
+            } else {
+                code.push_str(&format!(
+                    "{}({}) ->\n    gen_statem:call(Pid, {}).\n\n",
+                    method_snake,
+                    all_params.join(", "),
+                    call_args
+                ));
+            }
+        } else {
+            code.push_str(&format!(
+                "{}({}) ->\n    gen_statem:call(Pid, {}).\n\n",
+                method_snake,
+                all_params.join(", "),
+                call_args
+            ));
+        }
     }
 
     // callback_mode/0
@@ -3777,23 +3819,51 @@ pub(crate) fn generate_erlang_system(
                 state_name
             ));
 
-            // Default catch-all for unhandled events in this state
-            // HSM: if state has a parent, forward unhandled call events to parent
-            if let Some(ref parent) = state.parent {
-                let parent_atom = state_atom(parent);
-                code.push_str(&format!("{}({{call, From}}, __Event, Data) ->\n    {}({{call, From}}, __Event, Data);\n", state_name, parent_atom));
-                code.push_str(&format!(
-                    "{}(_EventType, _Event, Data) ->\n    {{keep_state, Data}}.\n\n",
-                    state_name
-                ));
+            // Default catch-all for unhandled events in this state.
+            //
+            // Frame contract: `=> $^` (default-forward) is OPTIONAL.
+            // Having a parent state via `$Child => $Parent` declares
+            // the HSM relationship but does NOT imply that unhandled
+            // events cascade. The user must explicitly write
+            // `=> $^` as a trailing clause in the state body to opt
+            // into auto-cascade.
+            //
+            // Erlang's gen_statem requires a `[{reply, From, V}]`
+            // for every call event to avoid caller deadlock. So:
+            //   - If state has parent AND default_forward=true:
+            //     forward unhandled call events to parent (matches
+            //     other backends' explicit-cascade behavior).
+            //   - Otherwise (no parent OR no default_forward): emit
+            //     a no-op reply with the type default — `ok` here,
+            //     matching the wrapper's null-default for typed
+            //     returns. The wrapper's `frame_return_default`
+            //     runs at the boundary, normalising `ok` to the
+            //     declared int/str/bool default.
+            if state.default_forward {
+                if let Some(ref parent) = state.parent {
+                    let parent_atom = state_atom(parent);
+                    code.push_str(&format!("{}({{call, From}}, __Event, Data) ->\n    {}({{call, From}}, __Event, Data);\n", state_name, parent_atom));
+                } else {
+                    // Edge: `=> $^` declared but no parent → user
+                    // bug, but framec validator catches it. Emit
+                    // reply-with-ok as a defensive fallback.
+                    code.push_str(&format!("{}({{call, From}}, _Event, Data) ->\n    {{keep_state, Data, [{{reply, From, ok}}]}};\n", state_name));
+                }
             } else {
-                // Catch-all for call events — must reply to avoid caller deadlock
+                // No explicit `=> $^` — unhandled events drop with
+                // a deadlock-safe reply (gen_statem requires reply
+                // for every call). Reply value is `ok`; the
+                // per-interface-method wrapper coerces this sentinel
+                // to the declared return type's default (`0` for
+                // int, `<<>>` for str, `false` for bool, etc.) at
+                // its own emission site, where the return type is
+                // known. See `Erlang interface wrapper` below.
                 code.push_str(&format!("{}({{call, From}}, _Event, Data) ->\n    {{keep_state, Data, [{{reply, From, ok}}]}};\n", state_name));
-                code.push_str(&format!(
-                    "{}(_EventType, _Event, Data) ->\n    {{keep_state, Data}}.\n\n",
-                    state_name
-                ));
             }
+            code.push_str(&format!(
+                "{}(_EventType, _Event, Data) ->\n    {{keep_state, Data}}.\n\n",
+                state_name
+            ));
         }
 
         // ────────────────────────────────────────────────────────────────

@@ -38,6 +38,122 @@ fn is_dynamic_target(lang: TargetLanguage) -> bool {
     )
 }
 
+/// Compute the type-default literal for a Frame return type, per
+/// language. Used by interface wrappers to initialize the
+/// FrameContext._return slot so that handlers that don't explicitly
+/// write @@:return still produce a valid type-default at the wrapper
+/// boundary — rather than null/None which crashes typed langs on
+/// unboxing (Java/C#) or violates the typed-return contract on
+/// dynamic langs (Python/JS/Ruby/Lua/PHP returning None when an
+/// `: int` was promised).
+///
+/// Frame source uses canonical type names: `int`, `str`, `bool`,
+/// `float`, `double`, `long`. Each backend maps them to its own
+/// type system; defaults follow each language's own zero-value
+/// convention (0 for ints, "" for strings, false for booleans).
+///
+/// Unknown types fall back to the language's null/None — caller
+/// can opt out by checking the unspecified-default sentinel
+/// (returns None from this function for void returns).
+fn frame_return_default(lang: TargetLanguage, type_str: &str) -> String {
+    let t = type_str.trim();
+    // Common int/string/bool patterns each lang accepts.
+    let is_int = matches!(
+        t,
+        "int" | "Int" | "i32" | "i64" | "long" | "Long" | "Integer"
+    );
+    let is_str = matches!(
+        t,
+        "str" | "string" | "String"
+    );
+    let is_bool = matches!(
+        t,
+        "bool" | "boolean" | "Boolean"
+    );
+    let is_float = matches!(
+        t,
+        "float" | "Float" | "double" | "Double" | "f32" | "f64"
+    );
+
+    match lang {
+        TargetLanguage::Python3 => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "False".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "None".to_string() }
+        }
+        TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
+            if is_int || is_float { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else { "null".to_string() }
+        }
+        TargetLanguage::Ruby => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "nil".to_string() }
+        }
+        TargetLanguage::Lua => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "nil".to_string() }
+        }
+        TargetLanguage::Php => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "null".to_string() }
+        }
+        TargetLanguage::Java => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "null".to_string() }
+        }
+        TargetLanguage::CSharp => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "null".to_string() }
+        }
+        TargetLanguage::Kotlin => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "null".to_string() }
+        }
+        TargetLanguage::Dart => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "null".to_string() }
+        }
+        TargetLanguage::GDScript => {
+            if is_int { "0".to_string() }
+            else if is_str { "\"\"".to_string() }
+            else if is_bool { "false".to_string() }
+            else if is_float { "0.0".to_string() }
+            else { "null".to_string() }
+        }
+        // Other langs (Rust, Go, C, C++, Swift, Erlang) handle
+        // defaults via their own context-init paths; this helper
+        // is currently called only by the wrappers above. Return
+        // a generic null marker for safety — those backends don't
+        // wire it through.
+        _ => "null".to_string(),
+    }
+}
+
 /// Generate interface wrapper methods
 ///
 /// For Python/TypeScript: Create FrameEvent and call __kernel
@@ -143,8 +259,24 @@ pub(crate) fn generate_interface_wrappers(
                     format!("[{}]", param_items.join(", "))
                 };
 
+                // Initialise _return:
+                //   - explicit `:= expr` from source → use it.
+                //   - typed return (`: int`) without explicit init →
+                //     type default (0/""/false) per Frame contract.
+                //   - untyped → leave None (the FrameContext default).
+                // The typed-return default ensures handlers that don't
+                // write @@:return still produce the contract value
+                // rather than None — uniform across all backends.
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {}", init_expr)
+                } else if let Some(ref rt) = method.return_type {
+                    let type_str = type_to_string(rt);
+                    let default_val = frame_return_default(lang, &type_str);
+                    if default_val == "None" {
+                        String::new()  // None is already the constructor default
+                    } else {
+                        format!("\n__ctx._return = {}", default_val)
+                    }
                 } else {
                     String::new()
                 };
@@ -195,8 +327,17 @@ self._context_stack.pop()"#,
                     format!("[{}]", param_items.join(", "))
                 };
 
+                // Typed-return default (see Python branch above).
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {};", init_expr)
+                } else if let Some(ref rt) = method.return_type {
+                    let type_str = type_to_string(rt);
+                    let default_val = frame_return_default(lang, &type_str);
+                    if default_val == "null" {
+                        String::new()
+                    } else {
+                        format!("\n__ctx._return = {};", default_val)
+                    }
                 } else {
                     String::new()
                 };
@@ -239,8 +380,17 @@ self._context_stack.pop()"#,
                     format!("[{}]", param_items.join(", "))
                 };
 
+                // Typed-return default (see Python branch).
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n$__ctx->_return = {};", init_expr)
+                } else if let Some(ref rt) = method.return_type {
+                    let type_str = type_to_string(rt);
+                    let default_val = frame_return_default(lang, &type_str);
+                    if default_val == "null" {
+                        String::new()
+                    } else {
+                        format!("\n$__ctx->_return = {};", default_val)
+                    }
                 } else {
                     String::new()
                 };
@@ -278,8 +428,17 @@ self._context_stack.pop()"#,
                     format!("[{}]", param_items.join(", "))
                 };
 
+                // Typed-return default (see Python branch).
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {}", init_expr)
+                } else if let Some(ref rt) = method.return_type {
+                    let type_str = type_to_string(rt);
+                    let default_val = frame_return_default(lang, &type_str);
+                    if default_val == "nil" {
+                        String::new()
+                    } else {
+                        format!("\n__ctx._return = {}", default_val)
+                    }
                 } else {
                     String::new()
                 };
@@ -506,11 +665,18 @@ return __result;"#,
                     code.push_str(&format!("{} __e = new {}(\"{}\", new ArrayList<>());\n", event_class, event_class, method.name));
                 }
 
-                // Create context with default return
+                // Create context with default return. Typed returns
+                // initialize _return to the type default (0 for int,
+                // "" for string, false for bool) so handlers that
+                // never write @@:return don't crash on Object → int
+                // unboxing. The _return field is declared as Object
+                // in the FrameContext class; passing the boxed type-
+                // default makes the cast work without throwing NPE.
                 if let Some(ref init) = method.return_init {
                     code.push_str(&format!("{} __ctx = new {}(__e, {});\n", context_class, context_class, init));
                 } else if has_return && return_type_str != "void" {
-                    code.push_str(&format!("{} __ctx = new {}(__e, null);\n", context_class, context_class));
+                    let default_val = frame_return_default(lang, &return_type_str);
+                    code.push_str(&format!("{} __ctx = new {}(__e, {});\n", context_class, context_class, default_val));
                 } else {
                     code.push_str(&format!("{} __ctx = new {}(__e, null);\n", context_class, context_class));
                 }
@@ -664,11 +830,17 @@ return __result;"#,
                     code.push_str(&format!("{} __e = new {}(\"{}\", new List<object>());\n", event_class, event_class, method.name));
                 }
 
-                // Create context with default return
+                // Create context with default return. Typed returns
+                // initialize _return to the type default (0 for int,
+                // "" for string, false for bool) so handlers that
+                // never write @@:return don't crash on the cast at
+                // line 847 (object → primitive cast unboxes null →
+                // NullReferenceException pre-fix).
                 if let Some(ref init) = method.return_init {
                     code.push_str(&format!("{} __ctx = new {}(__e, {});\n", context_class, context_class, init));
                 } else if has_return && return_type_str != "void" {
-                    code.push_str(&format!("{} __ctx = new {}(__e, null);\n", context_class, context_class));
+                    let default_val = frame_return_default(lang, &return_type_str);
+                    code.push_str(&format!("{} __ctx = new {}(__e, {});\n", context_class, context_class, default_val));
                 } else {
                     code.push_str(&format!("{} __ctx = new {}(__e, null);\n", context_class, context_class));
                 }
@@ -744,8 +916,17 @@ return __result;"#,
                     format!("{{{}}}", param_items.join(", "))
                 };
 
+                // Typed-return default (see Python branch).
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {}", init_expr)
+                } else if let Some(ref rt) = method.return_type {
+                    let type_str = type_to_string(rt);
+                    let default_val = frame_return_default(lang, &type_str);
+                    if default_val == "nil" {
+                        String::new()
+                    } else {
+                        format!("\n__ctx._return = {}", default_val)
+                    }
                 } else {
                     String::new()
                 };
@@ -835,8 +1016,17 @@ return __result;"#,
                     format!("[{}]", param_items.join(", "))
                 };
 
+                // Typed-return default (see Python branch).
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {}", init_expr)
+                } else if let Some(ref rt) = method.return_type {
+                    let type_str = type_to_string(rt);
+                    let default_val = frame_return_default(lang, &type_str);
+                    if default_val == "null" {
+                        String::new()
+                    } else {
+                        format!("\n__ctx._return = {}", default_val)
+                    }
                 } else {
                     String::new()
                 };
