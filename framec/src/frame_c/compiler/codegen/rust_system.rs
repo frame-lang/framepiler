@@ -1083,19 +1083,24 @@ pub(crate) fn rust_expand_transition(
         enter_args_vec.join(", ")
     ));
 
-    // ---- state_args → typed StateContext on the LEAF only ----
-    // State args are state-local: they belong to the state that
-    // declares them, not to ancestors. Writing them to ancestor
-    // compartments breaks Rust's enum-variant typing when an
-    // ancestor declares no params (its variant is unit, not
-    // tuple — `if let StateContext::Parent(ref mut ctx) = ...`
-    // becomes a compile error E0532).
+    // ---- state_args → typed StateContext on tuple-variant layers ----
+    // Walk the destination chain, writing the positional state args
+    // to every ancestor that declares its own params (tuple variant).
+    // Skip ancestors with no declared params — their StateContext
+    // variant is unit (`StateContext::Parent`), and emitting
+    // `if let StateContext::Parent(ref mut ctx) = ...` against a
+    // unit variant is a Rust compile error (E0532).
     //
-    // Pre-fix the chain walk wrote to every ancestor under the
-    // "signature-match rule guarantees uniform args" assumption,
-    // which is false when only the leaf declares args.
+    // The signature-match rule (docs/frame_runtime.md Step 22) holds
+    // for ancestors that DO declare params — they're guaranteed to
+    // accept the leaf's args by name and order. Ancestors with no
+    // params are not part of the propagation surface; they don't
+    // need (and can't accept) state args.
     if let Some(ref state) = state_str {
-        let args: Vec<(String, String)> = state
+        // Collect args as (leaf-param-name, value) pairs. The leaf
+        // names drive the leaf write; ancestor writes use the
+        // ancestor's own param names at the same positional index.
+        let arg_values: Vec<(String, String)> = state
             .split(',')
             .map(|x| x.trim())
             .filter(|x| !x.is_empty())
@@ -1112,11 +1117,8 @@ pub(crate) fn rust_expand_transition(
             })
             .collect();
 
-        if !args.is_empty() {
-            // Compute the destination chain (leaf → root). The
-            // signature-match rule guarantees every layer in the
-            // chain accepts the same state-arg names, so we write
-            // identical assignments at every depth.
+        if !arg_values.is_empty() {
+            // Compute the destination chain (leaf → root).
             let mut chain: Vec<String> = vec![target.to_string()];
             let mut cursor = target.to_string();
             while let Some(parent) = ctx.state_hsm_parents.get(&cursor) {
@@ -1124,26 +1126,60 @@ pub(crate) fn rust_expand_transition(
                 cursor = parent.clone();
             }
 
-            // Open block scope so multiple transitions in the same
-            // handler don't collide on local names.
             code.push_str(&format!("{}{{\n", indent_str));
 
-            // Leaf — direct field on __compartment.
+            // Leaf — direct field on __compartment. Always write
+            // (leaf has params by definition: `state_str` is non-empty
+            // implies the transition supplied state args, which means
+            // the leaf declares them).
             let leaf = &chain[0];
             code.push_str(&format!(
                 "{0}    if let {1}StateContext::{2}(ref mut ctx) = __compartment.state_context {{\n",
                 indent_str, ctx.system_name, leaf
             ));
-            for (k, v) in &args {
+            for (k, v) in &arg_values {
                 code.push_str(&format!("{}        ctx.{} = {};\n", indent_str, k, v));
             }
             code.push_str(&format!("{}    }}\n", indent_str));
 
-            // Ancestor walk REMOVED — state args are state-local
-            // and must NOT be written to ancestor compartments. See
-            // the comment at the top of this block.
-            //
-            // Close block scope.
+            // Ancestors — only those with declared params (tuple
+            // variants). Use the ancestor's own param names so the
+            // emitted writes target the right struct fields.
+            let mut parent_chain_var = "__compartment.parent_compartment".to_string();
+            for ancestor in &chain[1..] {
+                let ancestor_params = ctx
+                    .state_param_names
+                    .get(ancestor)
+                    .cloned()
+                    .unwrap_or_default();
+                if ancestor_params.is_empty() {
+                    // Unit variant — nothing to write. Still descend
+                    // the parent chain in case a higher ancestor has
+                    // params.
+                    parent_chain_var = format!("{}.as_mut().unwrap().parent_compartment", parent_chain_var);
+                    continue;
+                }
+                code.push_str(&format!(
+                    "{0}    if let Some(ref mut __anc) = {1} {{\n",
+                    indent_str, parent_chain_var
+                ));
+                code.push_str(&format!(
+                    "{0}        if let {1}StateContext::{2}(ref mut ctx) = __anc.state_context {{\n",
+                    indent_str, ctx.system_name, ancestor
+                ));
+                for (i, (_, v)) in arg_values.iter().enumerate() {
+                    if let Some(field_name) = ancestor_params.get(i) {
+                        code.push_str(&format!(
+                            "{}            ctx.{} = {};\n",
+                            indent_str, field_name, v
+                        ));
+                    }
+                }
+                code.push_str(&format!("{}        }}\n", indent_str));
+                code.push_str(&format!("{}    }}\n", indent_str));
+                parent_chain_var = format!("{}.as_mut().unwrap().parent_compartment", parent_chain_var);
+            }
+
             code.push_str(&format!("{}}}\n", indent_str));
         }
     }
