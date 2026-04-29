@@ -1376,18 +1376,27 @@ impl<'a> Lexer<'a> {
     /// leader (`#`, `//`, `--`, `%`, …), body, and any trailing
     /// newline the per-language skipper consumed. Trailing newlines
     /// are trimmed so codegen can emit one per line cleanly.
-    /// Frame source for a given target already uses that target's
-    /// comment syntax (Oceans Model), so codegen emits verbatim with
-    /// no per-target translation.
+    ///
+    /// Frame source for a given target uses that target's comment
+    /// leader (Oceans Model). The `//` line-comment branch in
+    /// `skip_whitespace_and_comments` accepts `//` regardless of
+    /// target — that's a convenience for users who write Frame
+    /// structurally and reach for `//` even in Python/Ruby/Lua/
+    /// GDScript Frame source. To preserve the Oceans-Model invariant
+    /// at codegen, captured `//` comments are translated here to the
+    /// target's native leader so emission produces valid target
+    /// source.
     fn capture_section_comment(&mut self, start: usize, end: usize) {
         let bytes = &self.source[start..end];
-        let text = String::from_utf8_lossy(bytes)
+        let raw = String::from_utf8_lossy(bytes)
             .trim_end_matches('\n')
             .trim_end_matches('\r')
             .to_string();
-        if !text.is_empty() {
-            self.pending_comments.push(text);
+        if raw.is_empty() {
+            return;
         }
+        let text = translate_section_comment(&raw, self.lang);
+        self.pending_comments.push(text);
     }
 
     /// Drain comments captured since the last call. The parser invokes
@@ -1463,6 +1472,56 @@ impl<'a> Lexer<'a> {
 // ============================================================================
 // Convenience Functions
 // ============================================================================
+
+/// Translate a captured section comment so its leader matches the
+/// target's native comment leader. The lexer's
+/// `skip_whitespace_and_comments` accepts `//` regardless of target
+/// (a convenience for users writing Frame structurally), but
+/// codegen emits captured leading comments verbatim as NativeBlock
+/// nodes — for non-`//` targets that produces invalid source. Maps
+/// a leading `//` to the target's native leader; comments that
+/// already use the target's leader pass through unchanged.
+fn translate_section_comment(raw: &str, lang: TargetLanguage) -> String {
+    let target_leader = native_comment_leader(lang);
+    if target_leader == "//" {
+        return raw.to_string();
+    }
+    // Preserve any leading whitespace before the `//` so codegen's
+    // line-level emit lands at the right indent.
+    let trimmed_left_len = raw.len() - raw.trim_start().len();
+    let indent = &raw[..trimmed_left_len];
+    let body = &raw[trimmed_left_len..];
+    if let Some(rest) = body.strip_prefix("//") {
+        format!("{}{}{}", indent, target_leader, rest)
+    } else {
+        raw.to_string()
+    }
+}
+
+/// Native single-line comment leader per target language. Used by
+/// `translate_section_comment` to rewrite `//` Frame structural
+/// comments into the target's native syntax for codegen emission.
+fn native_comment_leader(lang: TargetLanguage) -> &'static str {
+    match lang {
+        TargetLanguage::Python3 | TargetLanguage::Ruby | TargetLanguage::GDScript => "#",
+        TargetLanguage::Lua => "--",
+        TargetLanguage::Erlang => "%",
+        // C-family + scripting languages that natively use `//`.
+        TargetLanguage::JavaScript
+        | TargetLanguage::TypeScript
+        | TargetLanguage::Java
+        | TargetLanguage::Kotlin
+        | TargetLanguage::CSharp
+        | TargetLanguage::C
+        | TargetLanguage::Cpp
+        | TargetLanguage::Rust
+        | TargetLanguage::Swift
+        | TargetLanguage::Go
+        | TargetLanguage::Dart
+        | TargetLanguage::Php => "//",
+        TargetLanguage::Graphviz => "//",
+    }
+}
 
 /// Convenience function to lex an entire system body in structural mode.
 /// Useful for testing. For the full pipeline, use the `Lexer` struct directly.
