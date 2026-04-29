@@ -332,6 +332,66 @@ fn raw_contains_word(haystack: &str, needle: &str) -> bool {
 /// Capitalize a parameter name for Erlang, avoiding collisions with gen_statem reserved names.
 /// "data" → "Data_Arg" (not "Data" which collides with the gen_statem state data variable)
 /// "from" → "From_Arg" (not "From" which collides with the gen_statem caller reference)
+/// Replace whole-word occurrences of `word` with `replacement` in
+/// `s`. Word boundaries are non-alphanumeric/non-underscore. Used
+/// by the chained-transition emitter to capitalize state-arg
+/// references (`x` → `X`) inside Erlang transition-arg expressions.
+fn replace_whole_word(s: &str, word: &str, replacement: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let word_bytes = word.as_bytes();
+    let is_word_char = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + word_bytes.len() <= bytes.len()
+            && &bytes[i..i + word_bytes.len()] == word_bytes
+            && (i == 0 || !is_word_char(bytes[i - 1]))
+            && (i + word_bytes.len() == bytes.len()
+                || !is_word_char(bytes[i + word_bytes.len()]))
+        {
+            out.push_str(replacement);
+            i += word_bytes.len();
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Split a string on top-level commas, respecting nesting in
+/// `(`/`)`, `[`/`]`, and `{`/`}`. Used by the chained-transition
+/// emitter to parse a `frame_transition__(target, Data, exits,
+/// enters, state_args, From, ReplyVal)` argument list when the
+/// state_args list itself contains commas (multi-arg patterns
+/// like `[X, Y]`).
+fn split_top_level_commas(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut depth: i32 = 0;
+    for c in s.chars() {
+        match c {
+            '(' | '[' | '{' => {
+                depth += 1;
+                buf.push(c);
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                buf.push(c);
+            }
+            ',' if depth == 0 => {
+                out.push(buf.trim().to_string());
+                buf.clear();
+            }
+            _ => buf.push(c),
+        }
+    }
+    if !buf.trim().is_empty() {
+        out.push(buf.trim().to_string());
+    }
+    out
+}
+
 fn erlang_safe_capitalize(name: &str) -> String {
     let capitalized = {
         let mut chars = name.chars();
@@ -1147,6 +1207,85 @@ fn erlang_process_body_lines_full(
                             rewritten.replace(&pattern, &format!("{}({}, ", action, data_var));
                         rewritten = rewritten
                             .replace(&format!("({}, )", data_var), &format!("({})", data_var));
+                    }
+                }
+            }
+            // Hoist `self.<iface>(...)` calls embedded inside
+            // `frame_transition__(...)` / `frame_forward_transition__(...)`
+            // arg lists into preceding `frame_dispatch__` binds so the
+            // call result reaches the transition as a bound variable
+            // instead of falling through to the blanket `self.` →
+            // `Data#data.` substitution (which would emit invalid
+            // record-field-call syntax `Data#data.method()`). Innermost
+            // calls are hoisted first via `rfind`; the loop iterates
+            // until no `self.<iface>(` remains.
+            if !interface_names.is_empty()
+                && (rewritten.starts_with("frame_transition__(")
+                    || rewritten.starts_with("frame_forward_transition__("))
+            {
+                let mut iter_guard = 0;
+                while iter_guard < 16 {
+                    iter_guard += 1;
+                    let mut matched: Option<(String, usize, usize, String)> = None;
+                    for iface in interface_names {
+                        let pat = format!("self.{}(", iface);
+                        if let Some(start) = rewritten.rfind(&pat) {
+                            let open = start + pat.len() - 1;
+                            let bytes = rewritten.as_bytes();
+                            let mut depth = 0i32;
+                            let mut end = open;
+                            for i in open..bytes.len() {
+                                match bytes[i] {
+                                    b'(' => depth += 1,
+                                    b')' => {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            end = i;
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if end > open {
+                                let inner_args = rewritten[open + 1..end].to_string();
+                                if matched.is_none() {
+                                    matched =
+                                        Some((iface.clone(), start, end + 1, inner_args));
+                                }
+                            }
+                        }
+                    }
+                    if let Some((iface, start, after_end, inner_args)) = matched {
+                        let prev_data = data_var.clone();
+                        let data_access_prev = format!("{}#data.", prev_data);
+                        let args_subst = replace_outside_strings_and_comments(
+                            &inner_args,
+                            TargetLanguage::Erlang,
+                            &[("self.", data_access_prev.as_str())],
+                        );
+                        let args_list = if args_subst.trim().is_empty() {
+                            "[]".to_string()
+                        } else {
+                            format!("[{}]", args_subst)
+                        };
+                        data_gen += 1;
+                        let new_var = format!("Data{}", data_gen);
+                        let result_name = format!("__SelfResult_{}", data_gen);
+                        let method_snake = to_snake_case(&iface);
+                        result.push(format!(
+                            "    {{{}, {}}} = frame_dispatch__({}, {}, {})",
+                            new_var, result_name, method_snake, args_list, prev_data
+                        ));
+                        rewritten = format!(
+                            "{}{}{}",
+                            &rewritten[..start],
+                            result_name,
+                            &rewritten[after_end..]
+                        );
+                        data_var = new_var;
+                    } else {
+                        break;
                     }
                 }
             }
@@ -3115,6 +3254,23 @@ pub(crate) fn generate_erlang_system(
             // Data. The existing emission code below was written
             // assuming `Data`; substitute when emitting.
             let leaf_data_in = data_var.clone();
+            // State-args binding: when the state was declared as
+            // `$State(p1: T1, p2: T2)`, the enter handler can
+            // reference each param by name. Bind from
+            // `Data#data.frame_state_args` here so `$>()` body
+            // and the user-event handlers (which already bind
+            // these — see line 3285) see consistent values.
+            // Pre-fix this was missing, leaving state-arg names
+            // as free variables in `enter` clauses.
+            for (i, sp) in state.params.iter().enumerate() {
+                let var_name = erlang_safe_capitalize(&sp.name);
+                code.push_str(&format!(
+                    "    {} = frame_arg_at__({}, {}#data.frame_state_args),\n",
+                    var_name,
+                    i + 1,
+                    leaf_data_in
+                ));
+            }
             if let Some(ref enter) = state.enter {
                 // Extract enter params from frame_enter_args (positional list).
                 for (i, p) in enter.params.iter().enumerate() {
@@ -3180,8 +3336,19 @@ pub(crate) fn generate_erlang_system(
                             // Enter handlers can't return {next_state,...} in gen_statem state_enter mode,
                             // and {next_event,...} actions are forbidden from a state enter call.
                             // Defer the transition via a zero-delay state_timeout, which IS allowed
-                            // from enter callbacks and is dispatched as a normal event afterward:
-                            //   {keep_state, Data, [{state_timeout, 0, {frame_enter_transition, Target}}]}
+                            // from enter callbacks and is dispatched as a normal event afterward.
+                            //
+                            // The standard `frame_transition__` does:
+                            //   exit-dispatch + update Data with {exit/enter/state args, target} +
+                            //   {next_state, Target, ...}
+                            // For state_timeout-deferred mode we need the
+                            // SAME Data updates but emit `{keep_state,
+                            // Data, [{state_timeout, ...}]}` instead.
+                            // Pre-fix we kept only `Target` and dropped
+                            // exit/enter/state args entirely — Phase 15
+                            // P6 (chained $>() → -> $S2(x*2)) hit this:
+                            // s2's frame_state_args stayed at s1's
+                            // [LIT] instead of becoming [LIT*2].
                             let mut enter_lines = Vec::new();
                             for line in &processed {
                                 let t = line.trim();
@@ -3189,13 +3356,47 @@ pub(crate) fn generate_erlang_system(
                                     let inner = t
                                         .trim_start_matches("frame_transition__(")
                                         .trim_end_matches(')');
-                                    let parts: Vec<&str> =
-                                        inner.split(',').map(|s| s.trim()).collect();
-                                    if !parts.is_empty() {
-                                        let target = parts[0];
+                                    // Bracket/paren-aware split on top-
+                                    // level commas. State args like
+                                    // `[X * 2]` or `[X, Y]` contain
+                                    // nested commas that the naive
+                                    // split misses.
+                                    let parts = split_top_level_commas(inner);
+                                    if parts.len() >= 7 {
+                                        let target = parts[0].trim();
+                                        let data_in = parts[1].trim();
+                                        let exit_args = parts[2].trim();
+                                        let enter_args = parts[3].trim();
+                                        // Capitalize state-arg name
+                                        // references inside the state_
+                                        // args expression so they match
+                                        // the variables bound at the
+                                        // top of the enter handler
+                                        // (`X = frame_arg_at__(...)`).
+                                        // The Frame source `[x * 2]`
+                                        // becomes `[X * 2]` in Erlang.
+                                        let mut state_args = parts[4].trim().to_string();
+                                        for sp in &state.params {
+                                            let cap = erlang_safe_capitalize(&sp.name);
+                                            if cap != sp.name {
+                                                state_args = replace_whole_word(
+                                                    &state_args,
+                                                    &sp.name,
+                                                    &cap,
+                                                );
+                                            }
+                                        }
+                                        // Update Data with exit/enter/
+                                        // state args before scheduling
+                                        // the deferred transition.
+                                        // Mirrors frame_transition__'s
+                                        // body (exit dispatch + record
+                                        // update) — same effect, just
+                                        // returns keep_state instead of
+                                        // next_state.
                                         enter_lines.push(format!(
-                                            "    {{keep_state, {}, [{{state_timeout, 0, {{frame_enter_transition, {}}}}}]}}",
-                                            final_data, target
+                                            "    __DataX1 = {}#data{{frame_exit_args = {}}},\n    __DataX2 = frame_exit_dispatch__(__DataX1),\n    __DataX3 = __DataX2#data{{frame_enter_args = {}, frame_state_args = {}, frame_current_state = {}}},\n    {{keep_state, __DataX3, [{{state_timeout, 0, {{frame_enter_transition, {}}}}}]}}",
+                                            data_in, exit_args, enter_args, state_args, target, target
                                         ));
                                     }
                                 } else {

@@ -1083,8 +1083,17 @@ pub(crate) fn rust_expand_transition(
         enter_args_vec.join(", ")
     ));
 
-    // ---- state_args → typed StateContext on every layer ----
-    // Build the destination chain leaf→root from ctx.state_hsm_parents.
+    // ---- state_args → typed StateContext on the LEAF only ----
+    // State args are state-local: they belong to the state that
+    // declares them, not to ancestors. Writing them to ancestor
+    // compartments breaks Rust's enum-variant typing when an
+    // ancestor declares no params (its variant is unit, not
+    // tuple — `if let StateContext::Parent(ref mut ctx) = ...`
+    // becomes a compile error E0532).
+    //
+    // Pre-fix the chain walk wrote to every ancestor under the
+    // "signature-match rule guarantees uniform args" assumption,
+    // which is false when only the leaf declares args.
     if let Some(ref state) = state_str {
         let args: Vec<(String, String)> = state
             .split(',')
@@ -1130,40 +1139,10 @@ pub(crate) fn rust_expand_transition(
             }
             code.push_str(&format!("{}    }}\n", indent_str));
 
-            // Ancestors — walk via parent_compartment chain. Use a
-            // depth-N nested if-let so the borrow checker has a
-            // single linear chain of mutable reborrows; each step
-            // narrows scope so prior `ref mut` bindings are dropped.
-            for depth in 1..chain.len() {
-                let pad: String = "    ".repeat(depth);
-                let state = &chain[depth];
-                // Open `if let Some(ref mut p_<depth>)` for each ancestor.
-                code.push_str(&format!(
-                    "{0}    {1}if let Some(ref mut __anc_{2}) = ",
-                    indent_str, pad, depth
-                ));
-                if depth == 1 {
-                    code.push_str("__compartment.parent_compartment {\n");
-                } else {
-                    code.push_str(&format!("__anc_{}.parent_compartment {{\n", depth - 1));
-                }
-                code.push_str(&format!(
-                    "{0}    {1}    if let {2}StateContext::{3}(ref mut ctx) = __anc_{4}.state_context {{\n",
-                    indent_str, pad, ctx.system_name, state, depth
-                ));
-                for (k, v) in &args {
-                    code.push_str(&format!(
-                        "{}    {}        ctx.{} = {};\n",
-                        indent_str, pad, k, v
-                    ));
-                }
-                code.push_str(&format!("{}    {}    }}\n", indent_str, pad));
-            }
-            // Close all the `if let Some` scopes (ancestors).
-            for depth in (1..chain.len()).rev() {
-                let pad: String = "    ".repeat(depth);
-                code.push_str(&format!("{}    {}}}\n", indent_str, pad));
-            }
+            // Ancestor walk REMOVED — state args are state-local
+            // and must NOT be written to ancestor compartments. See
+            // the comment at the top of this block.
+            //
             // Close block scope.
             code.push_str(&format!("{}}}\n", indent_str));
         }
