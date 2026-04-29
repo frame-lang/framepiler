@@ -2944,53 +2944,17 @@ pub(crate) fn generate_erlang_system(
             format!("{{{}, {}}}", method_snake, params.join(", "))
         };
 
-        // Coerce the catch-all `ok` reply (emitted by states whose
-        // unmatched call clause replies with `ok` to satisfy gen_statem's
-        // no-deadlock requirement) to the typed-return default. Without
-        // this, dispatching to a non-handled event in a typed-return
-        // method returns the atom `ok` to the user — surprising and
-        // type-incorrect. The coercion only fires when the method
-        // declares a typed return; void methods keep the raw reply.
-        let return_type_str = method.return_type.as_ref().map(type_to_string);
-        let is_typed_return = return_type_str
-            .as_deref()
-            .map(|s| s != "void" && s != "None")
-            .unwrap_or(false);
-        if is_typed_return {
-            let type_str = return_type_str.unwrap_or_default();
-            let coerce_default = match type_str.as_str() {
-                "int" | "long" | "i32" | "i64" | "Integer" => "0",
-                "float" | "double" | "f32" | "f64" => "0.0",
-                "bool" | "boolean" | "Boolean" => "false",
-                "str" | "string" | "String" => "<<>>",
-                _ => "ok", // unknown type — pass through
-            };
-            // Only emit the case-of when the default differs from `ok`
-            // (otherwise the coercion is a no-op and adds noise).
-            if coerce_default != "ok" {
-                code.push_str(&format!(
-                    "{}({}) ->\n    case gen_statem:call(Pid, {}) of\n        ok -> {};\n        __V -> __V\n    end.\n\n",
-                    method_snake,
-                    all_params.join(", "),
-                    call_args,
-                    coerce_default
-                ));
-            } else {
-                code.push_str(&format!(
-                    "{}({}) ->\n    gen_statem:call(Pid, {}).\n\n",
-                    method_snake,
-                    all_params.join(", "),
-                    call_args
-                ));
-            }
-        } else {
-            code.push_str(&format!(
-                "{}({}) ->\n    gen_statem:call(Pid, {}).\n\n",
-                method_snake,
-                all_params.join(", "),
-                call_args
-            ));
-        }
+        // Erlang is dynamic per docs/frame_runtime.md: the wrapper
+        // returns whatever the state machine replied with, including
+        // the atom `ok` from the catch-all clause when no handler
+        // matched. Don't coerce — that would contradict the dynamic-
+        // lang contract and break tests that expect the raw reply.
+        code.push_str(&format!(
+            "{}({}) ->\n    gen_statem:call(Pid, {}).\n\n",
+            method_snake,
+            all_params.join(", "),
+            call_args
+        ));
     }
 
     // callback_mode/0

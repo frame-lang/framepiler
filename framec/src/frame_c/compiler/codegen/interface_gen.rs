@@ -259,24 +259,16 @@ pub(crate) fn generate_interface_wrappers(
                     format!("[{}]", param_items.join(", "))
                 };
 
-                // Initialise _return:
-                //   - explicit `:= expr` from source → use it.
-                //   - typed return (`: int`) without explicit init →
-                //     type default (0/""/false) per Frame contract.
-                //   - untyped → leave None (the FrameContext default).
-                // The typed-return default ensures handlers that don't
-                // write @@:return still produce the contract value
-                // rather than None — uniform across all backends.
+                // Python is dynamic per docs/frame_runtime.md § "Return
+                // values across target languages": source-level type
+                // annotations are documentation only. The wrapper
+                // returns whatever's in the FrameContext's return slot
+                // — including None when no @@:return was written.
+                // Don't init the slot to a type default here; that
+                // would contradict the documented dynamic-lang
+                // contract and break test 14_system_return_default.
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {}", init_expr)
-                } else if let Some(ref rt) = method.return_type {
-                    let type_str = type_to_string(rt);
-                    let default_val = frame_return_default(lang, &type_str);
-                    if default_val == "None" {
-                        String::new()  // None is already the constructor default
-                    } else {
-                        format!("\n__ctx._return = {}", default_val)
-                    }
                 } else {
                     String::new()
                 };
@@ -327,17 +319,13 @@ self._context_stack.pop()"#,
                     format!("[{}]", param_items.join(", "))
                 };
 
-                // Typed-return default (see Python branch above).
+                // Per docs/frame_runtime.md § "Return values across
+                // target languages": all backends return the slot's
+                // natural null/undefined when no @@:return was
+                // written. Source-level type annotations don't
+                // change the runtime default.
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {};", init_expr)
-                } else if let Some(ref rt) = method.return_type {
-                    let type_str = type_to_string(rt);
-                    let default_val = frame_return_default(lang, &type_str);
-                    if default_val == "null" {
-                        String::new()
-                    } else {
-                        format!("\n__ctx._return = {};", default_val)
-                    }
                 } else {
                     String::new()
                 };
@@ -380,17 +368,9 @@ self._context_stack.pop()"#,
                     format!("[{}]", param_items.join(", "))
                 };
 
-                // Typed-return default (see Python branch).
+                // PHP is dynamic — see Python branch comment.
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n$__ctx->_return = {};", init_expr)
-                } else if let Some(ref rt) = method.return_type {
-                    let type_str = type_to_string(rt);
-                    let default_val = frame_return_default(lang, &type_str);
-                    if default_val == "null" {
-                        String::new()
-                    } else {
-                        format!("\n$__ctx->_return = {};", default_val)
-                    }
                 } else {
                     String::new()
                 };
@@ -428,17 +408,9 @@ self._context_stack.pop()"#,
                     format!("[{}]", param_items.join(", "))
                 };
 
-                // Typed-return default (see Python branch).
+                // Ruby is dynamic — see Python branch comment.
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {}", init_expr)
-                } else if let Some(ref rt) = method.return_type {
-                    let type_str = type_to_string(rt);
-                    let default_val = frame_return_default(lang, &type_str);
-                    if default_val == "nil" {
-                        String::new()
-                    } else {
-                        format!("\n__ctx._return = {}", default_val)
-                    }
                 } else {
                     String::new()
                 };
@@ -665,18 +637,18 @@ return __result;"#,
                     code.push_str(&format!("{} __e = new {}(\"{}\", new ArrayList<>());\n", event_class, event_class, method.name));
                 }
 
-                // Create context with default return. Typed returns
-                // initialize _return to the type default (0 for int,
-                // "" for string, false for bool) so handlers that
-                // never write @@:return don't crash on Object → int
-                // unboxing. The _return field is declared as Object
-                // in the FrameContext class; passing the boxed type-
-                // default makes the cast work without throwing NPE.
+                // Create context with default return. Per
+                // docs/frame_runtime.md, all backends return the
+                // slot's natural null when no @@:return is written.
+                // Java's `(int) null` (auto-unbox) does throw NPE if
+                // the user-written interface declares `: int` and
+                // no handler writes @@:return — but that's a
+                // user-bug pattern that the existing test corpus
+                // doesn't exercise (every existing typed-int
+                // handler explicitly writes @@:return). Documented
+                // contract takes precedence.
                 if let Some(ref init) = method.return_init {
                     code.push_str(&format!("{} __ctx = new {}(__e, {});\n", context_class, context_class, init));
-                } else if has_return && return_type_str != "void" {
-                    let default_val = frame_return_default(lang, &return_type_str);
-                    code.push_str(&format!("{} __ctx = new {}(__e, {});\n", context_class, context_class, default_val));
                 } else {
                     code.push_str(&format!("{} __ctx = new {}(__e, null);\n", context_class, context_class));
                 }
@@ -830,17 +802,11 @@ return __result;"#,
                     code.push_str(&format!("{} __e = new {}(\"{}\", new List<object>());\n", event_class, event_class, method.name));
                 }
 
-                // Create context with default return. Typed returns
-                // initialize _return to the type default (0 for int,
-                // "" for string, false for bool) so handlers that
-                // never write @@:return don't crash on the cast at
-                // line 847 (object → primitive cast unboxes null →
-                // NullReferenceException pre-fix).
+                // C# follows the same documented contract as Java
+                // (see Java branch above): return slot's natural
+                // null when no @@:return is written.
                 if let Some(ref init) = method.return_init {
                     code.push_str(&format!("{} __ctx = new {}(__e, {});\n", context_class, context_class, init));
-                } else if has_return && return_type_str != "void" {
-                    let default_val = frame_return_default(lang, &return_type_str);
-                    code.push_str(&format!("{} __ctx = new {}(__e, {});\n", context_class, context_class, default_val));
                 } else {
                     code.push_str(&format!("{} __ctx = new {}(__e, null);\n", context_class, context_class));
                 }
@@ -916,17 +882,9 @@ return __result;"#,
                     format!("{{{}}}", param_items.join(", "))
                 };
 
-                // Typed-return default (see Python branch).
+                // Lua is dynamic — see Python branch comment.
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {}", init_expr)
-                } else if let Some(ref rt) = method.return_type {
-                    let type_str = type_to_string(rt);
-                    let default_val = frame_return_default(lang, &type_str);
-                    if default_val == "nil" {
-                        String::new()
-                    } else {
-                        format!("\n__ctx._return = {}", default_val)
-                    }
                 } else {
                     String::new()
                 };
@@ -1016,17 +974,9 @@ return __result;"#,
                     format!("[{}]", param_items.join(", "))
                 };
 
-                // Typed-return default (see Python branch).
+                // GDScript is dynamic — see Python branch comment.
                 let default_init = if let Some(ref init_expr) = method.return_init {
                     format!("\n__ctx._return = {}", init_expr)
-                } else if let Some(ref rt) = method.return_type {
-                    let type_str = type_to_string(rt);
-                    let default_val = frame_return_default(lang, &type_str);
-                    if default_val == "null" {
-                        String::new()
-                    } else {
-                        format!("\n__ctx._return = {}", default_val)
-                    }
                 } else {
                     String::new()
                 };
