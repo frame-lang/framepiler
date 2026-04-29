@@ -1191,19 +1191,26 @@ fn erlang_process_body_lines_full(
             if is_forward_call {
                 // Rewrite forward call into a bind so post-forward statements
                 // can run. Parent's handler may transition; frame_unwrap_forward__
-                // extracts the updated Data and either `undefined` (parent
-                // kept state) or the next-state atom (parent transitioned).
-                // The caller's final clause then emits a conditional tuple
-                // that honors whichever the parent returned — matching the
-                // 16-backend consensus that post-forward code always runs.
+                // extracts the updated Data, either `undefined` (parent kept
+                // state) or the next-state atom (parent transitioned), and
+                // the parent's reply value (from `[{reply, From, V}]`).
+                // Capture the reply as a `__ReturnVal` write so the existing
+                // return-value SSA pass picks it up as the child's reply
+                // (otherwise the child would hardcode `ok` and drop the
+                // parent's `@@:return` value across the forward).
                 let stripped = rewritten.trim_end_matches([',', ';']).trim().to_string();
                 data_gen += 1;
                 let new_var = format!("Data{}", data_gen);
                 let fwd_var = format!("__FwdNext{}", data_gen);
+                let reply_var = format!("__FwdReply{}", data_gen);
                 result.push(format!(
-                    "    {{{}, {}}} = frame_unwrap_forward__({})",
-                    new_var, fwd_var, stripped
+                    "    {{{}, {}, {}}} = frame_unwrap_forward__({})",
+                    new_var, fwd_var, reply_var, stripped
                 ));
+                // Treat the captured reply as a `@@:return` write so the
+                // SSA pass renames this to `__ReturnVal_K` and the handler's
+                // terminal reply uses the parent's value, not `ok`.
+                result.push(format!("    __ReturnVal = {}", reply_var));
                 data_var = new_var;
             } else {
                 result.push(format!("    {}", rewritten));
@@ -1817,13 +1824,57 @@ fn erlang_wrap_self_call_guards(lines: &[String], state_atom: &str) -> Vec<Strin
                 None
             })
             .unwrap_or_else(|| data_var.clone());
-        let arm_reply = if inner_wrapped
-            .iter()
-            .any(|l| l.trim().starts_with("__ReturnVal = "))
-        {
-            "__ReturnVal".to_string()
-        } else {
-            "ok".to_string()
+        // arm_reply: the reply value used in BOTH the matched arm
+        // (when no transition occurred) and the `_ ->` arm (when one
+        // did). The `_ ->` arm has a hard constraint: only variables
+        // visible at OUTER scope can be referenced. Variables bound
+        // by direct assignment inside the matched arm body
+        // (e.g. `__ReturnVal_1 = 5 + __SelfResult_1`) are arm-local
+        // and would be unbound in the `_ ->` arm.
+        //
+        // Strategy: scan the body's terminal `[{reply, From, X}]`
+        // tuple to extract X. Then verify X is bound at outer scope
+        // (tuple-destructure pattern `{...DataN, X}` — pre-case
+        // visible) and NOT by a direct `X = expr` line (arm-local).
+        // Fall back to `ok` if X isn't outer-scope visible.
+        let arm_reply: String = {
+            // Find the terminal reply value (X in `[{reply, From, X}]`).
+            let mut terminal_var: Option<String> = None;
+            for l in inner_wrapped.iter().rev() {
+                let t = l.trim();
+                if let Some(pos) = t.find("[{reply, From, ") {
+                    let after = &t[pos + "[{reply, From, ".len()..];
+                    if let Some(close) = after.find('}') {
+                        let val = after[..close].trim().to_string();
+                        if !val.is_empty() {
+                            terminal_var = Some(val);
+                            break;
+                        }
+                    }
+                }
+            }
+            match terminal_var {
+                Some(val) => {
+                    // Verify val is bound at outer scope. Direct
+                    // assignment (`X = expr`) inside the body becomes
+                    // arm-local once wrapped; tuple-destructure
+                    // (`{Data, X} = ...`) is pre-case visible.
+                    let direct_assign_prefix = format!("{} = ", val);
+                    let tuple_bind_substr = format!(", {}}}", val);
+                    let has_direct_assign = inner_wrapped
+                        .iter()
+                        .any(|x| x.trim().starts_with(&direct_assign_prefix));
+                    let has_tuple_bind = inner_wrapped
+                        .iter()
+                        .any(|x| x.contains(&tuple_bind_substr));
+                    if has_tuple_bind && !has_direct_assign {
+                        val
+                    } else {
+                        "ok".to_string()
+                    }
+                }
+                None => "ok".to_string(),
+            }
         };
         let inject_terminal = !last_expr_is_terminal && !arm_has_terminal_tuple;
 
@@ -1856,10 +1907,19 @@ fn erlang_wrap_self_call_guards(lines: &[String], state_atom: &str) -> Vec<Strin
         // syntax error. The analyzer in `analyze_case_arms` was
         // extended to recognise bare-pattern arm headers so the
         // wrap-emitted case is correctly classified.
+        //
+        // Reply value: must match the matching arm's reply
+        // (`arm_reply`), not hardcoded `undefined`. A dispatch
+        // that caused a transition still produces a return value
+        // — discarding it across the transition was wrong and
+        // surfaced by Phase 14 P8 (child overrides compute,
+        // drive forwards, parent calls @@:self.compute()
+        // — the dispatch's __ReturnVal_1 must reach the reply
+        // tuple regardless of whether a transition happened).
         result.push(format!("{ind}    _ ->", ind = ind));
         result.push(format!(
-            "{ind}        {{next_state, {dv}#data.frame_current_state, {dv}, [{{reply, From, undefined}}]}}",
-            ind = ind, dv = data_var
+            "{ind}        {{next_state, {dv}#data.frame_current_state, {dv}, [{{reply, From, {rv}}}]}}",
+            ind = ind, dv = data_var, rv = arm_reply
         ));
         result.push(format!("{ind}end", ind = ind));
         // Anything past tail_end (the enclosing case's arm boundary or
@@ -3976,16 +4036,29 @@ pub(crate) fn generate_erlang_system(
     // HSM parent-forward unwrap. When a child's `=> $^` has post-forward code
     // (e.g., `=> $^; self.x = self.x + 1`), we can't emit the parent call as
     // a tail call — the post-forward statements would be lost. The body
-    // processor instead binds: `{DataN, __FwdNextN} = frame_unwrap_forward__(ParentCall)`.
-    // This helper flattens the parent's gen_statem return tuple into
-    // `{UpdatedData, NextStateOrUndefined}` so the child can continue threading
-    // Data through its remaining statements and finally emit a single return
-    // tuple that honors whatever transition (if any) the parent performed.
-    // Matches the 16-backend consensus that post-forward code always runs.
-    code.push_str("frame_unwrap_forward__({keep_state, D, _}) -> {D, undefined};\n");
-    code.push_str("frame_unwrap_forward__({keep_state, D}) -> {D, undefined};\n");
-    code.push_str("frame_unwrap_forward__({next_state, NS, D, _}) -> {D, NS};\n");
-    code.push_str("frame_unwrap_forward__({next_state, NS, D}) -> {D, NS}.\n\n");
+    // processor instead binds:
+    //   `{DataN, __FwdNextN, __FwdReplyN} = frame_unwrap_forward__(ParentCall)`.
+    // This helper flattens the parent's gen_statem return tuple into a
+    // 3-tuple `{UpdatedData, NextStateOrUndefined, ParentReplyValue}` so the
+    // child can:
+    //   - continue threading Data through its remaining statements;
+    //   - honor whatever transition (if any) the parent performed; and
+    //   - propagate the parent's `[{reply, From, V}]` value as the child's
+    //     own reply (instead of hardcoding `ok`, which dropped the parent
+    //     handler's `@@:return` write across the forward).
+    // Matches the 16-backend consensus that `=> $^` returns whatever the
+    // parent's handler set in `@@:return`.
+    code.push_str(
+        "frame_unwrap_forward__({keep_state, D, Actions}) -> {D, undefined, frame_extract_reply__(Actions)};\n",
+    );
+    code.push_str("frame_unwrap_forward__({keep_state, D}) -> {D, undefined, ok};\n");
+    code.push_str(
+        "frame_unwrap_forward__({next_state, NS, D, Actions}) -> {D, NS, frame_extract_reply__(Actions)};\n",
+    );
+    code.push_str("frame_unwrap_forward__({next_state, NS, D}) -> {D, NS, ok}.\n\n");
+    code.push_str("frame_extract_reply__([{reply, _From, V} | _]) -> V;\n");
+    code.push_str("frame_extract_reply__([_ | Rest]) -> frame_extract_reply__(Rest);\n");
+    code.push_str("frame_extract_reply__([]) -> ok.\n\n");
 
     // Exit handler dispatch — walks the HSM chain bottom-up (leaf to
     // root), calling each layer's `frame_exit__<state>` helper if it
