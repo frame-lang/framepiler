@@ -4971,7 +4971,15 @@ pub(crate) fn generate_erlang_system(
 
     // Persistence methods (when @@persist is present)
     if system.persist_attr.is_some() {
-        // Collect all record field names for serialization
+        // Collect all record field names for serialization. Domain
+        // fields, per-state state-vars, the modal stack, AND the
+        // compartment-context fields (`frame_state_args`,
+        // `frame_enter_args`) — without those the saved blob is
+        // missing the destination state's positional context, so
+        // restore brings back a state with empty state_args/enter_args
+        // and any handler reading `$.x` on a `(x: int)` state sees
+        // `undefined`. Surfaced by persist × state-args probe
+        // (Phase 24 cross-product).
         let mut field_names: Vec<String> = Vec::new();
         for var in &system.domain {
             field_names.push(var.name.clone());
@@ -4985,6 +4993,8 @@ pub(crate) fn generate_erlang_system(
             }
         }
         field_names.push("frame_stack".to_string());
+        field_names.push("frame_state_args".to_string());
+        field_names.push("frame_enter_args".to_string());
 
         // save_state/1 — serializes current state + Data to a map
         code.push_str("save_state(Pid) ->\n");
