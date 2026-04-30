@@ -1716,56 +1716,23 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     methods
 }
 
-fn rust_json_extract(var_name: &str, var_type: &Type) -> String {
-    match var_type {
-        Type::Custom(name) => match name.to_lowercase().as_str() {
-            // Frame `int` maps to Rust `i64` (see RustBackend::convert_type).
-            // Only the explicit `i32` hint narrows.
-            "int" | "i64" => format!("data[\"{}\"].as_i64().unwrap_or(0)", var_name),
-            "i32" => format!("data[\"{}\"].as_i64().unwrap_or(0) as i32", var_name),
-            "float" | "f32" | "f64" => {
-                format!("data[\"{}\"].as_f64().unwrap_or(0.0)", var_name)
-            }
-            "bool" => format!("data[\"{}\"].as_bool().unwrap_or(false)", var_name),
-            "str" | "string" => {
-                format!(
-                    "data[\"{}\"].as_str().unwrap_or(\"\").to_string()",
-                    var_name
-                )
-            }
-            _ => format!(
-                "serde_json::from_value(data[\"{}\"].clone()).unwrap_or_default()",
-                var_name
-            ),
-        },
-        _ => format!(
-            "serde_json::from_value(data[\"{}\"].clone()).unwrap_or_default()",
-            var_name
-        ),
-    }
+// Type-ignorant: serde infers the target type from the surrounding
+// struct field. Works for any T: serde::Deserialize — primitives,
+// String, Vec<T>, HashMap<K, V>, user-defined #[derive(Deserialize)]
+// types. framec just emits the field-name lookup; serde does the
+// type-aware work via the user's declared field type.
+fn rust_json_extract(var_name: &str, _var_type: &Type) -> String {
+    format!(
+        "serde_json::from_value(data[\"{}\"].clone()).unwrap_or_default()",
+        var_name
+    )
 }
 
-fn rust_json_extract_unwrap(var_name: &str, var_type: &Type) -> String {
-    match var_type {
-        Type::Custom(name) => match name.to_lowercase().as_str() {
-            // Frame `int` maps to Rust `i64`; only explicit `i32` narrows.
-            "int" | "i64" => format!("data[\"{}\"].as_i64().unwrap()", var_name),
-            "i32" => format!("data[\"{}\"].as_i64().unwrap() as i32", var_name),
-            "float" | "f32" | "f64" => format!("data[\"{}\"].as_f64().unwrap()", var_name),
-            "bool" => format!("data[\"{}\"].as_bool().unwrap()", var_name),
-            "str" | "string" => {
-                format!("data[\"{}\"].as_str().unwrap().to_string()", var_name)
-            }
-            _ => format!(
-                "serde_json::from_value(data[\"{}\"].clone()).unwrap()",
-                var_name
-            ),
-        },
-        _ => format!(
-            "serde_json::from_value(data[\"{}\"].clone()).unwrap()",
-            var_name
-        ),
-    }
+fn rust_json_extract_unwrap(var_name: &str, _var_type: &Type) -> String {
+    format!(
+        "serde_json::from_value(data[\"{}\"].clone()).unwrap()",
+        var_name
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════
