@@ -1870,31 +1870,12 @@ pub(crate) fn generate_persistence_methods(
             // numeric types. Strings/bools/other any-shaped values
             // currently pass through as null (limitation of std::any
             // roundtrip without a richer type tag). D8 fix added the
-            // double cast path so float state-args round-trip.
-            // D10: per-state typed serialize. For std::vector<T>
-            // state-args, the generic int/double any_cast fallthroughs
-            // produce null; instead branch on c->state and emit the
-            // declared cast. Mirrors the C codegen's per-state pack.
-            let cpp_vec_elem_type = |t: &str| -> Option<String> {
-                let t = t.trim();
-                let rest = t.strip_prefix("std::vector<")?;
-                let inner = rest.strip_suffix(">")?;
-                Some(inner.trim().to_string())
-            };
-            // Returns Some(("array" or "object")) when t is a typed
-            // container nlohmann::json can serialize directly.
-            let cpp_container_kind = |t: &str| -> Option<&'static str> {
-                let t = t.trim();
-                if t.starts_with("std::vector<") {
-                    Some("array")
-                } else if t.starts_with("std::map<")
-                    || t.starts_with("std::unordered_map<")
-                {
-                    Some("object")
-                } else {
-                    None
-                }
-            };
+            // Type-ignorant: framec emits the declared type `T`
+            // verbatim into `std::any_cast<T>` and `nlohmann::json
+            // ::get<T>()`; nlohmann's ADL handles primitives, std::
+            // vector, std::map, std::unordered_map, std::string, and
+            // user types with to_json/from_json. No type-string
+            // parsing in framec.
             let cpp_state_arg_decls: Vec<(String, Vec<String>)> = system
                 .machine
                 .as_ref()
@@ -1922,10 +1903,14 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("    nlohmann::json __sa = nlohmann::json::array();\n");
             save_body.push_str("    {\n");
             let mut any_state_arg_branch = false;
+            // Type-ignorant typed serialize. framec emits the
+            // declared type `T` verbatim into `std::any_cast<T>` and
+            // wraps the result in `nlohmann::json(...)`. nlohmann's
+            // ADL handles primitives, std::vector, std::map,
+            // std::unordered_map, std::string, user types with
+            // to_json overloads — without framec naming any.
             for (state_name, types) in &cpp_state_arg_decls {
-                if types.is_empty()
-                    || types.iter().all(|t| cpp_container_kind(t).is_none())
-                {
+                if types.is_empty() {
                     continue;
                 }
                 if !any_state_arg_branch {
@@ -1936,22 +1921,19 @@ pub(crate) fn generate_persistence_methods(
                     state_name
                 ));
                 for (i, t) in types.iter().enumerate() {
-                    if cpp_container_kind(t).is_some() {
-                        // nlohmann::json natively serializes
-                        // std::vector<T>, std::map<std::string, T>,
-                        // std::unordered_map<std::string, T>.
+                    if t.is_empty() {
                         save_body.push_str(&format!(
-                            "        if (c->state_args.size() > {i}) {{ try {{ const auto& __ctr = std::any_cast<{t}>(c->state_args[{i}]); __sa.push_back(nlohmann::json(__ctr)); }} catch(...) {{ __sa.push_back(nullptr); }} }}\n"
+                            "        if (c->state_args.size() > {i}) {{ try {{ __sa.push_back(std::any_cast<int>(c->state_args[{i}])); }} catch(...) {{ try {{ __sa.push_back(std::any_cast<double>(c->state_args[{i}])); }} catch(...) {{ __sa.push_back(nullptr); }} }} }}\n"
                         ));
                     } else {
                         save_body.push_str(&format!(
-                            "        if (c->state_args.size() > {i}) {{ try {{ __sa.push_back(std::any_cast<int>(c->state_args[{i}])); }} catch(...) {{ try {{ __sa.push_back(std::any_cast<double>(c->state_args[{i}])); }} catch(...) {{ __sa.push_back(nullptr); }} }} }}\n"
+                            "        if (c->state_args.size() > {i}) {{ try {{ __sa.push_back(nlohmann::json(std::any_cast<{t}>(c->state_args[{i}]))); }} catch(...) {{ __sa.push_back(nullptr); }} }}\n"
                         ));
                     }
                 }
                 save_body.push_str("    } else \n");
             }
-            // Generic fallback for states without typed branches.
+            // Generic fallback for states without state_args at all.
             save_body.push_str("    {\n");
             save_body.push_str("        for (const auto& v : c->state_args) { try { __sa.push_back(std::any_cast<int>(v)); } catch(...) { try { __sa.push_back(std::any_cast<double>(v)); } catch(...) { __sa.push_back(nullptr); } } }\n");
             save_body.push_str("    }\n");
@@ -2027,13 +2009,15 @@ pub(crate) fn generate_persistence_methods(
             // state-arg, branch on `c->state` and rebuild the vector
             // from the JSON array. Falls through to the generic
             // int/double scalar path for non-list states.
+            // Type-ignorant typed restore. framec emits the declared
+            // type `T` verbatim; nlohmann::json's `get<T>()` handles
+            // any T it can deserialize (primitives, std::vector,
+            // std::map, std::string, user types with from_json).
             restore_body.push_str("    if (d.contains(\"state_args\") && d[\"state_args\"].is_array()) {\n");
             restore_body.push_str("        const auto& __sa = d[\"state_args\"];\n");
             let mut any_typed_state = false;
             for (state_name, types) in &cpp_state_arg_decls {
-                if types.is_empty()
-                    || types.iter().all(|t| cpp_container_kind(t).is_none())
-                {
+                if types.is_empty() {
                     continue;
                 }
                 if !any_typed_state {
@@ -2044,18 +2028,13 @@ pub(crate) fn generate_persistence_methods(
                     state_name
                 ));
                 for (i, t) in types.iter().enumerate() {
-                    if let Some(kind) = cpp_container_kind(t) {
-                        let json_check = if kind == "object" {
-                            "is_object()"
-                        } else {
-                            "is_array()"
-                        };
+                    if t.is_empty() {
                         restore_body.push_str(&format!(
-                            "            if (__sa.size() > {i} && __sa[{i}].{json_check}) {{ c->state_args.push_back(std::any(__sa[{i}].get<{t}>())); }}\n"
+                            "            if (__sa.size() > {i}) {{ if (__sa[{i}].is_number_integer()) c->state_args.push_back(std::any(__sa[{i}].get<int>())); else if (__sa[{i}].is_number_float()) c->state_args.push_back(std::any(__sa[{i}].get<double>())); }}\n"
                         ));
                     } else {
                         restore_body.push_str(&format!(
-                            "            if (__sa.size() > {i}) {{ if (__sa[{i}].is_number_integer()) c->state_args.push_back(std::any(__sa[{i}].get<int>())); else if (__sa[{i}].is_number_float()) c->state_args.push_back(std::any(__sa[{i}].get<double>())); }}\n"
+                            "            if (__sa.size() > {i}) {{ try {{ c->state_args.push_back(std::any(__sa[{i}].get<{t}>())); }} catch(...) {{ }} }}\n"
                         ));
                     }
                 }
