@@ -1846,8 +1846,74 @@ pub(crate) fn generate_persistence_methods(
             // currently pass through as null (limitation of std::any
             // roundtrip without a richer type tag). D8 fix added the
             // double cast path so float state-args round-trip.
+            // D10: per-state typed serialize. For std::vector<T>
+            // state-args, the generic int/double any_cast fallthroughs
+            // produce null; instead branch on c->state and emit the
+            // declared cast. Mirrors the C codegen's per-state pack.
+            let cpp_vec_elem_type = |t: &str| -> Option<String> {
+                let t = t.trim();
+                let rest = t.strip_prefix("std::vector<")?;
+                let inner = rest.strip_suffix(">")?;
+                Some(inner.trim().to_string())
+            };
+            let cpp_state_arg_decls: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .params
+                                .iter()
+                                .map(|p| match &p.param_type {
+                                    crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
+                                        s.clone()
+                                    }
+                                    crate::frame_c::compiler::frame_ast::Type::Unknown => {
+                                        String::new()
+                                    }
+                                })
+                                .collect();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             save_body.push_str("    nlohmann::json __sa = nlohmann::json::array();\n");
-            save_body.push_str("    for (const auto& v : c->state_args) { try { __sa.push_back(std::any_cast<int>(v)); } catch(...) { try { __sa.push_back(std::any_cast<double>(v)); } catch(...) { __sa.push_back(nullptr); } } }\n");
+            save_body.push_str("    {\n");
+            let mut any_state_arg_branch = false;
+            for (state_name, types) in &cpp_state_arg_decls {
+                if types.is_empty()
+                    || types.iter().all(|t| cpp_vec_elem_type(t).is_none())
+                {
+                    continue;
+                }
+                if !any_state_arg_branch {
+                    any_state_arg_branch = true;
+                }
+                save_body.push_str(&format!(
+                    "    if (c->state == \"{}\") {{\n",
+                    state_name
+                ));
+                for (i, t) in types.iter().enumerate() {
+                    if let Some(elem) = cpp_vec_elem_type(t) {
+                        save_body.push_str(&format!(
+                            "        if (c->state_args.size() > {i}) {{ try {{ const auto& __vec = std::any_cast<std::vector<{elem}>>(c->state_args[{i}]); nlohmann::json __nested = nlohmann::json::array(); for (const auto& __e : __vec) __nested.push_back(__e); __sa.push_back(__nested); }} catch(...) {{ __sa.push_back(nullptr); }} }}\n"
+                        ));
+                    } else {
+                        save_body.push_str(&format!(
+                            "        if (c->state_args.size() > {i}) {{ try {{ __sa.push_back(std::any_cast<int>(c->state_args[{i}])); }} catch(...) {{ try {{ __sa.push_back(std::any_cast<double>(c->state_args[{i}])); }} catch(...) {{ __sa.push_back(nullptr); }} }} }}\n"
+                        ));
+                    }
+                }
+                save_body.push_str("    } else \n");
+            }
+            // Generic fallback for states without typed branches.
+            save_body.push_str("    {\n");
+            save_body.push_str("        for (const auto& v : c->state_args) { try { __sa.push_back(std::any_cast<int>(v)); } catch(...) { try { __sa.push_back(std::any_cast<double>(v)); } catch(...) { __sa.push_back(nullptr); } } }\n");
+            save_body.push_str("    }\n");
+            save_body.push_str("    }\n");
             save_body.push_str("    __cj[\"state_args\"] = __sa;\n");
             save_body.push_str("    nlohmann::json __ea = nlohmann::json::array();\n");
             save_body.push_str("    for (const auto& v : c->enter_args) { try { __ea.push_back(std::any_cast<int>(v)); } catch(...) { try { __ea.push_back(std::any_cast<double>(v)); } catch(...) { __ea.push_back(nullptr); } } }\n");
@@ -1914,10 +1980,46 @@ pub(crate) fn generate_persistence_methods(
             // double). D8 fix added the double path; without it,
             // float state-args lost precision and the per-handler
             // any_cast<double> threw bad_any_cast.
+            // D10: per-state typed deserialize for vector args.
+            // For each state with a `std::vector<T>` declared
+            // state-arg, branch on `c->state` and rebuild the vector
+            // from the JSON array. Falls through to the generic
+            // int/double scalar path for non-list states.
             restore_body.push_str("    if (d.contains(\"state_args\") && d[\"state_args\"].is_array()) {\n");
-            restore_body.push_str("        for (const auto& v : d[\"state_args\"]) {\n");
-            restore_body.push_str("            if (v.is_number_integer()) c->state_args.push_back(std::any(v.get<int>()));\n");
-            restore_body.push_str("            else if (v.is_number_float()) c->state_args.push_back(std::any(v.get<double>()));\n");
+            restore_body.push_str("        const auto& __sa = d[\"state_args\"];\n");
+            let mut any_typed_state = false;
+            for (state_name, types) in &cpp_state_arg_decls {
+                if types.is_empty()
+                    || types.iter().all(|t| cpp_vec_elem_type(t).is_none())
+                {
+                    continue;
+                }
+                if !any_typed_state {
+                    any_typed_state = true;
+                }
+                restore_body.push_str(&format!(
+                    "        if (c->state == \"{}\") {{\n",
+                    state_name
+                ));
+                for (i, t) in types.iter().enumerate() {
+                    if let Some(elem) = cpp_vec_elem_type(t) {
+                        restore_body.push_str(&format!(
+                            "            if (__sa.size() > {i} && __sa[{i}].is_array()) {{ std::vector<{elem}> __vec; for (const auto& __e : __sa[{i}]) __vec.push_back(__e.get<{elem}>()); c->state_args.push_back(std::any(__vec)); }}\n"
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "            if (__sa.size() > {i}) {{ if (__sa[{i}].is_number_integer()) c->state_args.push_back(std::any(__sa[{i}].get<int>())); else if (__sa[{i}].is_number_float()) c->state_args.push_back(std::any(__sa[{i}].get<double>())); }}\n"
+                        ));
+                    }
+                }
+                restore_body.push_str("        } else \n");
+            }
+            // Fallback for states without typed state-args.
+            restore_body.push_str("        {\n");
+            restore_body.push_str("            for (const auto& v : __sa) {\n");
+            restore_body.push_str("                if (v.is_number_integer()) c->state_args.push_back(std::any(v.get<int>()));\n");
+            restore_body.push_str("                else if (v.is_number_float()) c->state_args.push_back(std::any(v.get<double>()));\n");
+            restore_body.push_str("            }\n");
             restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
             restore_body.push_str("    if (d.contains(\"enter_args\") && d[\"enter_args\"].is_array()) {\n");
@@ -2287,6 +2389,144 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("        else c.enter_args.Add(v.ToString());\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
+            // D10: per-state typed list conversion. The generic
+            // restore above puts list-typed state-args as
+            // `List<object>` (because we don't know the element type
+            // generically). C# generics are reified, so a user-level
+            // `(List<T>) state_args[i]` cast fails. Emit per-state
+            // branches that re-create the typed list when the
+            // declared type is `List<T>` for a known T.
+            let cs_list_elem_type = |t: &str| -> Option<String> {
+                let t = t.trim();
+                let t = t
+                    .strip_prefix("System.Collections.Generic.")
+                    .unwrap_or(t);
+                let rest = t.strip_prefix("List<")?;
+                let inner = rest.strip_suffix(">")?;
+                Some(inner.trim().to_string())
+            };
+            let cs_typed_list_conv =
+                |elem_type: &str, idx: usize, slot: &str| -> String {
+                    // slot: "state_args" or "enter_args"
+                    // Generates: if (c.<slot>[idx] is List<object> __raw) { var __l = new List<T>(); foreach ... __l.Add(...); c.<slot>[idx] = __l; }
+                    let (typed_t, getter) = match elem_type {
+                        "int" => ("int", "Convert.ToInt32(__re)"),
+                        "long" => ("long", "Convert.ToInt64(__re)"),
+                        "double" | "float" => {
+                            ("double", "Convert.ToDouble(__re)")
+                        }
+                        "string" => ("string", "__re?.ToString()"),
+                        "bool" => ("bool", "Convert.ToBoolean(__re)"),
+                        _ => return String::new(),
+                    };
+                    format!(
+                        "    if (c.{slot}.Count > {idx} && c.{slot}[{idx}] is System.Collections.Generic.List<object> __raw{idx}_{slot}) {{\n\
+                         \x20       var __l{idx}_{slot} = new System.Collections.Generic.List<{typed_t}>();\n\
+                         \x20       foreach (var __re in __raw{idx}_{slot}) __l{idx}_{slot}.Add({getter});\n\
+                         \x20       c.{slot}[{idx}] = __l{idx}_{slot};\n\
+                         \x20   }}\n"
+                    )
+                };
+            let state_arg_decls: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .params
+                                .iter()
+                                .map(|p| match &p.param_type {
+                                    crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
+                                        s.clone()
+                                    }
+                                    crate::frame_c::compiler::frame_ast::Type::Unknown => {
+                                        String::new()
+                                    }
+                                })
+                                .collect();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let enter_arg_decls: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .enter
+                                .as_ref()
+                                .map(|e| {
+                                    e.params
+                                        .iter()
+                                        .map(|p| match &p.param_type {
+                                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
+                                                s.clone()
+                                            }
+                                            crate::frame_c::compiler::frame_ast::Type::Unknown => {
+                                                String::new()
+                                            }
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut any_per_state = false;
+            for (state_name, types) in &state_arg_decls {
+                let mut branch = String::new();
+                for (i, t) in types.iter().enumerate() {
+                    if let Some(elem) = cs_list_elem_type(t) {
+                        let conv = cs_typed_list_conv(&elem, i, "state_args");
+                        if !conv.is_empty() {
+                            branch.push_str(&conv);
+                        }
+                    }
+                }
+                if !branch.is_empty() {
+                    if !any_per_state {
+                        deser_body.push_str(
+                            "// D10 per-state typed list conversion\n",
+                        );
+                        any_per_state = true;
+                    }
+                    deser_body.push_str(&format!(
+                        "if (c.state == \"{}\") {{\n{}}}\n",
+                        state_name, branch
+                    ));
+                }
+            }
+            for (state_name, types) in &enter_arg_decls {
+                let mut branch = String::new();
+                for (i, t) in types.iter().enumerate() {
+                    if let Some(elem) = cs_list_elem_type(t) {
+                        let conv = cs_typed_list_conv(&elem, i, "enter_args");
+                        if !conv.is_empty() {
+                            branch.push_str(&conv);
+                        }
+                    }
+                }
+                if !branch.is_empty() {
+                    if !any_per_state {
+                        deser_body.push_str(
+                            "// D10 per-state typed list conversion\n",
+                        );
+                        any_per_state = true;
+                    }
+                    deser_body.push_str(&format!(
+                        "if (c.state == \"{}\") {{\n{}}}\n",
+                        state_name, branch
+                    ));
+                }
+            }
             deser_body.push_str("if (el.TryGetProperty(\"parent\", out var p) && p.ValueKind != System.Text.Json.JsonValueKind.Null) {\n");
             deser_body.push_str("    c.parent_compartment = __DeserComp(p);\n");
             deser_body.push_str("}\n");
@@ -3153,6 +3393,153 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    if sa, ok := m[\"state_args\"].([]interface{}); ok { for _, v := range sa { comp.stateArgs = append(comp.stateArgs, normalizeNum(v)) } }\n");
             restore_body.push_str("    if ea, ok := m[\"enter_args\"].([]interface{}); ok { for _, v := range ea { comp.enterArgs = append(comp.enterArgs, normalizeNum(v)) } }\n");
             restore_body.push_str("    if xa, ok := m[\"exit_args\"].([]interface{}); ok { for _, v := range xa { comp.exitArgs = append(comp.exitArgs, normalizeNum(v)) } }\n");
+            // D10: per-state typed slice conversion. JSON Arrays
+            // come back as `[]interface{}`, but the user-handler
+            // type-asserts to the declared Go slice type
+            // (e.g. `.([]int)`). Walk the declared per-state arg
+            // types and convert when needed.
+            let go_slice_elem_type = |t: &str| -> Option<String> {
+                let t = t.trim();
+                let rest = t.strip_prefix("[]")?;
+                Some(rest.trim().to_string())
+            };
+            let go_typed_list_conv = |elem_type: &str,
+                                      idx: usize,
+                                      slot: &str|
+             -> String {
+                let (typed_t, conv) = match elem_type {
+                    "int" => ("int", "int(__f)"),
+                    "int32" => ("int32", "int32(__f)"),
+                    "int64" => ("int64", "int64(__f)"),
+                    "float32" => ("float32", "float32(__f)"),
+                    "float64" => ("float64", "__f"),
+                    "string" => {
+                        return format!(
+                            "    if len(comp.{slot}) > {idx} {{\n\
+                             \x20       if __raw, __ok := comp.{slot}[{idx}].([]interface{{}}); __ok {{\n\
+                             \x20           __typed := make([]string, 0, len(__raw))\n\
+                             \x20           for _, __e := range __raw {{\n\
+                             \x20               if __s, __ok2 := __e.(string); __ok2 {{ __typed = append(__typed, __s) }}\n\
+                             \x20           }}\n\
+                             \x20           comp.{slot}[{idx}] = __typed\n\
+                             \x20       }}\n\
+                             \x20   }}\n"
+                        );
+                    }
+                    "bool" => {
+                        return format!(
+                            "    if len(comp.{slot}) > {idx} {{\n\
+                             \x20       if __raw, __ok := comp.{slot}[{idx}].([]interface{{}}); __ok {{\n\
+                             \x20           __typed := make([]bool, 0, len(__raw))\n\
+                             \x20           for _, __e := range __raw {{\n\
+                             \x20               if __b, __ok2 := __e.(bool); __ok2 {{ __typed = append(__typed, __b) }}\n\
+                             \x20           }}\n\
+                             \x20           comp.{slot}[{idx}] = __typed\n\
+                             \x20       }}\n\
+                             \x20   }}\n"
+                        );
+                    }
+                    _ => return String::new(),
+                };
+                format!(
+                    "    if len(comp.{slot}) > {idx} {{\n\
+                     \x20       if __raw, __ok := comp.{slot}[{idx}].([]interface{{}}); __ok {{\n\
+                     \x20           __typed := make([]{typed_t}, 0, len(__raw))\n\
+                     \x20           for _, __e := range __raw {{\n\
+                     \x20               if __f, __ok2 := __e.(float64); __ok2 {{ __typed = append(__typed, {conv}) }}\n\
+                     \x20           }}\n\
+                     \x20           comp.{slot}[{idx}] = __typed\n\
+                     \x20       }}\n\
+                     \x20   }}\n"
+                )
+            };
+            let go_state_arg_decls: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .params
+                                .iter()
+                                .map(|p| match &p.param_type {
+                                    crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
+                                        s.clone()
+                                    }
+                                    crate::frame_c::compiler::frame_ast::Type::Unknown => {
+                                        String::new()
+                                    }
+                                })
+                                .collect();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let go_enter_arg_decls: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .enter
+                                .as_ref()
+                                .map(|e| {
+                                    e.params
+                                        .iter()
+                                        .map(|p| match &p.param_type {
+                                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
+                                                s.clone()
+                                            }
+                                            crate::frame_c::compiler::frame_ast::Type::Unknown => {
+                                                String::new()
+                                            }
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (state_name, types) in &go_state_arg_decls {
+                let mut branch = String::new();
+                for (i, t) in types.iter().enumerate() {
+                    if let Some(elem) = go_slice_elem_type(t) {
+                        let conv = go_typed_list_conv(&elem, i, "stateArgs");
+                        if !conv.is_empty() {
+                            branch.push_str(&conv);
+                        }
+                    }
+                }
+                if !branch.is_empty() {
+                    restore_body.push_str(&format!(
+                        "    if comp.state == \"{}\" {{\n{}    }}\n",
+                        state_name, branch
+                    ));
+                }
+            }
+            for (state_name, types) in &go_enter_arg_decls {
+                let mut branch = String::new();
+                for (i, t) in types.iter().enumerate() {
+                    if let Some(elem) = go_slice_elem_type(t) {
+                        let conv = go_typed_list_conv(&elem, i, "enterArgs");
+                        if !conv.is_empty() {
+                            branch.push_str(&conv);
+                        }
+                    }
+                }
+                if !branch.is_empty() {
+                    restore_body.push_str(&format!(
+                        "    if comp.state == \"{}\" {{\n{}    }}\n",
+                        state_name, branch
+                    ));
+                }
+            }
             restore_body.push_str("    // forward_event is typically nil in persisted state\n");
             restore_body.push_str(
                 "    comp.parentCompartment = deserializeComp(m[\"parent_compartment\"])\n",
