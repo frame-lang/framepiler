@@ -2053,13 +2053,38 @@ pub(crate) fn generate_persistence_methods(
             deser_body
                 .push_str("    for (var k : sv.keySet()) { c.state_vars.put(k, sv.get(k)); }\n");
             deser_body.push_str("}\n");
+            // Convert JSON arrays back to ArrayList<Object> when an
+            // arg was itself a list/array (org.json wraps Collections
+            // as JSONArray on serialize; without this conversion the
+            // user's `(List<T>) state_args.get(0)` cast fails because
+            // the value is a JSONArray, not a List).
             deser_body.push_str("if (d.has(\"state_args\")) {\n");
             deser_body.push_str("    var sa = d.getJSONArray(\"state_args\");\n");
-            deser_body.push_str("    for (int i = 0; i < sa.length(); i++) { c.state_args.add(sa.get(i)); }\n");
+            deser_body.push_str("    for (int i = 0; i < sa.length(); i++) {\n");
+            deser_body.push_str("        Object __v = sa.get(i);\n");
+            deser_body.push_str("        if (__v instanceof org.json.JSONArray) {\n");
+            deser_body.push_str("            var __ja = (org.json.JSONArray) __v;\n");
+            deser_body.push_str("            var __list = new java.util.ArrayList<Object>();\n");
+            deser_body.push_str("            for (int __k = 0; __k < __ja.length(); __k++) __list.add(__ja.get(__k));\n");
+            deser_body.push_str("            c.state_args.add(__list);\n");
+            deser_body.push_str("        } else {\n");
+            deser_body.push_str("            c.state_args.add(__v);\n");
+            deser_body.push_str("        }\n");
+            deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (d.has(\"enter_args\")) {\n");
             deser_body.push_str("    var ea = d.getJSONArray(\"enter_args\");\n");
-            deser_body.push_str("    for (int i = 0; i < ea.length(); i++) { c.enter_args.add(ea.get(i)); }\n");
+            deser_body.push_str("    for (int i = 0; i < ea.length(); i++) {\n");
+            deser_body.push_str("        Object __v = ea.get(i);\n");
+            deser_body.push_str("        if (__v instanceof org.json.JSONArray) {\n");
+            deser_body.push_str("            var __ja = (org.json.JSONArray) __v;\n");
+            deser_body.push_str("            var __list = new java.util.ArrayList<Object>();\n");
+            deser_body.push_str("            for (int __k = 0; __k < __ja.length(); __k++) __list.add(__ja.get(__k));\n");
+            deser_body.push_str("            c.enter_args.add(__list);\n");
+            deser_body.push_str("        } else {\n");
+            deser_body.push_str("            c.enter_args.add(__v);\n");
+            deser_body.push_str("        }\n");
+            deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (d.has(\"parent\") && !d.isNull(\"parent\")) {\n");
             deser_body.push_str("    c.parent_compartment = __deserComp(d.get(\"parent\"));\n");
@@ -2225,10 +2250,24 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("        else c.state_vars[kv.Name] = kv.Value.ToString();\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
+            // Nested-array case: a list-typed state-arg (e.g.
+            // `List<int>`) serializes as a JSON Array inside the
+            // outer state_args Array. Reconstruct it as
+            // `List<object>` on deserialize so the user's
+            // `(List<T>) state_args[0]` cast succeeds.
             deser_body.push_str("if (el.TryGetProperty(\"state_args\", out var sa) && sa.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
             deser_body.push_str("    foreach (var v in sa.EnumerateArray()) {\n");
             deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) { if (v.TryGetInt32(out int __ii)) c.state_args.Add(__ii); else if (v.TryGetInt64(out long __il)) c.state_args.Add(__il); else c.state_args.Add(v.GetDouble()); }\n");
             deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.String) c.state_args.Add(v.GetString());\n");
+            deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
+            deser_body.push_str("            var __nested = new System.Collections.Generic.List<object>();\n");
+            deser_body.push_str("            foreach (var __ne in v.EnumerateArray()) {\n");
+            deser_body.push_str("                if (__ne.ValueKind == System.Text.Json.JsonValueKind.Number) { if (__ne.TryGetInt32(out int __nii)) __nested.Add(__nii); else if (__ne.TryGetInt64(out long __nil)) __nested.Add(__nil); else __nested.Add(__ne.GetDouble()); }\n");
+            deser_body.push_str("                else if (__ne.ValueKind == System.Text.Json.JsonValueKind.String) __nested.Add(__ne.GetString());\n");
+            deser_body.push_str("                else __nested.Add(__ne.ToString());\n");
+            deser_body.push_str("            }\n");
+            deser_body.push_str("            c.state_args.Add(__nested);\n");
+            deser_body.push_str("        }\n");
             deser_body.push_str("        else c.state_args.Add(v.ToString());\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
@@ -2236,6 +2275,15 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("    foreach (var v in ea.EnumerateArray()) {\n");
             deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) { if (v.TryGetInt32(out int __ii)) c.enter_args.Add(__ii); else if (v.TryGetInt64(out long __il)) c.enter_args.Add(__il); else c.enter_args.Add(v.GetDouble()); }\n");
             deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.String) c.enter_args.Add(v.GetString());\n");
+            deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
+            deser_body.push_str("            var __nested = new System.Collections.Generic.List<object>();\n");
+            deser_body.push_str("            foreach (var __ne in v.EnumerateArray()) {\n");
+            deser_body.push_str("                if (__ne.ValueKind == System.Text.Json.JsonValueKind.Number) { if (__ne.TryGetInt32(out int __nii)) __nested.Add(__nii); else if (__ne.TryGetInt64(out long __nil)) __nested.Add(__nil); else __nested.Add(__ne.GetDouble()); }\n");
+            deser_body.push_str("                else if (__ne.ValueKind == System.Text.Json.JsonValueKind.String) __nested.Add(__ne.GetString());\n");
+            deser_body.push_str("                else __nested.Add(__ne.ToString());\n");
+            deser_body.push_str("            }\n");
+            deser_body.push_str("            c.enter_args.Add(__nested);\n");
+            deser_body.push_str("        }\n");
             deser_body.push_str("        else c.enter_args.Add(v.ToString());\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
@@ -2546,13 +2594,35 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("    val sv = d.getJSONObject(\"state_vars\")\n");
             deser_body.push_str("    for (k in sv.keys()) { c.state_vars[k] = sv.get(k) }\n");
             deser_body.push_str("}\n");
+            // Same conversion as Java: JSONArray entries inside
+            // state_args/enter_args came from list-typed args; cast
+            // back to ArrayList<Any?> so the user's `as List<T>`
+            // succeeds.
             deser_body.push_str("if (d.has(\"state_args\")) {\n");
             deser_body.push_str("    val sa = d.getJSONArray(\"state_args\")\n");
-            deser_body.push_str("    for (i in 0 until sa.length()) { c.state_args.add(sa.get(i)) }\n");
+            deser_body.push_str("    for (i in 0 until sa.length()) {\n");
+            deser_body.push_str("        val __v = sa.get(i)\n");
+            deser_body.push_str("        if (__v is org.json.JSONArray) {\n");
+            deser_body.push_str("            val __list = java.util.ArrayList<Any?>()\n");
+            deser_body.push_str("            for (__k in 0 until __v.length()) __list.add(__v.get(__k))\n");
+            deser_body.push_str("            c.state_args.add(__list)\n");
+            deser_body.push_str("        } else {\n");
+            deser_body.push_str("            c.state_args.add(__v)\n");
+            deser_body.push_str("        }\n");
+            deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (d.has(\"enter_args\")) {\n");
             deser_body.push_str("    val ea = d.getJSONArray(\"enter_args\")\n");
-            deser_body.push_str("    for (i in 0 until ea.length()) { c.enter_args.add(ea.get(i)) }\n");
+            deser_body.push_str("    for (i in 0 until ea.length()) {\n");
+            deser_body.push_str("        val __v = ea.get(i)\n");
+            deser_body.push_str("        if (__v is org.json.JSONArray) {\n");
+            deser_body.push_str("            val __list = java.util.ArrayList<Any?>()\n");
+            deser_body.push_str("            for (__k in 0 until __v.length()) __list.add(__v.get(__k))\n");
+            deser_body.push_str("            c.enter_args.add(__list)\n");
+            deser_body.push_str("        } else {\n");
+            deser_body.push_str("            c.enter_args.add(__v)\n");
+            deser_body.push_str("        }\n");
+            deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (d.has(\"parent\") && !d.isNull(\"parent\")) {\n");
             deser_body.push_str("    c.parent_compartment = __deserComp(d.get(\"parent\"))\n");
