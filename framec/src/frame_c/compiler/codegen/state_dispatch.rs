@@ -1176,6 +1176,38 @@ pub(crate) fn generate_state_handlers_via_arcanum(
         }
         m
     };
+    // Companion map: for every (state_name, param_name) in the
+    // effective view, the param's declared type (as a Frame source
+    // string — backends map it to native types). Used by typed-
+    // language per-handler emit so cast types match the declaration
+    // (otherwise C/C++/Java/etc. default to `int` and break str/bool).
+    let state_param_types: std::collections::HashMap<(String, String), String> = {
+        let mut m: std::collections::HashMap<(String, String), String> =
+            std::collections::HashMap::new();
+        for s in &machine.states {
+            for p in &s.params {
+                let type_str = match &p.param_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => t.clone(),
+                    crate::frame_c::compiler::frame_ast::Type::Unknown => "int".to_string(),
+                };
+                // Own params (state owns the declaration site).
+                m.insert((s.name.clone(), p.name.clone()), type_str.clone());
+                // Cascade-inherited: walk parent chain and register
+                // the same name+type at every ancestor.
+                let mut current = s.parent.clone();
+                while let Some(parent_name) = current {
+                    m.entry((parent_name.clone(), p.name.clone()))
+                        .or_insert_with(|| type_str.clone());
+                    current = machine
+                        .states
+                        .iter()
+                        .find(|st| st.name == parent_name)
+                        .and_then(|st| st.parent.clone());
+                }
+            }
+        }
+        m
+    };
     // Mirror for enter handler params: maps target state name to its
     // declared `$>(name: type)` enter handler param names. Lets transition
     // codegen write enter_args by name instead of by positional index.
@@ -1346,6 +1378,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             &state_enter_param_names,
             &state_exit_param_names,
             &event_param_names,
+            &state_param_types,
         ));
     }
 
@@ -1369,6 +1402,7 @@ pub(crate) fn generate_per_handler_methods(
     state_enter_param_names: &std::collections::HashMap<String, Vec<String>>,
     state_exit_param_names: &std::collections::HashMap<String, Vec<String>>,
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
 
@@ -1455,6 +1489,7 @@ pub(crate) fn generate_per_handler_methods(
                 event_param_names,
                 &handler_state_var_types,
                 &state_hsm_parents,
+                state_param_types,
             );
             methods.push(method);
         }
@@ -1487,6 +1522,7 @@ pub(crate) fn generate_per_handler_methods(
                 event_param_names,
                 &handler_state_var_types,
                 &state_hsm_parents,
+                state_param_types,
             );
             // Per-handler leading comments (from `HandlerAst.leading_comments`
             // / `EnterHandler.leading_comments` / `ExitHandler.leading_comments`,
@@ -1532,6 +1568,7 @@ fn generate_per_handler_method_for_lang(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     match lang {
         TargetLanguage::Python3 => generate_python_handler_method(
@@ -1608,6 +1645,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         TargetLanguage::Lua => generate_lua_handler_method(
             system_name,
@@ -1644,6 +1682,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         TargetLanguage::Php => generate_php_handler_method(
             system_name,
@@ -1680,6 +1719,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         TargetLanguage::Java => generate_java_handler_method(
             system_name,
@@ -1698,6 +1738,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         TargetLanguage::Kotlin => generate_kotlin_handler_method(
             system_name,
@@ -1716,6 +1757,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         TargetLanguage::Swift => generate_swift_handler_method(
             system_name,
@@ -1734,6 +1776,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         TargetLanguage::Cpp => generate_cpp_handler_method(
             system_name,
@@ -1752,6 +1795,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         TargetLanguage::CSharp => generate_csharp_handler_method(
             system_name,
@@ -1770,6 +1814,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         TargetLanguage::C => generate_c_handler_method(
             system_name,
@@ -1788,6 +1833,7 @@ fn generate_per_handler_method_for_lang(
             event_param_names,
             handler_state_var_types,
             state_hsm_parents,
+            state_param_types,
         ),
         _ => unreachable!(
             "generate_per_handler_method_for_lang called with non-per-handler target {:?}",
@@ -1836,6 +1882,7 @@ fn generate_ruby_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
@@ -1946,6 +1993,7 @@ fn generate_lua_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
@@ -2058,6 +2106,7 @@ fn generate_php_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
@@ -2144,6 +2193,7 @@ fn generate_go_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::Go;
@@ -2163,6 +2213,7 @@ fn generate_go_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
@@ -2170,9 +2221,19 @@ fn generate_go_handler_method(
     // State-param binding. Go's untyped `interface{}` needs a type assertion;
     // fall back to `any` when the declared type is missing.
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
-            let type_str = "int"; // state_param_names doesn't carry types — default to int
-            let go_type = go_map_type(type_str);
+            // Skip when a handler param shadows a state-arg — Go's
+            // `:=` disallows redeclaration in the same scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
+            let frame_type = state_param_types
+                .get(&(state_name.to_string(), name.clone()))
+                .map(|s| s.as_str())
+                .unwrap_or("int");
+            let go_type = go_map_type(frame_type);
             body.push_str(&format!(
                 "{} := compartment.stateArgs[{}].({})\n_ = {}\n",
                 name, i, go_type, name
@@ -2280,6 +2341,7 @@ fn generate_java_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::Java;
@@ -2299,14 +2361,26 @@ fn generate_java_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
 
     // State-param binding. Java needs explicit typed cast.
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
-            let java_type = "int"; // state_param_names doesn't carry types — default to int
+            // Skip when a handler param shadows a state-arg — Java
+            // disallows variable redeclaration in the same scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
+            let frame_type = state_param_types
+                .get(&(state_name.to_string(), name.clone()))
+                .map(|s| s.as_str())
+                .unwrap_or("int");
+            let java_type = java_map_type(frame_type);
             body.push_str(&format!(
                 "{} {} = ({}) compartment.state_args.get({});\n",
                 java_type, name, java_type, i
@@ -2400,6 +2474,7 @@ fn generate_kotlin_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::Kotlin;
@@ -2419,14 +2494,26 @@ fn generate_kotlin_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
 
     // State-param binding. Kotlin uses `val name = compartment.state_args[i] as T`.
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
-            let kt_type = "Int"; // state_param_names doesn't carry types — default to Int
+            // Skip when a handler param shadows a state-arg — `val` can't
+            // be redeclared in the same Kotlin scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
+            let frame_type = state_param_types
+                .get(&(state_name.to_string(), name.clone()))
+                .map(|s| s.as_str())
+                .unwrap_or("int");
+            let kt_type = kotlin_map_type(frame_type);
             body.push_str(&format!(
                 "val {} = compartment.state_args[{}] as {}\n",
                 name, i, kt_type
@@ -2520,6 +2607,7 @@ fn generate_swift_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::Swift;
@@ -2539,14 +2627,26 @@ fn generate_swift_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
 
     // State-param binding. Swift uses `let name = compartment.state_args[i] as! T`.
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
-            let sw_type = "Int"; // state_param_names doesn't carry types — default to Int
+            // Skip when a handler param shadows a state-arg — Swift's
+            // `let` can't be redeclared in the same scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
+            let frame_type = state_param_types
+                .get(&(state_name.to_string(), name.clone()))
+                .map(|s| s.as_str())
+                .unwrap_or("int");
+            let sw_type = swift_map_type(frame_type);
             body.push_str(&format!(
                 "let {} = compartment.state_args[{}] as! {}\n",
                 name, i, sw_type
@@ -2640,6 +2740,7 @@ fn generate_cpp_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::Cpp;
@@ -2659,18 +2760,38 @@ fn generate_cpp_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
 
     // State-param binding. C++ uses `auto name = std::any_cast<T>(compartment->state_args[i]);`.
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
-            let cpp_type = "int"; // default — no type info in state_param_names
-            body.push_str(&format!(
-                "auto {} = std::any_cast<{}>(compartment->state_args[{}]);\n",
-                name, cpp_type, i
-            ));
+            // Skip when a handler param shadows a state-arg — C++
+            // disallows variable redeclaration in the same scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
+            let frame_type = state_param_types
+                .get(&(state_name.to_string(), name.clone()))
+                .map(|s| s.as_str())
+                .unwrap_or("int");
+            let cpp_type = cpp_map_type(frame_type);
+            // Untyped params land as `std::any`; copy without cast.
+            if cpp_type == "std::any" {
+                body.push_str(&format!(
+                    "auto {} = compartment->state_args[{}];\n",
+                    name, i
+                ));
+            } else {
+                body.push_str(&format!(
+                    "{} {} = std::any_cast<{}>(compartment->state_args[{}]);\n",
+                    cpp_type, name, cpp_type, i
+                ));
+            }
         }
     }
 
@@ -2773,6 +2894,7 @@ fn generate_csharp_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::CSharp;
@@ -2792,14 +2914,26 @@ fn generate_csharp_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
 
     // State-param binding. C# uses `var name = (T) compartment.state_args[i];`.
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
-            let cs_type = "int"; // default — no type info in state_param_names
+            // Skip when a handler param shadows a state-arg — C# disallows
+            // variable redeclaration in the same scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
+            let frame_type = state_param_types
+                .get(&(state_name.to_string(), name.clone()))
+                .map(|s| s.as_str())
+                .unwrap_or("int");
+            let cs_type = csharp_map_type(frame_type);
             body.push_str(&format!(
                 "{} {} = ({}) compartment.state_args[{}];\n",
                 cs_type, name, cs_type, i
@@ -2894,6 +3028,7 @@ fn generate_c_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::C;
@@ -2913,16 +3048,44 @@ fn generate_c_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
 
-    // State-param binding. C uses `int name = (int)(intptr_t) FrameVec_get(compartment->state_args, i);`.
+    // State-param binding. Maps Frame types to native C types so
+    // `str` → `const char*`, `bool` → `int`, etc. Falls back to `int`
+    // when the type isn't registered. Mirrors the rules in
+    // DispatchSyntax::C's `c_param_type_and_cast` helper (kept in sync).
+    let c_state_arg_decl = |type_str: &str| -> (String, String) {
+        let t = type_str.trim();
+        match t {
+            "str" | "string" | "String" | "char*" | "const char*" => {
+                ("const char*".to_string(), "(const char*)".to_string())
+            }
+            _ if t.ends_with('*') => (t.to_string(), format!("({})", t)),
+            _ => ("int".to_string(), "(int)(intptr_t)".to_string()),
+        }
+    };
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
+            // Dynamic languages let the handler-param prefetch reassign
+            // an outer `name`; C disallows redeclaration. When a handler
+            // param shadows a state-arg, skip the state-arg prefetch and
+            // let the param binding take over.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
+            let type_str = state_param_types
+                .get(&(state_name.to_string(), name.clone()))
+                .map(|s| s.as_str())
+                .unwrap_or("int");
+            let (c_type, cast) = c_state_arg_decl(type_str);
             body.push_str(&format!(
-                "int {} = (int)(intptr_t){}_FrameVec_get(compartment->state_args, {});\n",
-                name, system_name, i
+                "{} {} = {}{}_FrameVec_get(compartment->state_args, {});\n",
+                c_type, name, cast, system_name, i
             ));
             body.push_str(&format!("(void){};\n", name));
         }
@@ -3027,6 +3190,7 @@ fn generate_dart_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    _state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::Dart;
@@ -3046,13 +3210,21 @@ fn generate_dart_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
 
     // State-param binding.
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
+            // Skip when a handler param shadows a state-arg — Dart's
+            // `final` can't be redeclared in the same scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
             body.push_str(&format!(
                 "final {} = compartment.state_args[{}];\n",
                 name, i
@@ -3158,6 +3330,7 @@ fn generate_gdscript_handler_method(
     event_param_names: &std::collections::HashMap<String, Vec<String>>,
     handler_state_var_types: &std::collections::HashMap<String, String>,
     state_hsm_parents: &std::collections::HashMap<String, String>,
+    _state_param_types: &std::collections::HashMap<(String, String), String>,
 ) -> CodegenNode {
     let method_name = handler_method_name(state_name, handler);
     let lang = TargetLanguage::GDScript;
@@ -3177,12 +3350,20 @@ fn generate_gdscript_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
 
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
+            // Skip when a handler param shadows a state-arg — GDScript's
+            // `var` can't be redeclared in the same scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
             body.push_str(&format!("var {} = compartment.state_args[{}]\n", name, i));
         }
     }
@@ -3283,6 +3464,7 @@ fn generate_typescript_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
@@ -3291,7 +3473,14 @@ fn generate_typescript_handler_method(
     // through `compartment.state_args` — bind them to named locals at the
     // top of every handler so handler bodies can reference them by name.
     if let Some(sp_names) = state_param_names.get(state_name) {
+        let handler_param_names: std::collections::HashSet<&str> =
+            handler.params.iter().map(|p| p.name.as_str()).collect();
         for (i, name) in sp_names.iter().enumerate() {
+            // Skip when a handler param shadows a state-arg — JS/TS
+            // `const` can't be redeclared in the same scope.
+            if handler_param_names.contains(name.as_str()) {
+                continue;
+            }
             body.push_str(&format!(
                 "const {} = compartment.state_args[{}];\n",
                 name, i
@@ -3412,6 +3601,7 @@ fn generate_python_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     let mut body = String::new();
@@ -3555,6 +3745,7 @@ pub(crate) fn generate_state_method(
         // transitions. Empty map is safe here.
         state_hsm_parents: std::collections::HashMap::new(),
         current_return_type: None,
+            state_param_types: std::collections::HashMap::new(),
     };
 
     // Generate the dispatch body based on __e._message / __e.message
@@ -3798,6 +3989,7 @@ pub(crate) fn generate_handler_from_arcanum(
         // future propagation step that needs ancestor lookup.
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     // Emit handler default return value if present
@@ -3862,8 +4054,18 @@ pub(crate) fn generate_handler_from_arcanum(
                     name, system_name, owner
                 ));
             };
+            // Skip prefetch when a handler param shadows a state-arg of
+            // the same name — Rust allows shadowing but the prefetch
+            // would clobber the handler-supplied value with the OLD
+            // compartment value, breaking writes-back-via-transition
+            // and any handler that just consumes the param verbatim.
+            let handler_param_names: std::collections::HashSet<&str> =
+                handler.params.iter().map(|p| p.name.as_str()).collect();
             // 1. Own params — owner is self.
             for name in non_start_state_param_names {
+                if handler_param_names.contains(name.as_str()) {
+                    continue;
+                }
                 emit_walk(&mut sys_param_preamble, name, state_name);
             }
             // 2. Cascade-inherited params — declared at a descendant's
@@ -3890,7 +4092,8 @@ pub(crate) fn generate_handler_from_arcanum(
                 }
                 if let Some(descendant_params) = state_param_names.get(descendant) {
                     for p in descendant_params {
-                        if already.contains(p.as_str()) {
+                        if already.contains(p.as_str()) || handler_param_names.contains(p.as_str())
+                        {
                             continue;
                         }
                         emit_walk(&mut sys_param_preamble, p, descendant);

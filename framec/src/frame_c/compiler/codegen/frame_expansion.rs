@@ -4933,6 +4933,7 @@ mod tests {
             event_param_names: std::collections::HashMap::new(),
             state_hsm_parents: std::collections::HashMap::new(),
             current_return_type: None,
+            state_param_types: std::collections::HashMap::new(),
         }
     }
 

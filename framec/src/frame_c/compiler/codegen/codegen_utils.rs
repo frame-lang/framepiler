@@ -55,6 +55,12 @@ pub(crate) struct HandlerContext {
     /// Map from event name to its interface method's declared param names.
     /// Used by @@:params.name to resolve named parameter to positional index.
     pub event_param_names: std::collections::HashMap<String, Vec<String>>,
+    /// (state_name, param_name) → declared type string. Populated for the
+    /// effective view: a state's own params plus any params declared at
+    /// a descendant's cascade arrow `$Child => $Self(name: T)`. Used by
+    /// typed-language per-handler emit so the prefetch cast/declaration
+    /// matches the declared type instead of defaulting to `int`.
+    pub state_param_types: std::collections::HashMap<(String, String), String>,
     /// Declared return type of the handler currently being expanded.
     /// Used by the C backend to branch on `float`/`double` when emitting
     /// `@@:(expr)` so doubles survive the `void*` return slot.
