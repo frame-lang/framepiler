@@ -1433,6 +1433,25 @@ pub(crate) fn generate_persistence_methods(
             deserialize_helper.push_str(&format!("            {}_FrameDict_set(comp->state_vars, var_item->string, (void*)(intptr_t)(int)var_item->valuedouble);\n", system.name));
             deserialize_helper.push_str("        }\n");
             deserialize_helper.push_str("    }\n");
+            // Deserialize state_args (positional) — values stored as
+            // intptr_t casts (matches the serialize side).
+            deserialize_helper
+                .push_str("    cJSON* sa = cJSON_GetObjectItem(data, \"state_args\");\n");
+            deserialize_helper.push_str("    if (sa) {\n");
+            deserialize_helper.push_str("        cJSON* sa_item;\n");
+            deserialize_helper.push_str("        cJSON_ArrayForEach(sa_item, sa) {\n");
+            deserialize_helper.push_str(&format!("            {}_FrameVec_push(comp->state_args, (void*)(intptr_t)(int)sa_item->valuedouble);\n", system.name));
+            deserialize_helper.push_str("        }\n");
+            deserialize_helper.push_str("    }\n");
+            // Deserialize enter_args (positional)
+            deserialize_helper
+                .push_str("    cJSON* ea = cJSON_GetObjectItem(data, \"enter_args\");\n");
+            deserialize_helper.push_str("    if (ea) {\n");
+            deserialize_helper.push_str("        cJSON* ea_item;\n");
+            deserialize_helper.push_str("        cJSON_ArrayForEach(ea_item, ea) {\n");
+            deserialize_helper.push_str(&format!("            {}_FrameVec_push(comp->enter_args, (void*)(intptr_t)(int)ea_item->valuedouble);\n", system.name));
+            deserialize_helper.push_str("        }\n");
+            deserialize_helper.push_str("    }\n");
             // Recursively deserialize parent
             deserialize_helper.push_str(
                 "    cJSON* parent = cJSON_GetObjectItem(data, \"parent_compartment\");\n",
@@ -2695,6 +2714,8 @@ pub(crate) fn generate_persistence_methods(
             ser_body.push_str("sv = {}\n");
             ser_body.push_str("comp.state_vars.each { |k, v| sv[k] = v }\n");
             ser_body.push_str("j[\"state_vars\"] = sv\n");
+            ser_body.push_str("j[\"state_args\"] = comp.state_args\n");
+            ser_body.push_str("j[\"enter_args\"] = comp.enter_args\n");
             ser_body.push_str("j[\"parent\"] = __ser_comp(comp.parent_compartment)\n");
             ser_body.push_str("j");
 
@@ -2719,6 +2740,8 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("if data[\"state_vars\"]\n");
             deser_body.push_str("  data[\"state_vars\"].each { |k, v| c.state_vars[k] = v }\n");
             deser_body.push_str("end\n");
+            deser_body.push_str("c.state_args = data[\"state_args\"] if data[\"state_args\"]\n");
+            deser_body.push_str("c.enter_args = data[\"enter_args\"] if data[\"enter_args\"]\n");
             deser_body.push_str("if data[\"parent\"]\n");
             deser_body.push_str("  c.parent_compartment = __deser_comp(data[\"parent\"])\n");
             deser_body.push_str("end\n");
@@ -2879,10 +2902,18 @@ pub(crate) fn generate_persistence_methods(
             ));
             // state_vars is a map (keyed by $.varName); state_args / enter_args /
             // exit_args are positional slices (Vec of interface{}).
-            restore_body.push_str("    if sv, ok := m[\"state_vars\"].(map[string]interface{}); ok { for k, v := range sv { comp.stateVars[k] = v } }\n");
-            restore_body.push_str("    if sa, ok := m[\"state_args\"].([]interface{}); ok { comp.stateArgs = append(comp.stateArgs, sa...) }\n");
-            restore_body.push_str("    if ea, ok := m[\"enter_args\"].([]interface{}); ok { comp.enterArgs = append(comp.enterArgs, ea...) }\n");
-            restore_body.push_str("    if xa, ok := m[\"exit_args\"].([]interface{}); ok { comp.exitArgs = append(comp.exitArgs, xa...) }\n");
+            //
+            // JSON numbers come back as float64 in Go's encoding/json default;
+            // convert whole-number float64 → int so type assertions in
+            // generated handlers (e.g. `slot := stateArgs[0].(int)`) work.
+            restore_body.push_str("    normalizeNum := func(v interface{}) interface{} {\n");
+            restore_body.push_str("        if f, ok := v.(float64); ok && f == float64(int(f)) { return int(f) }\n");
+            restore_body.push_str("        return v\n");
+            restore_body.push_str("    }\n");
+            restore_body.push_str("    if sv, ok := m[\"state_vars\"].(map[string]interface{}); ok { for k, v := range sv { comp.stateVars[k] = normalizeNum(v) } }\n");
+            restore_body.push_str("    if sa, ok := m[\"state_args\"].([]interface{}); ok { for _, v := range sa { comp.stateArgs = append(comp.stateArgs, normalizeNum(v)) } }\n");
+            restore_body.push_str("    if ea, ok := m[\"enter_args\"].([]interface{}); ok { for _, v := range ea { comp.enterArgs = append(comp.enterArgs, normalizeNum(v)) } }\n");
+            restore_body.push_str("    if xa, ok := m[\"exit_args\"].([]interface{}); ok { for _, v := range xa { comp.exitArgs = append(comp.exitArgs, normalizeNum(v)) } }\n");
             restore_body.push_str("    // forward_event is typically nil in persisted state\n");
             restore_body.push_str(
                 "    comp.parentCompartment = deserializeComp(m[\"parent_compartment\"])\n",
