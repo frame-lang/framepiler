@@ -1475,7 +1475,9 @@ pub(crate) fn generate_persistence_methods(
             // Serialize entire compartment chain
             save_body.push_str(&format!("cJSON_AddItemToObject(root, \"_compartment\", {}_serialize_compartment(self->__compartment));\n", system.name));
 
-            // Serialize state stack (simplified - just states for now)
+            // Serialize state stack — full compartment chain per entry,
+            // matching the current-compartment serialization shape so
+            // pop after restore restores state_args/enter_args/state_vars.
             save_body.push_str("cJSON* stack_arr = cJSON_CreateArray();\n");
             save_body.push_str(&format!(
                 "for (int i = 0; i < {}_FrameVec_size(self->_state_stack); i++) {{\n",
@@ -1483,9 +1485,10 @@ pub(crate) fn generate_persistence_methods(
             ));
             save_body.push_str(&format!("    {}_Compartment* comp = ({}_Compartment*){}_FrameVec_get(self->_state_stack, i);\n",
                 system.name, system.name, system.name));
-            save_body.push_str("    cJSON* stack_obj = cJSON_CreateObject();\n");
-            save_body.push_str("    cJSON_AddStringToObject(stack_obj, \"state\", comp->state);\n");
-            save_body.push_str("    cJSON_AddItemToArray(stack_arr, stack_obj);\n");
+            save_body.push_str(&format!(
+                "    cJSON_AddItemToArray(stack_arr, {}_serialize_compartment(comp));\n",
+                system.name
+            ));
             save_body.push_str("}\n");
             save_body.push_str("cJSON_AddItemToObject(root, \"_state_stack\", stack_arr);\n");
 
@@ -1567,21 +1570,24 @@ pub(crate) fn generate_persistence_methods(
                 system.name
             ));
 
-            // Restore state stack
+            // Restore state stack — uses deserialize_compartment so each
+            // entry gets its full state_args / enter_args / state_vars
+            // restored, matching the save side.
             restore_body
                 .push_str("cJSON* stack_arr = cJSON_GetObjectItem(root, \"_state_stack\");\n");
             restore_body.push_str("if (stack_arr) {\n");
             restore_body.push_str("    cJSON* stack_item;\n");
             restore_body.push_str("    cJSON_ArrayForEach(stack_item, stack_arr) {\n");
-            restore_body.push_str(
-                "        cJSON* state_obj = cJSON_GetObjectItem(stack_item, \"state\");\n",
-            );
-            restore_body.push_str(&format!("        {}_Compartment* comp = {}_Compartment_new(strdup(state_obj->valuestring));\n",
-                system.name, system.name));
             restore_body.push_str(&format!(
-                "        {}_FrameVec_push(instance->_state_stack, comp);\n",
+                "        {}_Compartment* comp = {}_deserialize_compartment(stack_item);\n",
+                system.name, system.name
+            ));
+            restore_body.push_str("        if (comp) {\n");
+            restore_body.push_str(&format!(
+                "            {}_FrameVec_push(instance->_state_stack, comp);\n",
                 system.name
             ));
+            restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
             restore_body.push_str("}\n\n");
 
