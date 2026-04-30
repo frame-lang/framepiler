@@ -3048,23 +3048,36 @@ fn generate_c_handler_method(
         event_param_names: event_param_names.clone(),
         state_hsm_parents: state_hsm_parents.clone(),
         current_return_type: handler.return_type.clone(),
-        state_param_types: std::collections::HashMap::new(),
+        state_param_types: state_param_types.clone(),
     };
 
     let mut body = String::new();
 
-    // State-param binding. Maps Frame types to native C types so
-    // `str` → `const char*`, `bool` → `int`, etc. Falls back to `int`
-    // when the type isn't registered. Mirrors the rules in
-    // DispatchSyntax::C's `c_param_type_and_cast` helper (kept in sync).
-    let c_state_arg_decl = |type_str: &str| -> (String, String) {
+    // State-param / handler-param binding from a void* slot. Maps Frame
+    // types to native C types so `str` → `const char*`, `bool` → `int`,
+    // `float`/`double` → `double` (via the runtime's `Sys_unpack_double`
+    // bit-pun helper, since `(intptr_t)(0.5)` truncates), etc. Falls
+    // back to `int` for unknown types — matches `DispatchSyntax::C`'s
+    // `c_param_type_and_cast` helper, extended for floats.
+    //
+    // Returns (decl_type, full_extract_expr) where the extractor takes
+    // the void* value placeholder `{val}`.
+    let c_extract = |type_str: &str, val_expr: &str| -> (String, String) {
         let t = type_str.trim();
         match t {
-            "str" | "string" | "String" | "char*" | "const char*" => {
-                ("const char*".to_string(), "(const char*)".to_string())
-            }
-            _ if t.ends_with('*') => (t.to_string(), format!("({})", t)),
-            _ => ("int".to_string(), "(int)(intptr_t)".to_string()),
+            "str" | "string" | "String" | "char*" | "const char*" => (
+                "const char*".to_string(),
+                format!("(const char*){}", val_expr),
+            ),
+            "float" | "f32" | "f64" | "double" => (
+                "double".to_string(),
+                format!("{}_unpack_double({})", system_name, val_expr),
+            ),
+            _ if t.ends_with('*') => (t.to_string(), format!("({}){}", t, val_expr)),
+            _ => (
+                "int".to_string(),
+                format!("(int)(intptr_t){}", val_expr),
+            ),
         }
     };
     if let Some(sp_names) = state_param_names.get(state_name) {
@@ -3082,16 +3095,19 @@ fn generate_c_handler_method(
                 .get(&(state_name.to_string(), name.clone()))
                 .map(|s| s.as_str())
                 .unwrap_or("int");
-            let (c_type, cast) = c_state_arg_decl(type_str);
-            body.push_str(&format!(
-                "{} {} = {}{}_FrameVec_get(compartment->state_args, {});\n",
-                c_type, name, cast, system_name, i
-            ));
+            let val_expr = format!(
+                "{}_FrameVec_get(compartment->state_args, {})",
+                system_name, i
+            );
+            let (c_type, extract) = c_extract(type_str, &val_expr);
+            body.push_str(&format!("{} {} = {};\n", c_type, name, extract));
             body.push_str(&format!("(void){};\n", name));
         }
     }
 
-    // Handler-param binding.
+    // Handler-param binding. Reuse the c_extract helper from above so
+    // float/double params route through `Sys_unpack_double` (intptr_t
+    // cast truncates floats — same root issue as state-args).
     let param_source_pre = if handler.is_enter {
         "compartment->enter_args"
     } else if handler.is_exit {
@@ -3101,25 +3117,12 @@ fn generate_c_handler_method(
     };
     for (i, param) in handler.params.iter().enumerate() {
         let type_str = param.symbol_type.as_deref().unwrap_or("int");
-        let (c_decl, cast) = match type_str.trim() {
-            "str" | "string" | "String" | "char*" | "const char*" => {
-                ("const char*", "(const char*)")
-            }
-            t if t.ends_with('*') => (t, "("),
-            _ => ("int", "(int)(intptr_t)"),
-        };
-        if cast.ends_with('(') {
-            // Generic pointer type — emit matching parens
-            body.push_str(&format!(
-                "{} {} = ({}){}_FrameVec_get({}, {});\n",
-                c_decl, param.name, c_decl, system_name, param_source_pre, i
-            ));
-        } else {
-            body.push_str(&format!(
-                "{} {} = {}{}_FrameVec_get({}, {});\n",
-                c_decl, param.name, cast, system_name, param_source_pre, i
-            ));
-        }
+        let val_expr = format!(
+            "{}_FrameVec_get({}, {})",
+            system_name, param_source_pre, i
+        );
+        let (c_decl, extract) = c_extract(type_str, &val_expr);
+        body.push_str(&format!("{} {} = {};\n", c_decl, param.name, extract));
         body.push_str(&format!("(void){};\n", param.name));
     }
 

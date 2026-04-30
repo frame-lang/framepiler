@@ -440,13 +440,26 @@ self._context_stack.pop()"#,
                 // C: Create FrameEvent + FrameContext, push context, call kernel, pop and return
                 let sys = &system.name;
 
-                // Build parameters dict creation (with semicolon)
+                // Build parameters dict creation (with semicolon).
+                // Float/double params route through `Sys_pack_double`
+                // (memcpy bit-pun) — `(void*)(intptr_t)(0.5)` truncates
+                // to integer and breaks any float-typed interface arg.
                 let params_code = if method.params.is_empty() {
                     format!("{}_FrameEvent* __e = {}_FrameEvent_new(\"{}\", NULL, 0);", sys, sys, method.name)
                 } else {
                     let mut code = format!("{}_FrameVec* __params = {}_FrameVec_new();\n", sys, sys);
                     for p in &method.params {
-                        code.push_str(&format!("{}_FrameVec_push(__params, (void*)(intptr_t){});\n", sys, p.name));
+                        let p_type = type_to_string(&p.param_type);
+                        let push_arg = match p_type.trim() {
+                            "float" | "double" | "f32" | "f64" => {
+                                format!("{}_pack_double({})", sys, p.name)
+                            }
+                            _ => format!("(void*)(intptr_t){}", p.name),
+                        };
+                        code.push_str(&format!(
+                            "{}_FrameVec_push(__params, {});\n",
+                            sys, push_arg
+                        ));
                     }
                     code.push_str(&format!("{}_FrameEvent* __e = {}_FrameEvent_new(\"{}\", __params, 1);", sys, sys, method.name));
                     code

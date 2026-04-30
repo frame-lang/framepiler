@@ -700,19 +700,16 @@ impl CppBackend {
         params
             .iter()
             .map(|p| {
-                let type_ann = p
+                let raw_type = p
                     .type_annotation
-                    .as_ref()
-                    .unwrap_or(&"auto".to_string())
-                    .clone();
-                // Map generic types to C++ equivalents
-                let type_ann = match type_ann.as_str() {
-                    "Any" => "std::any".to_string(),
-                    "string" | "String" | "str" => "std::string".to_string(),
-                    "number" => "int".to_string(),
-                    "boolean" => "bool".to_string(),
-                    _ => type_ann,
-                };
+                    .as_deref()
+                    .unwrap_or("auto");
+                // Route through the shared cpp_map_type so emit_params,
+                // map_type, and the std::any_cast prefetch agree on
+                // Frame → C++ mappings (esp. `float` → `double`,
+                // otherwise interface signature emits `float` while
+                // handler bodies cast to `double` and any_cast fails).
+                let type_ann = super::super::codegen_utils::cpp_map_type(raw_type);
                 if let Some(ref default_val) = p.default_value {
                     let default_str =
                         self.emit(default_val, &mut super::super::backend::EmitContext::new());
@@ -726,13 +723,7 @@ impl CppBackend {
     }
 
     fn map_type(&self, t: &str) -> String {
-        match t {
-            "Any" => "std::any".to_string(),
-            "string" | "String" | "str" => "std::string".to_string(),
-            "number" => "int".to_string(),
-            "boolean" => "bool".to_string(),
-            other => other.to_string(),
-        }
+        super::super::codegen_utils::cpp_map_type(t)
     }
 
     fn needs_semicolon(&self, node: &CodegenNode) -> bool {

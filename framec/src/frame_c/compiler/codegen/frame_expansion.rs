@@ -1249,6 +1249,31 @@ pub(crate) fn generate_frame_expansion(
                         // Open block scope so locals don't collide with
                         // sibling transitions in the same handler (e.g.
                         // separate `if` branches).
+                        // Look up target's state-arg names so each value
+                        // can be packed using its declared type. Float /
+                        // double survive only via the memcpy bit-pun
+                        // helper `Sys_pack_double`; (intptr_t) truncates.
+                        let target_param_names: Vec<String> = ctx
+                            .state_param_names
+                            .get(&target)
+                            .cloned()
+                            .unwrap_or_default();
+                        let push_arg_for_target = |idx: usize, value_expr: &str| -> String {
+                            let frame_type = target_param_names
+                                .get(idx)
+                                .and_then(|name| {
+                                    ctx.state_param_types
+                                        .get(&(target.clone(), name.clone()))
+                                        .cloned()
+                                })
+                                .unwrap_or_default();
+                            match frame_type.trim() {
+                                "float" | "double" | "f32" | "f64" => {
+                                    format!("{}_pack_double({})", sys, value_expr)
+                                }
+                                _ => format!("(void*)(intptr_t)({})", value_expr),
+                            }
+                        };
                         code.push_str(&format!("{}{{\n", indent_str));
                         if state_vals.is_empty() {
                             code.push_str(&format!(
@@ -1260,10 +1285,11 @@ pub(crate) fn generate_frame_expansion(
                                 "{}    {}_FrameVec* __sa = {}_FrameVec_new();\n",
                                 indent_str, sys, sys
                             ));
-                            for v in &state_vals {
+                            for (i, v) in state_vals.iter().enumerate() {
+                                let push_arg = push_arg_for_target(i, v);
                                 code.push_str(&format!(
-                                    "{}    {}_FrameVec_push(__sa, (void*)(intptr_t)({}));\n",
-                                    indent_str, sys, v
+                                    "{}    {}_FrameVec_push(__sa, {});\n",
+                                    indent_str, sys, push_arg
                                 ));
                             }
                         }
