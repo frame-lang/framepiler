@@ -1403,20 +1403,111 @@ pub(crate) fn generate_persistence_methods(
             serialize_helper.push_str("        }\n");
             serialize_helper.push_str("    }\n");
             serialize_helper.push_str("    cJSON_AddItemToObject(obj, \"state_vars\", vars);\n");
-            // state_args + enter_args — same compartment-context fix
-            // pattern as Java/Kotlin/C#/Swift/C++. C uses FrameVec<void*>
-            // for both; best-effort serialize as int (the most common
-            // arg type). Larger arg shapes need a richer FrameVec
-            // serializer — pending if found in fuzz.
+            // state_args + enter_args — type-aware via per-state branch.
+            // C stores FrameVec values as `void*`. For int types,
+            // `(intptr_t) ptr` round-trips. For float/double types,
+            // we use `Sys_pack_double` / `Sys_unpack_double` (memcpy
+            // bit-pun). Without per-state typing, doubles truncate
+            // through the int path — D8 fix introduces the per-state
+            // branch by reading `comp->state` and dispatching to the
+            // declared param types.
+            //
+            // Build per-state arg type metadata at codegen time.
+            let type_to_string = |t: &crate::frame_c::compiler::frame_ast::Type| -> String {
+                match t {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
+                    crate::frame_c::compiler::frame_ast::Type::Unknown => "int".to_string(),
+                }
+            };
+            let state_arg_types: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .map(|s| {
+                            let types: Vec<String> =
+                                s.params.iter().map(|p| type_to_string(&p.param_type)).collect();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let state_enter_arg_types: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .enter
+                                .as_ref()
+                                .map(|e| {
+                                    e.params
+                                        .iter()
+                                        .map(|p| type_to_string(&p.param_type))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let c_pack_for = |frame_type: &str, val_expr: &str, sys_name: &str| -> String {
+                match frame_type.trim() {
+                    "float" | "double" | "f32" | "f64" => {
+                        format!("cJSON_CreateNumber({sys_name}_unpack_double({val_expr}))")
+                    }
+                    _ => format!("cJSON_CreateNumber((double)(intptr_t){val_expr})"),
+                }
+            };
             serialize_helper.push_str("    cJSON* sa = cJSON_CreateArray();\n");
-            serialize_helper.push_str(
-                "    if (comp->state_args) { for (int i = 0; i < comp->state_args->size; i++) { cJSON_AddItemToArray(sa, cJSON_CreateNumber((double)(intptr_t)comp->state_args->items[i])); } }\n"
-            );
+            serialize_helper.push_str("    if (comp->state_args) {\n");
+            for (state_name, types) in &state_arg_types {
+                if types.is_empty() {
+                    continue;
+                }
+                serialize_helper.push_str(&format!(
+                    "        if (strcmp(comp->state, \"{}\") == 0) {{\n",
+                    state_name
+                ));
+                for (i, t) in types.iter().enumerate() {
+                    let val_expr = format!("comp->state_args->items[{}]", i);
+                    serialize_helper.push_str(&format!(
+                        "            if ({}_FrameVec_get(comp->state_args, {}) != NULL || {} < comp->state_args->size) cJSON_AddItemToArray(sa, {});\n",
+                        system.name,
+                        i,
+                        i,
+                        c_pack_for(t, &val_expr, &system.name)
+                    ));
+                }
+                serialize_helper.push_str("        }\n");
+            }
+            serialize_helper.push_str("    }\n");
             serialize_helper.push_str("    cJSON_AddItemToObject(obj, \"state_args\", sa);\n");
             serialize_helper.push_str("    cJSON* ea = cJSON_CreateArray();\n");
-            serialize_helper.push_str(
-                "    if (comp->enter_args) { for (int i = 0; i < comp->enter_args->size; i++) { cJSON_AddItemToArray(ea, cJSON_CreateNumber((double)(intptr_t)comp->enter_args->items[i])); } }\n"
-            );
+            serialize_helper.push_str("    if (comp->enter_args) {\n");
+            for (state_name, types) in &state_enter_arg_types {
+                if types.is_empty() {
+                    continue;
+                }
+                serialize_helper.push_str(&format!(
+                    "        if (strcmp(comp->state, \"{}\") == 0) {{\n",
+                    state_name
+                ));
+                for (i, t) in types.iter().enumerate() {
+                    let val_expr = format!("comp->enter_args->items[{}]", i);
+                    serialize_helper.push_str(&format!(
+                        "            if ({} < comp->enter_args->size) cJSON_AddItemToArray(ea, {});\n",
+                        i,
+                        c_pack_for(t, &val_expr, &system.name)
+                    ));
+                }
+                serialize_helper.push_str("        }\n");
+            }
+            serialize_helper.push_str("    }\n");
             serialize_helper.push_str("    cJSON_AddItemToObject(obj, \"enter_args\", ea);\n");
             // Recursively serialize parent
             serialize_helper.push_str(&format!("    cJSON_AddItemToObject(obj, \"parent_compartment\", {}_serialize_compartment(comp->parent_compartment));\n", system.name));
@@ -1446,24 +1537,67 @@ pub(crate) fn generate_persistence_methods(
             deserialize_helper.push_str(&format!("            {}_FrameDict_set(comp->state_vars, var_item->string, (void*)(intptr_t)(int)var_item->valuedouble);\n", system.name));
             deserialize_helper.push_str("        }\n");
             deserialize_helper.push_str("    }\n");
-            // Deserialize state_args (positional) — values stored as
-            // intptr_t casts (matches the serialize side).
+            // Deserialize state_args (positional) — type-aware via
+            // per-state branch. cJSON stores numbers as double
+            // (valuedouble); for int types we (intptr_t)(int) cast,
+            // for float/double we Sys_pack_double the value back into
+            // a void* slot.
+            let c_unpack_for = |frame_type: &str, val_expr: &str, sys_name: &str| -> String {
+                match frame_type.trim() {
+                    "float" | "double" | "f32" | "f64" => {
+                        format!("{sys_name}_pack_double({val_expr})")
+                    }
+                    _ => format!("(void*)(intptr_t)(int){val_expr}"),
+                }
+            };
             deserialize_helper
                 .push_str("    cJSON* sa = cJSON_GetObjectItem(data, \"state_args\");\n");
             deserialize_helper.push_str("    if (sa) {\n");
-            deserialize_helper.push_str("        cJSON* sa_item;\n");
-            deserialize_helper.push_str("        cJSON_ArrayForEach(sa_item, sa) {\n");
-            deserialize_helper.push_str(&format!("            {}_FrameVec_push(comp->state_args, (void*)(intptr_t)(int)sa_item->valuedouble);\n", system.name));
-            deserialize_helper.push_str("        }\n");
+            for (state_name, types) in &state_arg_types {
+                if types.is_empty() {
+                    continue;
+                }
+                deserialize_helper.push_str(&format!(
+                    "        if (strcmp(comp->state, \"{}\") == 0) {{\n",
+                    state_name
+                ));
+                for (i, t) in types.iter().enumerate() {
+                    deserialize_helper.push_str(&format!(
+                        "            cJSON* sa_item_{i} = cJSON_GetArrayItem(sa, {i});\n"
+                    ));
+                    deserialize_helper.push_str(&format!(
+                        "            if (sa_item_{i}) {}_FrameVec_push(comp->state_args, {});\n",
+                        system.name,
+                        c_unpack_for(t, &format!("sa_item_{i}->valuedouble"), &system.name)
+                    ));
+                }
+                deserialize_helper.push_str("        }\n");
+            }
             deserialize_helper.push_str("    }\n");
             // Deserialize enter_args (positional)
             deserialize_helper
                 .push_str("    cJSON* ea = cJSON_GetObjectItem(data, \"enter_args\");\n");
             deserialize_helper.push_str("    if (ea) {\n");
-            deserialize_helper.push_str("        cJSON* ea_item;\n");
-            deserialize_helper.push_str("        cJSON_ArrayForEach(ea_item, ea) {\n");
-            deserialize_helper.push_str(&format!("            {}_FrameVec_push(comp->enter_args, (void*)(intptr_t)(int)ea_item->valuedouble);\n", system.name));
-            deserialize_helper.push_str("        }\n");
+            for (state_name, types) in &state_enter_arg_types {
+                if types.is_empty() {
+                    continue;
+                }
+                deserialize_helper.push_str(&format!(
+                    "        if (strcmp(comp->state, \"{}\") == 0) {{\n",
+                    state_name
+                ));
+                for (i, t) in types.iter().enumerate() {
+                    deserialize_helper.push_str(&format!(
+                        "            cJSON* ea_item_{i} = cJSON_GetArrayItem(ea, {i});\n"
+                    ));
+                    deserialize_helper.push_str(&format!(
+                        "            if (ea_item_{i}) {}_FrameVec_push(comp->enter_args, {});\n",
+                        system.name,
+                        c_unpack_for(t, &format!("ea_item_{i}->valuedouble"), &system.name)
+                    ));
+                }
+                deserialize_helper.push_str("        }\n");
+            }
             deserialize_helper.push_str("    }\n");
             // Recursively deserialize parent
             deserialize_helper.push_str(
@@ -1707,11 +1841,16 @@ pub(crate) fn generate_persistence_methods(
             // best-effort cast to int (the most common arg type); other
             // types pass through as null which is a known limitation
             // pending a richer std::any-aware serializer.
+            // Try int first, then double — covers the common Frame
+            // numeric types. Strings/bools/other any-shaped values
+            // currently pass through as null (limitation of std::any
+            // roundtrip without a richer type tag). D8 fix added the
+            // double cast path so float state-args round-trip.
             save_body.push_str("    nlohmann::json __sa = nlohmann::json::array();\n");
-            save_body.push_str("    for (const auto& v : c->state_args) { try { __sa.push_back(std::any_cast<int>(v)); } catch(...) { __sa.push_back(nullptr); } }\n");
+            save_body.push_str("    for (const auto& v : c->state_args) { try { __sa.push_back(std::any_cast<int>(v)); } catch(...) { try { __sa.push_back(std::any_cast<double>(v)); } catch(...) { __sa.push_back(nullptr); } } }\n");
             save_body.push_str("    __cj[\"state_args\"] = __sa;\n");
             save_body.push_str("    nlohmann::json __ea = nlohmann::json::array();\n");
-            save_body.push_str("    for (const auto& v : c->enter_args) { try { __ea.push_back(std::any_cast<int>(v)); } catch(...) { __ea.push_back(nullptr); } }\n");
+            save_body.push_str("    for (const auto& v : c->enter_args) { try { __ea.push_back(std::any_cast<int>(v)); } catch(...) { try { __ea.push_back(std::any_cast<double>(v)); } catch(...) { __ea.push_back(nullptr); } } }\n");
             save_body.push_str("    __cj[\"enter_args\"] = __ea;\n");
             save_body.push_str("    __cj[\"parent\"] = __ser(c->parent_compartment.get());\n");
             save_body.push_str("    return __cj;\n");
@@ -1770,15 +1909,21 @@ pub(crate) fn generate_persistence_methods(
                 ));
             }
             restore_body.push_str("    }\n");
-            // Deserialize state_args + enter_args — best-effort int.
+            // Deserialize state_args + enter_args. Branch on JSON
+            // numeric kind: integer → std::any(int); float → std::any(
+            // double). D8 fix added the double path; without it,
+            // float state-args lost precision and the per-handler
+            // any_cast<double> threw bad_any_cast.
             restore_body.push_str("    if (d.contains(\"state_args\") && d[\"state_args\"].is_array()) {\n");
             restore_body.push_str("        for (const auto& v : d[\"state_args\"]) {\n");
             restore_body.push_str("            if (v.is_number_integer()) c->state_args.push_back(std::any(v.get<int>()));\n");
+            restore_body.push_str("            else if (v.is_number_float()) c->state_args.push_back(std::any(v.get<double>()));\n");
             restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
             restore_body.push_str("    if (d.contains(\"enter_args\") && d[\"enter_args\"].is_array()) {\n");
             restore_body.push_str("        for (const auto& v : d[\"enter_args\"]) {\n");
             restore_body.push_str("            if (v.is_number_integer()) c->enter_args.push_back(std::any(v.get<int>()));\n");
+            restore_body.push_str("            else if (v.is_number_float()) c->enter_args.push_back(std::any(v.get<double>()));\n");
             restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
             restore_body
@@ -2070,21 +2215,26 @@ pub(crate) fn generate_persistence_methods(
             ));
             deser_body.push_str("if (el.TryGetProperty(\"state_vars\", out var sv) && sv.ValueKind == System.Text.Json.JsonValueKind.Object) {\n");
             deser_body.push_str("    foreach (var kv in sv.EnumerateObject()) {\n");
-            deser_body.push_str("        if (kv.Value.ValueKind == System.Text.Json.JsonValueKind.Number) c.state_vars[kv.Name] = kv.Value.GetInt32();\n");
+            // Number values may be int or float. Try Int32 first (the
+            // common case — preserves the existing typed reads at the
+            // handler site), then fall back to Int64 for large ints,
+            // then double for fractionals. Avoids the "Int64 cast to
+            // Int32 fails" pitfall when handler does `(int) value`.
+            deser_body.push_str("        if (kv.Value.ValueKind == System.Text.Json.JsonValueKind.Number) { if (kv.Value.TryGetInt32(out int __ii)) c.state_vars[kv.Name] = __ii; else if (kv.Value.TryGetInt64(out long __il)) c.state_vars[kv.Name] = __il; else c.state_vars[kv.Name] = kv.Value.GetDouble(); }\n");
             deser_body.push_str("        else if (kv.Value.ValueKind == System.Text.Json.JsonValueKind.String) c.state_vars[kv.Name] = kv.Value.GetString();\n");
             deser_body.push_str("        else c.state_vars[kv.Name] = kv.Value.ToString();\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (el.TryGetProperty(\"state_args\", out var sa) && sa.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
             deser_body.push_str("    foreach (var v in sa.EnumerateArray()) {\n");
-            deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) c.state_args.Add(v.GetInt32());\n");
+            deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) { if (v.TryGetInt32(out int __ii)) c.state_args.Add(__ii); else if (v.TryGetInt64(out long __il)) c.state_args.Add(__il); else c.state_args.Add(v.GetDouble()); }\n");
             deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.String) c.state_args.Add(v.GetString());\n");
             deser_body.push_str("        else c.state_args.Add(v.ToString());\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (el.TryGetProperty(\"enter_args\", out var ea) && ea.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
             deser_body.push_str("    foreach (var v in ea.EnumerateArray()) {\n");
-            deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) c.enter_args.Add(v.GetInt32());\n");
+            deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) { if (v.TryGetInt32(out int __ii)) c.enter_args.Add(__ii); else if (v.TryGetInt64(out long __il)) c.enter_args.Add(__il); else c.enter_args.Add(v.GetDouble()); }\n");
             deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.String) c.enter_args.Add(v.GetString());\n");
             deser_body.push_str("        else c.enter_args.Add(v.ToString());\n");
             deser_body.push_str("    }\n");

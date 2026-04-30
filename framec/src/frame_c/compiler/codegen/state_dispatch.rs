@@ -353,7 +353,17 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_bind_param: |name, type_str, _sys, index| {
                 let cs_type = csharp_map_type(type_str);
-                format!("{cs_type} {name} = ({cs_type}) __compartment.state_args[{index}];\n")
+                // Convert.ToXxx ladder (D8) — JSON parsers may hand back
+                // a different boxed numeric type (long vs double, etc.)
+                // than the declared parameter, so normalize via Convert.
+                let extract = match cs_type.as_str() {
+                    "double" => format!("System.Convert.ToDouble(__compartment.state_args[{index}])"),
+                    "float" => format!("System.Convert.ToSingle(__compartment.state_args[{index}])"),
+                    "int" => format!("System.Convert.ToInt32(__compartment.state_args[{index}])"),
+                    "long" => format!("System.Convert.ToInt64(__compartment.state_args[{index}])"),
+                    _ => format!("({cs_type}) __compartment.state_args[{index}]"),
+                };
+                format!("{cs_type} {name} = {extract};\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -369,7 +379,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}var {name} = ({cs_type}) {list}[{index}];\n")
+                let extract = match cs_type.as_str() {
+                    "double" => format!("System.Convert.ToDouble({list}[{index}])"),
+                    "float" => format!("System.Convert.ToSingle({list}[{index}])"),
+                    "int" => format!("System.Convert.ToInt32({list}[{index}])"),
+                    "long" => format!("System.Convert.ToInt64({list}[{index}])"),
+                    _ => format!("({cs_type}) {list}[{index}]"),
+                };
+                format!("{indent}var {name} = {extract};\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
         }),
@@ -392,9 +409,21 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_bind_param: |name, type_str, _sys, index| {
                 let java_type = java_map_type(type_str);
-                format!(
-                    "{java_type} {name} = ({java_type}) __compartment.state_args.get({index});\n"
-                )
+                // Number-ladder unwrap so the prefetch works whether the
+                // stored value is a live boxed primitive (Double from a
+                // configure() call) or a deserialized BigDecimal/Long
+                // that org.json may hand back when loaded from JSON via
+                // @@persist. (D8 fix.)
+                let extract = match java_type.as_str() {
+                    "double" => format!("((Number) __compartment.state_args.get({index})).doubleValue()"),
+                    "float" => format!("((Number) __compartment.state_args.get({index})).floatValue()"),
+                    "long" => format!("((Number) __compartment.state_args.get({index})).longValue()"),
+                    "int" => format!("((Number) __compartment.state_args.get({index})).intValue()"),
+                    "short" => format!("((Number) __compartment.state_args.get({index})).shortValue()"),
+                    "byte" => format!("((Number) __compartment.state_args.get({index})).byteValue()"),
+                    _ => format!("({java_type}) __compartment.state_args.get({index})"),
+                };
+                format!("{java_type} {name} = {extract};\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -410,7 +439,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}var {name} = ({java_type}) {list}.get({index});\n")
+                let extract = match java_type.as_str() {
+                    "double" => format!("((Number) {list}.get({index})).doubleValue()"),
+                    "float" => format!("((Number) {list}.get({index})).floatValue()"),
+                    "long" => format!("((Number) {list}.get({index})).longValue()"),
+                    "int" => format!("((Number) {list}.get({index})).intValue()"),
+                    _ => format!("({java_type}) {list}.get({index})"),
+                };
+                format!("{indent}var {name} = {extract};\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e);\n"),
         }),
@@ -433,7 +469,21 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_bind_param: |name, type_str, _sys, index| {
                 let kt_type = kotlin_map_type(type_str);
-                format!("val {name} = __compartment.state_args[{index}] as {kt_type}\n")
+                // Number-ladder unwrap so the prefetch works whether
+                // the stored value is a live boxed primitive (Double
+                // from a configure() call) or a deserialized
+                // BigDecimal/Long that org.json may hand back when the
+                // compartment was loaded from JSON via @@persist. (D8.)
+                let extract = match kt_type.as_str() {
+                    "Double" => format!("(__compartment.state_args[{index}] as Number).toDouble()"),
+                    "Float" => format!("(__compartment.state_args[{index}] as Number).toFloat()"),
+                    "Long" => format!("(__compartment.state_args[{index}] as Number).toLong()"),
+                    "Int" => format!("(__compartment.state_args[{index}] as Number).toInt()"),
+                    "Short" => format!("(__compartment.state_args[{index}] as Number).toShort()"),
+                    "Byte" => format!("(__compartment.state_args[{index}] as Number).toByte()"),
+                    _ => format!("__compartment.state_args[{index}] as {kt_type}"),
+                };
+                format!("val {name} = {extract}\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -449,7 +499,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}val {name} = {list}[{index}] as {kt_type}\n")
+                let extract = match kt_type.as_str() {
+                    "Double" => format!("({list}[{index}] as Number).toDouble()"),
+                    "Float" => format!("({list}[{index}] as Number).toFloat()"),
+                    "Long" => format!("({list}[{index}] as Number).toLong()"),
+                    "Int" => format!("({list}[{index}] as Number).toInt()"),
+                    _ => format!("{list}[{index}] as {kt_type}"),
+                };
+                format!("{indent}val {name} = {extract}\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e)\n"),
         }),
@@ -472,7 +529,17 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             },
             fmt_bind_param: |name, type_str, _sys, index| {
                 let sw_type = swift_map_type(type_str);
-                format!("let {name} = __compartment.state_args[{index}] as! {sw_type}\n")
+                // NSNumber-ladder unwrap (D8) — JSONSerialization can hand
+                // back NSNumber that doesn't satisfy `as! Double` directly
+                // when the underlying numeric tag differs.
+                let extract = match sw_type.as_str() {
+                    "Double" => format!("(__compartment.state_args[{index}] as! NSNumber).doubleValue"),
+                    "Float" => format!("(__compartment.state_args[{index}] as! NSNumber).floatValue"),
+                    "Int" => format!("(__compartment.state_args[{index}] as! NSNumber).intValue"),
+                    "Int64" => format!("(__compartment.state_args[{index}] as! NSNumber).int64Value"),
+                    _ => format!("__compartment.state_args[{index}] as! {sw_type}"),
+                };
+                format!("let {name} = {extract}\n")
             },
             fmt_init_sv: |var_name, init_val, indent, _sys| {
                 format!(
@@ -488,7 +555,14 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     "exit" => "__compartment.exit_args",
                     _ => "__e._parameters",
                 };
-                format!("{indent}let {name} = {list}[{index}] as! {sw_type}\n")
+                let extract = match sw_type.as_str() {
+                    "Double" => format!("({list}[{index}] as! NSNumber).doubleValue"),
+                    "Float" => format!("({list}[{index}] as! NSNumber).floatValue"),
+                    "Int" => format!("({list}[{index}] as! NSNumber).intValue"),
+                    "Int64" => format!("({list}[{index}] as! NSNumber).int64Value"),
+                    _ => format!("{list}[{index}] as! {sw_type}"),
+                };
+                format!("{indent}let {name} = {extract}\n")
             },
             fmt_forward: |parent, indent, _sys| format!("{indent}_state_{parent}(__e)\n"),
         }),
@@ -2366,7 +2440,23 @@ fn generate_java_handler_method(
 
     let mut body = String::new();
 
-    // State-param binding. Java needs explicit typed cast.
+    // State-param binding. Java needs explicit typed cast. For
+    // numeric types we go through Number's ladder so the prefetch
+    // works whether the stored value is a live boxed primitive
+    // (Double from a configure() call) or a deserialized
+    // BigDecimal/Long/Integer that org.json may hand back when the
+    // compartment was loaded from JSON via @@persist. (D8 fix.)
+    let java_extract = |java_type: &str, src: &str| -> String {
+        match java_type {
+            "double" => format!("((Number) {}).doubleValue()", src),
+            "float" => format!("((Number) {}).floatValue()", src),
+            "long" => format!("((Number) {}).longValue()", src),
+            "int" => format!("((Number) {}).intValue()", src),
+            "short" => format!("((Number) {}).shortValue()", src),
+            "byte" => format!("((Number) {}).byteValue()", src),
+            _ => format!("({}) {}", java_type, src),
+        }
+    };
     if let Some(sp_names) = state_param_names.get(state_name) {
         let handler_param_names: std::collections::HashSet<&str> =
             handler.params.iter().map(|p| p.name.as_str()).collect();
@@ -2381,9 +2471,12 @@ fn generate_java_handler_method(
                 .map(|s| s.as_str())
                 .unwrap_or("int");
             let java_type = java_map_type(frame_type);
+            let src = format!("compartment.state_args.get({})", i);
             body.push_str(&format!(
-                "{} {} = ({}) compartment.state_args.get({});\n",
-                java_type, name, java_type, i
+                "{} {} = {};\n",
+                java_type,
+                name,
+                java_extract(&java_type, &src)
             ));
         }
     }
@@ -2399,9 +2492,12 @@ fn generate_java_handler_method(
     for (i, param) in handler.params.iter().enumerate() {
         let type_str = param.symbol_type.as_deref().unwrap_or("int");
         let java_type = java_map_type(type_str);
+        let src = format!("{}.get({})", param_source, i);
         body.push_str(&format!(
-            "{} {} = ({}) {}.get({});\n",
-            java_type, param.name, java_type, param_source, i
+            "{} {} = {};\n",
+            java_type,
+            param.name,
+            java_extract(&java_type, &src)
         ));
     }
 
@@ -2514,10 +2610,15 @@ fn generate_kotlin_handler_method(
                 .map(|s| s.as_str())
                 .unwrap_or("int");
             let kt_type = kotlin_map_type(frame_type);
-            body.push_str(&format!(
-                "val {} = compartment.state_args[{}] as {}\n",
-                name, i, kt_type
-            ));
+            // Number-ladder unwrap (D8) — see fmt_bind_param.
+            let extract = match kt_type.as_str() {
+                "Double" => format!("(compartment.state_args[{i}] as Number).toDouble()"),
+                "Float" => format!("(compartment.state_args[{i}] as Number).toFloat()"),
+                "Long" => format!("(compartment.state_args[{i}] as Number).toLong()"),
+                "Int" => format!("(compartment.state_args[{i}] as Number).toInt()"),
+                _ => format!("compartment.state_args[{i}] as {kt_type}"),
+            };
+            body.push_str(&format!("val {name} = {extract}\n"));
         }
     }
 
@@ -2647,10 +2748,15 @@ fn generate_swift_handler_method(
                 .map(|s| s.as_str())
                 .unwrap_or("int");
             let sw_type = swift_map_type(frame_type);
-            body.push_str(&format!(
-                "let {} = compartment.state_args[{}] as! {}\n",
-                name, i, sw_type
-            ));
+            // NSNumber-ladder unwrap (D8) — see fmt_bind_param.
+            let extract = match sw_type.as_str() {
+                "Double" => format!("(compartment.state_args[{i}] as! NSNumber).doubleValue"),
+                "Float" => format!("(compartment.state_args[{i}] as! NSNumber).floatValue"),
+                "Int" => format!("(compartment.state_args[{i}] as! NSNumber).intValue"),
+                "Int64" => format!("(compartment.state_args[{i}] as! NSNumber).int64Value"),
+                _ => format!("compartment.state_args[{i}] as! {sw_type}"),
+            };
+            body.push_str(&format!("let {name} = {extract}\n"));
         }
     }
 
@@ -2934,14 +3040,27 @@ fn generate_csharp_handler_method(
                 .map(|s| s.as_str())
                 .unwrap_or("int");
             let cs_type = csharp_map_type(frame_type);
+            // Convert.ToXxx ladder (D8) — see fmt_bind_param.
+            let cs_extract = |t: &str, src: &str| -> String {
+                match t {
+                    "double" => format!("System.Convert.ToDouble({src})"),
+                    "float" => format!("System.Convert.ToSingle({src})"),
+                    "int" => format!("System.Convert.ToInt32({src})"),
+                    "long" => format!("System.Convert.ToInt64({src})"),
+                    _ => format!("({t}) {src}"),
+                }
+            };
+            let src = format!("compartment.state_args[{i}]");
             body.push_str(&format!(
-                "{} {} = ({}) compartment.state_args[{}];\n",
-                cs_type, name, cs_type, i
+                "{cs_type} {name} = {};\n",
+                cs_extract(&cs_type, &src)
             ));
         }
     }
 
-    // Handler-param binding.
+    // Handler-param binding. Convert.ToXxx ladder (D8) — handler args
+    // come from typed primitive boxing, but interface_gen's @@persist
+    // path can also hand back JSON-decoded numbers via the same list.
     let param_source = if handler.is_enter {
         "compartment.enter_args"
     } else if handler.is_exit {
@@ -2949,12 +3068,23 @@ fn generate_csharp_handler_method(
     } else {
         "__e._parameters"
     };
+    let cs_extract2 = |t: &str, src: &str| -> String {
+        match t {
+            "double" => format!("System.Convert.ToDouble({src})"),
+            "float" => format!("System.Convert.ToSingle({src})"),
+            "int" => format!("System.Convert.ToInt32({src})"),
+            "long" => format!("System.Convert.ToInt64({src})"),
+            _ => format!("({t}) {src}"),
+        }
+    };
     for (i, param) in handler.params.iter().enumerate() {
         let type_str = param.symbol_type.as_deref().unwrap_or("int");
         let cs_type = csharp_map_type(type_str);
+        let src = format!("{param_source}[{i}]");
         body.push_str(&format!(
-            "{} {} = ({}) {}[{}];\n",
-            cs_type, param.name, cs_type, param_source, i
+            "{cs_type} {} = {};\n",
+            param.name,
+            cs_extract2(&cs_type, &src)
         ));
     }
 
