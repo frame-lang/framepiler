@@ -1463,6 +1463,16 @@ pub(crate) fn generate_persistence_methods(
                     _ => format!("cJSON_CreateNumber((double)(intptr_t){val_expr})"),
                 }
             };
+            // For `: list` types, emit a multi-line block that
+            // iterates the inner FrameVec and serializes each item.
+            // (c_pack_for produces a single expression — list types
+            // need a sub-loop, so they take a separate code path.)
+            let is_list_type = |t: &str| -> bool {
+                matches!(
+                    t.trim(),
+                    "list" | "List" | "Array" | "Array<any>"
+                )
+            };
             serialize_helper.push_str("    cJSON* sa = cJSON_CreateArray();\n");
             serialize_helper.push_str("    if (comp->state_args) {\n");
             for (state_name, types) in &state_arg_types {
@@ -1474,14 +1484,35 @@ pub(crate) fn generate_persistence_methods(
                     state_name
                 ));
                 for (i, t) in types.iter().enumerate() {
-                    let val_expr = format!("comp->state_args->items[{}]", i);
-                    serialize_helper.push_str(&format!(
-                        "            if ({}_FrameVec_get(comp->state_args, {}) != NULL || {} < comp->state_args->size) cJSON_AddItemToArray(sa, {});\n",
-                        system.name,
-                        i,
-                        i,
-                        c_pack_for(t, &val_expr, &system.name)
-                    ));
+                    if is_list_type(t) {
+                        // FrameVec<int> → JSON array of numbers.
+                        // Element type is opaque (FrameVec stores
+                        // void*); the user packs as `(intptr_t)int`.
+                        // We unpack with the same intptr_t convention.
+                        serialize_helper.push_str(&format!(
+                            "            if ({i} < comp->state_args->size) {{\n\
+                             \x20               {sys}_FrameVec* __sub = ({sys}_FrameVec*)comp->state_args->items[{i}];\n\
+                             \x20               cJSON* __sub_arr = cJSON_CreateArray();\n\
+                             \x20               if (__sub) {{\n\
+                             \x20                   for (int __k = 0; __k < __sub->size; __k++) {{\n\
+                             \x20                       cJSON_AddItemToArray(__sub_arr, cJSON_CreateNumber((double)(intptr_t)__sub->items[__k]));\n\
+                             \x20                   }}\n\
+                             \x20               }}\n\
+                             \x20               cJSON_AddItemToArray(sa, __sub_arr);\n\
+                             \x20           }}\n",
+                            i = i,
+                            sys = system.name,
+                        ));
+                    } else {
+                        let val_expr = format!("comp->state_args->items[{}]", i);
+                        serialize_helper.push_str(&format!(
+                            "            if ({}_FrameVec_get(comp->state_args, {}) != NULL || {} < comp->state_args->size) cJSON_AddItemToArray(sa, {});\n",
+                            system.name,
+                            i,
+                            i,
+                            c_pack_for(t, &val_expr, &system.name)
+                        ));
+                    }
                 }
                 serialize_helper.push_str("        }\n");
             }
@@ -1498,12 +1529,29 @@ pub(crate) fn generate_persistence_methods(
                     state_name
                 ));
                 for (i, t) in types.iter().enumerate() {
-                    let val_expr = format!("comp->enter_args->items[{}]", i);
-                    serialize_helper.push_str(&format!(
-                        "            if ({} < comp->enter_args->size) cJSON_AddItemToArray(ea, {});\n",
-                        i,
-                        c_pack_for(t, &val_expr, &system.name)
-                    ));
+                    if is_list_type(t) {
+                        serialize_helper.push_str(&format!(
+                            "            if ({i} < comp->enter_args->size) {{\n\
+                             \x20               {sys}_FrameVec* __sub = ({sys}_FrameVec*)comp->enter_args->items[{i}];\n\
+                             \x20               cJSON* __sub_arr = cJSON_CreateArray();\n\
+                             \x20               if (__sub) {{\n\
+                             \x20                   for (int __k = 0; __k < __sub->size; __k++) {{\n\
+                             \x20                       cJSON_AddItemToArray(__sub_arr, cJSON_CreateNumber((double)(intptr_t)__sub->items[__k]));\n\
+                             \x20                   }}\n\
+                             \x20               }}\n\
+                             \x20               cJSON_AddItemToArray(ea, __sub_arr);\n\
+                             \x20           }}\n",
+                            i = i,
+                            sys = system.name,
+                        ));
+                    } else {
+                        let val_expr = format!("comp->enter_args->items[{}]", i);
+                        serialize_helper.push_str(&format!(
+                            "            if ({} < comp->enter_args->size) cJSON_AddItemToArray(ea, {});\n",
+                            i,
+                            c_pack_for(t, &val_expr, &system.name)
+                        ));
+                    }
                 }
                 serialize_helper.push_str("        }\n");
             }
@@ -1565,11 +1613,29 @@ pub(crate) fn generate_persistence_methods(
                     deserialize_helper.push_str(&format!(
                         "            cJSON* sa_item_{i} = cJSON_GetArrayItem(sa, {i});\n"
                     ));
-                    deserialize_helper.push_str(&format!(
-                        "            if (sa_item_{i}) {}_FrameVec_push(comp->state_args, {});\n",
-                        system.name,
-                        c_unpack_for(t, &format!("sa_item_{i}->valuedouble"), &system.name)
-                    ));
+                    if is_list_type(t) {
+                        // JSON array → newly-allocated FrameVec*.
+                        // Each child is a Number whose intptr_t round-
+                        // trip matches what serialize emitted.
+                        deserialize_helper.push_str(&format!(
+                            "            if (sa_item_{i} && cJSON_IsArray(sa_item_{i})) {{\n\
+                             \x20               {sys}_FrameVec* __sub = {sys}_FrameVec_new();\n\
+                             \x20               cJSON* __child;\n\
+                             \x20               cJSON_ArrayForEach(__child, sa_item_{i}) {{\n\
+                             \x20                   {sys}_FrameVec_push(__sub, (void*)(intptr_t)(int)__child->valuedouble);\n\
+                             \x20               }}\n\
+                             \x20               {sys}_FrameVec_push(comp->state_args, __sub);\n\
+                             \x20           }}\n",
+                            i = i,
+                            sys = system.name,
+                        ));
+                    } else {
+                        deserialize_helper.push_str(&format!(
+                            "            if (sa_item_{i}) {}_FrameVec_push(comp->state_args, {});\n",
+                            system.name,
+                            c_unpack_for(t, &format!("sa_item_{i}->valuedouble"), &system.name)
+                        ));
+                    }
                 }
                 deserialize_helper.push_str("        }\n");
             }
@@ -1590,6 +1656,21 @@ pub(crate) fn generate_persistence_methods(
                     deserialize_helper.push_str(&format!(
                         "            cJSON* ea_item_{i} = cJSON_GetArrayItem(ea, {i});\n"
                     ));
+                    if is_list_type(t) {
+                        deserialize_helper.push_str(&format!(
+                            "            if (ea_item_{i} && cJSON_IsArray(ea_item_{i})) {{\n\
+                             \x20               {sys}_FrameVec* __sub = {sys}_FrameVec_new();\n\
+                             \x20               cJSON* __child;\n\
+                             \x20               cJSON_ArrayForEach(__child, ea_item_{i}) {{\n\
+                             \x20                   {sys}_FrameVec_push(__sub, (void*)(intptr_t)(int)__child->valuedouble);\n\
+                             \x20               }}\n\
+                             \x20               {sys}_FrameVec_push(comp->enter_args, __sub);\n\
+                             \x20           }}\n",
+                            i = i,
+                            sys = system.name,
+                        ));
+                        continue;
+                    }
                     deserialize_helper.push_str(&format!(
                         "            if (ea_item_{i}) {}_FrameVec_push(comp->enter_args, {});\n",
                         system.name,

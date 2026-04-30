@@ -726,11 +726,20 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
             /// Map a Frame parameter type to its C declaration + void*-cast.
             /// Strings → `const char*`, pointer-types (anything ending in `*`)
             /// stay as-is, everything else defaults to `int` via intptr_t.
-            fn c_param_type_and_cast(type_str: &str) -> (String, String) {
+            fn c_param_type_and_cast(type_str: &str, sys: &str) -> (String, String) {
                 let t = type_str.trim();
                 match t {
                     "str" | "string" | "String" | "char*" | "const char*" => {
                         ("const char*".to_string(), "(const char*)".to_string())
+                    }
+                    // Frame's `: list` maps to <sys>_FrameVec* in C
+                    // (see backends/c.rs convert_type_to_c). State-args
+                    // and event/enter/exit args of list type need the
+                    // typed cast, not the int fallthrough.
+                    "list" | "List" | "Array" | "Array<any>" => {
+                        let typ = format!("{}_FrameVec*", sys);
+                        let cast = format!("({})", typ);
+                        (typ, cast)
                     }
                     _ if t.ends_with('*') => (t.to_string(), format!("({})", t)),
                     _ => ("int".to_string(), "(int)(intptr_t)".to_string()),
@@ -765,8 +774,8 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                     s.push_str("}\n");
                     s
                 },
-                fmt_bind_param: |name, type_str, _sys, index| {
-                    let (c_type, cast) = c_param_type_and_cast(type_str);
+                fmt_bind_param: |name, type_str, sys, index| {
+                    let (c_type, cast) = c_param_type_and_cast(type_str, sys);
                     // state_args is now a FrameVec*, so access via ->items[N].
                     format!("{c_type} {name} = {cast}self->__compartment->state_args->items[{index}];\n")
                 },
@@ -777,13 +786,13 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                      {indent}}}\n"
                 )
                 },
-                fmt_unpack: |name, type_str, indent, _sys, source, _default, index| {
+                fmt_unpack: |name, type_str, indent, sys, source, _default, index| {
                     let list = match source {
                         "enter" => "self->__compartment->enter_args",
                         "exit" => "self->__compartment->exit_args",
                         _ => "__e->_parameters",
                     };
-                    let (c_type, cast) = c_param_type_and_cast(type_str);
+                    let (c_type, cast) = c_param_type_and_cast(type_str, sys);
                     // _parameters / enter_args / exit_args are FrameVec*; dereference ->items[N].
                     format!("{indent}{c_type} {name} = {cast}{list}->items[{index}];\n")
                 },
@@ -3203,6 +3212,14 @@ fn generate_c_handler_method(
                 "double".to_string(),
                 format!("{}_unpack_double({})", system_name, val_expr),
             ),
+            // Frame's `: list` lands as <sys>_FrameVec* (see backends/c.rs
+            // convert_type_to_c). State-args/event-args of list type
+            // need the typed cast, not the int fallthrough.
+            "list" | "List" | "Array" | "Array<any>" => {
+                let typ = format!("{}_FrameVec*", system_name);
+                let extract = format!("({}){}", typ, val_expr);
+                (typ, extract)
+            }
             _ if t.ends_with('*') => (t.to_string(), format!("({}){}", t, val_expr)),
             _ => (
                 "int".to_string(),
