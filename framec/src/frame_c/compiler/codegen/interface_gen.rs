@@ -1937,6 +1937,20 @@ pub(crate) fn generate_persistence_methods(
                 let inner = rest.strip_suffix(">")?;
                 Some(inner.trim().to_string())
             };
+            // Returns Some(("array" or "object")) when t is a typed
+            // container nlohmann::json can serialize directly.
+            let cpp_container_kind = |t: &str| -> Option<&'static str> {
+                let t = t.trim();
+                if t.starts_with("std::vector<") {
+                    Some("array")
+                } else if t.starts_with("std::map<")
+                    || t.starts_with("std::unordered_map<")
+                {
+                    Some("object")
+                } else {
+                    None
+                }
+            };
             let cpp_state_arg_decls: Vec<(String, Vec<String>)> = system
                 .machine
                 .as_ref()
@@ -1966,7 +1980,7 @@ pub(crate) fn generate_persistence_methods(
             let mut any_state_arg_branch = false;
             for (state_name, types) in &cpp_state_arg_decls {
                 if types.is_empty()
-                    || types.iter().all(|t| cpp_vec_elem_type(t).is_none())
+                    || types.iter().all(|t| cpp_container_kind(t).is_none())
                 {
                     continue;
                 }
@@ -1978,9 +1992,12 @@ pub(crate) fn generate_persistence_methods(
                     state_name
                 ));
                 for (i, t) in types.iter().enumerate() {
-                    if let Some(elem) = cpp_vec_elem_type(t) {
+                    if cpp_container_kind(t).is_some() {
+                        // nlohmann::json natively serializes
+                        // std::vector<T>, std::map<std::string, T>,
+                        // std::unordered_map<std::string, T>.
                         save_body.push_str(&format!(
-                            "        if (c->state_args.size() > {i}) {{ try {{ const auto& __vec = std::any_cast<std::vector<{elem}>>(c->state_args[{i}]); nlohmann::json __nested = nlohmann::json::array(); for (const auto& __e : __vec) __nested.push_back(__e); __sa.push_back(__nested); }} catch(...) {{ __sa.push_back(nullptr); }} }}\n"
+                            "        if (c->state_args.size() > {i}) {{ try {{ const auto& __ctr = std::any_cast<{t}>(c->state_args[{i}]); __sa.push_back(nlohmann::json(__ctr)); }} catch(...) {{ __sa.push_back(nullptr); }} }}\n"
                         ));
                     } else {
                         save_body.push_str(&format!(
@@ -2071,7 +2088,7 @@ pub(crate) fn generate_persistence_methods(
             let mut any_typed_state = false;
             for (state_name, types) in &cpp_state_arg_decls {
                 if types.is_empty()
-                    || types.iter().all(|t| cpp_vec_elem_type(t).is_none())
+                    || types.iter().all(|t| cpp_container_kind(t).is_none())
                 {
                     continue;
                 }
@@ -2083,9 +2100,14 @@ pub(crate) fn generate_persistence_methods(
                     state_name
                 ));
                 for (i, t) in types.iter().enumerate() {
-                    if let Some(elem) = cpp_vec_elem_type(t) {
+                    if let Some(kind) = cpp_container_kind(t) {
+                        let json_check = if kind == "object" {
+                            "is_object()"
+                        } else {
+                            "is_array()"
+                        };
                         restore_body.push_str(&format!(
-                            "            if (__sa.size() > {i} && __sa[{i}].is_array()) {{ std::vector<{elem}> __vec; for (const auto& __e : __sa[{i}]) __vec.push_back(__e.get<{elem}>()); c->state_args.push_back(std::any(__vec)); }}\n"
+                            "            if (__sa.size() > {i} && __sa[{i}].{json_check}) {{ c->state_args.push_back(std::any(__sa[{i}].get<{t}>())); }}\n"
                         ));
                     } else {
                         restore_body.push_str(&format!(
@@ -2241,17 +2263,20 @@ pub(crate) fn generate_persistence_methods(
             // as JSONArray on serialize; without this conversion the
             // user's `(List<T>) state_args.get(0)` cast fails because
             // the value is a JSONArray, not a List).
-            // Recursive conversion via __convertJsonArray helper:
-            // handles arbitrary nesting depth (e.g. List<List<Integer>>).
-            // Generic erasure on the JVM lets the user's `(List<T>)`
-            // cast succeed even though the underlying list type is
-            // ArrayList<Object>.
+            // Recursive conversion via __convertJsonArray /
+            // __convertJsonObject helpers: handles arbitrary nesting
+            // depth (e.g. List<List<Integer>>, Map<String, Map<...>>).
+            // Generic erasure on the JVM lets the user's `(List<T>)` /
+            // `(Map<K,V>)` cast succeed even though the underlying
+            // type is ArrayList<Object> / HashMap<String,Object>.
             deser_body.push_str("if (d.has(\"state_args\")) {\n");
             deser_body.push_str("    var sa = d.getJSONArray(\"state_args\");\n");
             deser_body.push_str("    for (int i = 0; i < sa.length(); i++) {\n");
             deser_body.push_str("        Object __v = sa.get(i);\n");
             deser_body.push_str("        if (__v instanceof org.json.JSONArray) {\n");
             deser_body.push_str("            c.state_args.add(__convertJsonArray((org.json.JSONArray) __v));\n");
+            deser_body.push_str("        } else if (__v instanceof org.json.JSONObject) {\n");
+            deser_body.push_str("            c.state_args.add(__convertJsonObject((org.json.JSONObject) __v));\n");
             deser_body.push_str("        } else {\n");
             deser_body.push_str("            c.state_args.add(__v);\n");
             deser_body.push_str("        }\n");
@@ -2263,6 +2288,8 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("        Object __v = ea.get(i);\n");
             deser_body.push_str("        if (__v instanceof org.json.JSONArray) {\n");
             deser_body.push_str("            c.enter_args.add(__convertJsonArray((org.json.JSONArray) __v));\n");
+            deser_body.push_str("        } else if (__v instanceof org.json.JSONObject) {\n");
+            deser_body.push_str("            c.enter_args.add(__convertJsonObject((org.json.JSONObject) __v));\n");
             deser_body.push_str("        } else {\n");
             deser_body.push_str("            c.enter_args.add(__v);\n");
             deser_body.push_str("        }\n");
@@ -2292,13 +2319,16 @@ pub(crate) fn generate_persistence_methods(
             // the user's `(List<T>)` cast at the handler site sees a
             // proper Java collection at every level. Generic erasure
             // means the inner ArrayLists work as List<T> even though
-            // their actual element type is Object.
+            // their actual element type is Object. Recurses into
+            // JSONObject children too via __convertJsonObject.
             let mut conv_body = String::new();
             conv_body.push_str("var __list = new java.util.ArrayList<Object>();\n");
             conv_body.push_str("for (int __k = 0; __k < ja.length(); __k++) {\n");
             conv_body.push_str("    Object __v = ja.get(__k);\n");
             conv_body.push_str("    if (__v instanceof org.json.JSONArray) {\n");
             conv_body.push_str("        __list.add(__convertJsonArray((org.json.JSONArray) __v));\n");
+            conv_body.push_str("    } else if (__v instanceof org.json.JSONObject) {\n");
+            conv_body.push_str("        __list.add(__convertJsonObject((org.json.JSONObject) __v));\n");
             conv_body.push_str("    } else {\n");
             conv_body.push_str("        __list.add(__v);\n");
             conv_body.push_str("    }\n");
@@ -2310,6 +2340,35 @@ pub(crate) fn generate_persistence_methods(
                 return_type: Some("Object".to_string()),
                 body: vec![CodegenNode::NativeBlock {
                     code: conv_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Private,
+                decorators: vec![],
+            });
+
+            // Recursive JSONObject → HashMap<String, Object> converter.
+            // Mirrors __convertJsonArray for dict/map state-args.
+            let mut conv_obj_body = String::new();
+            conv_obj_body.push_str("var __map = new java.util.HashMap<String, Object>();\n");
+            conv_obj_body.push_str("for (var __k : jo.keySet()) {\n");
+            conv_obj_body.push_str("    Object __v = jo.get(__k);\n");
+            conv_obj_body.push_str("    if (__v instanceof org.json.JSONArray) {\n");
+            conv_obj_body.push_str("        __map.put(__k, __convertJsonArray((org.json.JSONArray) __v));\n");
+            conv_obj_body.push_str("    } else if (__v instanceof org.json.JSONObject) {\n");
+            conv_obj_body.push_str("        __map.put(__k, __convertJsonObject((org.json.JSONObject) __v));\n");
+            conv_obj_body.push_str("    } else {\n");
+            conv_obj_body.push_str("        __map.put(__k, __v);\n");
+            conv_obj_body.push_str("    }\n");
+            conv_obj_body.push_str("}\n");
+            conv_obj_body.push_str("return __map;");
+            methods.push(CodegenNode::Method {
+                name: "__convertJsonObject".to_string(),
+                params: vec![Param::new("jo").with_type("org.json.JSONObject")],
+                return_type: Some("Object".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: conv_obj_body,
                     span: None,
                 }],
                 is_async: false,
@@ -2517,6 +2576,48 @@ pub(crate) fn generate_persistence_methods(
                         return Some((typed_t, expr));
                     }
                 }
+                // Dictionary<K, V> — comma-separated K and V at depth-0.
+                if let Some(rest) = t.strip_prefix("Dictionary<") {
+                    if let Some(inner) = rest.strip_suffix(">") {
+                        // Split inner on top-level comma.
+                        let mut depth = 0i32;
+                        let mut split_idx = None;
+                        for (i, c) in inner.char_indices() {
+                            match c {
+                                '<' => depth += 1,
+                                '>' => depth -= 1,
+                                ',' if depth == 0 => {
+                                    split_idx = Some(i);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(idx) = split_idx {
+                            let k = inner[..idx].trim();
+                            let v = inner[idx + 1..].trim();
+                            // JSON keys are always strings. Only string K
+                            // is supported in the typed-restore path; other
+                            // K (e.g. int) would need key-string-to-K
+                            // conversion which we don't generate.
+                            if k != "string" && k != "String" {
+                                return None;
+                            }
+                            let (v_cs_type, v_expr) =
+                                cs_value_convert(v, "__de.Value")?;
+                            let typed_t = format!(
+                                "System.Collections.Generic.Dictionary<string, {}>",
+                                v_cs_type
+                            );
+                            let expr = format!(
+                                "(({src}) is System.Collections.Generic.Dictionary<string, object> __raw_d ? \
+                                 ((System.Func<{typed_t}>)(() => {{ var __d = new {typed_t}(); foreach (var __de in __raw_d) __d[__de.Key] = {v_expr}; return __d; }}))() : \
+                                 null)"
+                            );
+                            return Some((typed_t, expr));
+                        }
+                    }
+                }
                 let conv = match t {
                     "int" => "Convert.ToInt32",
                     "long" => "Convert.ToInt64",
@@ -2527,29 +2628,30 @@ pub(crate) fn generate_persistence_methods(
                 };
                 Some((t.to_string(), format!("{conv}({src})")))
             }
-            let cs_typed_list_conv = |elem_type: &str, idx: usize, slot: &str| -> String {
-                // Backwards-compatible signature: top-level type is
-                // List<elem_type>. Build the conversion via the
-                // recursive helper.
-                let outer_type = format!("System.Collections.Generic.List<{elem_type}>");
+            // Per-state typed conversion. For declared type
+            // `List<T>` or `Dictionary<K,V>`, build the typed value
+            // from the generic List<object> / Dictionary<string, object>
+            // tree produced by __convertJsonValue. Returns "" if the
+            // declared type isn't a recognised generic shape.
+            let cs_typed_conv = |declared_type: &str, idx: usize, slot: &str| -> String {
+                let t = cs_normalize_type(declared_type);
+                let runtime_check = if t.starts_with("List<") {
+                    "is System.Collections.Generic.List<object>"
+                } else if t.starts_with("Dictionary<") {
+                    "is System.Collections.Generic.Dictionary<string, object>"
+                } else {
+                    return String::new();
+                };
                 let (cs_type, expr) =
-                    match cs_value_convert(&outer_type, &format!("c.{slot}[{idx}]")) {
+                    match cs_value_convert(declared_type, &format!("c.{slot}[{idx}]")) {
                         Some(x) => x,
                         None => return String::new(),
                     };
                 format!(
-                    "    if (c.{slot}.Count > {idx} && c.{slot}[{idx}] is System.Collections.Generic.List<object>) {{\n\
+                    "    if (c.{slot}.Count > {idx} && c.{slot}[{idx}] {runtime_check}) {{\n\
                      \x20       c.{slot}[{idx}] = ({cs_type})({expr});\n\
                      \x20   }}\n"
                 )
-            };
-            // Treat `List<...>` (nested or scalar) as a list type; the
-            // recursive cs_value_convert handles the rest.
-            let cs_list_elem_type = |t: &str| -> Option<String> {
-                let t = cs_normalize_type(t);
-                let rest = t.strip_prefix("List<")?;
-                let inner = rest.strip_suffix(">")?;
-                Some(inner.trim().to_string())
             };
             let state_arg_decls: Vec<(String, Vec<String>)> = system
                 .machine
@@ -2608,11 +2710,9 @@ pub(crate) fn generate_persistence_methods(
             for (state_name, types) in &state_arg_decls {
                 let mut branch = String::new();
                 for (i, t) in types.iter().enumerate() {
-                    if let Some(elem) = cs_list_elem_type(t) {
-                        let conv = cs_typed_list_conv(&elem, i, "state_args");
-                        if !conv.is_empty() {
-                            branch.push_str(&conv);
-                        }
+                    let conv = cs_typed_conv(t, i, "state_args");
+                    if !conv.is_empty() {
+                        branch.push_str(&conv);
                     }
                 }
                 if !branch.is_empty() {
@@ -2631,11 +2731,9 @@ pub(crate) fn generate_persistence_methods(
             for (state_name, types) in &enter_arg_decls {
                 let mut branch = String::new();
                 for (i, t) in types.iter().enumerate() {
-                    if let Some(elem) = cs_list_elem_type(t) {
-                        let conv = cs_typed_list_conv(&elem, i, "enter_args");
-                        if !conv.is_empty() {
-                            branch.push_str(&conv);
-                        }
+                    let conv = cs_typed_conv(t, i, "enter_args");
+                    if !conv.is_empty() {
+                        branch.push_str(&conv);
                     }
                 }
                 if !branch.is_empty() {
@@ -2672,9 +2770,10 @@ pub(crate) fn generate_persistence_methods(
 
             // Recursive JsonElement → object converter. Numbers /
             // strings / booleans return their primitive form;
-            // arrays return List<object> recursively. The per-state
-            // typed pass then recovers `List<T>` from the nested
-            // List<object> tree.
+            // arrays return List<object>; objects return
+            // Dictionary<string, object>. Recurses for nested
+            // structures. The per-state typed pass then recovers
+            // `List<T>` / `Dictionary<K,V>` from the generic tree.
             let mut conv_body = String::new();
             conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.Number) {\n");
             conv_body.push_str("    if (v.TryGetInt32(out int __i)) return __i;\n");
@@ -2688,6 +2787,11 @@ pub(crate) fn generate_persistence_methods(
             conv_body.push_str("    var __list = new System.Collections.Generic.List<object>();\n");
             conv_body.push_str("    foreach (var __ne in v.EnumerateArray()) __list.Add(__convertJsonValue(__ne));\n");
             conv_body.push_str("    return __list;\n");
+            conv_body.push_str("}\n");
+            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.Object) {\n");
+            conv_body.push_str("    var __dict = new System.Collections.Generic.Dictionary<string, object>();\n");
+            conv_body.push_str("    foreach (var __prop in v.EnumerateObject()) __dict[__prop.Name] = __convertJsonValue(__prop.Value);\n");
+            conv_body.push_str("    return __dict;\n");
             conv_body.push_str("}\n");
             conv_body.push_str("return v.ToString();");
             methods.push(CodegenNode::Method {
@@ -2996,14 +3100,17 @@ pub(crate) fn generate_persistence_methods(
             // state_args/enter_args came from list-typed args; cast
             // back to ArrayList<Any?> so the user's `as List<T>`
             // succeeds.
-            // Recursive __convertJsonArray for arbitrary nesting
-            // depth (List<List<...>>). Same shape as the Java fix.
+            // Recursive __convertJsonArray / __convertJsonObject for
+            // arbitrary nesting depth (List<List<...>>, Map<...>).
+            // Same shape as the Java fix.
             deser_body.push_str("if (d.has(\"state_args\")) {\n");
             deser_body.push_str("    val sa = d.getJSONArray(\"state_args\")\n");
             deser_body.push_str("    for (i in 0 until sa.length()) {\n");
             deser_body.push_str("        val __v = sa.get(i)\n");
             deser_body.push_str("        if (__v is org.json.JSONArray) {\n");
             deser_body.push_str("            c.state_args.add(__convertJsonArray(__v))\n");
+            deser_body.push_str("        } else if (__v is org.json.JSONObject) {\n");
+            deser_body.push_str("            c.state_args.add(__convertJsonObject(__v))\n");
             deser_body.push_str("        } else {\n");
             deser_body.push_str("            c.state_args.add(__v)\n");
             deser_body.push_str("        }\n");
@@ -3015,6 +3122,8 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("        val __v = ea.get(i)\n");
             deser_body.push_str("        if (__v is org.json.JSONArray) {\n");
             deser_body.push_str("            c.enter_args.add(__convertJsonArray(__v))\n");
+            deser_body.push_str("        } else if (__v is org.json.JSONObject) {\n");
+            deser_body.push_str("            c.enter_args.add(__convertJsonObject(__v))\n");
             deser_body.push_str("        } else {\n");
             deser_body.push_str("            c.enter_args.add(__v)\n");
             deser_body.push_str("        }\n");
@@ -3040,13 +3149,16 @@ pub(crate) fn generate_persistence_methods(
             });
 
             // Recursive JSONArray → ArrayList<Any?> converter for
-            // arbitrary nesting depth.
+            // arbitrary nesting depth (recurses via __convertJsonObject
+            // for Map values).
             let mut conv_body = String::new();
             conv_body.push_str("val __list = java.util.ArrayList<Any?>()\n");
             conv_body.push_str("for (__k in 0 until ja.length()) {\n");
             conv_body.push_str("    val __v = ja.get(__k)\n");
             conv_body.push_str("    if (__v is org.json.JSONArray) {\n");
             conv_body.push_str("        __list.add(__convertJsonArray(__v))\n");
+            conv_body.push_str("    } else if (__v is org.json.JSONObject) {\n");
+            conv_body.push_str("        __list.add(__convertJsonObject(__v))\n");
             conv_body.push_str("    } else {\n");
             conv_body.push_str("        __list.add(__v)\n");
             conv_body.push_str("    }\n");
@@ -3058,6 +3170,35 @@ pub(crate) fn generate_persistence_methods(
                 return_type: Some("Any".to_string()),
                 body: vec![CodegenNode::NativeBlock {
                     code: conv_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
+            });
+
+            // Recursive JSONObject → HashMap<String, Any?> converter
+            // for dict/map state-args.
+            let mut conv_obj_body = String::new();
+            conv_obj_body.push_str("val __map = java.util.HashMap<String, Any?>()\n");
+            conv_obj_body.push_str("for (__k in jo.keys()) {\n");
+            conv_obj_body.push_str("    val __v = jo.get(__k)\n");
+            conv_obj_body.push_str("    if (__v is org.json.JSONArray) {\n");
+            conv_obj_body.push_str("        __map[__k] = __convertJsonArray(__v)\n");
+            conv_obj_body.push_str("    } else if (__v is org.json.JSONObject) {\n");
+            conv_obj_body.push_str("        __map[__k] = __convertJsonObject(__v)\n");
+            conv_obj_body.push_str("    } else {\n");
+            conv_obj_body.push_str("        __map[__k] = __v\n");
+            conv_obj_body.push_str("    }\n");
+            conv_obj_body.push_str("}\n");
+            conv_obj_body.push_str("return __map");
+            methods.push(CodegenNode::Method {
+                name: "__convertJsonObject".to_string(),
+                params: vec![Param::new("jo").with_type("org.json.JSONObject")],
+                return_type: Some("Any".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: conv_obj_body,
                     span: None,
                 }],
                 is_async: false,
@@ -3589,7 +3730,8 @@ pub(crate) fn generate_persistence_methods(
             // Recursive Go conversion: returns Some((typed_type,
             // expr)) where expr produces a value of typed_type from
             // an interface{} source `src`. Recurses through slice
-            // types so `[][][]int` etc. round-trip.
+            // and map types so `map[string][]int`, `[][]map[...]`
+            // etc. round-trip.
             fn go_value_convert(t_in: &str, src: &str) -> Option<(String, String)> {
                 let t = t_in.trim();
                 if let Some(inner) = t.strip_prefix("[]") {
@@ -3603,6 +3745,24 @@ pub(crate) fn generate_persistence_methods(
                         "func() {typed} {{ __raw, _ := ({src}).([]interface{{}}); __r := make({typed}, 0, len(__raw)); for _, __e := range __raw {{ __r = append(__r, {inner_expr}) }}; return __r }}()"
                     );
                     return Some((typed, expr));
+                }
+                // map[K]V — find the matching `]` for the key type
+                // bracket. JSON object keys are always strings, so K
+                // must be `string` for the typed restore to work.
+                if let Some(rest) = t.strip_prefix("map[") {
+                    if let Some(close_idx) = rest.find(']') {
+                        let key_t = rest[..close_idx].trim();
+                        if key_t != "string" {
+                            return None;
+                        }
+                        let val_t = rest[close_idx + 1..].trim();
+                        let (val_type, val_expr) = go_value_convert(val_t, "__v")?;
+                        let typed = format!("map[string]{}", val_type);
+                        let expr = format!(
+                            "func() {typed} {{ __raw, _ := ({src}).(map[string]interface{{}}); __r := make({typed}); for __k, __v := range __raw {{ __r[__k] = {val_expr} }}; return __r }}()"
+                        );
+                        return Some((typed, expr));
+                    }
                 }
                 let pair = match t {
                     "int" => (
@@ -3634,22 +3794,29 @@ pub(crate) fn generate_persistence_methods(
                 };
                 Some(pair)
             }
-            let go_typed_list_conv = |elem_type: &str,
-                                      idx: usize,
-                                      slot: &str|
+            let go_typed_conv = |declared_type: &str,
+                                  idx: usize,
+                                  slot: &str|
              -> String {
-                let outer_type = format!("[]{}", elem_type);
+                let t = declared_type.trim();
+                let runtime_check = if t.starts_with("[]") {
+                    "([]interface{})"
+                } else if t.starts_with("map[") {
+                    "(map[string]interface{})"
+                } else {
+                    return String::new();
+                };
                 let src = format!("comp.{slot}[{idx}]");
-                let (_typed_type, expr) = match go_value_convert(&outer_type, &src) {
+                let (_typed_type, expr) = match go_value_convert(declared_type, &src) {
                     Some(x) => x,
                     None => return String::new(),
                 };
-                // Wrap with bounds + nil check. Only convert when
-                // the value is a `[]interface{}` (i.e. came from the
-                // generic JSON loop); otherwise leave as-is.
+                // Wrap with bounds + type-assertion check. Only
+                // convert when the value matches the generic JSON
+                // shape (slice → []interface{}, map → map[string]interface{}).
                 format!(
                     "    if len(comp.{slot}) > {idx} {{\n\
-                     \x20       if _, __isSlice := comp.{slot}[{idx}].([]interface{{}}); __isSlice {{\n\
+                     \x20       if _, __isMatch := comp.{slot}[{idx}].{runtime_check}; __isMatch {{\n\
                      \x20           comp.{slot}[{idx}] = {expr}\n\
                      \x20       }}\n\
                      \x20   }}\n"
@@ -3711,11 +3878,9 @@ pub(crate) fn generate_persistence_methods(
             for (state_name, types) in &go_state_arg_decls {
                 let mut branch = String::new();
                 for (i, t) in types.iter().enumerate() {
-                    if let Some(elem) = go_slice_elem_type(t) {
-                        let conv = go_typed_list_conv(&elem, i, "stateArgs");
-                        if !conv.is_empty() {
-                            branch.push_str(&conv);
-                        }
+                    let conv = go_typed_conv(t, i, "stateArgs");
+                    if !conv.is_empty() {
+                        branch.push_str(&conv);
                     }
                 }
                 if !branch.is_empty() {
@@ -3728,11 +3893,9 @@ pub(crate) fn generate_persistence_methods(
             for (state_name, types) in &go_enter_arg_decls {
                 let mut branch = String::new();
                 for (i, t) in types.iter().enumerate() {
-                    if let Some(elem) = go_slice_elem_type(t) {
-                        let conv = go_typed_list_conv(&elem, i, "enterArgs");
-                        if !conv.is_empty() {
-                            branch.push_str(&conv);
-                        }
+                    let conv = go_typed_conv(t, i, "enterArgs");
+                    if !conv.is_empty() {
+                        branch.push_str(&conv);
                     }
                 }
                 if !branch.is_empty() {

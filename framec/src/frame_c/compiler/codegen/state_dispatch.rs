@@ -741,6 +741,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                         let cast = format!("({})", typ);
                         (typ, cast)
                     }
+                    // Same shape for `: dict` → <sys>_FrameDict*.
+                    "dict" | "Dict" | "Record<string, any>" => {
+                        let typ = format!("{}_FrameDict*", sys);
+                        let cast = format!("({})", typ);
+                        (typ, cast)
+                    }
                     _ if t.ends_with('*') => (t.to_string(), format!("({})", t)),
                     _ => ("int".to_string(), "(int)(intptr_t)".to_string()),
                 }
@@ -3217,6 +3223,12 @@ fn generate_c_handler_method(
             // need the typed cast, not the int fallthrough.
             "list" | "List" | "Array" | "Array<any>" => {
                 let typ = format!("{}_FrameVec*", system_name);
+                let extract = format!("({}){}", typ, val_expr);
+                (typ, extract)
+            }
+            // Same shape for `: dict` → <sys>_FrameDict*.
+            "dict" | "Dict" | "Record<string, any>" => {
+                let typ = format!("{}_FrameDict*", system_name);
                 let extract = format!("({}){}", typ, val_expr);
                 (typ, extract)
             }
