@@ -2186,7 +2186,12 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
             // pattern-match cases use bare patterns followed by `->`,
             // and the body processor's pre-pass normalises subsequent
             // arms to the `; <pattern> ->` form. Match any of those.
-            let curr_is_branch = lt.starts_with("true ->")
+            // A bare `;` on its own line is an Erlang if/case arm
+            // separator (the user wrote native if/case syntax with the
+            // `;` on a dedicated line). The body processor must not
+            // append `,` before it.
+            let curr_is_branch = lt == ";"
+                || lt.starts_with("true ->")
                 || lt.starts_with("; false")
                 || lt.starts_with("; true")
                 || (lt.starts_with(';') && (lt.ends_with(" ->") || lt.ends_with("->")));
@@ -2216,6 +2221,102 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
 
         code.push_str(line);
     }
+}
+
+/// Lowers native Erlang-style `if Cond -> Body ; true -> Body end` to
+/// Frame's C-style `if Cond { Body } else { Body }` so the existing
+/// `erlang_transform_blocks` pipeline can handle it. Without this pass,
+/// native Erlang if syntax breaks the SSA renamer (each branch's
+/// `__ReturnVal = X` gets a distinct `__ReturnVal_K` name, but Erlang
+/// requires both arms to bind the same variable for it to be visible
+/// after the `end`).
+///
+/// Recognises only the simple two-arm form: `if Cond ->` opener,
+/// optional `;` arm separator, `true ->` else header, `end` closer.
+/// Multi-arm `if A -> ; B -> ; true -> end` would need else-if
+/// chaining; not yet handled.
+fn erlang_lower_native_if(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let t = line.trim();
+        // Native if-opener: `if Cond ->` (NOT `if Cond {`, which the
+        // existing transform already handles).
+        let is_native_if =
+            t.starts_with("if ") && t.ends_with(" ->") && !t.ends_with('{');
+        if !is_native_if {
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+        // Find the matching `end` and the `; / true ->` separator.
+        // Search for `;`-on-its-own-line followed by `true ->` then
+        // body and `end`. Skip nested if/case structures by depth
+        // tracking.
+        let cond = t[3..t.len() - 2].trim().to_string();
+        let indent = &line[..line.len() - line.trim_start().len()];
+        let mut j = i + 1;
+        let mut depth = 1;
+        let mut sep_idx: Option<usize> = None;
+        let mut end_idx: Option<usize> = None;
+        while j < lines.len() {
+            let lt = lines[j].trim();
+            let opens =
+                (lt.starts_with("if ") && lt.ends_with(" ->"))
+                || ((lt.starts_with("case ") || lt.starts_with("case("))
+                    && (lt.ends_with(" of") || lt.ends_with(" of,")));
+            let closes = lt == "end" || lt == "end," || lt == "end;";
+            if opens {
+                depth += 1;
+            } else if closes {
+                depth -= 1;
+                if depth == 0 {
+                    end_idx = Some(j);
+                    break;
+                }
+            } else if depth == 1 && lt == ";" {
+                // Lookahead for the `true ->` line that follows.
+                let mut k = j + 1;
+                while k < lines.len() && lines[k].trim().is_empty() {
+                    k += 1;
+                }
+                if k < lines.len() && lines[k].trim() == "true ->" {
+                    sep_idx = Some(j);
+                    // Skip over the `true ->` so we don't redetect.
+                    j = k;
+                }
+            }
+            j += 1;
+        }
+        let (Some(sep), Some(end)) = (sep_idx, end_idx) else {
+            // Couldn't recognise the structure — pass through unchanged.
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        };
+        // Body slices: arm 1 from i+1..sep ; arm 2 from (line after
+        // `true ->`)..end .
+        // Find the line after `true ->`.
+        let mut true_arm_start = sep + 1;
+        while true_arm_start < end && lines[true_arm_start].trim() != "true ->" {
+            true_arm_start += 1;
+        }
+        true_arm_start += 1;
+        // Emit C-style if/else.
+        out.push(format!("{}if {} {{", indent, cond));
+        for k in (i + 1)..sep {
+            out.push(lines[k].to_string());
+        }
+        out.push(format!("{}}} else {{", indent));
+        for k in true_arm_start..end {
+            out.push(lines[k].to_string());
+        }
+        out.push(format!("{}}}", indent));
+        i = end + 1;
+    }
+    out.join("\n")
 }
 
 /// Runs on the spliced handler body text AFTER Frame statements have been expanded.
@@ -3289,11 +3390,31 @@ pub(crate) fn generate_erlang_system(
             // these — see line 3285) see consistent values.
             // Pre-fix this was missing, leaving state-arg names
             // as free variables in `enter` clauses.
+            //
+            // Elide the prefetch when the enter body doesn't
+            // reference the state-arg name (avoids erlc unused-
+            // variable warnings on enter clauses). Frame source may
+            // use either the lowercase declared name or the Erlang-
+            // capitalized form — check both.
+            let enter_body_src = state.enter.as_ref().and_then(|e| {
+                std::str::from_utf8(&source[e.body.span.start..e.body.span.end]).ok()
+            });
             for (i, sp) in state.params.iter().enumerate() {
-                let var_name = erlang_safe_capitalize(&sp.name);
+                let cap = erlang_safe_capitalize(&sp.name);
+                if let Some(body) = enter_body_src {
+                    let used =
+                        raw_contains_word(body, &sp.name) || raw_contains_word(body, &cap);
+                    if !used {
+                        continue;
+                    }
+                } else if state.enter.is_none() {
+                    // No enter body at all — nothing references the
+                    // state-arg in the enter clause.
+                    continue;
+                }
                 code.push_str(&format!(
                     "    {} = frame_arg_at__({}, {}#data.frame_state_args),\n",
-                    var_name,
+                    cap,
                     i + 1,
                     leaf_data_in
                 ));
@@ -3336,7 +3457,7 @@ pub(crate) fn generate_erlang_system(
                     TargetLanguage::Erlang,
                     &enter_ctx,
                 );
-                let enter_body = erlang_transform_blocks(&raw_enter);
+                let enter_body = erlang_transform_blocks(&erlang_lower_native_if(&raw_enter));
 
                 if !enter_body.trim().is_empty() {
                     let enter_params: Vec<(&str, String)> = enter
@@ -3488,13 +3609,36 @@ pub(crate) fn generate_erlang_system(
                 // handlers that don't reference it). Same convention
                 // as the existing catch-all clauses below
                 // (`__Event` for parent-forward dispatch).
+                // Underscore-prefix params that the handler body
+                // doesn't reference. Erlang treats `_Name` as
+                // intentionally-unused and suppresses the warning;
+                // bare `Name` triggers an unused-variable warning on
+                // every clause that doesn't read it.
+                let handler_body_src_for_params = std::str::from_utf8(
+                    &source[handler.body.span.start..handler.body.span.end],
+                )
+                .unwrap_or("");
+                // Frame source for Erlang target may reference the
+                // param by either its declared (lowercase) name OR
+                // its Erlang-capitalized name (e.g. `Mode` instead of
+                // `mode`) — check both forms.
                 let call_pattern = if handler.params.is_empty() {
                     format!("__Event = {}", event_atom)
                 } else {
                     let param_names: Vec<String> = handler
                         .params
                         .iter()
-                        .map(|p| erlang_safe_capitalize(&p.name))
+                        .map(|p| {
+                            let cap = erlang_safe_capitalize(&p.name);
+                            let used =
+                                raw_contains_word(handler_body_src_for_params, &p.name)
+                                    || raw_contains_word(handler_body_src_for_params, &cap);
+                            if used {
+                                cap
+                            } else {
+                                format!("_{}", cap)
+                            }
+                        })
                         .collect();
                     format!("__Event = {{{}, {}}}", event_atom, param_names.join(", "))
                 };
@@ -3510,8 +3654,24 @@ pub(crate) fn generate_erlang_system(
                 // declaration order in `$State(p1, p2, ...)`. Mirrors the
                 // Python dispatch preamble that prepends
                 // `name = compartment.state_args[index]`.
+                //
+                // Elide the prefetch when the handler body doesn't
+                // reference the state-arg name — otherwise erlc emits
+                // an unused-variable warning on every clause whose body
+                // happens not to use the cascaded state-arg. Check both
+                // the lowercase declared name and the Erlang-
+                // capitalized form (Frame source may use either).
+                let handler_body_src = std::str::from_utf8(
+                    &source[handler.body.span.start..handler.body.span.end],
+                )
+                .unwrap_or("");
                 for (i, sp) in state.params.iter().enumerate() {
                     let cap = erlang_safe_capitalize(&sp.name);
+                    let used = raw_contains_word(handler_body_src, &sp.name)
+                        || raw_contains_word(handler_body_src, &cap);
+                    if !used {
+                        continue;
+                    }
                     code.push_str(&format!(
                         "    {} = frame_arg_at__({}, Data#data.frame_state_args),\n",
                         cap,
@@ -3549,7 +3709,7 @@ pub(crate) fn generate_erlang_system(
                 );
 
                 // Transform if/else { } blocks to Erlang case/of/end
-                let spliced_body = erlang_transform_blocks(&raw_spliced);
+                let spliced_body = erlang_transform_blocks(&erlang_lower_native_if(&raw_spliced));
 
                 // Post-process: rewrite self.X, capitalize params, thread Data.
                 // Include both handler params AND state params (declared via
@@ -4116,7 +4276,7 @@ pub(crate) fn generate_erlang_system(
                     TargetLanguage::Erlang,
                     &enter_ctx,
                 );
-                let enter_body = erlang_transform_blocks(&raw_enter);
+                let enter_body = erlang_transform_blocks(&erlang_lower_native_if(&raw_enter));
                 let enter_params: Vec<(&str, String)> = enter
                     .params
                     .iter()
@@ -4192,7 +4352,7 @@ pub(crate) fn generate_erlang_system(
                     TargetLanguage::Erlang,
                     &enter_ctx,
                 );
-                let enter_body = erlang_transform_blocks(&raw_enter);
+                let enter_body = erlang_transform_blocks(&erlang_lower_native_if(&raw_enter));
 
                 if !enter_body.trim().is_empty() {
                     let enter_params: Vec<(&str, String)> = enter
