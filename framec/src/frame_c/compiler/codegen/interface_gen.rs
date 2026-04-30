@@ -3661,107 +3661,28 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    if sa, ok := m[\"state_args\"].([]interface{}); ok { for _, v := range sa { comp.stateArgs = append(comp.stateArgs, normalizeNum(v)) } }\n");
             restore_body.push_str("    if ea, ok := m[\"enter_args\"].([]interface{}); ok { for _, v := range ea { comp.enterArgs = append(comp.enterArgs, normalizeNum(v)) } }\n");
             restore_body.push_str("    if xa, ok := m[\"exit_args\"].([]interface{}); ok { for _, v := range xa { comp.exitArgs = append(comp.exitArgs, normalizeNum(v)) } }\n");
-            // D10: per-state typed slice conversion. JSON Arrays
-            // come back as `[]interface{}`, but the user-handler
-            // type-asserts to the declared Go slice type
-            // (e.g. `.([]int)`). Walk the declared per-state arg
-            // types and convert when needed.
-            let go_slice_elem_type = |t: &str| -> Option<String> {
-                let t = t.trim();
-                let rest = t.strip_prefix("[]")?;
-                Some(rest.trim().to_string())
-            };
-            // Recursive Go conversion: returns Some((typed_type,
-            // expr)) where expr produces a value of typed_type from
-            // an interface{} source `src`. Recurses through slice
-            // and map types so `map[string][]int`, `[][]map[...]`
-            // etc. round-trip.
-            fn go_value_convert(t_in: &str, src: &str) -> Option<(String, String)> {
-                let t = t_in.trim();
-                if let Some(inner) = t.strip_prefix("[]") {
-                    let (inner_type, inner_expr) =
-                        go_value_convert(inner.trim(), "__e")?;
-                    let typed = format!("[]{}", inner_type);
-                    // IIFE: cast src to []interface{}, iterate, build
-                    // typed slice. Variable names shadow at nested
-                    // scopes — Go's lexical scoping makes this safe.
-                    let expr = format!(
-                        "func() {typed} {{ __raw, _ := ({src}).([]interface{{}}); __r := make({typed}, 0, len(__raw)); for _, __e := range __raw {{ __r = append(__r, {inner_expr}) }}; return __r }}()"
-                    );
-                    return Some((typed, expr));
-                }
-                // map[K]V — find the matching `]` for the key type
-                // bracket. JSON object keys are always strings, so K
-                // must be `string` for the typed restore to work.
-                if let Some(rest) = t.strip_prefix("map[") {
-                    if let Some(close_idx) = rest.find(']') {
-                        let key_t = rest[..close_idx].trim();
-                        if key_t != "string" {
-                            return None;
-                        }
-                        let val_t = rest[close_idx + 1..].trim();
-                        let (val_type, val_expr) = go_value_convert(val_t, "__v")?;
-                        let typed = format!("map[string]{}", val_type);
-                        let expr = format!(
-                            "func() {typed} {{ __raw, _ := ({src}).(map[string]interface{{}}); __r := make({typed}); for __k, __v := range __raw {{ __r[__k] = {val_expr} }}; return __r }}()"
-                        );
-                        return Some((typed, expr));
-                    }
-                }
-                let pair = match t {
-                    "int" => (
-                        "int".to_string(),
-                        format!("func() int {{ __f, _ := ({src}).(float64); return int(__f) }}()"),
-                    ),
-                    "int32" => (
-                        "int32".to_string(),
-                        format!("func() int32 {{ __f, _ := ({src}).(float64); return int32(__f) }}()"),
-                    ),
-                    "int64" => (
-                        "int64".to_string(),
-                        format!("func() int64 {{ __f, _ := ({src}).(float64); return int64(__f) }}()"),
-                    ),
-                    "float64" => ("float64".to_string(), format!("({src}).(float64)")),
-                    "float32" => (
-                        "float32".to_string(),
-                        format!("func() float32 {{ __f, _ := ({src}).(float64); return float32(__f) }}()"),
-                    ),
-                    "string" => (
-                        "string".to_string(),
-                        format!("func() string {{ if __s, __ok := ({src}).(string); __ok {{ return __s }}; return \"\" }}()"),
-                    ),
-                    "bool" => (
-                        "bool".to_string(),
-                        format!("func() bool {{ if __b, __ok := ({src}).(bool); __ok {{ return __b }}; return false }}()"),
-                    ),
-                    _ => return None,
-                };
-                Some(pair)
-            }
+            // Type-ignorant typed restore via marshal-roundtrip.
+            // Go's encoding/json reflection handles arbitrary types
+            // (primitive / slice / map / nested / user struct) when
+            // unmarshalling into a typed target. framec emits the
+            // declared type verbatim — no parsing of generics, no
+            // element-type enumeration, no per-shape branching.
             let go_typed_conv = |declared_type: &str,
                                   idx: usize,
                                   slot: &str|
              -> String {
                 let t = declared_type.trim();
-                let runtime_check = if t.starts_with("[]") {
-                    "([]interface{})"
-                } else if t.starts_with("map[") {
-                    "(map[string]interface{})"
-                } else {
+                if t.is_empty() {
                     return String::new();
-                };
+                }
                 let src = format!("comp.{slot}[{idx}]");
-                let (_typed_type, expr) = match go_value_convert(declared_type, &src) {
-                    Some(x) => x,
-                    None => return String::new(),
-                };
-                // Wrap with bounds + type-assertion check. Only
-                // convert when the value matches the generic JSON
-                // shape (slice → []interface{}, map → map[string]interface{}).
                 format!(
                     "    if len(comp.{slot}) > {idx} {{\n\
-                     \x20       if _, __isMatch := comp.{slot}[{idx}].{runtime_check}; __isMatch {{\n\
-                     \x20           comp.{slot}[{idx}] = {expr}\n\
+                     \x20       if __raw, __err := json.Marshal({src}); __err == nil {{\n\
+                     \x20           var __typed {t}\n\
+                     \x20           if json.Unmarshal(__raw, &__typed) == nil {{\n\
+                     \x20               comp.{slot}[{idx}] = __typed\n\
+                     \x20           }}\n\
                      \x20       }}\n\
                      \x20   }}\n"
                 )
