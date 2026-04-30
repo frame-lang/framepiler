@@ -1142,6 +1142,40 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             )
         })
         .collect();
+    // Cascade-aware view: a state's effective param names include any
+    // names declared on a child's cascade arrow `$Child => $Self(name: T)`.
+    // The runtime's __prepareEnter propagates state_args to every
+    // compartment in the chain, so a parent state's handlers can read
+    // those values. Used only for handler-body prefetch; transition
+    // writes / Rust variant decls keep using `state_param_names` (own
+    // params only).
+    let state_param_effective_names: std::collections::HashMap<String, Vec<String>> = {
+        let mut m = state_param_names.clone();
+        for s in &machine.states {
+            if s.params.is_empty() {
+                continue;
+            }
+            // Walk up the entire HSM parent chain — every ancestor's
+            // handlers can see the descendant's cascade-arrow params
+            // because the runtime's frame_state_args / state_args list
+            // is the same value for every compartment in the chain.
+            let mut current = s.parent.clone();
+            while let Some(parent_name) = current {
+                let entry = m.entry(parent_name.clone()).or_default();
+                for p in &s.params {
+                    if !entry.contains(&p.name) {
+                        entry.push(p.name.clone());
+                    }
+                }
+                current = machine
+                    .states
+                    .iter()
+                    .find(|st| st.name == parent_name)
+                    .and_then(|st| st.parent.clone());
+            }
+        }
+        m
+    };
     // Mirror for enter handler params: maps target state name to its
     // declared `$>(name: type)` enter handler param names. Lets transition
     // codegen write enter_args by name instead of by positional index.
@@ -1308,7 +1342,7 @@ pub(crate) fn generate_state_handlers_via_arcanum(
             source,
             has_state_vars,
             &defined_systems,
-            &state_param_names,
+            &state_param_effective_names,
             &state_enter_param_names,
             &state_exit_param_names,
             &event_param_names,
@@ -3790,7 +3824,7 @@ pub(crate) fn generate_handler_from_arcanum(
                         .push_str(&format!("let {0} = self.__sys_{0}.clone();\n", p.name));
                 }
             }
-        } else if !non_start_state_param_names.is_empty() {
+        } else {
             // Non-start state with declared state params: walk the
             // HSM compartment chain to find the layer matching this
             // handler's owner state, then pattern-match its typed
@@ -3802,14 +3836,14 @@ pub(crate) fn generate_handler_from_arcanum(
             // self.__compartment.state_context directly was the
             // bug: ancestor variants never matched and the binding
             // silently fell back to Default::default().
-            for name in non_start_state_param_names {
-                // Pattern syntax note: `match &__sc.state_context`
-                // makes the scrutinee a reference, so the inner
-                // binding `ctx` is auto-borrowed — using `ref ctx`
-                // here is rejected by recent rustc as
-                // "cannot explicitly borrow within an implicitly-
-                // borrowing pattern".
-                sys_param_preamble.push_str(&format!(
+            //
+            // Pattern syntax note: `match &__sc.state_context` makes
+            // the scrutinee a reference, so the inner binding `ctx`
+            // is auto-borrowed — using `ref ctx` here is rejected by
+            // recent rustc as "cannot explicitly borrow within an
+            // implicitly-borrowing pattern".
+            let emit_walk = |sb: &mut String, name: &str, owner: &str| {
+                sb.push_str(&format!(
                     concat!(
                         "let {0} = {{\n",
                         "    let mut __sc = &self.__compartment;\n",
@@ -3825,8 +3859,43 @@ pub(crate) fn generate_handler_from_arcanum(
                         "    }}\n",
                         "}};\n"
                     ),
-                    name, system_name, state_name
+                    name, system_name, owner
                 ));
+            };
+            // 1. Own params — owner is self.
+            for name in non_start_state_param_names {
+                emit_walk(&mut sys_param_preamble, name, state_name);
+            }
+            // 2. Cascade-inherited params — declared at a descendant's
+            // cascade arrow `$Descendant => $Self(name: T)`. The runtime
+            // stores the value on the descendant's typed StateContext
+            // variant (the leaf), so the walk targets the descendant.
+            // Only emit for descendants in this state's HSM subtree.
+            let already: std::collections::HashSet<&str> = non_start_state_param_names
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            for descendant in state_hsm_parents.keys() {
+                let mut cursor = state_hsm_parents.get(descendant);
+                let mut on_chain = false;
+                while let Some(p) = cursor {
+                    if p == state_name {
+                        on_chain = true;
+                        break;
+                    }
+                    cursor = state_hsm_parents.get(p);
+                }
+                if !on_chain {
+                    continue;
+                }
+                if let Some(descendant_params) = state_param_names.get(descendant) {
+                    for p in descendant_params {
+                        if already.contains(p.as_str()) {
+                            continue;
+                        }
+                        emit_walk(&mut sys_param_preamble, p, descendant);
+                    }
+                }
             }
         }
     }

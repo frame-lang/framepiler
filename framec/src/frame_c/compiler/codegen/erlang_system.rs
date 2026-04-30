@@ -3665,9 +3665,44 @@ pub(crate) fn generate_erlang_system(
                     &source[handler.body.span.start..handler.body.span.end],
                 )
                 .unwrap_or("");
-                for (i, sp) in state.params.iter().enumerate() {
-                    let cap = erlang_safe_capitalize(&sp.name);
-                    let used = raw_contains_word(handler_body_src, &sp.name)
+                // Build the effective param list for this state: own
+                // params plus any params declared at a descendant's
+                // cascade arrow (`$Child => $Self(name: T)`). Erlang's
+                // frame_state_args is a flat list shared by every
+                // compartment in the HSM chain, so an ancestor's
+                // handler can read descendant-declared names directly.
+                let mut effective_params: Vec<(String, usize)> = state
+                    .params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (p.name.clone(), i))
+                    .collect();
+                for descendant in machine.states.iter() {
+                    let mut cursor = descendant.parent.clone();
+                    let mut is_descendant = false;
+                    while let Some(p) = cursor {
+                        if p == state.name {
+                            is_descendant = true;
+                            break;
+                        }
+                        cursor = machine
+                            .states
+                            .iter()
+                            .find(|s| s.name == p)
+                            .and_then(|s| s.parent.clone());
+                    }
+                    if !is_descendant {
+                        continue;
+                    }
+                    for (i, p) in descendant.params.iter().enumerate() {
+                        if !effective_params.iter().any(|(n, _)| n == &p.name) {
+                            effective_params.push((p.name.clone(), i));
+                        }
+                    }
+                }
+                for (name, idx) in &effective_params {
+                    let cap = erlang_safe_capitalize(name);
+                    let used = raw_contains_word(handler_body_src, name)
                         || raw_contains_word(handler_body_src, &cap);
                     if !used {
                         continue;
@@ -3675,7 +3710,7 @@ pub(crate) fn generate_erlang_system(
                     code.push_str(&format!(
                         "    {} = frame_arg_at__({}, Data#data.frame_state_args),\n",
                         cap,
-                        i + 1
+                        idx + 1
                     ));
                 }
 
