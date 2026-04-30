@@ -683,41 +683,21 @@ pub(crate) fn generate_rust_state_dispatch(
             }
             code.push_str(&format!("    \"{}\" => {{\n", message));
             for (idx, param) in handler.params.iter().enumerate() {
-                // Normalize Frame type keywords so the Rust-typed match
-                // arms below catch them (same concern as the handler-
-                // dispatch block further down).
+                // Normalize Frame type keywords to Rust ones (the
+                // typed `Box<dyn Any>` boxing in the interface push
+                // records the raw value, so the downcast type must
+                // match the user-declared Rust type exactly).
                 let raw_type = param.symbol_type.as_deref().unwrap_or("String");
                 let param_type = match raw_type {
                     "int" => "i64",
                     "float" => "f64",
+                    "str" | "string" => "String",
                     other => other,
                 };
-                let extraction = match param_type {
-                    "String" | "str" | "string" => format!(
-                        "        let {}: String = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
-                        param.name, idx
-                    ),
-                    "i32" => format!(
-                        "        let {}: i32 = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name, idx
-                    ),
-                    "i64" => format!(
-                        "        let {}: i64 = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name, idx
-                    ),
-                    "f64" | "f32" => format!(
-                        "        let {}: {} = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name, param_type, idx
-                    ),
-                    "bool" => format!(
-                        "        let {}: bool = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name, idx
-                    ),
-                    _ => format!(
-                        "        let {} = __e.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).cloned().unwrap_or_default();\n",
-                        param.name, idx, param_type
-                    ),
-                };
+                let extraction = format!(
+                    "        let {}: {} = __e.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).cloned().unwrap_or_default();\n",
+                    param.name, param_type, idx, param_type
+                );
                 code.push_str(&extraction);
             }
             let param_names: Vec<_> = handler.params.iter().map(|p| p.name.clone()).collect();
@@ -736,40 +716,21 @@ pub(crate) fn generate_rust_state_dispatch(
                 "        let __ctx_event = &self._context_stack.last().unwrap().event;\n",
             );
             for (idx, param) in handler.params.iter().enumerate() {
-                // Normalize Frame type keywords to the Rust target type
-                // so the dispatch arms below (which are keyed on Rust
-                // types) match correctly. Without this, `v: int` in a
-                // Frame handler falls through to the catch-all and
-                // unpacks as String, mismatching the `_s_*_handler(_, v: i64)`
-                // method signature.
+                // Normalize Frame type keywords to the Rust target type.
+                // The typed `Box<dyn Any>` boxing in the interface push
+                // records the raw value, so the downcast type must match
+                // the user-declared Rust type exactly.
                 let raw_type = param.symbol_type.as_deref().unwrap_or("String");
                 let param_type = match raw_type {
                     "int" => "i64",
                     "float" => "f64",
+                    "str" | "string" => "String",
                     other => other,
                 };
-                let extraction = match param_type {
-                    "String" | "str" | "string" => format!(
-                        "        let {}: String = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
-                        param.name, idx
-                    ),
-                    "i64" | "i32" | "isize" => format!(
-                        "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name, param_type, idx
-                    ),
-                    "f64" | "f32" => format!(
-                        "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name, param_type, idx
-                    ),
-                    "bool" => format!(
-                        "        let {}: bool = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse().ok()).unwrap_or_default();\n",
-                        param.name, idx
-                    ),
-                    _ => format!(
-                        "        let {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
-                        param.name, idx
-                    ),
-                };
+                let extraction = format!(
+                    "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).cloned().unwrap_or_default();\n",
+                    param.name, param_type, idx, param_type
+                );
                 code.push_str(&extraction);
             }
             let param_names: Vec<_> = handler.params.iter().map(|p| p.name.clone()).collect();
@@ -937,10 +898,14 @@ pub(crate) fn generate_rust_interface_body(
     let mut code = if method.params.is_empty() {
         format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name)
     } else {
+        // Type-direct boxing. The matching dispatch downcast pulls
+        // the value back as the param's declared type. Storing as the
+        // raw value (not a `.to_string()` round-trip) is required for
+        // compound types like `Vec<T>` that don't implement `Display`.
         let param_items: Vec<String> = method
             .params
             .iter()
-            .map(|p| format!("Box::new({}.to_string()) as Box<dyn std::any::Any>", p.name))
+            .map(|p| format!("Box::new({}.clone()) as Box<dyn std::any::Any>", p.name))
             .collect();
         let mut s = format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name);
         s.push_str(&format!(

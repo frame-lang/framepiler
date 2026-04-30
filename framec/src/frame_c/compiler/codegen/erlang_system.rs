@@ -3714,6 +3714,18 @@ pub(crate) fn generate_erlang_system(
                     if !used {
                         continue;
                     }
+                    // Shadow check: the handler header pattern at
+                    // `__Event = {ev, P1, P2, ...}` already binds any
+                    // event param with this name. Re-binding via
+                    // `Cap = frame_arg_at__(...)` would be a pattern
+                    // match against the existing binding and crash if
+                    // values differ (D9 follow-up — same shape as the
+                    // typed-language D5 shadow check).
+                    let shadowed_by_event_param =
+                        handler.params.iter().any(|p| &p.name == name);
+                    if shadowed_by_event_param {
+                        continue;
+                    }
                     code.push_str(&format!(
                         "    {} = frame_arg_at__({}, Data#data.frame_state_args),\n",
                         cap,
