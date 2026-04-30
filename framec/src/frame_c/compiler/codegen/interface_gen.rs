@@ -2241,15 +2241,17 @@ pub(crate) fn generate_persistence_methods(
             // as JSONArray on serialize; without this conversion the
             // user's `(List<T>) state_args.get(0)` cast fails because
             // the value is a JSONArray, not a List).
+            // Recursive conversion via __convertJsonArray helper:
+            // handles arbitrary nesting depth (e.g. List<List<Integer>>).
+            // Generic erasure on the JVM lets the user's `(List<T>)`
+            // cast succeed even though the underlying list type is
+            // ArrayList<Object>.
             deser_body.push_str("if (d.has(\"state_args\")) {\n");
             deser_body.push_str("    var sa = d.getJSONArray(\"state_args\");\n");
             deser_body.push_str("    for (int i = 0; i < sa.length(); i++) {\n");
             deser_body.push_str("        Object __v = sa.get(i);\n");
             deser_body.push_str("        if (__v instanceof org.json.JSONArray) {\n");
-            deser_body.push_str("            var __ja = (org.json.JSONArray) __v;\n");
-            deser_body.push_str("            var __list = new java.util.ArrayList<Object>();\n");
-            deser_body.push_str("            for (int __k = 0; __k < __ja.length(); __k++) __list.add(__ja.get(__k));\n");
-            deser_body.push_str("            c.state_args.add(__list);\n");
+            deser_body.push_str("            c.state_args.add(__convertJsonArray((org.json.JSONArray) __v));\n");
             deser_body.push_str("        } else {\n");
             deser_body.push_str("            c.state_args.add(__v);\n");
             deser_body.push_str("        }\n");
@@ -2260,10 +2262,7 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("    for (int i = 0; i < ea.length(); i++) {\n");
             deser_body.push_str("        Object __v = ea.get(i);\n");
             deser_body.push_str("        if (__v instanceof org.json.JSONArray) {\n");
-            deser_body.push_str("            var __ja = (org.json.JSONArray) __v;\n");
-            deser_body.push_str("            var __list = new java.util.ArrayList<Object>();\n");
-            deser_body.push_str("            for (int __k = 0; __k < __ja.length(); __k++) __list.add(__ja.get(__k));\n");
-            deser_body.push_str("            c.enter_args.add(__list);\n");
+            deser_body.push_str("            c.enter_args.add(__convertJsonArray((org.json.JSONArray) __v));\n");
             deser_body.push_str("        } else {\n");
             deser_body.push_str("            c.enter_args.add(__v);\n");
             deser_body.push_str("        }\n");
@@ -2280,6 +2279,37 @@ pub(crate) fn generate_persistence_methods(
                 return_type: Some(compartment_class.clone()),
                 body: vec![CodegenNode::NativeBlock {
                     code: deser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Private,
+                decorators: vec![],
+            });
+
+            // Recursive JSONArray → ArrayList<Object> converter.
+            // Handles arbitrary nesting depth (List<List<...>>) so
+            // the user's `(List<T>)` cast at the handler site sees a
+            // proper Java collection at every level. Generic erasure
+            // means the inner ArrayLists work as List<T> even though
+            // their actual element type is Object.
+            let mut conv_body = String::new();
+            conv_body.push_str("var __list = new java.util.ArrayList<Object>();\n");
+            conv_body.push_str("for (int __k = 0; __k < ja.length(); __k++) {\n");
+            conv_body.push_str("    Object __v = ja.get(__k);\n");
+            conv_body.push_str("    if (__v instanceof org.json.JSONArray) {\n");
+            conv_body.push_str("        __list.add(__convertJsonArray((org.json.JSONArray) __v));\n");
+            conv_body.push_str("    } else {\n");
+            conv_body.push_str("        __list.add(__v);\n");
+            conv_body.push_str("    }\n");
+            conv_body.push_str("}\n");
+            conv_body.push_str("return __list;");
+            methods.push(CodegenNode::Method {
+                name: "__convertJsonArray".to_string(),
+                params: vec![Param::new("ja").with_type("org.json.JSONArray")],
+                return_type: Some("Object".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: conv_body,
                     span: None,
                 }],
                 is_async: false,
@@ -2433,42 +2463,16 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("        else c.state_vars[kv.Name] = kv.Value.ToString();\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
-            // Nested-array case: a list-typed state-arg (e.g.
-            // `List<int>`) serializes as a JSON Array inside the
-            // outer state_args Array. Reconstruct it as
-            // `List<object>` on deserialize so the user's
-            // `(List<T>) state_args[0]` cast succeeds.
+            // Generic deserialize: each JSON element → `object` in
+            // state_args. Arrays recurse into List<object> so the
+            // per-state typed pass (below) can convert to the
+            // declared `List<T>`. The recursion handles arbitrary
+            // nesting depth (List<List<...>>).
             deser_body.push_str("if (el.TryGetProperty(\"state_args\", out var sa) && sa.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
-            deser_body.push_str("    foreach (var v in sa.EnumerateArray()) {\n");
-            deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) { if (v.TryGetInt32(out int __ii)) c.state_args.Add(__ii); else if (v.TryGetInt64(out long __il)) c.state_args.Add(__il); else c.state_args.Add(v.GetDouble()); }\n");
-            deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.String) c.state_args.Add(v.GetString());\n");
-            deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
-            deser_body.push_str("            var __nested = new System.Collections.Generic.List<object>();\n");
-            deser_body.push_str("            foreach (var __ne in v.EnumerateArray()) {\n");
-            deser_body.push_str("                if (__ne.ValueKind == System.Text.Json.JsonValueKind.Number) { if (__ne.TryGetInt32(out int __nii)) __nested.Add(__nii); else if (__ne.TryGetInt64(out long __nil)) __nested.Add(__nil); else __nested.Add(__ne.GetDouble()); }\n");
-            deser_body.push_str("                else if (__ne.ValueKind == System.Text.Json.JsonValueKind.String) __nested.Add(__ne.GetString());\n");
-            deser_body.push_str("                else __nested.Add(__ne.ToString());\n");
-            deser_body.push_str("            }\n");
-            deser_body.push_str("            c.state_args.Add(__nested);\n");
-            deser_body.push_str("        }\n");
-            deser_body.push_str("        else c.state_args.Add(v.ToString());\n");
-            deser_body.push_str("    }\n");
+            deser_body.push_str("    foreach (var v in sa.EnumerateArray()) c.state_args.Add(__convertJsonValue(v));\n");
             deser_body.push_str("}\n");
             deser_body.push_str("if (el.TryGetProperty(\"enter_args\", out var ea) && ea.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
-            deser_body.push_str("    foreach (var v in ea.EnumerateArray()) {\n");
-            deser_body.push_str("        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) { if (v.TryGetInt32(out int __ii)) c.enter_args.Add(__ii); else if (v.TryGetInt64(out long __il)) c.enter_args.Add(__il); else c.enter_args.Add(v.GetDouble()); }\n");
-            deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.String) c.enter_args.Add(v.GetString());\n");
-            deser_body.push_str("        else if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
-            deser_body.push_str("            var __nested = new System.Collections.Generic.List<object>();\n");
-            deser_body.push_str("            foreach (var __ne in v.EnumerateArray()) {\n");
-            deser_body.push_str("                if (__ne.ValueKind == System.Text.Json.JsonValueKind.Number) { if (__ne.TryGetInt32(out int __nii)) __nested.Add(__nii); else if (__ne.TryGetInt64(out long __nil)) __nested.Add(__nil); else __nested.Add(__ne.GetDouble()); }\n");
-            deser_body.push_str("                else if (__ne.ValueKind == System.Text.Json.JsonValueKind.String) __nested.Add(__ne.GetString());\n");
-            deser_body.push_str("                else __nested.Add(__ne.ToString());\n");
-            deser_body.push_str("            }\n");
-            deser_body.push_str("            c.enter_args.Add(__nested);\n");
-            deser_body.push_str("        }\n");
-            deser_body.push_str("        else c.enter_args.Add(v.ToString());\n");
-            deser_body.push_str("    }\n");
+            deser_body.push_str("    foreach (var v in ea.EnumerateArray()) c.enter_args.Add(__convertJsonValue(v));\n");
             deser_body.push_str("}\n");
             // D10: per-state typed list conversion. The generic
             // restore above puts list-typed state-args as
@@ -2476,38 +2480,77 @@ pub(crate) fn generate_persistence_methods(
             // generically). C# generics are reified, so a user-level
             // `(List<T>) state_args[i]` cast fails. Emit per-state
             // branches that re-create the typed list when the
-            // declared type is `List<T>` for a known T.
-            let cs_list_elem_type = |t: &str| -> Option<String> {
-                let t = t.trim();
+            // declared type is `List<T>` for a known T. Recurses
+            // through arbitrary depth (List<List<...>>).
+            let cs_normalize_type = |t: &str| -> String {
+                t.trim()
+                    .strip_prefix("System.Collections.Generic.")
+                    .unwrap_or(t.trim())
+                    .to_string()
+            };
+            // Returns Some((cs_type, expr)) where cs_type is the
+            // declared C# type (e.g. "List<int>", "int") and expr
+            // converts a single `object`-typed source to that type.
+            // Returns None for types we don't know how to convert.
+            fn cs_value_convert(t_in: &str, src: &str) -> Option<(String, String)> {
+                let t = t_in.trim();
                 let t = t
                     .strip_prefix("System.Collections.Generic.")
-                    .unwrap_or(t);
+                    .unwrap_or(t)
+                    .trim();
+                if let Some(rest) = t.strip_prefix("List<") {
+                    if let Some(inner) = rest.strip_suffix(">") {
+                        let inner_t = inner.trim();
+                        let (inner_cs_type, inner_expr) =
+                            cs_value_convert(inner_t, "__re")?;
+                        // Build a LINQ-style expression: cast src to
+                        // List<object>, project each element through
+                        // the inner converter, ToList<inner_cs_type>().
+                        // Using foreach in a lambda keeps it
+                        // self-contained.
+                        let typed_t = format!("System.Collections.Generic.List<{}>", inner_cs_type);
+                        let expr = format!(
+                            "(({src}) is System.Collections.Generic.List<object> __raw_l ? \
+                             ((System.Func<{typed_t}>)(() => {{ var __l = new {typed_t}(); foreach (var __re in __raw_l) __l.Add({inner_expr}); return __l; }}))() : \
+                             null)"
+                        );
+                        return Some((typed_t, expr));
+                    }
+                }
+                let conv = match t {
+                    "int" => "Convert.ToInt32",
+                    "long" => "Convert.ToInt64",
+                    "double" | "float" => "Convert.ToDouble",
+                    "string" => return Some(("string".to_string(), format!("({src})?.ToString()"))),
+                    "bool" => "Convert.ToBoolean",
+                    _ => return None,
+                };
+                Some((t.to_string(), format!("{conv}({src})")))
+            }
+            let cs_typed_list_conv = |elem_type: &str, idx: usize, slot: &str| -> String {
+                // Backwards-compatible signature: top-level type is
+                // List<elem_type>. Build the conversion via the
+                // recursive helper.
+                let outer_type = format!("System.Collections.Generic.List<{elem_type}>");
+                let (cs_type, expr) =
+                    match cs_value_convert(&outer_type, &format!("c.{slot}[{idx}]")) {
+                        Some(x) => x,
+                        None => return String::new(),
+                    };
+                format!(
+                    "    if (c.{slot}.Count > {idx} && c.{slot}[{idx}] is System.Collections.Generic.List<object>) {{\n\
+                     \x20       c.{slot}[{idx}] = ({cs_type})({expr});\n\
+                     \x20   }}\n"
+                )
+            };
+            // Treat `List<...>` (nested or scalar) as a list type; the
+            // recursive cs_value_convert handles the rest.
+            let cs_list_elem_type = |t: &str| -> Option<String> {
+                let t = cs_normalize_type(t);
                 let rest = t.strip_prefix("List<")?;
                 let inner = rest.strip_suffix(">")?;
                 Some(inner.trim().to_string())
             };
-            let cs_typed_list_conv =
-                |elem_type: &str, idx: usize, slot: &str| -> String {
-                    // slot: "state_args" or "enter_args"
-                    // Generates: if (c.<slot>[idx] is List<object> __raw) { var __l = new List<T>(); foreach ... __l.Add(...); c.<slot>[idx] = __l; }
-                    let (typed_t, getter) = match elem_type {
-                        "int" => ("int", "Convert.ToInt32(__re)"),
-                        "long" => ("long", "Convert.ToInt64(__re)"),
-                        "double" | "float" => {
-                            ("double", "Convert.ToDouble(__re)")
-                        }
-                        "string" => ("string", "__re?.ToString()"),
-                        "bool" => ("bool", "Convert.ToBoolean(__re)"),
-                        _ => return String::new(),
-                    };
-                    format!(
-                        "    if (c.{slot}.Count > {idx} && c.{slot}[{idx}] is System.Collections.Generic.List<object> __raw{idx}_{slot}) {{\n\
-                         \x20       var __l{idx}_{slot} = new System.Collections.Generic.List<{typed_t}>();\n\
-                         \x20       foreach (var __re in __raw{idx}_{slot}) __l{idx}_{slot}.Add({getter});\n\
-                         \x20       c.{slot}[{idx}] = __l{idx}_{slot};\n\
-                         \x20   }}\n"
-                    )
-                };
             let state_arg_decls: Vec<(String, Vec<String>)> = system
                 .machine
                 .as_ref()
@@ -2619,6 +2662,40 @@ pub(crate) fn generate_persistence_methods(
                 return_type: Some(compartment_class.clone()),
                 body: vec![CodegenNode::NativeBlock {
                     code: deser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Private,
+                decorators: vec![],
+            });
+
+            // Recursive JsonElement → object converter. Numbers /
+            // strings / booleans return their primitive form;
+            // arrays return List<object> recursively. The per-state
+            // typed pass then recovers `List<T>` from the nested
+            // List<object> tree.
+            let mut conv_body = String::new();
+            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.Number) {\n");
+            conv_body.push_str("    if (v.TryGetInt32(out int __i)) return __i;\n");
+            conv_body.push_str("    if (v.TryGetInt64(out long __l)) return __l;\n");
+            conv_body.push_str("    return v.GetDouble();\n");
+            conv_body.push_str("}\n");
+            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString();\n");
+            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.True) return true;\n");
+            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.False) return false;\n");
+            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
+            conv_body.push_str("    var __list = new System.Collections.Generic.List<object>();\n");
+            conv_body.push_str("    foreach (var __ne in v.EnumerateArray()) __list.Add(__convertJsonValue(__ne));\n");
+            conv_body.push_str("    return __list;\n");
+            conv_body.push_str("}\n");
+            conv_body.push_str("return v.ToString();");
+            methods.push(CodegenNode::Method {
+                name: "__convertJsonValue".to_string(),
+                params: vec![Param::new("v").with_type("System.Text.Json.JsonElement")],
+                return_type: Some("object".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: conv_body,
                     span: None,
                 }],
                 is_async: false,
@@ -2919,14 +2996,14 @@ pub(crate) fn generate_persistence_methods(
             // state_args/enter_args came from list-typed args; cast
             // back to ArrayList<Any?> so the user's `as List<T>`
             // succeeds.
+            // Recursive __convertJsonArray for arbitrary nesting
+            // depth (List<List<...>>). Same shape as the Java fix.
             deser_body.push_str("if (d.has(\"state_args\")) {\n");
             deser_body.push_str("    val sa = d.getJSONArray(\"state_args\")\n");
             deser_body.push_str("    for (i in 0 until sa.length()) {\n");
             deser_body.push_str("        val __v = sa.get(i)\n");
             deser_body.push_str("        if (__v is org.json.JSONArray) {\n");
-            deser_body.push_str("            val __list = java.util.ArrayList<Any?>()\n");
-            deser_body.push_str("            for (__k in 0 until __v.length()) __list.add(__v.get(__k))\n");
-            deser_body.push_str("            c.state_args.add(__list)\n");
+            deser_body.push_str("            c.state_args.add(__convertJsonArray(__v))\n");
             deser_body.push_str("        } else {\n");
             deser_body.push_str("            c.state_args.add(__v)\n");
             deser_body.push_str("        }\n");
@@ -2937,9 +3014,7 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("    for (i in 0 until ea.length()) {\n");
             deser_body.push_str("        val __v = ea.get(i)\n");
             deser_body.push_str("        if (__v is org.json.JSONArray) {\n");
-            deser_body.push_str("            val __list = java.util.ArrayList<Any?>()\n");
-            deser_body.push_str("            for (__k in 0 until __v.length()) __list.add(__v.get(__k))\n");
-            deser_body.push_str("            c.enter_args.add(__list)\n");
+            deser_body.push_str("            c.enter_args.add(__convertJsonArray(__v))\n");
             deser_body.push_str("        } else {\n");
             deser_body.push_str("            c.enter_args.add(__v)\n");
             deser_body.push_str("        }\n");
@@ -2956,6 +3031,33 @@ pub(crate) fn generate_persistence_methods(
                 return_type: Some(format!("{}?", compartment_class)),
                 body: vec![CodegenNode::NativeBlock {
                     code: deser_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
+            });
+
+            // Recursive JSONArray → ArrayList<Any?> converter for
+            // arbitrary nesting depth.
+            let mut conv_body = String::new();
+            conv_body.push_str("val __list = java.util.ArrayList<Any?>()\n");
+            conv_body.push_str("for (__k in 0 until ja.length()) {\n");
+            conv_body.push_str("    val __v = ja.get(__k)\n");
+            conv_body.push_str("    if (__v is org.json.JSONArray) {\n");
+            conv_body.push_str("        __list.add(__convertJsonArray(__v))\n");
+            conv_body.push_str("    } else {\n");
+            conv_body.push_str("        __list.add(__v)\n");
+            conv_body.push_str("    }\n");
+            conv_body.push_str("}\n");
+            conv_body.push_str("return __list");
+            methods.push(CodegenNode::Method {
+                name: "__convertJsonArray".to_string(),
+                params: vec![Param::new("ja").with_type("org.json.JSONArray")],
+                return_type: Some("Any".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: conv_body,
                     span: None,
                 }],
                 is_async: false,
@@ -3484,52 +3586,71 @@ pub(crate) fn generate_persistence_methods(
                 let rest = t.strip_prefix("[]")?;
                 Some(rest.trim().to_string())
             };
+            // Recursive Go conversion: returns Some((typed_type,
+            // expr)) where expr produces a value of typed_type from
+            // an interface{} source `src`. Recurses through slice
+            // types so `[][][]int` etc. round-trip.
+            fn go_value_convert(t_in: &str, src: &str) -> Option<(String, String)> {
+                let t = t_in.trim();
+                if let Some(inner) = t.strip_prefix("[]") {
+                    let (inner_type, inner_expr) =
+                        go_value_convert(inner.trim(), "__e")?;
+                    let typed = format!("[]{}", inner_type);
+                    // IIFE: cast src to []interface{}, iterate, build
+                    // typed slice. Variable names shadow at nested
+                    // scopes — Go's lexical scoping makes this safe.
+                    let expr = format!(
+                        "func() {typed} {{ __raw, _ := ({src}).([]interface{{}}); __r := make({typed}, 0, len(__raw)); for _, __e := range __raw {{ __r = append(__r, {inner_expr}) }}; return __r }}()"
+                    );
+                    return Some((typed, expr));
+                }
+                let pair = match t {
+                    "int" => (
+                        "int".to_string(),
+                        format!("func() int {{ __f, _ := ({src}).(float64); return int(__f) }}()"),
+                    ),
+                    "int32" => (
+                        "int32".to_string(),
+                        format!("func() int32 {{ __f, _ := ({src}).(float64); return int32(__f) }}()"),
+                    ),
+                    "int64" => (
+                        "int64".to_string(),
+                        format!("func() int64 {{ __f, _ := ({src}).(float64); return int64(__f) }}()"),
+                    ),
+                    "float64" => ("float64".to_string(), format!("({src}).(float64)")),
+                    "float32" => (
+                        "float32".to_string(),
+                        format!("func() float32 {{ __f, _ := ({src}).(float64); return float32(__f) }}()"),
+                    ),
+                    "string" => (
+                        "string".to_string(),
+                        format!("func() string {{ if __s, __ok := ({src}).(string); __ok {{ return __s }}; return \"\" }}()"),
+                    ),
+                    "bool" => (
+                        "bool".to_string(),
+                        format!("func() bool {{ if __b, __ok := ({src}).(bool); __ok {{ return __b }}; return false }}()"),
+                    ),
+                    _ => return None,
+                };
+                Some(pair)
+            }
             let go_typed_list_conv = |elem_type: &str,
                                       idx: usize,
                                       slot: &str|
              -> String {
-                let (typed_t, conv) = match elem_type {
-                    "int" => ("int", "int(__f)"),
-                    "int32" => ("int32", "int32(__f)"),
-                    "int64" => ("int64", "int64(__f)"),
-                    "float32" => ("float32", "float32(__f)"),
-                    "float64" => ("float64", "__f"),
-                    "string" => {
-                        return format!(
-                            "    if len(comp.{slot}) > {idx} {{\n\
-                             \x20       if __raw, __ok := comp.{slot}[{idx}].([]interface{{}}); __ok {{\n\
-                             \x20           __typed := make([]string, 0, len(__raw))\n\
-                             \x20           for _, __e := range __raw {{\n\
-                             \x20               if __s, __ok2 := __e.(string); __ok2 {{ __typed = append(__typed, __s) }}\n\
-                             \x20           }}\n\
-                             \x20           comp.{slot}[{idx}] = __typed\n\
-                             \x20       }}\n\
-                             \x20   }}\n"
-                        );
-                    }
-                    "bool" => {
-                        return format!(
-                            "    if len(comp.{slot}) > {idx} {{\n\
-                             \x20       if __raw, __ok := comp.{slot}[{idx}].([]interface{{}}); __ok {{\n\
-                             \x20           __typed := make([]bool, 0, len(__raw))\n\
-                             \x20           for _, __e := range __raw {{\n\
-                             \x20               if __b, __ok2 := __e.(bool); __ok2 {{ __typed = append(__typed, __b) }}\n\
-                             \x20           }}\n\
-                             \x20           comp.{slot}[{idx}] = __typed\n\
-                             \x20       }}\n\
-                             \x20   }}\n"
-                        );
-                    }
-                    _ => return String::new(),
+                let outer_type = format!("[]{}", elem_type);
+                let src = format!("comp.{slot}[{idx}]");
+                let (_typed_type, expr) = match go_value_convert(&outer_type, &src) {
+                    Some(x) => x,
+                    None => return String::new(),
                 };
+                // Wrap with bounds + nil check. Only convert when
+                // the value is a `[]interface{}` (i.e. came from the
+                // generic JSON loop); otherwise leave as-is.
                 format!(
                     "    if len(comp.{slot}) > {idx} {{\n\
-                     \x20       if __raw, __ok := comp.{slot}[{idx}].([]interface{{}}); __ok {{\n\
-                     \x20           __typed := make([]{typed_t}, 0, len(__raw))\n\
-                     \x20           for _, __e := range __raw {{\n\
-                     \x20               if __f, __ok2 := __e.(float64); __ok2 {{ __typed = append(__typed, {conv}) }}\n\
-                     \x20           }}\n\
-                     \x20           comp.{slot}[{idx}] = __typed\n\
+                     \x20       if _, __isSlice := comp.{slot}[{idx}].([]interface{{}}); __isSlice {{\n\
+                     \x20           comp.{slot}[{idx}] = {expr}\n\
                      \x20       }}\n\
                      \x20   }}\n"
                 )
