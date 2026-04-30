@@ -1983,8 +1983,14 @@ pub(crate) fn generate_frame_expansion(
                         // unresolved `__ReturnVal` token in this position
                         // with `ok` — the gen_statem default reply value
                         // for handlers that didn't set one.
+                        // Quote the state atom to immunize it from
+                        // erlang_capitalize_params: when a transition target
+                        // collides with a param name (state `$Active` and
+                        // param `active`) the capitalize pass would otherwise
+                        // turn the atom into the param's variable form.
+                        // `'active'` and `active` are equivalent Erlang atoms.
                         code.push_str(&format!(
-                            "{}frame_transition__({}, Data, {}, {}, {}, From, __ReturnVal)",
+                            "{}frame_transition__('{}', Data, {}, {}, {}, From, __ReturnVal)",
                             indent_str, erlang_state, exit_list, enter_list, state_list
                         ));
                         code

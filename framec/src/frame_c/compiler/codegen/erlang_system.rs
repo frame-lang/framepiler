@@ -455,15 +455,21 @@ fn erlang_capitalize_params(line: &str, param_names: &[(&str, String)]) -> Strin
             if result[i..].starts_with(original) {
                 // Check word boundaries
                 // Don't capitalize identifiers inside record access patterns (#record.field)
+                // or inside quoted atoms ('foo'): `'` flanks an atom, not a
+                // variable, so a name collision between a state atom and a
+                // param name (test 67: state $Active + param `active`) keeps
+                // the atom form when the codegen quotes it.
                 let prev_byte = result.as_bytes()[i.saturating_sub(1)];
                 let before_ok = i == 0
                     || !prev_byte.is_ascii_alphanumeric()
                         && prev_byte != b'_'
                         && prev_byte != b'#'
-                        && prev_byte != b'.';
+                        && prev_byte != b'.'
+                        && prev_byte != b'\'';
                 let after_ok = i + orig_len >= result.len()
                     || !result.as_bytes()[i + orig_len].is_ascii_alphanumeric()
-                        && result.as_bytes()[i + orig_len] != b'_';
+                        && result.as_bytes()[i + orig_len] != b'_'
+                        && result.as_bytes()[i + orig_len] != b'\'';
                 if before_ok && after_ok {
                     new_result.push_str(capitalized);
                     i += orig_len;
