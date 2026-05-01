@@ -2300,6 +2300,30 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
+            // Top-level JSON value normaliser. Routes JSONArray /
+            // JSONObject through their recursive helpers; passes
+            // primitives through unchanged. Used by domain-var
+            // restore so user field types like `List<Integer>` /
+            // `Map<String, Integer>` accept the converted value
+            // via erasure cast.
+            let mut conv_val_body = String::new();
+            conv_val_body.push_str("if (v instanceof org.json.JSONArray) return __convertJsonArray((org.json.JSONArray) v);\n");
+            conv_val_body.push_str("if (v instanceof org.json.JSONObject) return __convertJsonObject((org.json.JSONObject) v);\n");
+            conv_val_body.push_str("return v;");
+            methods.push(CodegenNode::Method {
+                name: "__convertJsonValue".to_string(),
+                params: vec![Param::new("v").with_type("Object")],
+                return_type: Some("Object".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: conv_val_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: true,
+                visibility: Visibility::Private,
+                decorators: vec![],
+            });
+
             // save_state()
             let mut save_body = String::new();
             save_body.push_str("var __j = new org.json.JSONObject();\n");
@@ -2346,7 +2370,14 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    for (int i = 0; i < __stack.length(); i++) { __instance._state_stack.add(__deserComp(__stack.get(i))); }\n");
             restore_body.push_str("}\n");
 
-            // Restore domain vars
+            // Restore domain vars. Primitives must use the org.json
+            // typed getters (only way to unbox JSON Number → int /
+            // long / double / boolean correctly). Reference types
+            // route through __convertJsonValue (recursive
+            // JSONArray/JSONObject → ArrayList/HashMap unwrapper)
+            // and then erasure-cast to the declared field type —
+            // works for List<T>, Map<K,V>, nested generics, and
+            // any user reference type.
             for var in &system.domain {
                 let java_type = match &var.var_type {
                     crate::frame_c::compiler::frame_ast::Type::Custom(t) => java_map_type(t).leak(),
@@ -2369,9 +2400,10 @@ pub(crate) fn generate_persistence_methods(
                         "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getString(\"{0}\"); }}\n",
                         var.name
                     )),
-                    _ => restore_body.push_str(&format!(
-                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.get(\"{0}\"); }}\n",
-                        var.name
+                    other => restore_body.push_str(&format!(
+                        "if (__j.has(\"{name}\")) {{ __instance.{name} = ({t}) __convertJsonValue(__j.get(\"{name}\")); }}\n",
+                        name = var.name,
+                        t = other
                     )),
                 }
             }
@@ -3017,6 +3049,25 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
+            // Top-level JSON value normaliser — same shape as Java.
+            let mut conv_val_body = String::new();
+            conv_val_body.push_str("if (v is org.json.JSONArray) return __convertJsonArray(v)\n");
+            conv_val_body.push_str("if (v is org.json.JSONObject) return __convertJsonObject(v)\n");
+            conv_val_body.push_str("return v");
+            methods.push(CodegenNode::Method {
+                name: "__convertJsonValue".to_string(),
+                params: vec![Param::new("v").with_type("Any")],
+                return_type: Some("Any".to_string()),
+                body: vec![CodegenNode::NativeBlock {
+                    code: conv_val_body,
+                    span: None,
+                }],
+                is_async: false,
+                is_static: false,
+                visibility: Visibility::Private,
+                decorators: vec![],
+            });
+
             // save_state()
             let mut save_body = String::new();
             save_body.push_str("val j = org.json.JSONObject()\n");
@@ -3065,41 +3116,38 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    instance._state_stack = mutableListOf()\n");
             restore_body.push_str(&format!("    for (i in 0 until stack.length()) {{ instance._state_stack.add(instance.__deserComp(stack.get(i))!!) }}\n"));
             restore_body.push_str("}\n");
+            // Same shape as Java: primitives must use the org.json
+            // typed getters; reference types route through
+            // __convertJsonValue + erasure cast so List<T>/Map<K,V>
+            // domain vars work.
             for var in &system.domain {
-                let kt_type = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                        let mapped = kotlin_map_type(t);
-                        match mapped.as_str() {
-                            "Int" | "Long" => "Int",
-                            "Double" | "Float" => "Double",
-                            "Boolean" => "Boolean",
-                            "String" => "String",
-                            _ => "Any",
-                        }
-                    }
-                    _ => "Any",
+                let mapped = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => kotlin_map_type(t),
+                    _ => "Any".to_string(),
                 };
-                match kt_type {
-                    "Int" => restore_body.push_str(&format!(
-                        "if (j.has(\"{0}\")) instance.{0} = j.getInt(\"{0}\")\n",
-                        var.name
-                    )),
-                    "String" => restore_body.push_str(&format!(
-                        "if (j.has(\"{0}\")) instance.{0} = j.getString(\"{0}\")\n",
-                        var.name
-                    )),
-                    "Boolean" => restore_body.push_str(&format!(
-                        "if (j.has(\"{0}\")) instance.{0} = j.getBoolean(\"{0}\")\n",
-                        var.name
-                    )),
-                    "Double" => restore_body.push_str(&format!(
-                        "if (j.has(\"{0}\")) instance.{0} = j.getDouble(\"{0}\")\n",
-                        var.name
-                    )),
-                    _ => restore_body.push_str(&format!(
-                        "if (j.has(\"{0}\")) instance.{0} = j.get(\"{0}\")\n",
-                        var.name
-                    )),
+                let primitive = matches!(
+                    mapped.as_str(),
+                    "Int" | "Long" | "Double" | "Float" | "Boolean" | "String"
+                );
+                if primitive {
+                    let getter = match mapped.as_str() {
+                        "Int" | "Long" => "getInt",
+                        "Double" | "Float" => "getDouble",
+                        "Boolean" => "getBoolean",
+                        "String" => "getString",
+                        _ => unreachable!(),
+                    };
+                    restore_body.push_str(&format!(
+                        "if (j.has(\"{name}\")) instance.{name} = j.{getter}(\"{name}\")\n",
+                        name = var.name,
+                        getter = getter
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "if (j.has(\"{name}\")) instance.{name} = __convertJsonValue(j.get(\"{name}\")) as {t}\n",
+                        name = var.name,
+                        t = mapped
+                    ));
                 }
             }
             restore_body.push_str("return instance");
