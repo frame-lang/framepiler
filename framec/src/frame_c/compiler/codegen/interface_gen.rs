@@ -2456,123 +2456,23 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str("if (el.TryGetProperty(\"enter_args\", out var ea) && ea.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
             deser_body.push_str("    foreach (var v in ea.EnumerateArray()) c.enter_args.Add(__convertJsonValue(v));\n");
             deser_body.push_str("}\n");
-            // D10: per-state typed list conversion. The generic
-            // restore above puts list-typed state-args as
-            // `List<object>` (because we don't know the element type
-            // generically). C# generics are reified, so a user-level
-            // `(List<T>) state_args[i]` cast fails. Emit per-state
-            // branches that re-create the typed list when the
-            // declared type is `List<T>` for a known T. Recurses
-            // through arbitrary depth (List<List<...>>).
-            let cs_normalize_type = |t: &str| -> String {
-                t.trim()
-                    .strip_prefix("System.Collections.Generic.")
-                    .unwrap_or(t.trim())
-                    .to_string()
-            };
-            // Returns Some((cs_type, expr)) where cs_type is the
-            // declared C# type (e.g. "List<int>", "int") and expr
-            // converts a single `object`-typed source to that type.
-            // Returns None for types we don't know how to convert.
-            fn cs_value_convert(t_in: &str, src: &str) -> Option<(String, String)> {
-                let t = t_in.trim();
-                let t = t
-                    .strip_prefix("System.Collections.Generic.")
-                    .unwrap_or(t)
-                    .trim();
-                if let Some(rest) = t.strip_prefix("List<") {
-                    if let Some(inner) = rest.strip_suffix(">") {
-                        let inner_t = inner.trim();
-                        let (inner_cs_type, inner_expr) =
-                            cs_value_convert(inner_t, "__re")?;
-                        // Build a LINQ-style expression: cast src to
-                        // List<object>, project each element through
-                        // the inner converter, ToList<inner_cs_type>().
-                        // Using foreach in a lambda keeps it
-                        // self-contained.
-                        let typed_t = format!("System.Collections.Generic.List<{}>", inner_cs_type);
-                        let expr = format!(
-                            "(({src}) is System.Collections.Generic.List<object> __raw_l ? \
-                             ((System.Func<{typed_t}>)(() => {{ var __l = new {typed_t}(); foreach (var __re in __raw_l) __l.Add({inner_expr}); return __l; }}))() : \
-                             null)"
-                        );
-                        return Some((typed_t, expr));
-                    }
-                }
-                // Dictionary<K, V> — comma-separated K and V at depth-0.
-                if let Some(rest) = t.strip_prefix("Dictionary<") {
-                    if let Some(inner) = rest.strip_suffix(">") {
-                        // Split inner on top-level comma.
-                        let mut depth = 0i32;
-                        let mut split_idx = None;
-                        for (i, c) in inner.char_indices() {
-                            match c {
-                                '<' => depth += 1,
-                                '>' => depth -= 1,
-                                ',' if depth == 0 => {
-                                    split_idx = Some(i);
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(idx) = split_idx {
-                            let k = inner[..idx].trim();
-                            let v = inner[idx + 1..].trim();
-                            // JSON keys are always strings. Only string K
-                            // is supported in the typed-restore path; other
-                            // K (e.g. int) would need key-string-to-K
-                            // conversion which we don't generate.
-                            if k != "string" && k != "String" {
-                                return None;
-                            }
-                            let (v_cs_type, v_expr) =
-                                cs_value_convert(v, "__de.Value")?;
-                            let typed_t = format!(
-                                "System.Collections.Generic.Dictionary<string, {}>",
-                                v_cs_type
-                            );
-                            let expr = format!(
-                                "(({src}) is System.Collections.Generic.Dictionary<string, object> __raw_d ? \
-                                 ((System.Func<{typed_t}>)(() => {{ var __d = new {typed_t}(); foreach (var __de in __raw_d) __d[__de.Key] = {v_expr}; return __d; }}))() : \
-                                 null)"
-                            );
-                            return Some((typed_t, expr));
-                        }
-                    }
-                }
-                let conv = match t {
-                    "int" => "Convert.ToInt32",
-                    "long" => "Convert.ToInt64",
-                    "double" | "float" => "Convert.ToDouble",
-                    "string" => return Some(("string".to_string(), format!("({src})?.ToString()"))),
-                    "bool" => "Convert.ToBoolean",
-                    _ => return None,
-                };
-                Some((t.to_string(), format!("{conv}({src})")))
-            }
-            // Per-state typed conversion. For declared type
-            // `List<T>` or `Dictionary<K,V>`, build the typed value
-            // from the generic List<object> / Dictionary<string, object>
-            // tree produced by __convertJsonValue. Returns "" if the
-            // declared type isn't a recognised generic shape.
+            // Type-ignorant typed restore via JsonSerializer
+            // round-trip. framec emits the declared type verbatim;
+            // System.Text.Json reflection handles primitives,
+            // List<T>, Dictionary<K,V>, nested structures, and user
+            // types with [JsonPropertyName] attributes — without
+            // framec parsing generics or detecting container kinds.
             let cs_typed_conv = |declared_type: &str, idx: usize, slot: &str| -> String {
-                let t = cs_normalize_type(declared_type);
-                let runtime_check = if t.starts_with("List<") {
-                    "is System.Collections.Generic.List<object>"
-                } else if t.starts_with("Dictionary<") {
-                    "is System.Collections.Generic.Dictionary<string, object>"
-                } else {
+                let t = declared_type.trim();
+                if t.is_empty() {
                     return String::new();
-                };
-                let (cs_type, expr) =
-                    match cs_value_convert(declared_type, &format!("c.{slot}[{idx}]")) {
-                        Some(x) => x,
-                        None => return String::new(),
-                    };
+                }
                 format!(
-                    "    if (c.{slot}.Count > {idx} && c.{slot}[{idx}] {runtime_check}) {{\n\
-                     \x20       c.{slot}[{idx}] = ({cs_type})({expr});\n\
+                    "    if (c.{slot}.Count > {idx} && c.{slot}[{idx}] != null) {{\n\
+                     \x20       try {{\n\
+                     \x20           var __raw = System.Text.Json.JsonSerializer.Serialize(c.{slot}[{idx}]);\n\
+                     \x20           c.{slot}[{idx}] = System.Text.Json.JsonSerializer.Deserialize<{t}>(__raw);\n\
+                     \x20       }} catch {{ /* leave generic value in place */ }}\n\
                      \x20   }}\n"
                 )
             };
