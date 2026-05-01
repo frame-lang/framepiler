@@ -3240,62 +3240,27 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    instance._state_stack = []\n");
             restore_body.push_str("    for sc in stack { if let c = instance.__deserComp(sc) { instance._state_stack.append(c) } }\n");
             restore_body.push_str("}\n");
+            // Type-ignorant: wrap the value in an array, encode to
+            // JSON via JSONSerialization, then decode as [T].first.
+            // The array-wrap trick avoids JSONSerialization's
+            // top-level-must-be-container restriction. framec emits
+            // `T` verbatim; Codable conformance handles the typing.
             for var in &system.domain {
                 let swift_type = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                        let mapped = swift_map_type(t);
-                        match mapped.as_str() {
-                            "Int" => "Int",
-                            "Double" | "Float" => "Double",
-                            "Bool" => "Bool",
-                            "String" => "String",
-                            s if s.starts_with('[') => s.to_string().leak(),
-                            _ => "Any",
-                        }
-                    }
-                    _ => "Any",
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => swift_map_type(t),
+                    _ => "Any".to_string(),
                 };
-                match swift_type {
-                    "Int" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? Int {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    "String" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? String {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    "Bool" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? Bool {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    "Double" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? Double {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    "[String]" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? [String] {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    "[Int]" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? [Int] {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    "[Bool]" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? [Bool] {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    "[Double]" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? [Double] {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    "[Any]" => restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] as? [Any] {{ instance.{0} = v }}\n",
-                        var.name
-                    )),
-                    _ => restore_body.push_str(&format!(
+                if swift_type == "Any" {
+                    restore_body.push_str(&format!(
                         "if let v = j[\"{0}\"] {{ instance.{0} = v }}\n",
                         var.name
-                    )),
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "if let __raw = j[\"{name}\"], let __data = try? JSONSerialization.data(withJSONObject: [__raw]), let __arr = try? JSONDecoder().decode([{t}].self, from: __data), let __v = __arr.first {{ instance.{name} = __v }}\n",
+                        name = var.name,
+                        t = swift_type
+                    ));
                 }
             }
             restore_body.push_str("return instance");
