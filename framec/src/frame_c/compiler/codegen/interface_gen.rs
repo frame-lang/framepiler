@@ -2031,8 +2031,70 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("    }\n");
             save_body.push_str("    }\n");
             save_body.push_str("    __cj[\"state_args\"] = __sa;\n");
+            // D13 fix: per-state typed enter_args (mirror of state_args
+            // path above). Without this, declared `$>(items: vector<T>)`
+            // round-trips as int/double-only and a user that reads
+            // __compartment->enter_args[i] post-restore hits bad_any_cast.
+            let cpp_enter_arg_decls: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .enter
+                                .as_ref()
+                                .map(|e| {
+                                    e.params
+                                        .iter()
+                                        .map(|p| match &p.param_type {
+                                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
+                                                s.clone()
+                                            }
+                                            crate::frame_c::compiler::frame_ast::Type::Unknown => {
+                                                String::new()
+                                            }
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             save_body.push_str("    nlohmann::json __ea = nlohmann::json::array();\n");
-            save_body.push_str("    for (const auto& v : c->enter_args) { try { __ea.push_back(std::any_cast<int>(v)); } catch(...) { try { __ea.push_back(std::any_cast<double>(v)); } catch(...) { __ea.push_back(nullptr); } } }\n");
+            save_body.push_str("    {\n");
+            let mut any_enter_branch = false;
+            for (state_name, types) in &cpp_enter_arg_decls {
+                if types.is_empty() {
+                    continue;
+                }
+                if !any_enter_branch {
+                    any_enter_branch = true;
+                }
+                save_body.push_str(&format!(
+                    "    if (c->state == \"{}\") {{\n",
+                    state_name
+                ));
+                for (i, t) in types.iter().enumerate() {
+                    if t.is_empty() {
+                        save_body.push_str(&format!(
+                            "        if (c->enter_args.size() > {i}) {{ try {{ __ea.push_back(std::any_cast<int>(c->enter_args[{i}])); }} catch(...) {{ try {{ __ea.push_back(std::any_cast<double>(c->enter_args[{i}])); }} catch(...) {{ __ea.push_back(nullptr); }} }} }}\n"
+                        ));
+                    } else {
+                        save_body.push_str(&format!(
+                            "        if (c->enter_args.size() > {i}) {{ try {{ __ea.push_back(nlohmann::json(std::any_cast<{t}>(c->enter_args[{i}]))); }} catch(...) {{ __ea.push_back(nullptr); }} }}\n"
+                        ));
+                    }
+                }
+                save_body.push_str("    } else\n");
+            }
+            save_body.push_str("    {\n");
+            save_body.push_str("        for (const auto& v : c->enter_args) { try { __ea.push_back(std::any_cast<int>(v)); } catch(...) { try { __ea.push_back(std::any_cast<double>(v)); } catch(...) { __ea.push_back(nullptr); } } }\n");
+            save_body.push_str("    }\n");
+            save_body.push_str("    }\n");
             save_body.push_str("    __cj[\"enter_args\"] = __ea;\n");
             save_body.push_str("    __cj[\"parent\"] = __ser(c->parent_compartment.get());\n");
             save_body.push_str("    return __cj;\n");
@@ -2140,10 +2202,39 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("            }\n");
             restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
+            // D13 fix: per-state typed enter_args (mirror state_args).
             restore_body.push_str("    if (d.contains(\"enter_args\") && d[\"enter_args\"].is_array()) {\n");
-            restore_body.push_str("        for (const auto& v : d[\"enter_args\"]) {\n");
-            restore_body.push_str("            if (v.is_number_integer()) c->enter_args.push_back(std::any(v.get<int>()));\n");
-            restore_body.push_str("            else if (v.is_number_float()) c->enter_args.push_back(std::any(v.get<double>()));\n");
+            restore_body.push_str("        const auto& __ea = d[\"enter_args\"];\n");
+            let mut any_typed_enter = false;
+            for (state_name, types) in &cpp_enter_arg_decls {
+                if types.is_empty() {
+                    continue;
+                }
+                if !any_typed_enter {
+                    any_typed_enter = true;
+                }
+                restore_body.push_str(&format!(
+                    "        if (c->state == \"{}\") {{\n",
+                    state_name
+                ));
+                for (i, t) in types.iter().enumerate() {
+                    if t.is_empty() {
+                        restore_body.push_str(&format!(
+                            "            if (__ea.size() > {i}) {{ if (__ea[{i}].is_number_integer()) c->enter_args.push_back(std::any(__ea[{i}].get<int>())); else if (__ea[{i}].is_number_float()) c->enter_args.push_back(std::any(__ea[{i}].get<double>())); }}\n"
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "            if (__ea.size() > {i}) {{ try {{ c->enter_args.push_back(std::any(__ea[{i}].get<{t}>())); }} catch(...) {{ }} }}\n"
+                        ));
+                    }
+                }
+                restore_body.push_str("        } else \n");
+            }
+            restore_body.push_str("        {\n");
+            restore_body.push_str("            for (const auto& v : __ea) {\n");
+            restore_body.push_str("                if (v.is_number_integer()) c->enter_args.push_back(std::any(v.get<int>()));\n");
+            restore_body.push_str("                else if (v.is_number_float()) c->enter_args.push_back(std::any(v.get<double>()));\n");
+            restore_body.push_str("            }\n");
             restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
             restore_body

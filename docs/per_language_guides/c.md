@@ -110,6 +110,61 @@ for the canonical example.
 runtime-provided list helper for C — the user is responsible for the
 underlying type. Capability-matrix footnote `[l]` documents this.
 
+### Persist + custom typed lists (D12 extension hook)
+
+The `@@persist` C runtime emits a symbol-mangle dispatcher:
+`<sys>_persist_pack_<mangled>(value)` and a matching `unpack_`
+twin. The runtime supplies built-in pack/unpack functions for
+`int`, `double`, `str`, `bool`, `list`, `dict`. The default
+`pack_list` packs each element as `int`; if you have a list of
+`str` or `float` you'll lose precision/data on round-trip.
+
+Two approaches to typed lists:
+
+**Approach A — declare a custom type, supply your own pack/unpack:**
+
+```c
+// Frame:
+//   domain:
+//       names : <sys>_StrList* = NULL
+//
+// Then in your C prolog:
+
+typedef <sys>_FrameVec MySys_StrList;  // alias for clarity
+
+static cJSON* MySys_persist_pack_StrList(void* v) {
+    MySys_StrList* vec = (MySys_StrList*)v;
+    cJSON* arr = cJSON_CreateArray();
+    if (vec) {
+        for (int i = 0; i < vec->size; i++) {
+            cJSON_AddItemToArray(arr,
+                cJSON_CreateString((const char*)vec->items[i]));
+        }
+    }
+    return arr;
+}
+
+static void* MySys_persist_unpack_StrList(cJSON* j) {
+    if (!cJSON_IsArray(j)) return NULL;
+    MySys_StrList* vec = MySys_FrameVec_new();
+    cJSON* item;
+    cJSON_ArrayForEach(item, j) {
+        MySys_FrameVec_push(vec,
+            (void*)strdup(item->valuestring ? item->valuestring : ""));
+    }
+    return vec;
+}
+```
+
+The mangled symbol matches the user-declared type string verbatim
+(only `*` becomes `P`, non-identifier chars become `_`). Framec
+emits the call as `MySys_persist_pack_StrList(value)`; the linker
+finds your symbol.
+
+**Approach B — accept the int default and round-trip raw bytes.**
+For homogeneous int lists this works out of the box. For other
+types, prefer Approach A.
+
 ---
 
 ## Strings: `char*` and `sprintf`/`snprintf`
