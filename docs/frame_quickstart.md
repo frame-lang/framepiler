@@ -220,10 +220,23 @@ Generated methods:
 
 | Method | Kind | Returns |
 |---|---|---|
-| `save_state()` | instance | bytes / JSON string (per target) |
+| `save_state()` | instance | JSON string (Python: pickle bytes — see warning below) |
 | `SystemName.restore_state(data)` | **static** | new restored instance |
 
 **Restore does NOT invoke `$>`**. The state is being restored, not entered.
+
+**Quiescent contract — E700.** Calling `save_state()` from inside
+a handler is a contract violation. The runtime errors with
+`E700: system not quiescent` (per-backend mechanism: throw, panic,
+abort, or push_error). Only call `save_state` between events.
+
+**Nested `@@SystemName` fields persist recursively.** All 17
+backends; each child's state embeds in the parent's blob.
+
+**Python uses pickle.** Untrusted-source blobs run arbitrary code
+on `restore_state`. Don't unpickle data you didn't write yourself
+without validation. JSON migration for Python is in RFC-0012,
+deferred pending customer feedback.
 
 ---
 
