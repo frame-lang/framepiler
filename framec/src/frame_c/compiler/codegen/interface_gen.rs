@@ -1201,6 +1201,30 @@ pub(crate) fn extract_body_content(
     }
 }
 
+/// Extract the child @@System() name from a domain field's initializer text.
+/// Returns Some("Counter") for `@@Counter()`, `@@Counter(args)`, etc.
+/// Returns None for any non-tagged-system initializer (primitives, native
+/// constructors like `new Counter()` after expand_tagged_in_domain has
+/// already run, etc.).
+///
+/// Used by persist codegen to detect domain fields holding nested system
+/// instances. For those, save_state recurses into the child's saveState
+/// and restore_state rebuilds via the child's restoreState — preserving
+/// class identity through a JSON round-trip that would otherwise produce
+/// a plain object dict.
+fn extract_tagged_system_name(init: &str) -> Option<&str> {
+    let s = init.trim();
+    let rest = s.strip_prefix("@@")?;
+    let end = rest
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(rest.len());
+    if end == 0 {
+        None
+    } else {
+        Some(&rest[..end])
+    }
+}
+
 /// Dart type-tree node. Used by the Dart persist-restore emitter to
 /// produce deep-typed comprehension expressions from type-string
 /// declarations. Architecturally type-ignorant: parses only `List<...>`
@@ -1369,9 +1393,20 @@ pub(crate) fn generate_persistence_methods(
                 );
             }
 
-            // Add domain variables
+            // Add domain variables. Nested system instances (declared
+            // with `@@SystemName()` initializer) round-trip via the
+            // child's saveState/restoreState — preserving class identity
+            // through JSON. Plain values pass through verbatim.
             for var in &system.domain {
-                save_body.push_str(&format!("    {}: this.{},\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "    {0}: this.{0} ? JSON.parse(this.{0}.saveState()) : null,\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("    {}: this.{},\n", var.name, var.name));
+                }
             }
 
             save_body.push_str("});\n");
@@ -1433,9 +1468,20 @@ pub(crate) fn generate_persistence_methods(
             }
             restore_body.push_str("instance._context_stack = [];\n");
 
-            // Restore domain variables
+            // Restore domain variables. Nested system instances rebuild
+            // via the child's restoreState — recovering class identity
+            // (methods are callable post-restore). Plain values pass
+            // through verbatim.
             for var in &system.domain {
-                restore_body.push_str(&format!("instance.{} = data.{};\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "instance.{0} = data.{0} != null ? {1}.restoreState(JSON.stringify(data.{0})) : null;\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    restore_body.push_str(&format!("instance.{} = data.{};\n", var.name, var.name));
+                }
             }
 
             restore_body.push_str("return instance;");
