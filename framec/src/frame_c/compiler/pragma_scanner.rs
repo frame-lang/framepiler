@@ -177,12 +177,35 @@ impl PragmaScanner {
         Ok(PragmaScanResult { regions })
     }
 
-    /// Identify the kind of pragma from @@<keyword>
+    /// Identify the kind of pragma from `@@<keyword>` or `@@[<name>(args?)]`.
+    ///
+    /// Recognises two surface shapes:
+    /// - **Bare keyword:** `@@target`, `@@persist`, `@@system`, etc. The
+    ///   original Frame directive grammar.
+    /// - **Attribute form (RFC-0013):** `@@[name]`, `@@[name(args)]`. The
+    ///   C#/Java/Kotlin annotation shape. Wave 1 ships `@@[persist]`;
+    ///   later waves migrate `@@target`, etc.
     fn identify_pragma_kind(bytes: &[u8], start: usize) -> PragmaKind {
         let n = bytes.len();
         let mut i = start + 2; // Skip @@
 
-        // Extract keyword
+        // Attribute form: @@[name(...)?]
+        if i < n && bytes[i] == b'[' {
+            i += 1;
+            let kw_start = i;
+            while i < n
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-')
+            {
+                i += 1;
+            }
+            let name = &bytes[kw_start..i];
+            return match name {
+                b"persist" => PragmaKind::Persist,
+                _ => PragmaKind::Other,
+            };
+        }
+
+        // Bare-keyword form: @@<keyword>
         let kw_start = i;
         while i < n && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-') {
             i += 1;

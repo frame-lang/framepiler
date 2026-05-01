@@ -552,12 +552,63 @@ fn is_system_pragma(bytes: &[u8], pos: usize) -> bool {
 
 /// Identify the kind and value of a pragma at the given position.
 ///
-/// The position should be at the first `@` of `@@keyword`.
+/// The position should be at the first `@` of `@@keyword` or `@@[name]`.
+///
+/// Recognises two surface shapes:
+/// - **Bare keyword:** `@@target python_3`, `@@persist`, `@@system Foo {}`.
+/// - **Attribute form (RFC-0013):** `@@[name]`, `@@[name(args)]`. Wave 1
+///   ships `@@[persist]`; later waves migrate `@@target`, etc.
 fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
     let n = bytes.len();
     let mut i = start + 2; // Skip @@
 
-    // Extract keyword
+    // Attribute form: @@[name(args?)]
+    if i < n && bytes[i] == b'[' {
+        i += 1;
+        let kw_start = i;
+        while i < n && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-') {
+            i += 1;
+        }
+        let name = &bytes[kw_start..i];
+
+        // Capture the args, if any: `(domain=[...])`. The pragma's
+        // `value` field still drives existing parsers (`@@persist
+        // (domain=[a, b])` → value = "(domain=[a, b])"). We pass the
+        // function-call slice through verbatim so downstream consumers
+        // see the same argument syntax they already understand.
+        let mut value: Option<String> = None;
+        if i < n && bytes[i] == b'(' {
+            let args_start = i;
+            let mut depth: i32 = 1;
+            i += 1;
+            while i < n && depth > 0 {
+                match bytes[i] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            value = Some(String::from_utf8_lossy(&bytes[args_start..i]).to_string());
+        }
+
+        // Expect the closing `]`.
+        while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i < n && bytes[i] == b']' {
+            // Consume newline so existing line-end logic continues to
+            // place the pragma on its own segment.
+        }
+
+        let kind = match name {
+            b"persist" => PragmaKind::Persist,
+            _ => PragmaKind::Other,
+        };
+        return (kind, value);
+    }
+
+    // Bare-keyword form: @@<keyword>
     let kw_start = i;
     while i < n && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-') {
         i += 1;
