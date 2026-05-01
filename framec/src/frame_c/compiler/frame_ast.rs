@@ -149,6 +149,21 @@ pub struct SystemParam {
     pub span: Span,
 }
 
+/// RFC-0013 attribute. Carries the parsed `@@[name]` or
+/// `@@[name(args)]` shape attached to an item (interface method,
+/// domain field, handler).
+///
+/// Wave 2 introduces `@@[target("lang")]` for per-item conditional
+/// emit. `args` is the raw bytes between the parens, NOT validated
+/// here — codegen consumes whichever shape the attribute name
+/// expects.
+#[derive(Debug, Clone)]
+pub struct Attribute {
+    pub name: String,
+    pub args: Option<String>,
+    pub span: Span,
+}
+
 /// Interface method declaration
 #[derive(Debug, Clone)]
 pub struct InterfaceMethod {
@@ -167,6 +182,10 @@ pub struct InterfaceMethod {
     /// codegen emits them verbatim before the per-target wrapper
     /// definition. Empty for methods with no preceding comments.
     pub leading_comments: Vec<String>,
+    /// RFC-0013 attributes attached via `@@[name(args?)]` immediately
+    /// before this declaration. Wave 2 supports `@@[target("lang")]`
+    /// for per-target conditional emit.
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -238,6 +257,10 @@ pub struct HandlerAst {
     /// `take_pending_comments()` and emitted by codegen before the
     /// per-handler method definition.
     pub leading_comments: Vec<String>,
+    /// RFC-0013 attributes (`@@[target("lang")]` etc.) attached
+    /// immediately before this handler. Codegen consults the list
+    /// to decide whether to emit the handler for the current target.
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -626,6 +649,9 @@ pub struct DomainVar {
     /// generated struct/class field. Empty for fields with no
     /// preceding comments.
     pub leading_comments: Vec<String>,
+    /// RFC-0013 attributes (`@@[target("lang")]` etc.) attached
+    /// immediately before this domain field declaration.
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 

@@ -137,6 +137,9 @@ impl<'a> Parser<'a> {
 
     fn parse_interface_methods(&mut self) -> Result<Vec<InterfaceMethod>, ParseError> {
         let mut methods = Vec::new();
+        // RFC-0013 wave 2: pending attributes accumulated until they
+        // can be attached to the next interface method.
+        let mut pending_attrs: Vec<crate::frame_c::compiler::frame_ast::Attribute> = Vec::new();
 
         loop {
             let tok = self.peek()?;
@@ -149,9 +152,22 @@ impl<'a> Parser<'a> {
                 | Token::Eof => break,
                 // Another interface keyword (duplicate section)
                 Token::Interface => break,
+                // RFC-0013 attribute: accumulate into pending_attrs
+                // for attachment to the next method.
+                Token::Attribute { .. } => {
+                    let spanned = self.advance()?;
+                    if let Token::Attribute { name, args } = spanned.token {
+                        pending_attrs.push(crate::frame_c::compiler::frame_ast::Attribute {
+                            name,
+                            args,
+                            span: spanned.span,
+                        });
+                    }
+                }
                 // Method name
                 Token::Ident(_) => {
-                    let method = self.parse_interface_method()?;
+                    let mut method = self.parse_interface_method()?;
+                    method.attributes = std::mem::take(&mut pending_attrs);
                     methods.push(method);
                 }
                 _ => {
@@ -257,6 +273,7 @@ impl<'a> Parser<'a> {
             is_async,
             is_static,
             leading_comments,
+            attributes: Vec::new(),
             span: Span::new(start, self.lexer.cursor()),
         })
     }
@@ -415,10 +432,26 @@ impl<'a> Parser<'a> {
         state: &mut StateAst,
         body_close: usize,
     ) -> Result<(), ParseError> {
+        // RFC-0013 wave 2: pending attributes accumulated until they
+        // can be attached to the next handler.
+        let mut pending_attrs: Vec<crate::frame_c::compiler::frame_ast::Attribute> = Vec::new();
+
         loop {
             let tok = self.peek()?;
             match tok {
                 Token::RBrace | Token::Eof => break,
+
+                // RFC-0013 attribute: accumulate for the next handler.
+                Token::Attribute { .. } => {
+                    let spanned = self.advance()?;
+                    if let Token::Attribute { name, args } = spanned.token {
+                        pending_attrs.push(crate::frame_c::compiler::frame_ast::Attribute {
+                            name,
+                            args,
+                            span: spanned.span,
+                        });
+                    }
+                }
 
                 // State variable declaration: $.varName
                 Token::StateVarRef(_) => {
@@ -442,7 +475,8 @@ impl<'a> Parser<'a> {
 
                 // Event handler: identifier(params) { body }
                 Token::Ident(_) => {
-                    let handler = self.parse_event_handler(body_close)?;
+                    let mut handler = self.parse_event_handler(body_close)?;
+                    handler.attributes = std::mem::take(&mut pending_attrs);
                     state.handlers.push(handler);
                 }
 
@@ -636,6 +670,7 @@ impl<'a> Parser<'a> {
             return_init,
             body,
             leading_comments,
+            attributes: Vec::new(),
             span: Span::new(start, self.lexer.cursor()),
         })
     }
@@ -1384,6 +1419,7 @@ impl<'a> Parser<'a> {
                     initializer_text: None,
                     is_const,
                     leading_comments: std::mem::take(&mut pending_doc),
+                    attributes: Vec::new(),
                     span: Span::new(field_start, pos),
                 });
                 continue;
@@ -1521,6 +1557,7 @@ impl<'a> Parser<'a> {
                 initializer_text: init_opt,
                 is_const,
                 leading_comments: std::mem::take(&mut pending_doc),
+                attributes: Vec::new(),
                 span: Span::new(field_start, pos),
             });
         }

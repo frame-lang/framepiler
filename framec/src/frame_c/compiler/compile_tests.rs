@@ -9,7 +9,7 @@ mod tests {
     fn test_compilation_fails_on_validation_error() {
         // Test case with an invalid state transition (E402)
         let invalid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system Test {
     machine:
         $Start {
@@ -45,7 +45,7 @@ mod tests {
     fn test_compilation_fails_on_invalid_parent_forward() {
         // E403: forward to parent in state without parent
         let invalid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system Test {
     machine:
         $Start {
@@ -74,7 +74,7 @@ mod tests {
     fn test_compilation_fails_on_state_param_mismatch() {
         // Test case with state parameter arity mismatch (E405)
         let invalid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system Test {
     machine:
         $Start {
@@ -107,7 +107,7 @@ mod tests {
     fn test_compilation_fails_on_duplicate_state() {
         // E116: duplicate state name
         let invalid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system Test {
     machine:
         $Start {
@@ -139,7 +139,7 @@ mod tests {
     fn test_compilation_fails_on_duplicate_state_var() {
         // E410: duplicate state variable name
         let invalid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system Test {
     machine:
         $Start {
@@ -168,7 +168,7 @@ mod tests {
     fn test_compilation_fails_on_hsm_cycle() {
         // E413: circular parent chain
         let invalid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system Test {
     machine:
         $A => $B {
@@ -197,7 +197,7 @@ mod tests {
     fn test_compilation_succeeds_on_valid_frame() {
         // Valid Frame code should compile successfully
         let valid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system TrafficLight {
     machine:
         $Red {
@@ -239,7 +239,7 @@ mod tests {
     fn test_compilation_fails_on_invalid_interface_method() {
         // Test case calling non-existent interface method (E406)
         let invalid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system Test {
     interface:
         start()
@@ -271,7 +271,7 @@ mod tests {
     fn test_multiple_validation_errors_all_reported() {
         // Frame code with multiple validation errors
         let invalid_frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system Test {
     machine:
         $Start {
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn test_user_enter_method_does_not_alias_lifecycle_enter() {
         let frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system M {
     interface:
         enter(field: str, value: str): str
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn test_user_exit_method_does_not_alias_lifecycle_exit() {
         let frame = r#"
-@@target python_3
+@@[target("python_3")]
 @@system M {
     interface:
         exit(code: int): str
@@ -363,7 +363,7 @@ mod tests {
     fn test_typescript_compilation_with_validation() {
         // Test TypeScript target also blocks on validation errors
         let invalid_frame = r#"
-@@target typescript
+@@[target("typescript")]
 @@system Test {
     machine:
         $Start {

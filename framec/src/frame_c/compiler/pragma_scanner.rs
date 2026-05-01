@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_simple_pragma() {
-        let source = b"@@target python_3\n";
+        let source = b"@@[target(\"python_3\")]\n";
         let scanner = PragmaScanner;
         let result = scanner.scan(&TestSkipper, source).unwrap();
 
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn test_mixed_content() {
-        let source = b"import os\n@@target python_3\ndef foo(): pass\n";
+        let source = b"import os\n@@[target(\"python_3\")]\ndef foo(): pass\n";
         let scanner = PragmaScanner;
         let result = scanner.scan(&TestSkipper, source).unwrap();
 

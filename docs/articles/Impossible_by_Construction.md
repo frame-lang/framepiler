@@ -104,7 +104,7 @@ The current defenses are convention-based: skill metadata checks, configurable u
 ### The Frame system
 
 ```
-@@target typescript
+@@[target("typescript")]
 
 @@system SkillExecutor {
     interface:
@@ -351,7 +351,7 @@ The MCP security best practices specification itself identifies the core problem
 A Frame system wrapping an MCP client's tool invocation pipeline can enforce authorization ordering structurally.
 
 ```
-@@target typescript
+@@[target("typescript")]
 
 @@system McpToolGate {
     interface:
@@ -570,7 +570,7 @@ The fundamental issue is that the browser agent operates with the user's authent
 A Frame system for browser agent control can enforce structural boundaries on what actions the agent can take and when.
 
 ```
-@@target typescript
+@@[target("typescript")]
 
 @@system BrowserAgentGate {
     interface:
@@ -814,7 +814,7 @@ A policy like "every PR that modifies a Frame system must include the updated Gr
 Frame is a language for defining state machines that lives inside your source files. You write a `@@system` block; the framepiler generates a class in your target language (TypeScript, Python, Rust, and 14 others). No runtime library, no dependencies.
 
 ```
-@@target typescript
+@@[target("typescript")]
 
 @@system Example {
     interface:

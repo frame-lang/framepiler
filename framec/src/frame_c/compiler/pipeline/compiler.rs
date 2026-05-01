@@ -365,6 +365,12 @@ pub fn compile_ast_based(
                 );
             }
 
+            // RFC-0013 wave 2: filter items by `@@[target("X")]`
+            // attribute. Items whose `target` attributes don't include
+            // the current target are pruned before codegen sees them.
+            // No `target` attribute = always emit.
+            filter_by_target_attribute(&mut system_ast, config.target);
+
             system_asts.push(system_ast);
         }
     }
@@ -697,6 +703,64 @@ pub fn compile_ast_based(
         warnings: module_warnings,
         source_map: None,
     })
+}
+
+/// RFC-0013 wave 2: prune AST items whose `@@[target("X")]` attributes
+/// don't include the current target.
+///
+/// An item with no `target` attribute is always emitted. An item with one
+/// or more `target` attributes is emitted only when at least one matches
+/// `current`. Unparseable target args are treated as non-matches (a future
+/// validator pass will surface them as a hard error).
+fn filter_by_target_attribute(
+    system_ast: &mut crate::frame_c::compiler::frame_ast::SystemAst,
+    current: TargetLanguage,
+) {
+    use crate::frame_c::compiler::frame_ast::Attribute;
+
+    fn unquote(s: &str) -> &str {
+        let t = s.trim();
+        let bytes = t.as_bytes();
+        if bytes.len() >= 2
+            && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+                || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+        {
+            &t[1..t.len() - 1]
+        } else {
+            t
+        }
+    }
+
+    fn should_emit(attrs: &[Attribute], current: TargetLanguage) -> bool {
+        let mut saw_target = false;
+        for a in attrs {
+            if a.name != "target" {
+                continue;
+            }
+            saw_target = true;
+            if let Some(args) = &a.args {
+                let lang_str = unquote(args);
+                if let Ok(t) = TargetLanguage::try_from(lang_str) {
+                    if t == current {
+                        return true;
+                    }
+                }
+            }
+        }
+        !saw_target
+    }
+
+    system_ast
+        .interface
+        .retain(|m| should_emit(&m.attributes, current));
+
+    if let Some(machine) = system_ast.machine.as_mut() {
+        for state in machine.states.iter_mut() {
+            state
+                .handlers
+                .retain(|h| should_emit(&h.attributes, current));
+        }
+    }
 }
 
 #[cfg(test)]

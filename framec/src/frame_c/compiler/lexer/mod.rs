@@ -58,6 +58,17 @@ pub enum Token {
     ContextData(String),   // "@@:data.key"
     ContextParams(String), // "@@:params.key"
 
+    // ===== Annotation Syntax (RFC-0013) =====
+    /// `@@[name]` or `@@[name(args)]` — the C#/Java/Kotlin-style
+    /// attribute form. Carries the attribute name and the raw args
+    /// slice (without the surrounding parens), or `None` if no args.
+    /// Wave 2 ships `@@[target("lang")]` at item attachment points
+    /// (interface method, domain field, handler).
+    Attribute {
+        name: String,
+        args: Option<String>,
+    },
+
     // ===== Delimiters =====
     LBrace,       // "{"
     RBrace,       // "}"
@@ -411,6 +422,14 @@ impl<'a> Lexer<'a> {
 
             // Identifiers and keywords
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.lex_identifier_or_keyword(start)?,
+
+            // RFC-0013 attribute: `@@[name(args?)]` — emitted in structural
+            // positions (interface methods, handlers, domain fields). The
+            // `@@` is not a Frame keyword in structural mode otherwise; it
+            // only legitimately appears here as the attribute leader.
+            b'@' if self.peek_byte(1) == Some(b'@') && self.peek_byte(2) == Some(b'[') => {
+                self.lex_context_construct(self.end)?;
+            }
 
             _ => {
                 self.cursor += 1;
@@ -1102,6 +1121,53 @@ impl<'a> Lexer<'a> {
     fn lex_context_construct(&mut self, end: usize) -> Result<(), LexError> {
         let start = self.cursor;
         self.cursor += 2; // Skip "@@"
+
+        // RFC-0013 attribute form: `@@[name]` or `@@[name(args)]`.
+        // Inside a system body (e.g. before an interface method),
+        // this is the C#/Java/Kotlin annotation shape. Parse the
+        // bracketed name + optional args slice and emit a single
+        // Token::Attribute. Module-scope `@@[persist]` etc. are
+        // handled earlier by the segmenter (PragmaKind::Persist).
+        if self.cursor < end && self.source[self.cursor] == b'[' {
+            self.cursor += 1; // skip [
+                              // Attribute name: alphanumeric / underscore / hyphen.
+            let name_start = self.cursor;
+            while self.cursor < end {
+                let c = self.source[self.cursor];
+                if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' {
+                    self.cursor += 1;
+                } else {
+                    break;
+                }
+            }
+            let name = String::from_utf8_lossy(&self.source[name_start..self.cursor]).to_string();
+            // Optional args: `(...)` with paren depth tracking so
+            // nested calls / list literals don't end the args early.
+            let mut args: Option<String> = None;
+            if self.cursor < end && self.source[self.cursor] == b'(' {
+                let args_start = self.cursor + 1;
+                self.cursor += 1;
+                let mut depth: i32 = 1;
+                while self.cursor < end && depth > 0 {
+                    match self.source[self.cursor] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    self.cursor += 1;
+                }
+                if depth == 0 {
+                    let inner = &self.source[args_start..self.cursor - 1];
+                    args = Some(String::from_utf8_lossy(inner).to_string());
+                }
+            }
+            // Expect closing `]`.
+            if self.cursor < end && self.source[self.cursor] == b']' {
+                self.cursor += 1;
+            }
+            self.emit(Token::Attribute { name, args }, start, self.cursor);
+            return Ok(());
+        }
 
         if self.cursor < end && self.source[self.cursor] == b':' {
             self.cursor += 1; // Skip ":"

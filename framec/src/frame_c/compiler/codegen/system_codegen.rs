@@ -6107,6 +6107,7 @@ mod tests {
             initializer_text: Some("0".to_string()),
             is_const: false,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             span: Span::new(0, 0),
         });
 

@@ -62,88 +62,138 @@ fn frame_return_default(lang: TargetLanguage, type_str: &str) -> String {
         t,
         "int" | "Int" | "i32" | "i64" | "long" | "Long" | "Integer"
     );
-    let is_str = matches!(
-        t,
-        "str" | "string" | "String"
-    );
-    let is_bool = matches!(
-        t,
-        "bool" | "boolean" | "Boolean"
-    );
-    let is_float = matches!(
-        t,
-        "float" | "Float" | "double" | "Double" | "f32" | "f64"
-    );
+    let is_str = matches!(t, "str" | "string" | "String");
+    let is_bool = matches!(t, "bool" | "boolean" | "Boolean");
+    let is_float = matches!(t, "float" | "Float" | "double" | "Double" | "f32" | "f64");
 
     match lang {
         TargetLanguage::Python3 => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "False".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "None".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "False".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "None".to_string()
+            }
         }
         TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
-            if is_int || is_float { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else { "null".to_string() }
+            if is_int || is_float {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else {
+                "null".to_string()
+            }
         }
         TargetLanguage::Ruby => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "nil".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "nil".to_string()
+            }
         }
         TargetLanguage::Lua => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "nil".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "nil".to_string()
+            }
         }
         TargetLanguage::Php => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "null".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "null".to_string()
+            }
         }
         TargetLanguage::Java => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "null".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "null".to_string()
+            }
         }
         TargetLanguage::CSharp => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "null".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "null".to_string()
+            }
         }
         TargetLanguage::Kotlin => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "null".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "null".to_string()
+            }
         }
         TargetLanguage::Dart => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "null".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "null".to_string()
+            }
         }
         TargetLanguage::GDScript => {
-            if is_int { "0".to_string() }
-            else if is_str { "\"\"".to_string() }
-            else if is_bool { "false".to_string() }
-            else if is_float { "0.0".to_string() }
-            else { "null".to_string() }
+            if is_int {
+                "0".to_string()
+            } else if is_str {
+                "\"\"".to_string()
+            } else if is_bool {
+                "false".to_string()
+            } else if is_float {
+                "0.0".to_string()
+            } else {
+                "null".to_string()
+            }
         }
         // Other langs (Rust, Go, C, C++, Swift, Erlang) handle
         // defaults via their own context-init paths; this helper
@@ -221,6 +271,7 @@ pub(crate) fn generate_interface_wrappers(
                     is_async: false,
                     is_static: false,
                     leading_comments: Vec::new(),
+                    attributes: Vec::new(),
                     span: Span::new(0, 0),
                 }
             })
@@ -1567,8 +1618,11 @@ pub(crate) fn generate_persistence_methods(
                     m.states
                         .iter()
                         .map(|s| {
-                            let types: Vec<String> =
-                                s.params.iter().map(|p| type_to_string(&p.param_type)).collect();
+                            let types: Vec<String> = s
+                                .params
+                                .iter()
+                                .map(|p| type_to_string(&p.param_type))
+                                .collect();
                             (s.name.clone(), types)
                         })
                         .collect()
@@ -1610,12 +1664,11 @@ pub(crate) fn generate_persistence_methods(
                 // Anything not in this table maps verbatim (sanitised
                 // to a valid C identifier suffix).
                 let canonical = match t {
-                    "i32" | "i64" | "isize" | "uint" | "uintptr_t"
-                    | "intptr_t" | "long" | "short" => "int",
+                    "i32" | "i64" | "isize" | "uint" | "uintptr_t" | "intptr_t" | "long"
+                    | "short" => "int",
                     "f32" | "f64" | "float" => "double",
                     "boolean" => "bool",
-                    "string" | "String" | "str" | "char*"
-                    | "const char*" => "str",
+                    "string" | "String" | "str" | "char*" | "const char*" => "str",
                     "List" | "Array" | "Array<any>" => "list",
                     "Dict" | "Record<string, any>" => "dict",
                     other => other,
@@ -2106,10 +2159,7 @@ pub(crate) fn generate_persistence_methods(
                 if !any_state_arg_branch {
                     any_state_arg_branch = true;
                 }
-                save_body.push_str(&format!(
-                    "    if (c->state == \"{}\") {{\n",
-                    state_name
-                ));
+                save_body.push_str(&format!("    if (c->state == \"{}\") {{\n", state_name));
                 for (i, t) in types.iter().enumerate() {
                     if t.is_empty() {
                         save_body.push_str(&format!(
@@ -2147,9 +2197,9 @@ pub(crate) fn generate_persistence_methods(
                                     e.params
                                         .iter()
                                         .map(|p| match &p.param_type {
-                                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
-                                                s.clone()
-                                            }
+                                            crate::frame_c::compiler::frame_ast::Type::Custom(
+                                                s,
+                                            ) => s.clone(),
                                             crate::frame_c::compiler::frame_ast::Type::Unknown => {
                                                 String::new()
                                             }
@@ -2172,10 +2222,7 @@ pub(crate) fn generate_persistence_methods(
                 if !any_enter_branch {
                     any_enter_branch = true;
                 }
-                save_body.push_str(&format!(
-                    "    if (c->state == \"{}\") {{\n",
-                    state_name
-                ));
+                save_body.push_str(&format!("    if (c->state == \"{}\") {{\n", state_name));
                 for (i, t) in types.iter().enumerate() {
                     if t.is_empty() {
                         save_body.push_str(&format!(
@@ -2276,7 +2323,9 @@ pub(crate) fn generate_persistence_methods(
             // type `T` verbatim; nlohmann::json's `get<T>()` handles
             // any T it can deserialize (primitives, std::vector,
             // std::map, std::string, user types with from_json).
-            restore_body.push_str("    if (d.contains(\"state_args\") && d[\"state_args\"].is_array()) {\n");
+            restore_body.push_str(
+                "    if (d.contains(\"state_args\") && d[\"state_args\"].is_array()) {\n",
+            );
             restore_body.push_str("        const auto& __sa = d[\"state_args\"];\n");
             let mut any_typed_state = false;
             for (state_name, types) in &cpp_state_arg_decls {
@@ -2286,10 +2335,7 @@ pub(crate) fn generate_persistence_methods(
                 if !any_typed_state {
                     any_typed_state = true;
                 }
-                restore_body.push_str(&format!(
-                    "        if (c->state == \"{}\") {{\n",
-                    state_name
-                ));
+                restore_body.push_str(&format!("        if (c->state == \"{}\") {{\n", state_name));
                 for (i, t) in types.iter().enumerate() {
                     if t.is_empty() {
                         restore_body.push_str(&format!(
@@ -2312,7 +2358,9 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
             // D13 fix: per-state typed enter_args (mirror state_args).
-            restore_body.push_str("    if (d.contains(\"enter_args\") && d[\"enter_args\"].is_array()) {\n");
+            restore_body.push_str(
+                "    if (d.contains(\"enter_args\") && d[\"enter_args\"].is_array()) {\n",
+            );
             restore_body.push_str("        const auto& __ea = d[\"enter_args\"];\n");
             let mut any_typed_enter = false;
             for (state_name, types) in &cpp_enter_arg_decls {
@@ -2322,10 +2370,7 @@ pub(crate) fn generate_persistence_methods(
                 if !any_typed_enter {
                     any_typed_enter = true;
                 }
-                restore_body.push_str(&format!(
-                    "        if (c->state == \"{}\") {{\n",
-                    state_name
-                ));
+                restore_body.push_str(&format!("        if (c->state == \"{}\") {{\n", state_name));
                 for (i, t) in types.iter().enumerate() {
                     if t.is_empty() {
                         restore_body.push_str(&format!(
@@ -2464,8 +2509,10 @@ pub(crate) fn generate_persistence_methods(
             ser_body.push_str(
                 "j.put(\"state_vars\", new java.util.LinkedHashMap<>(comp.state_vars));\n",
             );
-            ser_body.push_str("j.put(\"state_args\", new java.util.ArrayList<>(comp.state_args));\n");
-            ser_body.push_str("j.put(\"enter_args\", new java.util.ArrayList<>(comp.enter_args));\n");
+            ser_body
+                .push_str("j.put(\"state_args\", new java.util.ArrayList<>(comp.state_args));\n");
+            ser_body
+                .push_str("j.put(\"enter_args\", new java.util.ArrayList<>(comp.enter_args));\n");
             ser_body.push_str("j.put(\"parent\", __serComp(comp.parent_compartment));\n");
             ser_body.push_str("return j;");
 
@@ -2607,10 +2654,9 @@ pub(crate) fn generate_persistence_methods(
             // Map<K,V> domain fields recover their full typed shape (no
             // erasure-cast workaround needed at user-access sites).
             let mut restore_body = String::new();
-            restore_body.push_str("var mapper = new com.fasterxml.jackson.databind.ObjectMapper();\n");
-            restore_body.push_str(
-                "com.fasterxml.jackson.databind.JsonNode __j;\n",
-            );
+            restore_body
+                .push_str("var mapper = new com.fasterxml.jackson.databind.ObjectMapper();\n");
+            restore_body.push_str("com.fasterxml.jackson.databind.JsonNode __j;\n");
             restore_body.push_str(
                 "try { __j = mapper.readTree(json); } catch (Exception e) { throw new RuntimeException(e); }\n",
             );
@@ -2790,9 +2836,9 @@ pub(crate) fn generate_persistence_methods(
                                     e.params
                                         .iter()
                                         .map(|p| match &p.param_type {
-                                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
-                                                s.clone()
-                                            }
+                                            crate::frame_c::compiler::frame_ast::Type::Custom(
+                                                s,
+                                            ) => s.clone(),
                                             crate::frame_c::compiler::frame_ast::Type::Unknown => {
                                                 String::new()
                                             }
@@ -2816,9 +2862,7 @@ pub(crate) fn generate_persistence_methods(
                 }
                 if !branch.is_empty() {
                     if !any_per_state {
-                        deser_body.push_str(
-                            "// D10 per-state typed list conversion\n",
-                        );
+                        deser_body.push_str("// D10 per-state typed list conversion\n");
                         any_per_state = true;
                     }
                     deser_body.push_str(&format!(
@@ -2837,9 +2881,7 @@ pub(crate) fn generate_persistence_methods(
                 }
                 if !branch.is_empty() {
                     if !any_per_state {
-                        deser_body.push_str(
-                            "// D10 per-state typed list conversion\n",
-                        );
+                        deser_body.push_str("// D10 per-state typed list conversion\n");
                         any_per_state = true;
                     }
                     deser_body.push_str(&format!(
@@ -2879,16 +2921,23 @@ pub(crate) fn generate_persistence_methods(
             conv_body.push_str("    if (v.TryGetInt64(out long __l)) return __l;\n");
             conv_body.push_str("    return v.GetDouble();\n");
             conv_body.push_str("}\n");
-            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString();\n");
-            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.True) return true;\n");
-            conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.False) return false;\n");
+            conv_body.push_str(
+                "if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString();\n",
+            );
+            conv_body
+                .push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.True) return true;\n");
+            conv_body.push_str(
+                "if (v.ValueKind == System.Text.Json.JsonValueKind.False) return false;\n",
+            );
             conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
             conv_body.push_str("    var __list = new System.Collections.Generic.List<object>();\n");
             conv_body.push_str("    foreach (var __ne in v.EnumerateArray()) __list.Add(__convertJsonValue(__ne));\n");
             conv_body.push_str("    return __list;\n");
             conv_body.push_str("}\n");
             conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.Object) {\n");
-            conv_body.push_str("    var __dict = new System.Collections.Generic.Dictionary<string, object>();\n");
+            conv_body.push_str(
+                "    var __dict = new System.Collections.Generic.Dictionary<string, object>();\n",
+            );
             conv_body.push_str("    foreach (var __prop in v.EnumerateObject()) __dict[__prop.Name] = __convertJsonValue(__prop.Value);\n");
             conv_body.push_str("    return __dict;\n");
             conv_body.push_str("}\n");
@@ -3062,8 +3111,12 @@ pub(crate) fn generate_persistence_methods(
             deser_body.push_str(
                 "if (isset($data['state_vars'])) $c->state_vars = $data['state_vars'];\n",
             );
-            deser_body.push_str("if (isset($data['state_args'])) $c->state_args = $data['state_args'];\n");
-            deser_body.push_str("if (isset($data['enter_args'])) $c->enter_args = $data['enter_args'];\n");
+            deser_body.push_str(
+                "if (isset($data['state_args'])) $c->state_args = $data['state_args'];\n",
+            );
+            deser_body.push_str(
+                "if (isset($data['enter_args'])) $c->enter_args = $data['enter_args'];\n",
+            );
             deser_body.push_str("if (isset($data['parent'])) $c->parent_compartment = self::__deserComp($data['parent']);\n");
             deser_body.push_str("return $c;");
 
@@ -3475,7 +3528,9 @@ pub(crate) fn generate_persistence_methods(
             // save_state()
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
-            save_body.push_str("if !_context_stack.isEmpty { fatalError(\"E700: system not quiescent\") }\n");
+            save_body.push_str(
+                "if !_context_stack.isEmpty { fatalError(\"E700: system not quiescent\") }\n",
+            );
             save_body.push_str("var j: [String: Any] = [:]\n");
             save_body.push_str("j[\"_compartment\"] = __serComp(__compartment) as Any\n");
             save_body.push_str("var stack: [[String: Any]] = []\n");
@@ -3643,7 +3698,8 @@ pub(crate) fn generate_persistence_methods(
             // save_state()
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
-            save_body.push_str("raise \"E700: system not quiescent\" unless @_context_stack.empty?\n");
+            save_body
+                .push_str("raise \"E700: system not quiescent\" unless @_context_stack.empty?\n");
             save_body.push_str("j = {}\n");
             save_body.push_str("j[\"_compartment\"] = __ser_comp(@__compartment)\n");
             save_body.push_str("stack = []\n");
@@ -3732,7 +3788,9 @@ pub(crate) fn generate_persistence_methods(
             // save_state — serialize to JSON via encoding/json
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
-            save_body.push_str("if len(s._context_stack) > 0 { panic(\"E700: system not quiescent\") }\n");
+            save_body.push_str(
+                "if len(s._context_stack) > 0 { panic(\"E700: system not quiescent\") }\n",
+            );
             save_body.push_str(&format!(
                 "var serializeComp func(c *{}) interface{{}}\n",
                 compartment_type
@@ -3815,7 +3873,9 @@ pub(crate) fn generate_persistence_methods(
             // convert whole-number float64 → int so type assertions in
             // generated handlers (e.g. `slot := stateArgs[0].(int)`) work.
             restore_body.push_str("    normalizeNum := func(v interface{}) interface{} {\n");
-            restore_body.push_str("        if f, ok := v.(float64); ok && f == float64(int(f)) { return int(f) }\n");
+            restore_body.push_str(
+                "        if f, ok := v.(float64); ok && f == float64(int(f)) { return int(f) }\n",
+            );
             restore_body.push_str("        return v\n");
             restore_body.push_str("    }\n");
             restore_body.push_str("    if sv, ok := m[\"state_vars\"].(map[string]interface{}); ok { for k, v := range sv { comp.stateVars[k] = normalizeNum(v) } }\n");
@@ -3828,10 +3888,7 @@ pub(crate) fn generate_persistence_methods(
             // unmarshalling into a typed target. framec emits the
             // declared type verbatim — no parsing of generics, no
             // element-type enumeration, no per-shape branching.
-            let go_typed_conv = |declared_type: &str,
-                                  idx: usize,
-                                  slot: &str|
-             -> String {
+            let go_typed_conv = |declared_type: &str, idx: usize, slot: &str| -> String {
                 let t = declared_type.trim();
                 if t.is_empty() {
                     return String::new();
@@ -3886,9 +3943,9 @@ pub(crate) fn generate_persistence_methods(
                                     e.params
                                         .iter()
                                         .map(|p| match &p.param_type {
-                                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => {
-                                                s.clone()
-                                            }
+                                            crate::frame_c::compiler::frame_ast::Type::Custom(
+                                                s,
+                                            ) => s.clone(),
                                             crate::frame_c::compiler::frame_ast::Type::Unknown => {
                                                 String::new()
                                             }
@@ -3962,7 +4019,9 @@ pub(crate) fn generate_persistence_methods(
                     ));
                 } else {
                     let declared = match &var.var_type {
-                        crate::frame_c::compiler::frame_ast::Type::Custom(name) => go_map_type(name),
+                        crate::frame_c::compiler::frame_ast::Type::Custom(name) => {
+                            go_map_type(name)
+                        }
                         _ => "interface{}".to_string(),
                     };
                     let go_extract = format!(
@@ -3998,7 +4057,9 @@ pub(crate) fn generate_persistence_methods(
             // save_state — serialize to JSON via dart:convert
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
-            save_body.push_str("if (_context_stack.isNotEmpty) throw Exception(\"E700: system not quiescent\");\n");
+            save_body.push_str(
+                "if (_context_stack.isNotEmpty) throw Exception(\"E700: system not quiescent\");\n",
+            );
             save_body.push_str(&format!(
                 "Map<String, dynamic>? serializeComp({}? comp) {{\n",
                 compartment_type
@@ -4122,12 +4183,10 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str(
                 "    comp.state_vars = Map<String, dynamic>.from(data['state_vars'] ?? {});\n",
             );
-            restore_body.push_str(
-                "    final __saRaw = (data['state_args'] as List?) ?? <dynamic>[];\n",
-            );
-            restore_body.push_str(
-                "    final __eaRaw = (data['enter_args'] as List?) ?? <dynamic>[];\n",
-            );
+            restore_body
+                .push_str("    final __saRaw = (data['state_args'] as List?) ?? <dynamic>[];\n");
+            restore_body
+                .push_str("    final __eaRaw = (data['enter_args'] as List?) ?? <dynamic>[];\n");
             restore_body.push_str(
                 "    comp.exit_args = List<dynamic>.from(data['exit_args'] ?? <dynamic>[]);\n",
             );
@@ -4149,10 +4208,8 @@ pub(crate) fn generate_persistence_methods(
                     restore_body.push_str("            break;\n");
                 }
                 restore_body.push_str("        default:\n");
-                restore_body
-                    .push_str("            comp.state_args.addAll(__saRaw);\n");
-                restore_body
-                    .push_str("            comp.enter_args.addAll(__eaRaw);\n");
+                restore_body.push_str("            comp.state_args.addAll(__saRaw);\n");
+                restore_body.push_str("            comp.enter_args.addAll(__eaRaw);\n");
                 restore_body.push_str("            break;\n");
                 restore_body.push_str("    }\n");
             } else {
@@ -4221,7 +4278,9 @@ pub(crate) fn generate_persistence_methods(
             // save_state — serialize to JSON via cjson
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
-            save_body.push_str("if #self._context_stack > 0 then error(\"E700: system not quiescent\") end\n");
+            save_body.push_str(
+                "if #self._context_stack > 0 then error(\"E700: system not quiescent\") end\n",
+            );
             save_body.push_str("local json = require(\"cjson\")\n");
             save_body.push_str("local function serialize_comp(comp)\n");
             save_body.push_str("    if not comp then return nil end\n");

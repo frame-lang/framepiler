@@ -869,6 +869,26 @@ fn detect_source_language(source: &[u8]) -> Option<TargetLanguage> {
         // Stop scanning once we hit @@system; the target pragma must come first.
         if source[i] == b'@' && source[i + 1] == b'@' {
             let rest = &source[i..];
+            // RFC-0013 wave 2: `@@[target("lang")]` attribute form.
+            if rest.starts_with(b"@@[target(") {
+                let after = i + b"@@[target(".len();
+                let mut j = after;
+                if j < n && (source[j] == b'"' || source[j] == b'\'') {
+                    j += 1;
+                }
+                let val_start = j;
+                while j < n && (source[j].is_ascii_alphanumeric() || source[j] == b'_') {
+                    j += 1;
+                }
+                if val_start < j {
+                    if let Ok(val) = std::str::from_utf8(&source[val_start..j]) {
+                        if let Ok(lang) = TargetLanguage::try_from(val) {
+                            return Some(lang);
+                        }
+                    }
+                }
+                return None;
+            }
             if rest.starts_with(b"@@target") {
                 let after = i + b"@@target".len();
                 // Skip whitespace, then read an identifier.
@@ -935,7 +955,7 @@ mod tests {
 
     #[test]
     fn test_target_pragma() {
-        let source = "@@target python_3\n";
+        let source = "@@[target(\"python_3\")]\n";
         let map = segment_py(source);
         assert_eq!(map.segments.len(), 1);
         match &map.segments[0] {
@@ -954,7 +974,7 @@ mod tests {
     #[test]
     fn test_simple_system() {
         let source =
-            "@@target python_3\n\n@@system Foo {\n    machine:\n        $A {\n        }\n}\n";
+            "@@[target(\"python_3\")]\n\n@@system Foo {\n    machine:\n        $A {\n        }\n}\n";
         let map = segment_py(source);
 
         // Should have: Target pragma, Native (blank line), System
@@ -970,7 +990,7 @@ mod tests {
 
     #[test]
     fn test_native_before_and_after_system() {
-        let source = "@@target python_3\nimport os\n\n@@system S {\n    machine:\n        $A { }\n}\n\ndef main():\n    pass\n";
+        let source = "@@[target(\"python_3\")]\nimport os\n\n@@system S {\n    machine:\n        $A { }\n}\n\ndef main():\n    pass\n";
         let map = segment_py(source);
 
         // Count segment types
@@ -986,7 +1006,7 @@ mod tests {
 
     #[test]
     fn test_multi_system() {
-        let source = "@@target python_3\n\n@@system A {\n    machine:\n        $S1 { }\n}\n\n@@system B {\n    machine:\n        $S2 { }\n}\n";
+        let source = "@@[target(\"python_3\")]\n\n@@system A {\n    machine:\n        $S1 { }\n}\n\n@@system B {\n    machine:\n        $S2 { }\n}\n";
         let map = segment_py(source);
 
         let systems: Vec<_> = map.systems();
@@ -1047,7 +1067,7 @@ mod tests {
 
     #[test]
     fn test_run_expect_pragma() {
-        let source = "@@target python_3\n@@run-expect SUCCESS\n@@system S {\n    machine:\n        $A { }\n}\n";
+        let source = "@@[target(\"python_3\")]\n@@run-expect SUCCESS\n@@system S {\n    machine:\n        $A { }\n}\n";
         let map = segment_py(source);
 
         assert_eq!(map.run_expect(), Some("SUCCESS"));
@@ -1055,7 +1075,7 @@ mod tests {
 
     #[test]
     fn test_invalid_target_returns_error() {
-        let source = "@@target invalid_lang\n";
+        let source = "@@[target(\"invalid_lang\")]\n";
         let result = segment(&PythonSkipper, source.as_bytes());
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1068,7 +1088,7 @@ mod tests {
 
     #[test]
     fn test_segment_source_convenience() {
-        let source = b"@@target python_3\n@@system S {\n    machine:\n        $A { }\n}\n";
+        let source = b"@@[target(\"python_3\")]\n@@system S {\n    machine:\n        $A { }\n}\n";
         let map = segment_source(source, TargetLanguage::Python3).unwrap();
         assert_eq!(map.systems().len(), 1);
         assert_eq!(map.target, Some(TargetLanguage::Python3));
@@ -1082,7 +1102,7 @@ mod tests {
 
     #[test]
     fn test_python_triple_quote_hides_system() {
-        let source = br#"@@target python_3
+        let source = br#"@@[target("python_3")]
 template = """
 @@system Fake {
     this should NOT be parsed
@@ -1113,7 +1133,7 @@ template = """
     #[test]
     fn test_php_heredoc_hides_system() {
         let source = br#"<?php
-@@target php
+@@[target("php")]
 
 $template = <<<EOT
 @@system Fake {
@@ -1144,7 +1164,7 @@ EOT;
 
     #[test]
     fn test_kotlin_raw_string_hides_system() {
-        let source = br#"@@target kotlin
+        let source = br#"@@[target("kotlin")]
 
 val template = """
 @@system Fake {
@@ -1175,7 +1195,7 @@ val template = """
 
     #[test]
     fn test_swift_nested_comment_hides_system() {
-        let source = br#"@@target swift
+        let source = br#"@@[target("swift")]
 
 /* Outer comment
 /* Nested comment
@@ -1209,7 +1229,7 @@ Still in outer comment
 
     #[test]
     fn test_ruby_percent_literal_hides_system() {
-        let source = br#"@@target ruby
+        let source = br#"@@[target("ruby")]
 
 template = %Q{
 @@system Fake {
@@ -1240,7 +1260,7 @@ template = %Q{
 
     #[test]
     fn test_graphviz_returns_error() {
-        let source = b"@@target graphviz\n";
+        let source = b"@@[target(\"graphviz\")]\n";
         let result = segment_source(source, TargetLanguage::Graphviz);
         assert!(
             result.is_err(),

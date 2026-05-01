@@ -355,6 +355,7 @@ mod tests {
                         return_type: None,
                         return_init: None,
                         leading_comments: Vec::new(),
+                        attributes: Vec::new(),
                         body: HandlerBody {
                             statements: vec![Statement::Transition(TransitionAst {
                                 target: "B".to_string(),
@@ -475,6 +476,7 @@ mod tests {
                         return_type: None,
                         return_init: None,
                         leading_comments: Vec::new(),
+                        attributes: Vec::new(),
                         body: HandlerBody {
                             statements: vec![Statement::If(IfAst {
                                 condition: Expression::Binary {

@@ -180,6 +180,7 @@ mod tests {
             is_async: false,
             is_static: false,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             span: FrameSpan::new(10, 20),
         });
         system.interface.push(InterfaceMethod {
@@ -190,6 +191,7 @@ mod tests {
             is_async: false,
             is_static: false,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             span: FrameSpan::new(20, 30),
         });
 
@@ -239,6 +241,7 @@ mod tests {
             initializer_text: None,
             is_const: false,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             span: FrameSpan::new(70, 80),
         });
 
@@ -298,6 +301,7 @@ mod tests {
             return_type: None,
             return_init: None,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(70, 100),
@@ -312,6 +316,7 @@ mod tests {
             return_type: None,
             return_init: None,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(110, 140),
@@ -363,6 +368,7 @@ mod tests {
             initializer_text: None,
             is_const: false,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             span: FrameSpan::new(10, 30),
         });
 
@@ -386,6 +392,7 @@ mod tests {
             return_type: None,
             return_init: None,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(90, 150),
@@ -451,6 +458,7 @@ mod tests {
             return_type: None,
             return_init: None,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             body: HandlerBody {
                 statements: vec![],
                 span: FrameSpan::new(90, 150),
