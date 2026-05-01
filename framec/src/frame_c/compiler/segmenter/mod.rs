@@ -648,7 +648,10 @@ fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
         b"target" => PragmaKind::Target,
         b"codegen" => PragmaKind::Codegen,
         b"system" => return (PragmaKind::Other, value), // @@system handled separately
-        b"persist" => PragmaKind::Persist,
+        // RFC-0013: bare `@@persist` was migrated to `@@[persist]`.
+        // Hard cut — bare form is now Other (unrecognized pragma);
+        // downstream validation surfaces the right error message.
+        b"persist" => PragmaKind::Other,
         b"run-expect" => PragmaKind::RunExpect,
         b"skip-if" => PragmaKind::SkipIf,
         b"timeout" => PragmaKind::Timeout,

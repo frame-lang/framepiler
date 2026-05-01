@@ -217,7 +217,9 @@ impl PragmaScanner {
             b"target" => PragmaKind::Target,
             b"codegen" => PragmaKind::Codegen,
             b"system" => PragmaKind::System,
-            b"persist" => PragmaKind::Persist,
+            // RFC-0013: bare `@@persist` migrated to `@@[persist]`.
+            // Hard cut — bare form falls through to Other.
+            b"persist" => PragmaKind::Other,
             b"run-expect" => PragmaKind::RunExpect,
             _ => PragmaKind::Other,
         }

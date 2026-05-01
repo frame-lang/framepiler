@@ -22,7 +22,7 @@
 <prolog native code>                  # optional
 @@target python_3                     # required, exactly once
 @@codegen { frame_event: on }         # optional
-@@persist                             # optional — see Persistence
+@@[persist]                             # optional — see Persistence
 @@system Name (params)? : Base?, Base? {
     operations: ...                   # all sections optional, but in this order:
     interface:  ...                   # operations → interface → machine → actions → domain
@@ -211,9 +211,9 @@ Within one call: **don't mix positional and named**. Defaults are substituted at
 ## Persistence
 
 ```frame
-@@persist                             # persist everything (all domain vars)
-@@persist(domain=[a, b])              # whitelist specific domain fields
-@@persist(exclude=[c])                # blacklist specific domain fields
+@@[persist]                             # persist everything (all domain vars)
+@@[persist(domain=[a, b])]              # whitelist specific domain fields
+@@[persist(exclude=[c])]                # blacklist specific domain fields
 ```
 
 Generated methods:

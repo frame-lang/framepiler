@@ -33,7 +33,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 
 **Advanced Features (18-22)**
 
-18. [Session Persistence](#18-session-persistence) — save/restore with @@persist
+18. [Session Persistence](#18-session-persistence) — save/restore with @@[persist]
 19. [Async HTTP Client](#19-async-http-client) — async interface with two-phase init
 20. [Multi-System Composition](#20-multi-system-composition) — two systems interacting
 21. [Configurable Worker Pool](#21-configurable-worker-pool-parameterized-systems) — parameterized systems
@@ -160,7 +160,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 104. [Pick-and-Place with Vision Retry](#104-pick-and-place-with-vision-retry) — capstone manipulation workflow
 105. [Tool Changer](#105-tool-changer--interlocked-coupling-sequence) — interlocked coupling sequence
 106. [Force-Controlled Insertion](#106-force-controlled-insertion--peg-in-hole) — peg-in-hole with jam detection
-107. [Mission Controller (BT Alternative)](#107-mission-controller--bt-alternative-with-persistence) — with `@@persist` for resume
+107. [Mission Controller (BT Alternative)](#107-mission-controller--bt-alternative-with-persistence) — with `@@[persist]` for resume
 108. [Drone Flight Modes](#108-drone-flight-modes--failsafe-from-any-phase) — failsafe from any phase
 109. [Fleet Dispatcher](#109-fleet-dispatcher--n-robots-competing-consumers-for-tasks) — N robots, competing consumers for tasks
 
@@ -1129,7 +1129,7 @@ if __name__ == '__main__':
 ```frame
 @@target python_3
 
-@@persist
+@@[persist]
 @@system Session {
     interface:
         login(user: str)
@@ -1169,9 +1169,9 @@ if __name__ == '__main__':
     print(s2.who())              # alice (state preserved)
 ```
 
-**How it works:** `@@persist` generates `save_state()` and `restore_state()`. The saved data includes the current state (`$LoggedIn`), domain variables (`user = "alice"`), and the state stack. Restore does NOT fire the enter handler — it reconstructs the exact state.
+**How it works:** `@@[persist]` generates `save_state()` and `restore_state()`. The saved data includes the current state (`$LoggedIn`), domain variables (`user = "alice"`), and the state stack. Restore does NOT fire the enter handler — it reconstructs the exact state.
 
-**Features used:** `@@persist`, save/restore, domain variables
+**Features used:** `@@[persist]`, save/restore, domain variables
 
 -----
 
@@ -2961,7 +2961,7 @@ if __name__ == '__main__':
 ```frame
 @@target python_3
 
-@@persist
+@@[persist]
 
 @@system DeadLetterProcessor {
     interface:
@@ -3038,9 +3038,9 @@ if __name__ == '__main__':
     p2.process_tick()        # dead_lettered
 ```
 
-**How it works:** `@@persist` makes the whole machine serializable — including `attempts`, the current payload, and which state it's in. Crashing halfway through a retry sequence doesn't reset the counter. `$Processing`'s enter handler increments `attempts` and the handler re-enters itself on failure (`-> $Processing`) — the enter handler fires each time because a self-transition fully exits and re-enters.
+**How it works:** `@@[persist]` makes the whole machine serializable — including `attempts`, the current payload, and which state it's in. Crashing halfway through a retry sequence doesn't reset the counter. `$Processing`'s enter handler increments `attempts` and the handler re-enters itself on failure (`-> $Processing`) — the enter handler fires each time because a self-transition fully exits and re-enters.
 
-**Features used:** `@@persist` for crash-safe retry state, self-transition for retry loop, enter handler as side effect
+**Features used:** `@@[persist]` for crash-safe retry state, self-transition for retry loop, enter handler as side effect
 
 -----
 
@@ -3374,7 +3374,7 @@ if __name__ == '__main__':
 ```frame
 @@target python_3
 
-@@persist
+@@[persist]
 
 @@system MessageStore {
     interface:
@@ -3418,9 +3418,9 @@ if __name__ == '__main__':
     print(s2.total())             # 4
 ```
 
-**How it works:** The entire audit log is a domain variable. `@@persist` serializes it along with `next_seq` so the store's identity survives restarts. A one-state machine is sufficient because storage is always open. A production store would write-through to durable storage per record, but the snapshot approach demonstrates that Frame's persistence covers the full domain payload, not just the current state.
+**How it works:** The entire audit log is a domain variable. `@@[persist]` serializes it along with `next_seq` so the store's identity survives restarts. A one-state machine is sufficient because storage is always open. A production store would write-through to durable storage per record, but the snapshot approach demonstrates that Frame's persistence covers the full domain payload, not just the current state.
 
-**Features used:** `@@persist` across a large domain payload, list-of-dicts as log, single-state store
+**Features used:** `@@[persist]` across a large domain payload, list-of-dicts as log, single-state store
 
 -----
 
@@ -3437,7 +3437,7 @@ if __name__ == '__main__':
 
 import json
 
-@@persist
+@@[persist]
 
 @@system WizardMachine {
     operations:
@@ -3559,7 +3559,7 @@ if __name__ == '__main__':
 
 `next_event()` is an operation that reads `self.__compartment.state` directly. Operations bypass the state machine dispatch, making them suitable for read-only introspection. The host asks the machine what it wants next without knowing the machine's internals.
 
-**Features used:** `@@persist` as a transport payload, operations for introspection, side-tagged states, symmetric client/server code generation
+**Features used:** `@@[persist]` as a transport payload, operations for introspection, side-tagged states, symmetric client/server code generation
 
 -----
 
@@ -7614,12 +7614,12 @@ The 4-way handshake uses a state variable (`$.key_step`) that resets on every en
 
 ![67 state diagram](images/cookbook/67.svg)
 
-**Problem:** Model the BGP FSM from RFC 4271 §8. The RFC defines this as an explicit state machine with named events — it’s practically pseudocode for a Frame spec. BGP runs on every backbone router on the internet. `@@persist` lets the session survive daemon restarts, matching the `bgpd` graceful-restart feature.
+**Problem:** Model the BGP FSM from RFC 4271 §8. The RFC defines this as an explicit state machine with named events — it’s practically pseudocode for a Frame spec. BGP runs on every backbone router on the internet. `@@[persist]` lets the session survive daemon restarts, matching the `bgpd` graceful-restart feature.
 
 ```frame
 @@target python_3
 
-@@persist
+@@[persist]
 @@system BgpSession {
     interface:
         manual_start()
@@ -7831,9 +7831,9 @@ if __name__ == '__main__':
 
 **How it works:** This is a near-direct transcription of RFC 4271 §8.2.2. Each state handles exactly the events the RFC specifies. The `manual_stop()` event sends a NOTIFICATION(6,0) — Cease — from every state except `$Idle`. The hold timer and keepalive timer interactions in `$Established` match the RFC’s description: keepalive receipt resets the hold timer, keepalive timer expiry triggers a keepalive send.
 
-With `@@persist`, a `bgpd` graceful restart can save the session state to disk, exec a new binary, and pick up exactly where it left off — including the current `$Established` state and the negotiated hold time. This matches real BGP graceful restart (RFC 4724) which is engineered precisely to avoid tearing down long-lived sessions during software updates.
+With `@@[persist]`, a `bgpd` graceful restart can save the session state to disk, exec a new binary, and pick up exactly where it left off — including the current `$Established` state and the negotiated hold time. This matches real BGP graceful restart (RFC 4724) which is engineered precisely to avoid tearing down long-lived sessions during software updates.
 
-**Features used:** RFC-to-code direct correspondence, `@@persist` for session survival across restart, timer management via actions, conditional transitions (hold time negotiation), connect retry cycling between states
+**Features used:** RFC-to-code direct correspondence, `@@[persist]` for session survival across restart, timer management via actions, conditional transitions (hold time negotiation), connect retry cycling between states
 
 -----
 
@@ -13746,7 +13746,7 @@ if __name__ == '__main__':
 ```frame
 @@target python_3
 
-@@persist(domain=["mission_id", "site_list", "site_index", "findings", "inspection_retries"])
+@@[persist(domain=["mission_id", "site_list", "site_index", "findings", "inspection_retries"])]
 @@system MissionController {
     operations:
         progress(): dict {
@@ -13915,13 +13915,13 @@ if __name__ == '__main__':
 
 **Behavior trees as HSM.** BTs express sequence, fallback, and parallelism through tree structure. HSMs express the same concepts through state hierarchy and transitions. This mission has a linear sequence (`TravelingToSite → Inspecting → TravelingToSite → ... → ReturningToDock → Reporting`) with retry-on-failure at each site. In BT terms: a Sequence of (Retry-decorated Sub-sequences). In Frame: a linear transition graph with a retry loop in `$Inspecting`. The Frame version has the same execution semantics, with the added benefit that the entire state is a single dispatchable object rather than a tree of nodes with traversal state.
 
-**`@@persist(domain=[...])` selects the persistent fields.** The mission ID, site list, progress index, accumulated findings, and retry count are persisted. The current state is persisted by the Frame runtime automatically. On restart, the system resumes in whatever state it was in — mid-travel, mid-inspection, mid-report — with all counters and accumulated data intact. This is Recipe 18 (Session Persistence) applied to mission execution.
+**`@@[persist(domain=[...])]` selects the persistent fields.** The mission ID, site list, progress index, accumulated findings, and retry count are persisted. The current state is persisted by the Frame runtime automatically. On restart, the system resumes in whatever state it was in — mid-travel, mid-inspection, mid-report — with all counters and accumulated data intact. This is Recipe 18 (Session Persistence) applied to mission execution.
 
 **Why persistence matters for robotics.** A long-running inspection mission may take hours. A battery swap, a network outage, or a controlled restart shouldn't force the operator to re-run sites 1–7 because the robot was on site 8 when it was interrupted. The findings accumulated so far are valuable and must survive. Frame's persistence model gives you this property for free once the domain variables are declared persistent.
 
 **Operations expose progress.** `progress()` is an operation — a dashboard or supervisor can poll it at any time without affecting the mission. Operators watching 20 robots can see at a glance which one is on site 3 of 8 and which has drifted onto site 1's retry #2.
 
-**Features stressed:** `@@persist` for mission-level resume, HSM linear-with-retry pattern, operations for real-time progress visibility, behavior-tree-equivalent control flow expressed as a flat state graph
+**Features stressed:** `@@[persist]` for mission-level resume, HSM linear-with-retry pattern, operations for real-time progress visibility, behavior-tree-equivalent control flow expressed as a flat state graph
 
 -----
 
@@ -14497,7 +14497,7 @@ if __name__ == '__main__':
 |Service pattern              |no          |yes #30         |no                   |no                   |yes #50 (dequeue)    |no                      |
 |Enter-handler chain          |no          |yes #30, #31    |yes #42             |yes #48 (11 phases)  |no                   |no                      |
 |Events ignored in wrong state|yes #3, #12 |yes #24, #32    |yes #39             |yes #46 (terminals)  |no                   |yes most                |
-|`@@persist`                  |yes #18     |no              |yes #40, #44, #45   |no                   |no                   |yes #67                 |
+|`@@[persist]`                  |yes #18     |no              |yes #40, #44, #45   |no                   |no                   |yes #67                 |
 |Self-transition (retry loop) |no          |no              |yes #40             |no                   |no                   |yes #57                 |
 |HSM parent forwarding        |yes #9      |yes #26         |yes #41             |yes #46, #48, #49    |yes #51              |yes #55, #58, #61, #65, #66, #70, #71 |
 |Compensation chain           |no          |no              |yes #42             |no                   |no                   |yes #62                 |

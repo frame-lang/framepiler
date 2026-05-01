@@ -3893,7 +3893,7 @@ kernel after entry.
 
 ---
 
-## Step 25 — Session Persistence (`@@persist` and restore)
+## Step 25 — Session Persistence (`@@[persist]` and restore)
 
 A counter that survives process restarts. Save its state to a
 blob; restart the process; restore from the blob; the counter
@@ -3902,7 +3902,7 @@ keeps counting from where it left off.
 ```frame
 @@target python_3
 
-**@@persist**
+**@@[persist]**
 @@system Counter {
     interface:
         tick()
@@ -3925,13 +3925,13 @@ keeps counting from where it left off.
 }
 ```
 
-`@@persist` at the top is the only source change. Everything else
+`@@[persist]` at the top is the only source change. Everything else
 is the system as it would normally be written. This single
 declaration triggers two new methods on the generated class.
 
-`@@persist` doesn't add any new runtime mechanism in the kernel
+`@@[persist]` doesn't add any new runtime mechanism in the kernel
 or the dispatch pipeline. The system runs identically with or
-without it. What `@@persist` adds is two methods that walk the
+without it. What `@@[persist]` adds is two methods that walk the
 existing data structures and serialize them: `save_state()`
 returns a blob, and `restore_state(blob)` rebuilds the system
 from one.
@@ -4120,7 +4120,7 @@ in root-to-leaf order from the table, links `parent_compartment`
 pointers (which weren't serialized but are determined by the
 chain), and restores the domain.
 
-`@@persist` emits a `RestoreError` exception class (or the
+`@@[persist]` emits a `RestoreError` exception class (or the
 target's idiomatic equivalent — `RestoreException` in Java, a
 `Result::Err` variant in Rust, etc.) when restore detects a
 structural mismatch between the saved blob and the current
@@ -4165,8 +4165,8 @@ context_stack is corrupted. Discard the instance and restore from
 the most recent valid snapshot.
 
 This is the only error class besides `RestoreError` that
-`@@persist` adds; together with `save_state`, `restore_state`,
-and the quiescent check, they are the entire `@@persist` surface.
+`@@[persist]` adds; together with `save_state`, `restore_state`,
+and the quiescent check, they are the entire `@@[persist]` surface.
 
 ### ⚠️  Python uses pickle — untrusted-input warning
 
@@ -4270,14 +4270,14 @@ fail with a topology mismatch. Cross-host migration in v4
 assumes coordinated deployment: ship the same Frame source to
 every host that might handle a blob.
 
-### What `@@persist` doesn't change
+### What `@@[persist]` doesn't change
 
 The kernel doesn't change. The router doesn't change. Dispatchers
 don't change. Compartment fields don't change. State variable
 storage doesn't change. Everything we built up over the previous
 24 steps still works exactly the same way.
 
-`@@persist` adds two methods. That's the entire mechanism. The
+`@@[persist]` adds two methods. That's the entire mechanism. The
 runtime that supports persistence is the same runtime that
 supports any other Frame system — persistence is a property of
 the data, not the dispatch.

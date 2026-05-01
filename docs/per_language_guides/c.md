@@ -112,7 +112,7 @@ underlying type. Capability-matrix footnote `[l]` documents this.
 
 ### Persist + custom typed lists (D12 extension hook)
 
-The `@@persist` C runtime emits a symbol-mangle dispatcher:
+The `@@[persist]` C runtime emits a symbol-mangle dispatcher:
 `<sys>_persist_pack_<mangled>(value)` and a matching `unpack_`
 twin. The runtime supplies built-in pack/unpack functions for
 `int`, `double`, `str`, `bool`, `list`, `dict`. The default

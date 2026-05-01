@@ -701,14 +701,14 @@ Modes can nest: from `$Research`, you could `switch_mode("code")` to push resear
 
 **The agent problem:** Some agent tasks take hours or days — large codebase analysis, multi-document research, iterative code generation with test cycles. The agent process can be interrupted by context window limits, API timeouts, server restarts, or the user closing their laptop. When the process resumes, the agent needs to pick up exactly where it left off, not restart from scratch.
 
-Frame's `@@persist` annotation generates `save_state()` and `restore_state()` methods that serialize the full machine state — current state, state variables, the state stack, and all domain variables.
+Frame's `@@[persist]` annotation generates `save_state()` and `restore_state()` methods that serialize the full machine state — current state, state variables, the state stack, and all domain variables.
 
 ```
 @@target python_3
 
 import json
 
-@@persist
+@@[persist]
 @@system CodebaseAnalyzer {
     interface:
         start(repo_path: str)
@@ -821,7 +821,7 @@ The `maybe_checkpoint()` action saves state every 50 files. If the process dies 
 
 This pattern is directly applicable to any long-running agent task: multi-file code generation, large-scale data processing, iterative test-fix cycles, or multi-day research workflows.
 
-**Frame features used:** `@@persist` for save/restore, domain variables for progress tracking, self-transitions for iteration, actions for checkpoint logic.
+**Frame features used:** `@@[persist]` for save/restore, domain variables for progress tracking, self-transitions for iteration, actions for checkpoint logic.
 
 ---
 
@@ -1747,7 +1747,7 @@ Several additional deployment practices map naturally to Frame but don't require
 
 **Shadow mode / dual-write.** Run the old and new agent versions as separate Frame systems (multi-system composition, Pattern 7). Drive both with the same inputs, compare outputs, but only serve the old version's results. When the new version's quality is validated, swap the serving path.
 
-**Versioned state schemas.** When domain variables change between agent versions, `@@persist(domain=[...])` controls which fields are serialized. By persisting only stable fields, you reduce the risk of restore failures when upgrading agent code.
+**Versioned state schemas.** When domain variables change between agent versions, `@@[persist(domain=[...])]` controls which fields are serialized. By persisting only stable fields, you reduce the risk of restore failures when upgrading agent code.
 
 ---
 
@@ -1871,7 +1871,7 @@ The agent's full context is preserved on the stack during the pause. The operato
 
 This is architecturally guaranteed operator authority. The operation doesn't ask the state machine for permission — it writes directly to the agent's configuration. The next time the state machine processes an event, it reads the updated values. The agent can't "decide" to ignore a config change.
 
-**Auditable state history.** Every state transition is a named, loggable event. Combined with `@@persist`, the complete behavioral trajectory of an agent is capturable: which states it visited, in what order, how long each lasted, and what the full state context was at each transition. For alignment purposes, this provides:
+**Auditable state history.** Every state transition is a named, loggable event. Combined with `@@[persist]`, the complete behavioral trajectory of an agent is capturable: which states it visited, in what order, how long each lasted, and what the full state context was at each transition. For alignment purposes, this provides:
 
 - Post-hoc analysis of decisions that led to bad outcomes
 - Evidence for regulatory compliance in high-stakes domains
@@ -1916,7 +1916,7 @@ Developers and agents can always hand-roll state machines. Here's why Frame is b
 
 **Error handling composes.** HSM parent states handle cross-cutting concerns once. Adding a new workflow state that inherits all error handling is one `=> $Parent` annotation and one `=> $^` forward.
 
-**Persistence is free.** `@@persist` generates save/restore. No manual serialization, no risk of forgetting a field, no version migration headaches for the common case.
+**Persistence is free.** `@@[persist]` generates save/restore. No manual serialization, no risk of forgetting a field, no version migration headaches for the common case.
 
 **The output is ejectable.** Frame generates a plain class with no dependencies. If you outgrow Frame or need to customize the generated code, you can stop using the framepiler and maintain the output directly. No lock-in.
 

@@ -1775,11 +1775,11 @@ Use operations for utility methods, version info, debug introspection — anythi
 
 ### Persistence
 
-Add `@@persist` before a system to generate save/restore methods:
+Add `@@[persist]` before a system to generate save/restore methods:
 
 ```frame
 @@target python_3
-@@persist
+@@[persist]
 
 @@system Session {
     interface:

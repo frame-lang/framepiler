@@ -34,7 +34,7 @@ Complete reference for the Frame language. For a tutorial introduction, see [Get
 <preamble>          // native code (optional)
 @@target <lang>     // required, exactly once
 @@codegen { ... }   // optional, at most once
-<annotations>*      // zero or more (@@persist, etc.)
+<annotations>*      // zero or more (@@[persist], etc.)
 @@system <Name> (<params>)? {
     <sections>
 }
@@ -86,12 +86,12 @@ Optional. Must appear after `@@target` and before `@@system`.
 
 The framepiler auto-enables `frame_event` when features that require it are used (enter/exit parameters, event forwarding, `@@:return`, interface return values).
 
-### `@@persist`
+### `@@[persist]`
 
 ```frame
-@@persist
-@@persist(domain=[field1, field2])
-@@persist(exclude=[field3])
+@@[persist]
+@@[persist(domain=[field1, field2])]
+@@[persist(exclude=[field3])]
 ```
 
 Generates `save_state()` and `restore_state()` methods. See [Persistence](#persistence).
@@ -846,7 +846,7 @@ The **compartment** is Frame's central runtime data structure — a closure for 
 
 ## Persistence
 
-`@@persist` generates save/restore methods.
+`@@[persist]` generates save/restore methods.
 
 | Language | Save | Restore |
 |----------|------|---------|
@@ -865,9 +865,9 @@ The **compartment** is Frame's central runtime data structure — a closure for 
 
 | Form | Behavior |
 |------|---------|
-| `@@persist` | All domain vars |
-| `@@persist(domain=[a, b])` | Only `a`, `b` |
-| `@@persist(exclude=[c])` | All except `c` |
+| `@@[persist]` | All domain vars |
+| `@@[persist(domain=[a, b])]` | Only `a`, `b` |
+| `@@[persist(exclude=[c])]` | All except `c` |
 
 ---
 
@@ -998,7 +998,7 @@ The framepiler validates at the assembler stage:
 |-------|---------|
 | `@@target` | Declare target language |
 | `@@codegen` | Configure code generation |
-| `@@persist` | Enable serialization |
+| `@@[persist]` | Enable serialization |
 | `@@system` | Declare state machine |
 
 ### State Machine
@@ -1118,7 +1118,7 @@ import logging
     frame_event: on,
 }
 
-@@persist
+@@[persist]
 @@system OrderProcessor (max_retries: int) {
 
     operations:
