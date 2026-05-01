@@ -201,6 +201,7 @@ impl PragmaScanner {
             let name = &bytes[kw_start..i];
             return match name {
                 b"persist" => PragmaKind::Persist,
+                b"target" => PragmaKind::Target,
                 _ => PragmaKind::Other,
             };
         }
@@ -214,11 +215,12 @@ impl PragmaScanner {
         let keyword = &bytes[kw_start..i];
 
         match keyword {
-            b"target" => PragmaKind::Target,
+            // RFC-0013 wave 2: bare `@@target` migrated to
+            // `@@[target("...")]`. Bare form falls through to Other.
+            b"target" => PragmaKind::Other,
             b"codegen" => PragmaKind::Codegen,
             b"system" => PragmaKind::System,
-            // RFC-0013: bare `@@persist` migrated to `@@[persist]`.
-            // Hard cut — bare form falls through to Other.
+            // RFC-0013 wave 1: bare `@@persist` migrated to `@@[persist]`.
             b"persist" => PragmaKind::Other,
             b"run-expect" => PragmaKind::RunExpect,
             _ => PragmaKind::Other,

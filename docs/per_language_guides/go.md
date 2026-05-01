@@ -73,7 +73,7 @@ state machine. Frame source for Go must capitalize interface
 method names to make them callable:
 
 ```frame
-@@target go
+@@[target("go")]
 
 @@system WithInterface {
     interface:
@@ -293,7 +293,7 @@ every other backend. The comment leaders are `//` (line) and
 `/* ... */` (block).
 
 ```frame
-@@target go
+@@[target("go")]
 
 package main
 

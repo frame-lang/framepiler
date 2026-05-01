@@ -229,7 +229,7 @@ every other backend. The comment leaders are `//` (line),
 `/* ... */` (block), and `///` (XML doc-comment for tooling).
 
 ```frame
-@@target csharp
+@@[target("csharp")]
 
 using System;
 using System.Collections.Generic;

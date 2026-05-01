@@ -15,7 +15,7 @@ cargo install framec
 Create a file `hello.fpy`:
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 @@system Hello {
     interface:

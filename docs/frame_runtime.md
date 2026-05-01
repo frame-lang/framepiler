@@ -2042,7 +2042,7 @@ but trips open after too many in a row, counts down a cooldown
 period, then probes whether the downstream service has recovered.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system CircuitBreaker {
     interface:
@@ -2278,7 +2278,7 @@ A sensor whose calibration logic needs to read the current sensor
 value through its own interface method.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Sensor {
     interface:
@@ -2615,7 +2615,7 @@ context, the system needs to remember the previous state and
 return to it when the dialog closes.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Workflow {
     interface:
@@ -2813,7 +2813,7 @@ and fan-only — but shares logic for power on/off across all of
 them.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Thermostat {
     interface:
@@ -3131,7 +3131,7 @@ every transition into a mode, not just via `adjust()` after the
 fact.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Thermostat {
     interface:
@@ -3671,7 +3671,7 @@ to that state, and then dispatch the request to the new state's
 handler.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Approval {
     interface:
@@ -3900,7 +3900,7 @@ blob; restart the process; restore from the blob; the counter
 keeps counting from where it left off.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 **@@[persist]**
 @@system Counter {

@@ -114,7 +114,7 @@ Frame is not a standalone language. It's designed to live *inside* your native s
 Frame makes heavy use of a special token — `@@` — to mark Frame pragmas and constructs that should be preprocessed by the *framepiler* (Frame's compilation tool). Everything without `@@` passes through unchanged.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 import logging
 
@@ -214,7 +214,7 @@ framec --version
 Create a file called `hello.fpy`:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Hello {
     interface:
@@ -263,7 +263,7 @@ python3 hello.py
 Nothing happens yet — we declared the class but didn't instantiate it. Add native Python code after the system block:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Hello {
     interface:
@@ -336,7 +336,7 @@ A system's power comes from having multiple states, each responding to the same 
 ### A Light Switch
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system LightSwitch {
     interface:
@@ -413,7 +413,7 @@ status(): str {
 Here's a turnstile — locked until you insert a coin, then it lets one person through and locks again:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Turnstile {
     interface:
@@ -509,7 +509,7 @@ Each declaration specifies:
 Interface methods can take parameters, and handlers receive them:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Greeter {
     interface:
@@ -575,7 +575,7 @@ If the current state doesn't handle the event, the caller gets the default value
 ### Multiple Parameters and Returns
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Calculator {
     interface:
@@ -614,7 +614,7 @@ if __name__ == '__main__':
 The real power shows when different states handle the same event differently:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Player {
     interface:
@@ -700,7 +700,7 @@ The transition (`-> $Complete`) is buried. The state machine's structure is hard
 Move the native code into actions:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system OrderProcessor {
     interface:
@@ -812,7 +812,7 @@ Frame provides two kinds of variables, each with different scope and lifetime: *
 Domain variables are declared in the `domain:` block. They're instance fields that persist for the lifetime of the system, across all state transitions.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Counter {
     interface:
@@ -895,7 +895,7 @@ A good rule: if multiple states need it, use domain. If only one state needs it 
 You can pass arguments to a state during transition:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Router {
     interface:
@@ -939,7 +939,7 @@ When you write `-> $Page("Settings", "/settings")`, the arguments initialize the
 You can also pass arguments when constructing a system. System parameters can initialize domain variables:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Server(port: int, host: str) {
     interface:
@@ -1003,7 +1003,7 @@ When a transition happens, Frame fires lifecycle events:
 3. The new state's **enter handler** (`$>`) runs
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Connection {
     interface:
@@ -1149,7 +1149,7 @@ The critical difference from a normal transition: **state variables are restored
 #### Example: Subroutine State
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Editor {
     interface:
@@ -1253,7 +1253,7 @@ $Buffering {
 Declare a parent with `=> $ParentState` after the state name:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system MediaPlayer {
     interface:
@@ -1371,7 +1371,7 @@ $Child => $Parent {
 ### A Complete Example
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Appliance {
     interface:
@@ -1456,7 +1456,7 @@ Sometimes a handler or action needs to call one of the system's own interface me
 ### Calling Your Own Interface
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Sensor {
     interface:
@@ -1567,7 +1567,7 @@ Sync methods on an async system still work correctly — awaiting a synchronous 
 ### Example
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system HttpClient {
     interface:
@@ -1778,7 +1778,7 @@ Use operations for utility methods, version info, debug introspection — anythi
 Add `@@[persist]` before a system to generate save/restore methods:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 @@[persist]
 
 @@system Session {
@@ -1846,7 +1846,7 @@ The framepiler auto-enables `frame_event` when features that require it are used
 A single file can contain multiple `@@system` blocks:
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Logger {
     interface:

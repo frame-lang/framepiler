@@ -170,7 +170,7 @@ in the same `.ts` file.
 `//` (line) and `/* ... */` (block) and `/** ... */` (TSDoc).
 
 ```frame
-@@target typescript
+@@[target("typescript")]
 
 // Module-prolog block — passes through as TypeScript source.
 

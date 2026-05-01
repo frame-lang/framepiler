@@ -281,7 +281,7 @@ applies to every other backend. The comment leaders are `//`
 (line) and `/* ... */` (block) and `/** ... */` (KDoc).
 
 ```frame
-@@target kotlin
+@@[target("kotlin")]
 
 import kotlin.system.exitProcess
 

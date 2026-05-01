@@ -77,7 +77,7 @@ This is a classic Godot footgun.
 Framec catches this with **E501** at the Frame stage:
 
 ```frame
-@@target gdscript
+@@[target("gdscript")]
 
 @@system Bad {
     interface:
@@ -293,7 +293,7 @@ to every other backend. The comment leader for native code is
 `#`.
 
 ```frame
-@@target gdscript
+@@[target("gdscript")]
 extends SceneTree
 
 # Module-prolog block — passes through as GDScript source.

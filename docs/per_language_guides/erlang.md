@@ -530,7 +530,7 @@ The comment leader for native code is `%` (Erlang's line-comment),
 not `#` or `//`.
 
 ```frame
-@@target erlang
+@@[target("erlang")]
 %%
 %% This whole module-prolog block is native Erlang and passes
 %% through to the .erl output unchanged. Use Erlang comment

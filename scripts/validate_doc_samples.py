@@ -90,7 +90,8 @@ def extract_samples(md_path: Path) -> list[Sample]:
 
 
 def is_runnable_frame(body: str) -> bool:
-    return "@@target python_3" in body and "if __name__" in body
+    has_target = '@@[target("python_3")]' in body or "@@target python_3" in body
+    return has_target and "if __name__" in body
 
 
 def run_sample(framec: str, sample: Sample, workdir: Path) -> tuple[bool, str]:

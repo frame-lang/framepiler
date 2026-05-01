@@ -244,7 +244,7 @@ to every other backend. The comment leaders are `//` (line) and
 `/* ... */` (block) and `///` (doc-comment for tools).
 
 ```frame
-@@target swift
+@@[target("swift")]
 
 // Module-prolog block — passes through as Swift source.
 import Foundation

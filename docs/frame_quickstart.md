@@ -20,7 +20,7 @@
 
 ```frame
 <prolog native code>                  # optional
-@@target python_3                     # required, exactly once
+@@[target("python_3")]                # required, exactly once
 @@codegen { frame_event: on }         # optional
 @@[persist]                             # optional — see Persistence
 @@system Name (params)? : Base?, Base? {
@@ -370,7 +370,7 @@ cargo fmt --check                     # format check
 ## 60-second starter
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Turnstile {
     interface:

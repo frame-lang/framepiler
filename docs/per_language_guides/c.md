@@ -62,7 +62,7 @@ The Oceans Model workaround is to declare a `typedef` in the prolog
 that flattens the array shape to a single-token type:
 
 ```frame
-@@target c
+@@[target("c")]
 
 #include <stdio.h>
 #include <string.h>
@@ -330,7 +330,7 @@ other backend. The comment leaders are `//` (C99 line) and
 `/* ... */` (block).
 
 ```frame
-@@target c
+@@[target("c")]
 
 // Module-prolog block — passes through as C source.
 #include <stdio.h>

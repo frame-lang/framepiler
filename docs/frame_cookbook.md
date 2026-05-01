@@ -181,7 +181,7 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 **Problem:** Cycle through a fixed sequence of states on each event.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system TrafficLight {
     interface:
@@ -229,7 +229,7 @@ if __name__ == '__main__':
 **Problem:** A switch that alternates between on and off.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Switch {
     interface:
@@ -275,7 +275,7 @@ if __name__ == '__main__':
 **Problem:** A coin-operated turnstile that locks after each passage.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Turnstile {
     interface:
@@ -319,7 +319,7 @@ if __name__ == '__main__':
 **Problem:** A multi-step login: enter username, enter password, authenticate.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system LoginFlow {
     interface:
@@ -379,7 +379,7 @@ if __name__ == '__main__':
 **Problem:** A network connection with proper setup/teardown lifecycle.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Connection {
     interface:
@@ -436,7 +436,7 @@ if __name__ == '__main__':
 **Problem:** Retry an operation up to N times before failing.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Retrier {
     interface:
@@ -501,7 +501,7 @@ if __name__ == '__main__':
 **Problem:** Open nested modal dialogs and return to the previous one on close.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system DialogManager {
     interface:
@@ -562,7 +562,7 @@ if __name__ == '__main__':
 **Problem:** Track state history and allow stepping backward.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Editor {
     interface:
@@ -611,7 +611,7 @@ For true snapshot undo, use `push$` with a transition (`push$ -> $Editing`) to c
 **Problem:** A media player with play/pause/stop, where playing and paused are sub-states of "active."
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system VideoPlayer {
     interface:
@@ -666,7 +666,7 @@ if __name__ == '__main__':
 **Problem:** Process an order through validation, processing, and completion — with cancellation support.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system OrderProcessor {
     interface:
@@ -734,7 +734,7 @@ if __name__ == '__main__':
 **Problem:** A document requires approval from two reviewers before it's published.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ApprovalChain {
     interface:
@@ -800,7 +800,7 @@ if __name__ == '__main__':
 **Problem:** A game character with idle, walking, running, and jumping states.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Character {
     interface:
@@ -864,7 +864,7 @@ if __name__ == '__main__':
 **Problem:** An AI agent that explores, flees from threats, and tracks its actions.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Agent {
     interface:
@@ -924,7 +924,7 @@ if __name__ == '__main__':
 **Problem:** An LED that blinks on a timer, with on/off control.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system LedBlinker {
     interface:
@@ -972,7 +972,7 @@ if __name__ == '__main__':
 **Problem:** Filter noisy switch input — only register a press after the signal stabilizes.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Debouncer {
     interface:
@@ -1033,7 +1033,7 @@ if __name__ == '__main__':
 **Problem:** Output depends on both the current state AND the input (classic Mealy machine).
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system MealyDetector {
     interface:
@@ -1081,7 +1081,7 @@ if __name__ == '__main__':
 **Problem:** Output depends only on the current state (classic Moore machine).
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system MooreParity {
     interface:
@@ -1127,7 +1127,7 @@ if __name__ == '__main__':
 **Problem:** Save a user session to disk and restore it later.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@[persist]
 @@system Session {
@@ -1184,7 +1184,7 @@ if __name__ == '__main__':
 **Problem:** An HTTP client with async connect/fetch/disconnect.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 import aiohttp
 import asyncio
@@ -1247,7 +1247,7 @@ asyncio.run(main())
 **Problem:** A logger and an app as separate systems, with the app using the logger.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Logger {
     interface:
@@ -1308,7 +1308,7 @@ if __name__ == '__main__':
 A task executor whose pool size and retry policy are set at construction time. Domain, state, and enter parameters flow through the constructor to initialize the machine.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system WorkerPool($(max_retries: int), $>(start_msg: str), pool_size: int) {
     interface:
@@ -1374,7 +1374,7 @@ if __name__ == '__main__':
 **Problem:** A sensor that calibrates itself by reading its own value through the interface, then applying an offset.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Sensor {
     interface:
@@ -1461,7 +1461,7 @@ This is a runtime safety property, not a manual pattern — every `@@:self.metho
 **Problem:** A vending machine with admin operations that bypass the state machine.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system VendingMachine(inventory: dict = {}) {
     operations:
@@ -1554,7 +1554,7 @@ if __name__ == '__main__':
 **Problem:** A circuit breaker where the failure counter resets each time we re-enter the closed state.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system CircuitBreaker {
     interface:
@@ -1632,7 +1632,7 @@ if __name__ == '__main__':
 **Problem:** A token bucket rate limiter with a static utility function.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system RateLimiter {
     operations:
@@ -1691,7 +1691,7 @@ if __name__ == '__main__':
 **Problem:** A smart thermostat with three hierarchy levels.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Thermostat {
     interface:
@@ -1775,7 +1775,7 @@ if __name__ == '__main__':
 **Problem:** A deployment pipeline with rollback via push$/pop$, using decorated pop to signal rollback reason.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Deployer {
     interface:
@@ -1867,7 +1867,7 @@ if __name__ == '__main__':
 **Problem:** `$LoggedOut` creates a LoginManager; `$LoggedIn` creates a SessionManager. Managers are state variables — their lifecycle matches the state.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system LoginManager {
     interface:
@@ -2009,7 +2009,7 @@ if __name__ == '__main__':
 **Problem:** Different level types created per config. Re-entering `$InLevel` automatically swaps managers.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 import random
 
@@ -2116,7 +2116,7 @@ if __name__ == '__main__':
 **Problem:** A long-running service where the constructor never returns. HSM provides shared quit logic.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Worker {
     interface:
@@ -2184,7 +2184,7 @@ if __name__ == '__main__':
 **Problem:** Data flows through 5 stages via enter-handler transitions in a single interface call.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Pipeline {
     interface:
@@ -2273,7 +2273,7 @@ if __name__ == '__main__':
 **Problem:** A system with operations for test inspection. `@@:system.state` is a read-only accessor — allowed in operations because it doesn't mutate the state machine.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system TrafficLight {
     operations:
@@ -2363,7 +2363,7 @@ if __name__ == '__main__':
 **Problem:** An AI coding agent with planning, approval, tool execution, testing, and retry.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ToolRunner {
     interface:
@@ -2588,7 +2588,7 @@ All recipes target Python 3 for readability; the patterns generate identically f
 **Problem:** A sender may redeliver the same message. The receiver must process each business message exactly once, even if it arrives multiple times.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system IdempotentReceiver {
     interface:
@@ -2637,7 +2637,7 @@ if __name__ == '__main__':
 **Problem:** A single inbound stream contains messages of different kinds. Each kind should be routed to a different downstream destination.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ContentBasedRouter {
     interface:
@@ -2687,7 +2687,7 @@ if __name__ == '__main__':
 **Problem:** Drop messages that don't match a predicate. Count both accepted and rejected messages for observability.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system MessageFilter {
     interface:
@@ -2746,7 +2746,7 @@ if __name__ == '__main__':
 **Problem:** Correlated messages arrive separately. Wait until the full set has arrived, then emit a single combined message.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Aggregator {
     interface:
@@ -2807,7 +2807,7 @@ if __name__ == '__main__':
 **Problem:** Messages arrive out of order (each tagged with a sequence number). Release them downstream strictly in order, buffering anything premature.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Resequencer {
     interface:
@@ -2868,7 +2868,7 @@ if __name__ == '__main__':
 **Problem:** A downstream dependency is failing. Stop hammering it; let it recover. Periodically probe; resume full traffic only after probes succeed.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system CircuitBreaker {
     interface:
@@ -2959,7 +2959,7 @@ if __name__ == '__main__':
 **Problem:** A message that can't be processed after N attempts must not block the pipeline. Move it to a dead-letter channel for inspection. The processor must survive restarts without losing retry state.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@[persist]
 
@@ -3053,7 +3053,7 @@ if __name__ == '__main__':
 **Problem:** No push transport available. Poll a source for messages, process them, pause on empty, and stop cleanly when asked.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system PollingConsumer {
     operations:
@@ -3153,7 +3153,7 @@ if __name__ == '__main__':
 **Problem:** Orchestrate a multi-step business transaction across services with no distributed transaction. If any step fails, compensate the prior steps in reverse order.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system OrderSaga {
     interface:
@@ -3282,7 +3282,7 @@ if __name__ == '__main__':
 **Problem:** One queue of work, multiple workers pulling from it. The dispatcher hands each message to exactly one worker; workers process in parallel.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Worker {
     interface:
@@ -3372,7 +3372,7 @@ if __name__ == '__main__':
 **Problem:** Every message that flows through an integration should be persisted for audit, replay, and debugging. The store survives restarts.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@[persist]
 
@@ -3433,7 +3433,7 @@ if __name__ == '__main__':
 **Problem:** A state machine drives a workflow that spans a client and a server. Each side has work only it can do. The machine persists itself, travels across the wire, and resumes on the other side.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 import json
 
@@ -3580,7 +3580,7 @@ Recipes 46-49 model real-world protocols and safety-critical systems at full fid
 **Reference:** FIX Trading Community, Order State Change Matrices (FIX 4.4 / FIX Latest)
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system FixBuySideOrder(symbol: str, side: str, order_qty: float) {
     operations:
@@ -3971,7 +3971,7 @@ if __name__ == '__main__':
 **Problem:** The broker/exchange side of FIX. Receives orders from the buy-side, manages the book, and sends execution reports back. Interacts with the buy-side system.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system FixSellSide {
     interface:
@@ -4227,7 +4227,7 @@ if __name__ == '__main__':
 **Reference:** Apollo/Shuttle abort modes, SpaceX Falcon 9 flight profile
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 # --- Propulsion Controller ---
 @@system PropulsionController {
@@ -4616,7 +4616,7 @@ if __name__ == '__main__':
 **Reference:** IEC 61800-5-2 safe stop categories, ISO 10218 robot safety
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system RobotArm {
     operations:
@@ -4973,7 +4973,7 @@ Recipes 50-52 demonstrate the **work queue pattern**: a system receives events i
 **Problem:** A printer that accepts jobs while busy. Jobs are queued and printed in FIFO order. The printer processes one job at a time.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system PrintSpooler {
     operations:
@@ -5085,7 +5085,7 @@ if __name__ == '__main__':
 **Problem:** A CNC machine tool that processes work orders through setup, machining, and teardown phases. New orders arrive at any time and are queued with priority. The machine processes the highest-priority job next.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ManufacturingCell {
     operations:
@@ -5231,7 +5231,7 @@ if __name__ == '__main__':
 **Problem:** An elevator services floor requests using the SCAN algorithm: continue in the current direction until all requests in that direction are served, then reverse. Requests arrive at any time and are accumulated, not ignored.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Elevator {
     operations:
@@ -5420,7 +5420,7 @@ IDENT(set) IDENT(x) PUNCT(=) NUMBER(42) STRING(hello) EOF
 Scanners are the classic state-machine workload. Frame handles it naturally because every scanner is a state machine: you sit in a mode (`$Start`, `$InIdent`, `$InNumber`, `$InString`), consume a byte, decide whether to stay, emit, or change modes, and loop.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Scanner {
     interface:
@@ -5534,7 +5534,7 @@ The characteristic bit is **delimiter replay**: when `$InIdent` sees a non-ident
 This recipe is the natural complement to #53: the scanner handles token recognition, the parser handles structure.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system BracketParser {
     interface:
@@ -5660,7 +5660,7 @@ Nine recipes modeling real kernel subsystems as Frame state machines. Each recip
 **Problem:** Model the Linux task states and the transitions driven by signals, I/O, and scheduler decisions. In the kernel, these states are bitmask constants scattered across `kernel/sched/core.c`, `kernel/signal.c`, and `kernel/exit.c`. The transition logic is implicit — you have to trace code paths to determine which states are reachable from which.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system TaskLifecycle {
     interface:
@@ -5837,7 +5837,7 @@ The `$Zombie` → `$Dead` transition (via `wait_by_parent()`) models the parent 
 **Problem:** Model the kernel’s runtime PM framework (`drivers/base/power/runtime.c`). Devices transition through power states based on usage counts and autosuspend timers. The kernel implementation is 1,800 lines of nested conditionals and spinlock-protected flag checks.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system RuntimePM {
     interface:
@@ -5986,7 +5986,7 @@ The race condition where `get()` arrives during `$Suspending` is handled natural
 **Problem:** Model the lifecycle of a block I/O request through the kernel’s blk-mq layer (`block/blk-mq.c`). Requests move through queuing, dispatch, in-flight, completion, and error recovery stages.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system BlockRequest {
     interface:
@@ -6109,7 +6109,7 @@ The retry logic uses a domain variable (`self.attempts`) that persists across th
 **Problem:** Model the USB device enumeration sequence (USB 2.0 spec §9.1). When a device is plugged in, the hub driver must reset it, assign an address, read descriptors, and load a driver. Failure at any stage requires cleanup of all prior stages. The kernel implementation (`drivers/usb/core/hub.c`) is 5,800 lines.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system UsbEnumerator {
     interface:
@@ -6315,7 +6315,7 @@ In the kernel’s `hub_port_connect_change()`, this logic is a 300-line function
 **Problem:** Model the kernel’s watchdog device (`drivers/watchdog/watchdog_dev.c`). A hardware watchdog resets the system unless software periodically pings it. The “magic close” feature prevents accidental disarming: the device stays armed unless the close is preceded by writing a magic character (‘V’).
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system WatchdogDevice {
     interface:
@@ -6444,7 +6444,7 @@ In the kernel, this is implemented with a `WDOG_ALLOW_RELEASE` status bit. The F
 **Problem:** Model the kernel’s Out-Of-Memory killer (`mm/oom_kill.c`). When the system runs out of memory, it must select a victim process, kill it, and wait for memory to be freed. The critical safety property: the OOM killer must not select a new victim while still waiting for the previous one to die. In the kernel, this is enforced by `oom_lock` and careful flag management. In Frame, it’s structural.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system OomKiller {
     interface:
@@ -6563,7 +6563,7 @@ if __name__ == '__main__':
 **Problem:** Model the VFS filesystem freeze/thaw mechanism (`fs/super.c`). A mounted filesystem can be frozen for a consistent snapshot — writes are blocked but reads continue. This recipe uses a **3-level HSM**: `$Active` and `$Frozen` both share the “read-only” capability via an intermediate `$Readable` state.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Filesystem {
     interface:
@@ -6709,7 +6709,7 @@ The trailing `=> $^` on every HSM state ensures events propagate up the full 3-l
 **Problem:** Model the kernel module loading pipeline (`kernel/module/main.c`). Loading proceeds through symbol resolution, memory allocation, relocation, and initialization. Failure at any stage requires unwinding all prior stages.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ModuleLoader {
     interface:
@@ -6927,7 +6927,7 @@ Reference counting is exposed through the interface (`acquire()`/`release()`) ra
 **Problem:** Model signal delivery to a user-mode process. When a signal arrives, the kernel saves the current user context, jumps to the handler, and restores the context via `sigreturn`. Nested signals build a stack of saved frames. This is the textbook use case for `push$`/`pop$`.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system SignalContext {
     interface:
@@ -7047,7 +7047,7 @@ Eight recipes modeling network protocols from their RFCs as Frame state machines
 **Problem:** Model the DHCP client state machine from RFC 2131 Figure 5. The client discovers servers, requests a lease, and manages lease renewal with T1 and T2 timers. This is the protocol that gets every laptop its IP address.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system DhcpClient {
     interface:
@@ -7278,7 +7278,7 @@ This matches real DHCP clients (e.g., `dhclient`, `systemd-networkd`): T1/T2/exp
 **Problem:** Model the TLS 1.2 handshake from the server’s perspective (RFC 5246 §7.3). The handshake is a multi-step protocol where a fatal alert at any stage tears down the connection. HSM provides shared alert handling.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system TlsServerHandshake {
     interface:
@@ -7445,7 +7445,7 @@ if __name__ == '__main__':
 **Problem:** Model the IEEE 802.11 station management state machine. The key property: deauthentication can arrive in any connected state and resets the station to the beginning. Without HSM, every state needs its own `deauth()` handler.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system WifiStation {
     interface:
@@ -7617,7 +7617,7 @@ The 4-way handshake uses a state variable (`$.key_step`) that resets on every en
 **Problem:** Model the BGP FSM from RFC 4271 §8. The RFC defines this as an explicit state machine with named events — it’s practically pseudocode for a Frame spec. BGP runs on every backbone router on the internet. `@@[persist]` lets the session survive daemon restarts, matching the `bgpd` graceful-restart feature.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@[persist]
 @@system BgpSession {
@@ -7847,7 +7847,7 @@ With `@@[persist]`, a `bgpd` graceful restart can save the session state to disk
 **Problem:** Model the PPP LCP FSM from RFC 1661 §4. This RFC contains one of the most carefully specified protocol state machines ever published — a complete state transition table with 10 states and 16 events. The Frame spec should be a direct transcription.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system PppLcp {
     interface:
@@ -8126,7 +8126,7 @@ Comparing this spec against RFC 1661 Table 4 is a line-by-line verification exer
 **Problem:** Model an NTP client’s per-server association (RFC 5905). The client manages a polling interval that backs off when synchronized and resets when unsynchronized, plus a reachability register that tracks recent poll successes.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system NtpAssociation {
     operations:
@@ -8278,7 +8278,7 @@ Operations (`get_offset()` and `is_reachable()`) provide read-only access to the
 **Problem:** Model an HTTP/1.1 persistent connection lifecycle. The connection starts idle, processes one request at a time, and stays open for reuse (keep-alive) until explicitly closed or a timeout expires. Cross-cutting concerns — connection errors and explicit close — should be handled uniformly via HSM rather than duplicated per state.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system HttpConnection {
     interface:
@@ -8478,7 +8478,7 @@ if __name__ == '__main__':
 **Problem:** Model an SMTP client conversation (RFC 5321). The protocol is a strict command-response sequence, but it supports mid-conversation upgrade via STARTTLS. After STARTTLS, the conversation restarts from the greeting — a perfect `push$`/`pop$` match if you want to preserve the prior context, though here we use a fresh reset to match real SMTP semantics.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system SmtpClient {
     interface:
@@ -8735,7 +8735,7 @@ State machines fit physical sciences, biology, chemistry, and medicine naturally
 **Problem:** Model a substance moving through solid, liquid, gas, and plasma, including the latent-heat plateaus where the temperature holds steady while phase-change energy is absorbed.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Substance(melting_point: float, boiling_point: float, ionization_point: float) {
     interface:
@@ -8870,7 +8870,7 @@ if __name__ == '__main__':
 **Problem:** Water can be cooled below 0 C without freezing if pure and undisturbed. A disturbance triggers crystallization. A supercooled droplet and ice at the same temperature respond to `shake()` differently — that's a state distinction.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Water {
     interface:
@@ -8948,7 +8948,7 @@ if __name__ == '__main__':
 **Problem:** U-238 decay chain with probabilistic transitions per tick. Each nuclide owns its decay probability locally.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 import random
 
@@ -9028,7 +9028,7 @@ if __name__ == '__main__':
 **Problem:** G1/S/G2/M cycle with checkpoint arrest states. DNA damage, nutrient depletion, and spindle misalignment halt the cycle; repair or apoptosis resolve the arrest.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system CellCycle {
     interface:
@@ -9147,7 +9147,7 @@ if __name__ == '__main__':
 **Problem:** Single enzyme molecule: E + S ⇌ ES → E + P. Steady-state distribution reproduces Michaelis-Menten saturation.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 import random
 
@@ -9206,7 +9206,7 @@ if __name__ == '__main__':
 **Problem:** Resting → depolarizing → repolarizing → refractory. Absolute refractory cannot fire; relative refractory needs stronger input.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Neuron {
     interface:
@@ -9288,7 +9288,7 @@ if __name__ == '__main__':
 **Problem:** Individual person: Susceptible → Infected → Recovered. Run N of them to simulate an epidemic.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 import random
 
@@ -9360,7 +9360,7 @@ if __name__ == '__main__':
 **Problem:** Add titrant drop by drop. Endpoint locks the result — no more titrant after declaring endpoint.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Titration {
     interface:
@@ -9439,7 +9439,7 @@ if __name__ == '__main__':
 **Problem:** Denature at 95 C, anneal at 55 C, extend at 72 C. Repeat N times. Hold at 4 C.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system PCRCycler(total_cycles: int) {
     interface:
@@ -9535,7 +9535,7 @@ if __name__ == '__main__':
 **Problem:** Safety-critical delivery. Cannot infuse without priming. Alarm state has no infusion handlers — impossible by construction.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system InfusionPump {
     interface:
@@ -9625,7 +9625,7 @@ if __name__ == '__main__':
 **Problem:** Inspiration/expiration/pause cycle. Patient effort triggers next breath only during pause — not mid-inspiration.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Ventilator {
     interface:
@@ -9710,7 +9710,7 @@ if __name__ == '__main__':
 **Problem:** Rigid safety sequence: analyze → charge → confirm clear → shock. Cannot shock without completing the chain.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system AED {
     interface:
@@ -9807,7 +9807,7 @@ if __name__ == '__main__':
 **Problem:** AHA ACLS algorithm. Branches on shockable vs non-shockable rhythm. CPR cycles, epinephrine, amiodarone, ROSC.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ACLS {
     interface:
@@ -9908,7 +9908,7 @@ if __name__ == '__main__':
 **Problem:** Timed checklist: lactate, cultures, antibiotics, fluids, reassess MAP, pressors if needed. On-time vs late as distinct terminal states.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system SepsisBundle {
     interface:
@@ -10080,7 +10080,7 @@ TLS 1.3 reduces the handshake to a single round trip. The client sends `ClientHe
 Note on the downgrade check: `ServerHello.legacy_version` is frozen at `0x0303` for middlebox compatibility — checking it tells you nothing. The real version is read from the `supported_versions` extension, and the `server_random` downgrade sentinel is checked independently.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system TlsClient {
     interface:
@@ -10266,7 +10266,7 @@ A public client (mobile app, SPA) obtains an authorization code and exchanges it
 ### Frame system
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system OAuthPkceFlow {
     interface:
@@ -10437,7 +10437,7 @@ WebAuthn replaces passwords with public-key credentials bound to a specific orig
 ### Frame system
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system WebAuthnCeremony {
     interface:
@@ -10583,7 +10583,7 @@ User enters username, then password, then a second factor (TOTP / push / hardwar
 ### Frame system
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system MfaAuth {
     interface:
@@ -10709,7 +10709,7 @@ This version uses an HSM parent `$HasValidTgt` to hoist `tick()` and `logout()` 
 **A note on the validator:** `$HasValidTgt` is an abstract handler collection — nothing transitions to it directly. This is explicitly legal per the language reference ("Parent states don't need to be a state the system ever transitions *to* — it can be an abstract handler collection"), but the validator may emit `W414` unreachable-state. That warning is expected and benign for this pattern.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system KerberosClient {
     interface:
@@ -10865,7 +10865,7 @@ Noise XX is a three-message mutual authentication handshake from the [Noise Prot
 ### Frame system
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system NoiseXxInitiator {
     interface:
@@ -10985,7 +10985,7 @@ The Double Ratchet (Signal) combines a Diffie-Hellman ratchet (new DH shared sec
 The DH ratchet and decryption happen in the same handler. Frame's `forward_event` is single-hop and cannot be relayed through an intermediate state's `$>` — attempting that would drop the triggering ciphertext. The correct model is a single state with inline ratchet-then-decrypt logic. The state machine doesn't owe you a state for every conceptual phase of a handler.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system DoubleRatchetSession {
     interface:
@@ -11094,7 +11094,7 @@ A macaroon is a bearer token with attached caveats — first-party caveats (expi
 ### Frame system
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system MacaroonVerifier {
     interface:
@@ -11221,7 +11221,7 @@ Zero Trust Architecture (NIST SP 800-207) rejects the perimeter model. Every req
 Uses an HSM parent `$LiveSession` to centralize channel-binding checks, heartbeat, logout, and the `channel_binding_mismatch` hijack event across both `$FullAccess` and `$Degraded`. Return values are set with `@@:()` *before* transitions — code after a transition is unreachable per the language reference.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ZeroTrustSession {
     interface:
@@ -11399,7 +11399,7 @@ A secure boot chain proceeds through immutable ROM (the Core Root of Trust for M
 Per the TCG PC Client spec, the CRTM measures itself into PCR[0] before measuring the bootloader into PCR[1]. This version includes the CRTM self-measurement. The init stage has no antirollback gate in this demo — real systems typically hand off to IMA or dm-verity at that point for runtime file-integrity enforcement. That choice is flagged inline.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system SecureBoot {
     interface:
@@ -11582,7 +11582,7 @@ These recipes complement Recipe 49 (Robot Arm Controller), which established the
 **Problem:** A stepper motor needs to move a commanded number of steps without stalling or overshoot. The classic solution is a trapezoidal velocity profile: accelerate up to a cruise speed, cruise until the deceleration distance is reached, then decelerate to zero. A `stop()` command from any motion state must decelerate cleanly rather than halt instantly (which would stall or lose position).
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system StepperDriver {
     interface:
@@ -11741,7 +11741,7 @@ if __name__ == '__main__':
 **Problem:** An absolute servo axis powers on with unknown position. Homing establishes the reference: drive slowly toward a hard limit until the limit switch trips, back off, then find the encoder index pulse for fine alignment. If the limit switch doesn't trip within the expected distance, retry up to a bounded number of times before faulting. This is a mechanical version of USB enumeration (Recipe 58) — a mandatory startup pipeline with retry and compensation.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ServoHoming {
     interface:
@@ -11914,7 +11914,7 @@ if __name__ == '__main__':
 **Problem:** A quadrature encoder outputs two square waves (A and B) 90° out of phase. Decoding direction requires remembering the previous (A,B) pair: the transition from one pair to the next uniquely identifies forward or reverse motion. This is a Mealy machine — the output (tick count delta) depends on both current state and input — and it's the same structural shape as Recipe 16 but wired to physical quadrature signals.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system QuadratureDecoder {
     operations:
@@ -12059,7 +12059,7 @@ if __name__ == '__main__':
 **Problem:** A PID controller has tight numerical requirements — millisecond-scale update periods, deterministic math, minimal allocation. That hot loop belongs in native code (C, Rust, or firmware). But the *mode* around the loop — disabled, tuning, holding setpoint, tracking a trajectory, saturated and winding up — is workflow logic that fragments when written as boolean flags. This recipe shows Frame as the supervisor, calling into a native PID as an action.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system PidSupervisor {
     interface:
@@ -12235,7 +12235,7 @@ if __name__ == '__main__':
 **Problem:** A differential-drive mobile base needs two operational modes (teleop and autonomous waypoint following) and an overriding safety layer that triggers on bumper strikes, cliff sensor events, or emergency stop. Recipe 49 showed this pattern for a fixed-base industrial arm; a mobile platform has different events (velocity commands, waypoint lists, bumper strikes rather than move-to and gripper commands) but the same structural skeleton.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system MobileBase {
     operations:
@@ -12469,7 +12469,7 @@ if __name__ == '__main__':
 **Problem:** A mobile robot must navigate to a goal pose. A global planner (deliberative, slow) produces a waypoint path; a local controller (reactive, fast) follows the path while avoiding obstacles not in the map. On obstacle detection, the robot pauses, replans from the current pose, and resumes. After a bounded number of failed replans, it gives up. This is the classic hybrid-architecture problem that robotics has debated for decades — and it's structurally identical to the AI Coding Agent capstone (Recipe 33), with `$Planning`/`$Executing`/`$Replanning` relabeled for physical navigation.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system Navigator {
     interface:
@@ -12651,7 +12651,7 @@ if __name__ == '__main__':
 **Problem:** A robot with a finite battery must seek a charging dock, align precisely with the contacts, verify the charging connection, charge until full, then undock. Each stage has its own failure modes: dock beacon lost, misalignment on approach, charging fault. This is a negotiated resource lifecycle — structurally the same as DHCP (Recipe 64) or TLS (Recipe 65), but with physical docking instead of protocol messages.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system DockController {
     interface:
@@ -12879,7 +12879,7 @@ if __name__ == '__main__':
 **Problem:** A delivery robot needs to use an elevator to move between floors. The robot must approach the elevator, request a car, wait for one, board when doors open, ride, disembark when doors open at the destination. The elevator itself is Recipe 52 — this recipe shows the *user* side of the same problem: the robot's state during its interaction with an external shared resource.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 # Simplified elevator stub (the real one is Recipe 52)
 @@system Elevator {
@@ -13085,7 +13085,7 @@ if __name__ == '__main__':
 **Problem:** A vision-guided manipulator must locate an object, plan a grasp, approach, grip, verify the grip held, transport, place, and release. Each stage can fail: vision returns no detection, grasp planning fails, the gripper closes on air, the object slips during transport. Failures at early stages retry vision; failures after grasping drop the object safely and restart. This recipe is the manipulation capstone — it pulls together the pipeline, retry, HSM safety, and multi-system composition patterns introduced earlier in this section.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system PickPlace {
     operations:
@@ -13356,7 +13356,7 @@ if __name__ == '__main__':
 **Problem:** A robot with a tool changer must couple to a tool, verify the mechanical lock, perform work, uncouple on completion, and return to a no-tool state. The coupling sequence has safety interlocks: cannot uncouple while the tool is energized, cannot couple with a tool already attached, cannot move with a partially-coupled tool. Each interlock is a missing transition in the state graph.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system ToolChanger {
     operations:
@@ -13509,7 +13509,7 @@ if __name__ == '__main__':
 **Problem:** Peg-in-hole insertion is the canonical benchmark for force-controlled manipulation. The peg descends toward the hole, makes contact, searches laterally to find the hole entrance (the "spiral search" or "tilt search"), inserts when alignment is detected, and seats when the bottom is reached. If the peg jams — stuck with neither motion nor seating — the operation backs off and retries. This recipe shows Frame orchestrating a force-feedback loop while the native controller handles the compliant-motion math.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system PegInsertion {
     interface:
@@ -13744,7 +13744,7 @@ if __name__ == '__main__':
 **Problem:** A robot executes a multi-phase mission: go to inspection site, inspect the asset, report findings, return to dock. Inspections that fail trigger a retry. The mission must survive power interruptions — if the robot reboots mid-inspection, it resumes where it left off, not from the beginning. This is the workflow that robotics typically solves with behavior trees; this recipe shows the HSM-and-persistence equivalent in Frame.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@[persist(domain=["mission_id", "site_list", "site_index", "findings", "inspection_retries"])]
 @@system MissionController {
@@ -13934,7 +13934,7 @@ if __name__ == '__main__':
 **Problem:** A multirotor drone has a canonical flight-mode sequence: disarmed → armed → takeoff → hover → mission → return-home → land → disarmed. From any in-flight mode, a failsafe event (battery critical, GPS lost, RC link lost, geofence breach) must route to an appropriate recovery behavior — some land in place, some return home, some fail open. This is the avionic analog of Recipe 48's launch sequence and Recipe 49's safety overlay, combined.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system DroneFlightMode {
     operations:
@@ -14144,7 +14144,7 @@ if __name__ == '__main__':
 **Problem:** A warehouse has a pool of mobile robots and a continuously arriving stream of tasks. A central dispatcher holds the task queue; robots pull tasks when idle. When a robot completes a task, it becomes available for the next one. New tasks arriving while all robots are busy queue up. This is Recipe 43 (Competing Consumers) specialized for robotics: the dispatcher is the work queue, the robots are workers, and operations expose fleet-wide status for dashboards.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system FleetRobot(robot_id: str) {
     operations:
@@ -14350,7 +14350,7 @@ The companion essay [Parsers as Composed State Machines](articles/research/Parse
 **Problem:** Many real grammars contain local ambiguities that require bounded lookahead to resolve. The classic case in C-family languages: `foo * bar;` could be a multiplication statement (if `foo` is a variable) or a pointer-variable declaration (if `foo` is a type name). The parser has to consume a few tokens, decide which interpretation applies, and tell its caller. This recipe isolates that disambiguation as a dedicated state machine the coordinator consults like an oracle: tokens in, verdict out, internal walk hidden.
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 @@system StatementDisambiguator {
     interface:

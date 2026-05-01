@@ -159,7 +159,7 @@ to every other backend. The comment leader is `#` (line); for
 docstrings, use `"""..."""` (triple-quoted).
 
 ```frame
-@@target python_3
+@@[target("python_3")]
 
 # Module-prolog block — passes through as Python source.
 

@@ -297,7 +297,7 @@ every other backend. The comment leaders are `--` (line) and
 `--[[ ... ]]` (block).
 
 ```frame
-@@target lua
+@@[target("lua")]
 
 -- Module-prolog block — passes through as Lua source.
 local socket = require("socket")

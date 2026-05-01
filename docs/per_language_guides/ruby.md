@@ -181,7 +181,7 @@ Frame's "Oceans Model" applies to Ruby the same way it applies
 to every other backend. The comment leader is `#`.
 
 ```frame
-@@target ruby
+@@[target("ruby")]
 
 # Module-prolog block — passes through as Ruby source.
 

@@ -62,7 +62,7 @@ blocks in a single `.fjava` file are rejected at the framec stage
 with **E430** ("Java requires one system per file").
 
 ```frame
-@@target java
+@@[target("java")]
 
 @@system Producer { ... }
 @@system Consumer { ... }   // ← E430 fires here
@@ -267,7 +267,7 @@ every other backend. The comment leaders are `//` (line) and
 `/* ... */` (block) and `/** ... */` (Javadoc).
 
 ```frame
-@@target java
+@@[target("java")]
 
 // Module-prolog block — passes through as Java source.
 import java.util.List;

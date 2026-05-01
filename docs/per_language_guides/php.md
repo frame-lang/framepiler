@@ -183,7 +183,7 @@ to every other backend. The comment leaders are `//` (line),
 `#` (also line, PHP-specific), and `/* ... */` (block).
 
 ```frame
-@@target php
+@@[target("php")]
 <?php
 
 // Module-prolog block — passes through as PHP source.

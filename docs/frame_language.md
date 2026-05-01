@@ -32,9 +32,9 @@ Complete reference for the Frame language. For a tutorial introduction, see [Get
 
 ```
 <preamble>          // native code (optional)
-@@target <lang>     // required, exactly once
-@@codegen { ... }   // optional, at most once
-<annotations>*      // zero or more (@@[persist], etc.)
+@@[target("<lang>")]     // required, exactly once
+@@codegen { ... }        // optional, at most once
+<annotations>*           // zero or more (@@[persist], etc.)
 @@system <Name> (<params>)? {
     <sections>
 }
@@ -47,10 +47,10 @@ Everything outside `@@target`, `@@codegen`, annotations, and `@@system` is nativ
 
 Frame has **no type system**. Wherever a type or expression appears in Frame syntax — interface params, state variables, domain fields, return types, initializers — Frame treats them as **opaque strings** and passes them through to the generated code verbatim. Write your target language's type names (`int`, `String`, `Vec<i32>`, `std::string`, etc.) and expressions. Frame does not parse, validate, or translate them.
 
-### `@@target`
+### `@@[target(...)]`
 
 ```
-@@target <language_id>
+@@[target("<language_id>")]
 ```
 
 Required. Must appear before `@@system`. Specifies the target language.
@@ -1113,7 +1113,7 @@ Both `@@:self` and `@@:system` are syntactic prefixes. Bare forms are errors (E6
 ```frame
 import logging
 
-@@target python_3
+@@[target("python_3")]
 @@codegen {
     frame_event: on,
 }

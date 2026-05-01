@@ -102,7 +102,7 @@ Frame makes the machine explicit. States are declared. Transitions are visible. 
 Frame is a language for defining state machines that lives *inside* your source files. You write a `@@system` block specifying states, events, and transitions. The framepiler generates a complete class in your target language — Python, TypeScript, Rust, Go, and 13 others. No runtime library, no dependencies.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 @@system ToolCaller {
     interface:
@@ -211,7 +211,7 @@ Five states, buried in a while loop, managed by string comparison. Adding a sixt
 **The Frame version:**
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 import time
 
@@ -347,7 +347,7 @@ Each state handles only the events that matter to it. `rate_limited()` is only r
 **The agent problem:** A research agent follows a workflow: search for sources, evaluate relevance, deep-dive into promising results, synthesize findings. Each step can loop (search again with refined queries) or branch (skip deep-dive if surface results are sufficient). The workflow has natural checkpoints where the agent should report progress.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 @@system ResearchAgent {
     interface:
@@ -476,7 +476,7 @@ The workflow is visible at a glance: `$Searching` → `$Evaluating` → `$DeepDi
 **The agent problem:** Some agent actions require human approval before execution — deploying code, sending emails, making purchases, modifying production data. The agent needs to pause, present the proposed action, wait for approval or rejection, and then proceed or roll back. The approval gate shouldn't be tangled into every action handler.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 @@system GuardedAgent {
     interface:
@@ -564,7 +564,7 @@ The approval gate is a clean state. While in `$AwaitingApproval`, the agent igno
 **The agent problem:** A conversational agent operates in different modes — general chat, code assistance, web research, document analysis. Each mode interprets user messages differently, has different tool access, and handles errors differently. Switching between modes should be clean, and some modes may need to return to the previous mode when done.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 @@system ConversationAgent {
     interface:
@@ -704,7 +704,7 @@ Modes can nest: from `$Research`, you could `switch_mode("code")` to push resear
 Frame's `@@[persist]` annotation generates `save_state()` and `restore_state()` methods that serialize the full machine state — current state, state variables, the state stack, and all domain variables.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 import json
 
@@ -832,7 +832,7 @@ This pattern is directly applicable to any long-running agent task: multi-file c
 Frame's hierarchical state machines (HSM) solve this cleanly. A parent state handles common events; child states inherit that handling through explicit forwarding.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 @@system ResilientAgent {
     interface:
@@ -950,7 +950,7 @@ It automatically inherits all error handling from `$Active`. No duplication, no 
 Frame systems are plain classes. They compose through normal object interaction — one system holds references to others and orchestrates them.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 @@system Planner {
     interface:
@@ -1077,7 +1077,7 @@ This pattern scales naturally. Each sub-agent can have its own states (a `Coder`
 Frame gives you a cleaner alternative: each variant is a distinct state, and the flag controls which transition fires. The variant logic is isolated — you can read, test, and remove each variant independently.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 @@system SearchAgent {
     interface:
@@ -1191,7 +1191,7 @@ Testing is isolated. You can unit-test `$DeepSearch` independently by constructi
 Frame doesn't have built-in timers, but it doesn't need them. An external timer (a scheduler, a background thread, a cron job) emits a `timeout()` event to the state machine. Each state handles `timeout()` in its own way — or ignores it entirely.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 import threading
 
@@ -1352,7 +1352,7 @@ States that don't override `timeout()` inherit the parent's default (transition 
 The circuit breaker pattern from distributed systems maps directly to Frame states. The circuit has three states: closed (healthy, requests flow normally), open (unhealthy, requests are rejected or degraded), and half-open (testing whether the dependency has recovered).
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 import time
 
@@ -1496,7 +1496,7 @@ Every workflow state inherits failure tracking from `$ServiceLayer`. The `self.d
 Frame provides a clean answer through **operations**. Operations are public methods that bypass the state machine entirely — they execute regardless of the current state and have direct access to domain variables. This makes them the natural entry point for config injection: the config update always succeeds (no risk of being ignored by a state that doesn't handle it), and the new values take effect on the next event dispatch.
 
 ```
-@@target python_3
+@@[target("python_3")]
 
 import json
 

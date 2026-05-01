@@ -218,7 +218,7 @@ every other backend. The comment leaders are `//` (line),
 `/* ... */` (block), and `///` (DartDoc).
 
 ```frame
-@@target dart
+@@[target("dart")]
 
 // Module-prolog block — passes through as Dart source.
 

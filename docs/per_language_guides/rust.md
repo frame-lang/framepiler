@@ -284,7 +284,7 @@ every other backend. The comment leader for native code is `//`
 (line) or `/* */` (block).
 
 ```frame
-@@target rust
+@@[target("rust")]
 
 // Module-prolog block — passes through as Rust source.
 use std::collections::HashMap;

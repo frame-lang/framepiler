@@ -268,7 +268,7 @@ every other backend. The comment leaders are `//` (line) and
 `/* ... */` (block).
 
 ```frame
-@@target cpp_17
+@@[target("cpp_17")]
 
 // Module-prolog block — passes through as C++ source.
 #include <iostream>

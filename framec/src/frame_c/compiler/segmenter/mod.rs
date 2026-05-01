@@ -603,8 +603,22 @@ fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
 
         let kind = match name {
             b"persist" => PragmaKind::Persist,
+            b"target" => PragmaKind::Target,
             _ => PragmaKind::Other,
         };
+
+        // For @@[target("python_3")] the downstream code expects
+        // value="python_3" (matching the bare-form `@@target python_3`).
+        // Strip the surrounding `("...")` to give it the same shape.
+        if matches!(kind, PragmaKind::Target) {
+            if let Some(raw) = &value {
+                let inner = raw.trim_start_matches('(').trim_end_matches(')');
+                let inner = inner.trim();
+                let inner = inner.trim_start_matches('"').trim_end_matches('"');
+                return (kind, Some(inner.to_string()));
+            }
+        }
+
         return (kind, value);
     }
 
@@ -645,12 +659,13 @@ fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
     };
 
     let kind = match keyword {
-        b"target" => PragmaKind::Target,
+        // RFC-0013 wave 2: bare `@@target lang` migrated to
+        // `@@[target("lang")]`. Bare form falls through to Other;
+        // pipeline E804 check surfaces a migration error.
+        b"target" => PragmaKind::Other,
         b"codegen" => PragmaKind::Codegen,
         b"system" => return (PragmaKind::Other, value), // @@system handled separately
-        // RFC-0013: bare `@@persist` was migrated to `@@[persist]`.
-        // Hard cut — bare form is now Other (unrecognized pragma);
-        // downstream validation surfaces the right error message.
+        // RFC-0013 wave 1: bare `@@persist` migrated to `@@[persist]`.
         b"persist" => PragmaKind::Other,
         b"run-expect" => PragmaKind::RunExpect,
         b"skip-if" => PragmaKind::SkipIf,

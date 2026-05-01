@@ -152,16 +152,14 @@ pub fn compile_ast_based(
     // Check for @@persist pragma
     let has_persist = source_map.persist_pragma().is_some();
 
-    // RFC-0013 Wave 1 hard cut: bare `@@persist` is no longer accepted.
-    // Catch users still using the legacy syntax with a clear error and a
-    // migration pointer. We scan the raw source for `@@persist` at line
-    // start (after any leading whitespace) NOT followed by `[`. The
-    // pragma scanner has already routed the new `@@[persist]` form to
-    // PragmaKind::Persist; only the legacy bare form lands here.
+    // RFC-0013 hard-cut migrations: bare `@@persist` and `@@target`
+    // are no longer accepted. Catch legacy usages with a clear error
+    // and a migration pointer.
     {
         let src = std::str::from_utf8(&source_map.source).unwrap_or("");
         for line in src.lines() {
             let trimmed = line.trim_start();
+            // Wave 1: @@persist
             if trimmed.starts_with("@@persist") {
                 let after = &trimmed[9..];
                 let next = after.chars().next();
@@ -178,6 +176,28 @@ pub fn compile_ast_based(
                              (RFC-0013 wave 1). Args form: `@@persist(domain=[a, b])` becomes \
                              `@@[persist(domain=[a, b])]`. The change is mechanical — wrap the \
                              directive in `@@[ ]`.",
+                        )],
+                        warnings: vec![],
+                        source_map: None,
+                    });
+                }
+            }
+            // Wave 2: @@target
+            if trimmed.starts_with("@@target") {
+                let after = &trimmed[8..];
+                let next = after.chars().next();
+                let is_bare = match next {
+                    None => true,
+                    Some(c) => !c.is_ascii_alphanumeric() && c != '_' && c != '-',
+                };
+                if is_bare {
+                    return Ok(CompileResult {
+                        code: String::new(),
+                        errors: vec![CompileError::new(
+                            "E804",
+                            "Bare `@@target lang` is no longer accepted. Migrate to \
+                             `@@[target(\"lang\")]` (RFC-0013 wave 2). Example: \
+                             `@@target python_3` becomes `@@[target(\"python_3\")]`.",
                         )],
                         warnings: vec![],
                         source_map: None,
