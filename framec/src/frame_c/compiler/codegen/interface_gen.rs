@@ -2695,33 +2695,20 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    foreach (var item in __stack.EnumerateArray()) { __instance._state_stack.Add(__DeserComp(item)); }\n");
             restore_body.push_str("}\n");
 
-            // Restore domain vars via JsonElement
+            // Type-ignorant: emit the declared type verbatim as
+            // JsonSerializer.Deserialize<T>'s generic parameter.
+            // System.Text.Json reflection handles primitives, lists,
+            // dicts, and user types with [JsonPropertyName].
             for var in &system.domain {
-                let cs_type = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                        let mapped = csharp_map_type(t);
-                        match mapped.as_str() {
-                            "int" | "long" => "int",
-                            "double" | "float" => "double",
-                            "bool" => "bool",
-                            "string" | "String" => "string",
-                            _ => "object",
-                        }
-                    }
-                    _ => "object",
+                let declared = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => csharp_map_type(t),
+                    _ => "object".to_string(),
                 };
-                match cs_type {
-                    "int" => restore_body.push_str(&format!(
-                        "if (__root.TryGetProperty(\"{0}\", out var __{0})) {{ __instance.{0} = __{0}.GetInt32(); }}\n", var.name)),
-                    "double" => restore_body.push_str(&format!(
-                        "if (__root.TryGetProperty(\"{0}\", out var __{0})) {{ __instance.{0} = __{0}.GetDouble(); }}\n", var.name)),
-                    "bool" => restore_body.push_str(&format!(
-                        "if (__root.TryGetProperty(\"{0}\", out var __{0})) {{ __instance.{0} = __{0}.GetBoolean(); }}\n", var.name)),
-                    "string" => restore_body.push_str(&format!(
-                        "if (__root.TryGetProperty(\"{0}\", out var __{0})) {{ __instance.{0} = __{0}.GetString(); }}\n", var.name)),
-                    _ => restore_body.push_str(&format!(
-                        "if (__root.TryGetProperty(\"{0}\", out var __{0})) {{ __instance.{0} = __{0}.ToString(); }}\n", var.name)),
-                }
+                restore_body.push_str(&format!(
+                    "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ try {{ __instance.{name} = System.Text.Json.JsonSerializer.Deserialize<{t}>(__{name}.GetRawText()); }} catch {{ }} }}\n",
+                    name = var.name,
+                    t = declared
+                ));
             }
 
             restore_body.push_str("return __instance;");
@@ -3666,21 +3653,20 @@ pub(crate) fn generate_persistence_methods(
             ));
             restore_body.push_str("    for _, c := range stack { instance._state_stack = append(instance._state_stack, deserializeComp(c)) }\n");
             restore_body.push_str("}\n");
+            // Type-ignorant domain restore via marshal-roundtrip.
+            // framec emits the declared Go type verbatim;
+            // encoding/json reflection handles primitives, slices,
+            // maps, and user structs alike.
             for var in &system.domain {
-                let go_extract = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(name) => {
-                        match name.to_lowercase().as_str() {
-                            "int" | "i32" | "i64" => {
-                                format!("int(data[\"{}\"].(float64))", var.name)
-                            }
-                            "float" | "f32" | "f64" => format!("data[\"{}\"].(float64)", var.name),
-                            "bool" => format!("data[\"{}\"].(bool)", var.name),
-                            "str" | "string" => format!("data[\"{}\"].(string)", var.name),
-                            _ => format!("data[\"{}\"]", var.name),
-                        }
-                    }
-                    _ => format!("data[\"{}\"]", var.name),
+                let declared = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(name) => go_map_type(name),
+                    _ => "interface{}".to_string(),
                 };
+                let go_extract = format!(
+                    "func() {t} {{ var __typed {t}; if __raw, err := json.Marshal(data[\"{name}\"]); err == nil {{ json.Unmarshal(__raw, &__typed) }}; return __typed }}()",
+                    t = declared,
+                    name = var.name,
+                );
                 restore_body.push_str(&format!("instance.{} = {}\n", var.name, go_extract));
             }
             restore_body.push_str("return instance");
