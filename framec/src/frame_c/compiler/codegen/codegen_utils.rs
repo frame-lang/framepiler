@@ -459,7 +459,10 @@ pub(crate) fn is_bool_type(type_str: &str) -> bool {
 
 /// Check if type string represents a string type
 pub(crate) fn is_string_type(type_str: &str) -> bool {
-    matches!(type_str, "str" | "string" | "String" | "char*" | "&str")
+    matches!(
+        type_str,
+        "str" | "string" | "String" | "char*" | "const char*" | "&str"
+    )
 }
 
 /// Map a Frame type string to C# type for (Type) cast

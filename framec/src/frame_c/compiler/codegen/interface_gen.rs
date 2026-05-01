@@ -1813,8 +1813,26 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("}\n");
             save_body.push_str("cJSON_AddItemToObject(root, \"_state_stack\", stack_arr);\n");
 
-            // Serialize domain variables
+            // Serialize domain variables. Nested @@SystemName() instances
+            // round-trip via the child's save_state — parse the returned
+            // JSON string, embed as a sub-object, free the heap string.
             for var in &system.domain {
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    save_body.push_str(&format!(
+                        "if (self->{name}) {{\n\
+                         \x20   char* __child_json_{name} = {child}_save_state(self->{name});\n\
+                         \x20   cJSON* __child_obj_{name} = cJSON_Parse(__child_json_{name});\n\
+                         \x20   cJSON_AddItemToObject(root, \"{name}\", __child_obj_{name});\n\
+                         \x20   free(__child_json_{name});\n\
+                         }} else {{\n\
+                         \x20   cJSON_AddNullToObject(root, \"{name}\");\n\
+                         }}\n",
+                        name = var.name,
+                        child = child_sys
+                    ));
+                    continue;
+                }
                 let type_str = type_to_string(&var.var_type);
 
                 let json_add = if is_int_type(&type_str) {
@@ -1912,8 +1930,29 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    }\n");
             restore_body.push_str("}\n\n");
 
-            // Restore domain variables
+            // Restore domain variables. Nested @@SystemName() instances
+            // round-trip via the child's restore_state — print the
+            // sub-object back to a JSON string, hand it to the child
+            // factory, then free the temporary string.
             for var in &system.domain {
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "{{\n\
+                         \x20   cJSON* __child_obj_{name} = cJSON_GetObjectItem(root, \"{name}\");\n\
+                         \x20   if (__child_obj_{name} && !cJSON_IsNull(__child_obj_{name})) {{\n\
+                         \x20       char* __child_json_{name} = cJSON_PrintUnformatted(__child_obj_{name});\n\
+                         \x20       instance->{name} = {child}_restore_state(__child_json_{name});\n\
+                         \x20       free(__child_json_{name});\n\
+                         \x20   }} else {{\n\
+                         \x20       instance->{name} = NULL;\n\
+                         \x20   }}\n\
+                         }}\n",
+                        name = var.name,
+                        child = child_sys
+                    ));
+                    continue;
+                }
                 let type_str = type_to_string(&var.var_type);
 
                 let json_get = if is_int_type(&type_str) {

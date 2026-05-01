@@ -5216,54 +5216,131 @@ pub(crate) fn generate_erlang_system(
 
     // Persistence methods (when @@persist is present)
     if system.persist_attr.is_some() {
-        // Collect all record field names for serialization. The
-        // list is: domain fields + per-state state-vars + the
-        // modal stack + the canonical compartment-context fields
-        // (state_args / enter_args) from
-        // `ERLANG_COMPARTMENT_CONTEXT_FIELDS`. Iterating that
-        // constant rather than hardcoding the names here keeps
-        // persist in sync with push/pop's saved context — adding
-        // a new context field there propagates here automatically.
-        let mut field_names: Vec<String> = Vec::new();
+        // Collect domain fields with nested-system metadata. For
+        // each domain var with `inner: T = @@T()` shape, store
+        // (field_name, Some(child_module)) so save_state can
+        // recursively serialize the child's gen_statem state via
+        // its own save_state, and load_state can spawn a fresh
+        // child process via the child's load_state.
+        let mut domain_fields: Vec<(String, Option<String>)> = Vec::new();
         for var in &system.domain {
-            field_names.push(var.name.clone());
+            let child_module = match &var.initializer_text {
+                Some(t) => {
+                    let t = t.trim();
+                    t.strip_prefix("@@").and_then(|rest| {
+                        rest.find('(').and_then(|paren| {
+                            let sys_name = &rest[..paren];
+                            if sys_name.is_empty() {
+                                None
+                            } else {
+                                Some(to_snake_case(sys_name))
+                            }
+                        })
+                    })
+                }
+                None => None,
+            };
+            domain_fields.push((var.name.clone(), child_module));
         }
+
+        // The full field list for non-domain serialization: per-state
+        // state-vars + modal stack + canonical compartment-context
+        // fields. Same as before, just split out from domain.
+        let mut other_fields: Vec<String> = Vec::new();
         if let Some(ref machine) = system.machine {
             for state in &machine.states {
                 let state_prefix = to_snake_case(&state.name);
                 for sv in &state.state_vars {
-                    field_names.push(format!("sv_{}_{}", state_prefix, sv.name));
+                    other_fields.push(format!("sv_{}_{}", state_prefix, sv.name));
                 }
             }
         }
-        field_names.push("frame_stack".to_string());
+        other_fields.push("frame_stack".to_string());
         for field in ERLANG_COMPARTMENT_CONTEXT_FIELDS {
-            field_names.push(field.to_string());
+            other_fields.push(field.to_string());
         }
 
-        // save_state/1 — serializes current state + Data to a map
+        let total_fields = domain_fields.len() + other_fields.len();
+
+        // save_state/1 — serializes current state + Data to a map.
+        // Nested @@SystemName fields recurse through child save_state.
         code.push_str("save_state(Pid) ->\n");
         code.push_str("    {State, Data} = sys:get_state(Pid),\n");
         code.push_str("    #{state => State,\n");
-        for (i, field) in field_names.iter().enumerate() {
-            let comma = if i < field_names.len() - 1 { "," } else { "" };
+        let mut emitted = 0;
+        for (field, child_module) in &domain_fields {
+            let comma = if emitted < total_fields - 1 { "," } else { "" };
+            match child_module {
+                Some(child) => {
+                    // Nested system: child Pid serializes to its own state map.
+                    code.push_str(&format!(
+                        "      {field} => case Data#data.{field} of\n\
+                         \x20                  undefined -> undefined;\n\
+                         \x20                  ChildPid_{field} -> {child}:save_state(ChildPid_{field})\n\
+                         \x20             end{comma}\n",
+                        field = field,
+                        child = child,
+                        comma = comma
+                    ));
+                }
+                None => {
+                    code.push_str(&format!(
+                        "      {} => Data#data.{}{}\n",
+                        field, field, comma
+                    ));
+                }
+            }
+            emitted += 1;
+        }
+        for field in &other_fields {
+            let comma = if emitted < total_fields - 1 { "," } else { "" };
             code.push_str(&format!(
                 "      {} => Data#data.{}{}\n",
                 field, field, comma
             ));
+            emitted += 1;
         }
         code.push_str("    }.\n\n");
 
-        // load_state/1 — deserializes map and starts a new gen_statem
+        // load_state/1 — deserializes map and starts a new gen_statem.
+        // Nested fields spawn fresh child processes via child:load_state.
         code.push_str("load_state(Map) ->\n");
         code.push_str("    State = maps:get(state, Map),\n");
         code.push_str("    Data = #data{\n");
-        for (i, field) in field_names.iter().enumerate() {
-            let comma = if i < field_names.len() - 1 { "," } else { "" };
+        let mut emitted = 0;
+        for (field, child_module) in &domain_fields {
+            let comma = if emitted < total_fields - 1 { "," } else { "" };
+            match child_module {
+                Some(child) => {
+                    // Nested system: child sub-map → spawn fresh child Pid.
+                    code.push_str(&format!(
+                        "        {field} = case maps:get({field}, Map, undefined) of\n\
+                         \x20                       undefined -> undefined;\n\
+                         \x20                       ChildMap_{field} ->\n\
+                         \x20                           {{ok, ChildPid_{field}}} = {child}:load_state(ChildMap_{field}),\n\
+                         \x20                           ChildPid_{field}\n\
+                         \x20                   end{comma}\n",
+                        field = field,
+                        child = child,
+                        comma = comma
+                    ));
+                }
+                None => {
+                    code.push_str(&format!(
+                        "        {} = maps:get({}, Map, undefined){}\n",
+                        field, field, comma
+                    ));
+                }
+            }
+            emitted += 1;
+        }
+        for field in &other_fields {
+            let comma = if emitted < total_fields - 1 { "," } else { "" };
             code.push_str(&format!(
                 "        {} = maps:get({}, Map, undefined){}\n",
                 field, field, comma
             ));
+            emitted += 1;
         }
         code.push_str("    },\n");
         code.push_str("    {ok, Pid} = gen_statem:start_link(?MODULE, [], []),\n");
@@ -5313,19 +5390,49 @@ pub(crate) fn generate_erlang_system(
         }
     }
     for (field_name, sys_module) in &cross_sys_fields {
-        let needle = format!("Data#data.{}.", field_name);
-        // Each occurrence: rewrite the entire `Data#data.field.method(args)`
-        // call into `module:method(Data#data.field, args)`. Walk the
-        // string with manual index tracking so nested parens / commas
-        // inside args don't break the rewrite.
+        // Match `Data#data.field.` and `Data<digits>#data.field.` —
+        // the latter form arises when a handler chains multiple
+        // statements (per-statement chaining renames the record
+        // variable Data1, Data2, …). The rewrite preserves the
+        // original variable name in the output receiver.
+        let suffix = format!("#data.{}.", field_name);
         let mut out = String::with_capacity(code.len());
         let mut cursor = 0;
-        while let Some(found) = code[cursor..].find(&needle) {
-            let abs = cursor + found;
+        let bytes = code.as_bytes();
+        while cursor < bytes.len() {
+            // Find the next `Data` token followed by optional digits
+            // followed by the suffix.
+            let next = code[cursor..].find("Data");
+            let rel = match next {
+                Some(r) => r,
+                None => break,
+            };
+            let abs = cursor + rel;
+            // Token-boundary check: previous char must not be an
+            // identifier char (so we don't match inside `MyData`).
+            if abs > 0 {
+                let prev = bytes[abs - 1];
+                if prev.is_ascii_alphanumeric() || prev == b'_' {
+                    out.push_str(&code[cursor..abs + 4]);
+                    cursor = abs + 4;
+                    continue;
+                }
+            }
+            // Walk past optional digits after `Data`.
+            let mut var_end = abs + 4;
+            while var_end < bytes.len() && bytes[var_end].is_ascii_digit() {
+                var_end += 1;
+            }
+            // Check for the field suffix.
+            if !code[var_end..].starts_with(&suffix) {
+                out.push_str(&code[cursor..var_end]);
+                cursor = var_end;
+                continue;
+            }
+            let var_name = &code[abs..var_end]; // "Data" or "Data1" etc.
             out.push_str(&code[cursor..abs]);
-            // Find the method name (identifier) immediately after the dot.
-            let method_start = abs + needle.len();
-            let bytes = code.as_bytes();
+            // Find the method name (identifier) immediately after the suffix.
+            let method_start = var_end + suffix.len();
             let mut method_end = method_start;
             while method_end < bytes.len()
                 && (bytes[method_end].is_ascii_alphanumeric() || bytes[method_end] == b'_')
@@ -5360,7 +5467,7 @@ pub(crate) fn generate_erlang_system(
             }
             let args_inner = &code[args_open + 1..p - 1];
             let args_inner_trim = args_inner.trim();
-            let receiver = format!("Data#data.{}", field_name);
+            let receiver = format!("{}#data.{}", var_name, field_name);
             if args_inner_trim.is_empty() {
                 out.push_str(&format!("{}:{}({})", sys_module, method, receiver));
             } else {
