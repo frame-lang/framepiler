@@ -2522,7 +2522,15 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("for (var c : _state_stack) __stack.add(__serComp(c));\n");
             save_body.push_str("__j.put(\"_state_stack\", __stack);\n");
             for var in &system.domain {
-                save_body.push_str(&format!("__j.put(\"{}\", {});\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "try {{ __j.put(\"{0}\", {0} != null ? mapper.readTree({0}.save_state()) : null); }} catch (Exception e) {{ throw new RuntimeException(e); }}\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("__j.put(\"{}\", {});\n", var.name, var.name));
+                }
             }
             save_body.push_str("try { return mapper.writeValueAsString(__j); } catch (Exception e) { throw new RuntimeException(e); }");
 
@@ -2565,6 +2573,15 @@ pub(crate) fn generate_persistence_methods(
             );
             restore_body.push_str("}\n");
             for var in &system.domain {
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "if (__j.has(\"{name}\") && !__j.get(\"{name}\").isNull()) __instance.{name} = {child}.restore_state(__j.get(\"{name}\").toString());\n",
+                        name = var.name,
+                        child = child_sys
+                    ));
+                    continue;
+                }
                 let java_type: String = match &var.var_type {
                     crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
                         // Domain fields keep their declared Java type (incl.
@@ -3250,7 +3267,15 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("for (c in _state_stack) stack.add(__serComp(c))\n");
             save_body.push_str("j[\"_state_stack\"] = stack\n");
             for var in &system.domain {
-                save_body.push_str(&format!("j[\"{}\"] = {}\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "j[\"{0}\"] = if ({0} != null) mapper.readTree({0}.save_state()) else null\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("j[\"{}\"] = {}\n", var.name, var.name));
+                }
             }
             save_body.push_str("return mapper.writeValueAsString(j)");
 
@@ -3285,6 +3310,15 @@ pub(crate) fn generate_persistence_methods(
             );
             restore_body.push_str("}\n");
             for var in &system.domain {
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "if (j.has(\"{name}\") && !j.get(\"{name}\").isNull) instance.{name} = {child}.restore_state(j.get(\"{name}\").toString())\n",
+                        name = var.name,
+                        child = child_sys
+                    ));
+                    continue;
+                }
                 let mapped = match &var.var_type {
                     crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
                         kt_box(&kotlin_map_type(t))
@@ -4209,6 +4243,22 @@ pub(crate) fn generate_persistence_methods(
                     restore_body.push_str(&format!(
                         "if data.{0} ~= nil then instance.{0} = {1}.restore_state(json.encode(data.{0})) else instance.{0} = nil end\n",
                         var.name, child_sys
+                    ));
+                    continue;
+                }
+                let is_int = matches!(
+                    &var.var_type,
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) if t.trim() == "int"
+                );
+                if is_int {
+                    // cjson decodes JSON numbers as Lua floats; coerce
+                    // back to integer subtype (Lua 5.3+) so tostring()
+                    // round-trips as "0" rather than "0.0". Benign on
+                    // Lua 5.1/5.2 where floats already print without
+                    // decimal when integral.
+                    restore_body.push_str(&format!(
+                        "instance.{0} = (data.{0} ~= nil) and math.floor(data.{0}) or nil\n",
+                        var.name
                     ));
                 } else {
                     restore_body.push_str(&format!("instance.{} = data.{}\n", var.name, var.name));
