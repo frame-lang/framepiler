@@ -1584,8 +1584,17 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     save_body.push_str("    \"_compartment\": compartment_data,\n");
     save_body.push_str("    \"_state_stack\": stack_data,\n");
 
+    // Nested @@SystemName() instances round-trip via child save_state.
     for var in &system.domain {
-        save_body.push_str(&format!("    \"{}\": self.{},\n", var.name, var.name));
+        let init = var.initializer_text.as_deref().unwrap_or("");
+        if super::interface_gen::extract_tagged_system_name(init).is_some() {
+            save_body.push_str(&format!(
+                "    \"{0}\": serde_json::from_str::<serde_json::Value>(&self.{0}.save_state()).unwrap_or(serde_json::Value::Null),\n",
+                var.name
+            ));
+        } else {
+            save_body.push_str(&format!("    \"{}\": self.{},\n", var.name, var.name));
+        }
     }
 
     save_body.push_str("}).to_string()");
@@ -1692,8 +1701,16 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     restore_body.push_str("    __next_compartment: None,\n");
 
     for var in &system.domain {
-        let json_extract = rust_json_extract_unwrap(&var.name, &var.var_type);
-        restore_body.push_str(&format!("    {}: {},\n", var.name, json_extract));
+        let init = var.initializer_text.as_deref().unwrap_or("");
+        if let Some(child_sys) = super::interface_gen::extract_tagged_system_name(init) {
+            restore_body.push_str(&format!(
+                "    {0}: {1}::restore_state(&data[\"{0}\"].to_string()),\n",
+                var.name, child_sys
+            ));
+        } else {
+            let json_extract = rust_json_extract_unwrap(&var.name, &var.var_type);
+            restore_body.push_str(&format!("    {}: {},\n", var.name, json_extract));
+        }
     }
 
     restore_body.push_str("};\n");

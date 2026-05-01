@@ -1212,7 +1212,7 @@ pub(crate) fn extract_body_content(
 /// and restore_state rebuilds via the child's restoreState — preserving
 /// class identity through a JSON round-trip that would otherwise produce
 /// a plain object dict.
-fn extract_tagged_system_name(init: &str) -> Option<&str> {
+pub(crate) fn extract_tagged_system_name(init: &str) -> Option<&str> {
     let s = init.trim();
     let rest = s.strip_prefix("@@")?;
     let end = rest
@@ -2155,9 +2155,18 @@ pub(crate) fn generate_persistence_methods(
                 .push_str("for (auto& c : _state_stack) { __stack.push_back(__ser(c.get())); }\n");
             save_body.push_str("__j[\"_state_stack\"] = __stack;\n");
 
-            // Serialize domain vars
+            // Serialize domain vars. Nested @@SystemName() instances
+            // round-trip via child save_state (recursing into JSON).
             for var in &system.domain {
-                save_body.push_str(&format!("__j[\"{}\"] = {};\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "__j[\"{0}\"] = nlohmann::json::parse({0}.save_state());\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("__j[\"{}\"] = {};\n", var.name, var.name));
+                }
             }
 
             save_body.push_str("return __j.dump();");
@@ -2305,12 +2314,21 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    }\n");
             restore_body.push_str("}\n");
 
-            // Restore domain vars
+            // Restore domain vars. Nested @@SystemName() instances
+            // re-hydrate via child restore_state.
             for var in &system.domain {
-                restore_body.push_str(&format!(
-                    "if (__j.contains(\"{0}\")) {{ __j[\"{0}\"].get_to(__instance.{0}); }}\n",
-                    var.name
-                ));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "if (__j.contains(\"{0}\")) {{ __instance.{0} = {1}::restore_state(__j[\"{0}\"].dump()); }}\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "if (__j.contains(\"{0}\")) {{ __j[\"{0}\"].get_to(__instance.{0}); }}\n",
+                        var.name
+                    ));
+                }
             }
 
             restore_body.push_str("return __instance;");
@@ -3367,7 +3385,15 @@ pub(crate) fn generate_persistence_methods(
             );
             save_body.push_str("j[\"_state_stack\"] = stack\n");
             for var in &system.domain {
-                save_body.push_str(&format!("j[\"{}\"] = {}\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "if let __raw_{0} = {0}.saveState().data(using: .utf8), let __nested_{0} = try? JSONSerialization.jsonObject(with: __raw_{0}) {{ j[\"{0}\"] = __nested_{0} }}\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("j[\"{}\"] = {}\n", var.name, var.name));
+                }
             }
             save_body.push_str("let data = try! JSONSerialization.data(withJSONObject: j)\n");
             save_body.push_str("return String(data: data, encoding: .utf8)!");
@@ -3414,21 +3440,29 @@ pub(crate) fn generate_persistence_methods(
             // top-level-must-be-container restriction. framec emits
             // `T` verbatim; Codable conformance handles the typing.
             for var in &system.domain {
-                let swift_type = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => swift_map_type(t),
-                    _ => "Any".to_string(),
-                };
-                if swift_type == "Any" {
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "if let v = j[\"{0}\"] {{ instance.{0} = v }}\n",
-                        var.name
+                        "if let __raw_{0} = j[\"{0}\"], let __data_{0} = try? JSONSerialization.data(withJSONObject: __raw_{0}), let __json_{0} = String(data: __data_{0}, encoding: .utf8) {{ instance.{0} = {1}.restoreState(__json_{0}) }}\n",
+                        var.name, child_sys
                     ));
                 } else {
-                    restore_body.push_str(&format!(
-                        "if let __raw = j[\"{name}\"], let __data = try? JSONSerialization.data(withJSONObject: [__raw]), let __arr = try? JSONDecoder().decode([{t}].self, from: __data), let __v = __arr.first {{ instance.{name} = __v }}\n",
-                        name = var.name,
-                        t = swift_type
-                    ));
+                    let swift_type = match &var.var_type {
+                        crate::frame_c::compiler::frame_ast::Type::Custom(t) => swift_map_type(t),
+                        _ => "Any".to_string(),
+                    };
+                    if swift_type == "Any" {
+                        restore_body.push_str(&format!(
+                            "if let v = j[\"{0}\"] {{ instance.{0} = v }}\n",
+                            var.name
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "if let __raw = j[\"{name}\"], let __data = try? JSONSerialization.data(withJSONObject: [__raw]), let __arr = try? JSONDecoder().decode([{t}].self, from: __data), let __v = __arr.first {{ instance.{name} = __v }}\n",
+                            name = var.name,
+                            t = swift_type
+                        ));
+                    }
                 }
             }
             restore_body.push_str("return instance");
@@ -3624,7 +3658,16 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("        return arr\n");
             save_body.push_str("    }(),\n");
             for var in &system.domain {
-                save_body.push_str(&format!("    \"{}\": s.{},\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    // Nested @@SystemName(): recurse into child save_state.
+                    save_body.push_str(&format!(
+                        "    \"{0}\": func() interface{{}} {{ var __raw interface{{}}; _ = json.Unmarshal([]byte(s.{0}.SaveState()), &__raw); return __raw }}(),\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("    \"{}\": s.{},\n", var.name, var.name));
+                }
             }
             save_body.push_str("}\n");
             save_body.push_str("jsonBytes, _ := json.Marshal(data)\n");
@@ -3807,16 +3850,25 @@ pub(crate) fn generate_persistence_methods(
             // encoding/json reflection handles primitives, slices,
             // maps, and user structs alike.
             for var in &system.domain {
-                let declared = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(name) => go_map_type(name),
-                    _ => "interface{}".to_string(),
-                };
-                let go_extract = format!(
-                    "func() {t} {{ var __typed {t}; if __raw, err := json.Marshal(data[\"{name}\"]); err == nil {{ json.Unmarshal(__raw, &__typed) }}; return __typed }}()",
-                    t = declared,
-                    name = var.name,
-                );
-                restore_body.push_str(&format!("instance.{} = {}\n", var.name, go_extract));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    // Nested @@SystemName(): re-hydrate via child Restore<Name>.
+                    restore_body.push_str(&format!(
+                        "if __raw_{0}, err_{0} := json.Marshal(data[\"{0}\"]); err_{0} == nil {{ instance.{0} = Restore{1}(string(__raw_{0})) }}\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    let declared = match &var.var_type {
+                        crate::frame_c::compiler::frame_ast::Type::Custom(name) => go_map_type(name),
+                        _ => "interface{}".to_string(),
+                    };
+                    let go_extract = format!(
+                        "func() {t} {{ var __typed {t}; if __raw, err := json.Marshal(data[\"{name}\"]); err == nil {{ json.Unmarshal(__raw, &__typed) }}; return __typed }}()",
+                        t = declared,
+                        name = var.name,
+                    );
+                    restore_body.push_str(&format!("instance.{} = {}\n", var.name, go_extract));
+                }
             }
             restore_body.push_str("return instance");
 
