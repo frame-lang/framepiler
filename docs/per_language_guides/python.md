@@ -208,6 +208,36 @@ restore from a prior snapshot. See
 [`docs/frame_runtime.md`](../frame_runtime.md) and
 [`rfc-0012`](../rfcs/rfc-0012.md) for the full contract.
 
+## ⚠️  Persist uses pickle — security warning
+
+Frame's Python `save_state()` returns `pickle.dumps(self)` and
+`restore_state()` calls `pickle.loads(blob)`. **`pickle.loads`
+runs arbitrary code from the input** — a documented Python
+vulnerability (see Python's pickle docs: "Never unpickle data
+that could have come from an untrusted source").
+
+If you persist Frame system state to **any** storage that an
+attacker might write to — network sockets, user-uploaded files,
+shared databases, browser cookies, IPC channels — you have an
+RCE vector. An attacker crafts a pickle blob that runs arbitrary
+Python on `restore_state()`.
+
+**Safe uses:**
+- Local files written and read by the same trusted process.
+- Process-snapshot-for-crash-recovery on a single machine.
+- Test fixtures.
+
+**Unsafe uses without additional validation:**
+- Session state in cookies.
+- Cross-process / cross-machine state transfer.
+- Anything the user can edit.
+
+**Mitigation:** today, validate the source before calling
+`restore_state`. RFC-0012 captures a proposed migration to
+JSON-based persist that closes this hole; it's deferred pending
+customer feedback. See `docs/rfcs/rfc-0012.md` "Python: switch
+from pickle to JSON-based persist."
+
 ---
 
 ## Cross-references
