@@ -2104,58 +2104,73 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
-            // Collect state vars with types
-            let all_state_vars: Vec<(&str, &str, &str)> = system
+            // Collect (state_name, [param_java_types]) for states with declared
+            // params. Used to emit per-state typed restore for state_args /
+            // enter_args via Jackson's TypeReference. The architecture is
+            // type-ignorant in framec — we walk state.params and emit the
+            // user's declared type strings verbatim into
+            // `new TypeReference<USER_TYPE>(){}`. Jackson does deep typed
+            // conversion via reflection.
+            //
+            // Java primitives must be boxed for TypeReference (generics
+            // can't take primitives — `TypeReference<int>` is illegal).
+            let java_box = |t: &str| -> String {
+                match t {
+                    "int" => "Integer".to_string(),
+                    "double" => "Double".to_string(),
+                    "float" => "Float".to_string(),
+                    "boolean" => "Boolean".to_string(),
+                    "long" => "Long".to_string(),
+                    "char" => "Character".to_string(),
+                    "byte" => "Byte".to_string(),
+                    "short" => "Short".to_string(),
+                    other => other.to_string(),
+                }
+            };
+            let state_param_types: Vec<(String, Vec<String>)> = system
                 .machine
                 .as_ref()
                 .map(|m| {
                     m.states
                         .iter()
-                        .flat_map(|s| {
-                            s.state_vars.iter().map(move |sv| {
-                                let type_str = match &sv.var_type {
+                        .filter(|s| !s.params.is_empty())
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .params
+                                .iter()
+                                .map(|p| match &p.param_type {
                                     crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                                        t.as_str()
+                                        java_box(&java_map_type(t))
                                     }
-                                    crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
-                                };
-                                (s.name.as_str(), sv.name.as_str(), type_str)
-                            })
+                                    _ => "Object".to_string(),
+                                })
+                                .collect();
+                            (s.name.clone(), types)
                         })
                         .collect()
                 })
                 .unwrap_or_default();
 
-            // Private helper method for recursive compartment serialization.
-            // Saves state name, state_vars, state_args, enter_args, and
-            // parent compartment. state_args + enter_args are required so
-            // that a state declared `(x: int)` reads back its positional
-            // context after restore — without them the popped/restored
-            // state has empty args and `$.x` reads return wrong values.
-            // Same root pattern as Erlang persist fix (framepiler b8144d1)
-            // and Erlang push/pop fix (Phase 19 wave 3, framepiler 3f0cd24).
+            // __serComp — recursive compartment serializer. Builds a plain
+            // Map<String, Object> tree; Jackson handles nested types
+            // (Map, List, primitives) at writeValueAsString time via its
+            // built-in per-type serializers.
             let mut ser_body = String::new();
-            ser_body.push_str(&format!("if (comp == null) return null;\n"));
-            ser_body.push_str("var j = new org.json.JSONObject();\n");
+            ser_body.push_str("if (comp == null) return null;\n");
+            ser_body.push_str("var j = new java.util.LinkedHashMap<String, Object>();\n");
             ser_body.push_str("j.put(\"state\", comp.state);\n");
-            ser_body.push_str("var sv = new org.json.JSONObject();\n");
             ser_body.push_str(
-                "for (var e : comp.state_vars.entrySet()) { sv.put(e.getKey(), e.getValue()); }\n",
+                "j.put(\"state_vars\", new java.util.LinkedHashMap<>(comp.state_vars));\n",
             );
-            ser_body.push_str("j.put(\"state_vars\", sv);\n");
-            ser_body.push_str("var sa = new org.json.JSONArray();\n");
-            ser_body.push_str("for (var v : comp.state_args) { sa.put(v); }\n");
-            ser_body.push_str("j.put(\"state_args\", sa);\n");
-            ser_body.push_str("var ea = new org.json.JSONArray();\n");
-            ser_body.push_str("for (var v : comp.enter_args) { ea.put(v); }\n");
-            ser_body.push_str("j.put(\"enter_args\", ea);\n");
+            ser_body.push_str("j.put(\"state_args\", new java.util.ArrayList<>(comp.state_args));\n");
+            ser_body.push_str("j.put(\"enter_args\", new java.util.ArrayList<>(comp.enter_args));\n");
             ser_body.push_str("j.put(\"parent\", __serComp(comp.parent_compartment));\n");
             ser_body.push_str("return j;");
 
             methods.push(CodegenNode::Method {
                 name: "__serComp".to_string(),
                 params: vec![Param::new("comp").with_type(&compartment_class)],
-                return_type: Some("org.json.JSONObject".to_string()),
+                return_type: Some("Object".to_string()),
                 body: vec![CodegenNode::NativeBlock {
                     code: ser_body,
                     span: None,
@@ -2166,66 +2181,75 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // Private helper for deserialization
+            // __deserComp — recursive compartment deserializer.
+            // Per-state TypeReference is the win: state_args[i] for state
+            // `Active(m: Map<String, List<Integer>>)` is restored as a
+            // proper Map<String, List<Integer>> with Integer elements,
+            // not a generic LinkedHashMap<String, ArrayList<Number>>. The
+            // user's handler can then index `m[key]` directly without
+            // defensive casts at every access.
             let mut deser_body = String::new();
-            deser_body.push_str(
-                "if (obj == null || obj.equals(org.json.JSONObject.NULL)) return null;\n",
-            );
-            deser_body.push_str("var d = (org.json.JSONObject) obj;\n");
+            deser_body.push_str("if (node == null || node.isNull()) return null;\n");
             deser_body.push_str(&format!(
-                "var c = new {}(d.getString(\"state\"));\n",
+                "var c = new {}(node.get(\"state\").asText());\n",
                 compartment_class
             ));
-            deser_body.push_str("if (d.has(\"state_vars\")) {\n");
-            deser_body.push_str("    var sv = d.getJSONObject(\"state_vars\");\n");
+            deser_body.push_str("if (node.has(\"state_vars\")) {\n");
+            deser_body.push_str("    var fields = node.get(\"state_vars\").fields();\n");
+            deser_body.push_str("    while (fields.hasNext()) {\n");
+            deser_body.push_str("        var e = fields.next();\n");
             deser_body
-                .push_str("    for (var k : sv.keySet()) { c.state_vars.put(k, sv.get(k)); }\n");
-            deser_body.push_str("}\n");
-            // Convert JSON arrays back to ArrayList<Object> when an
-            // arg was itself a list/array (org.json wraps Collections
-            // as JSONArray on serialize; without this conversion the
-            // user's `(List<T>) state_args.get(0)` cast fails because
-            // the value is a JSONArray, not a List).
-            // Recursive conversion via __convertJsonArray /
-            // __convertJsonObject helpers: handles arbitrary nesting
-            // depth (e.g. List<List<Integer>>, Map<String, Map<...>>).
-            // Generic erasure on the JVM lets the user's `(List<T>)` /
-            // `(Map<K,V>)` cast succeed even though the underlying
-            // type is ArrayList<Object> / HashMap<String,Object>.
-            deser_body.push_str("if (d.has(\"state_args\")) {\n");
-            deser_body.push_str("    var sa = d.getJSONArray(\"state_args\");\n");
-            deser_body.push_str("    for (int i = 0; i < sa.length(); i++) {\n");
-            deser_body.push_str("        Object __v = sa.get(i);\n");
-            deser_body.push_str("        if (__v instanceof org.json.JSONArray) {\n");
-            deser_body.push_str("            c.state_args.add(__convertJsonArray((org.json.JSONArray) __v));\n");
-            deser_body.push_str("        } else if (__v instanceof org.json.JSONObject) {\n");
-            deser_body.push_str("            c.state_args.add(__convertJsonObject((org.json.JSONObject) __v));\n");
-            deser_body.push_str("        } else {\n");
-            deser_body.push_str("            c.state_args.add(__v);\n");
-            deser_body.push_str("        }\n");
+                .push_str("        c.state_vars.put(e.getKey(), mapper.convertValue(e.getValue(), Object.class));\n");
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
-            deser_body.push_str("if (d.has(\"enter_args\")) {\n");
-            deser_body.push_str("    var ea = d.getJSONArray(\"enter_args\");\n");
-            deser_body.push_str("    for (int i = 0; i < ea.length(); i++) {\n");
-            deser_body.push_str("        Object __v = ea.get(i);\n");
-            deser_body.push_str("        if (__v instanceof org.json.JSONArray) {\n");
-            deser_body.push_str("            c.enter_args.add(__convertJsonArray((org.json.JSONArray) __v));\n");
-            deser_body.push_str("        } else if (__v instanceof org.json.JSONObject) {\n");
-            deser_body.push_str("            c.enter_args.add(__convertJsonObject((org.json.JSONObject) __v));\n");
-            deser_body.push_str("        } else {\n");
-            deser_body.push_str("            c.enter_args.add(__v);\n");
-            deser_body.push_str("        }\n");
-            deser_body.push_str("    }\n");
-            deser_body.push_str("}\n");
-            deser_body.push_str("if (d.has(\"parent\") && !d.isNull(\"parent\")) {\n");
-            deser_body.push_str("    c.parent_compartment = __deserComp(d.get(\"parent\"));\n");
-            deser_body.push_str("}\n");
+            deser_body.push_str(
+                "var __sa = node.has(\"state_args\") ? node.get(\"state_args\") : null;\n",
+            );
+            deser_body.push_str(
+                "var __ea = node.has(\"enter_args\") ? node.get(\"enter_args\") : null;\n",
+            );
+            if !state_param_types.is_empty() {
+                deser_body.push_str("switch (c.state) {\n");
+                for (state_name, param_types) in &state_param_types {
+                    deser_body.push_str(&format!("    case \"{}\":\n", state_name));
+                    for (i, ty) in param_types.iter().enumerate() {
+                        deser_body.push_str(&format!(
+                            "        if (__sa != null && __sa.size() > {i}) c.state_args.add(mapper.convertValue(__sa.get({i}), new com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}}));\n"
+                        ));
+                        deser_body.push_str(&format!(
+                            "        if (__ea != null && __ea.size() > {i}) c.enter_args.add(mapper.convertValue(__ea.get({i}), new com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}}));\n"
+                        ));
+                    }
+                    deser_body.push_str("        break;\n");
+                }
+                deser_body.push_str("    default:\n");
+                deser_body.push_str(
+                    "        if (__sa != null) for (var n : __sa) c.state_args.add(mapper.convertValue(n, Object.class));\n",
+                );
+                deser_body.push_str(
+                    "        if (__ea != null) for (var n : __ea) c.enter_args.add(mapper.convertValue(n, Object.class));\n",
+                );
+                deser_body.push_str("        break;\n");
+                deser_body.push_str("}\n");
+            } else {
+                deser_body.push_str(
+                    "if (__sa != null) for (var n : __sa) c.state_args.add(mapper.convertValue(n, Object.class));\n",
+                );
+                deser_body.push_str(
+                    "if (__ea != null) for (var n : __ea) c.enter_args.add(mapper.convertValue(n, Object.class));\n",
+                );
+            }
+            deser_body.push_str(
+                "if (node.has(\"parent\") && !node.get(\"parent\").isNull()) c.parent_compartment = __deserComp(node.get(\"parent\"), mapper);\n",
+            );
             deser_body.push_str("return c;");
 
             methods.push(CodegenNode::Method {
                 name: "__deserComp".to_string(),
-                params: vec![Param::new("obj").with_type("Object")],
+                params: vec![
+                    Param::new("node").with_type("com.fasterxml.jackson.databind.JsonNode"),
+                    Param::new("mapper").with_type("com.fasterxml.jackson.databind.ObjectMapper"),
+                ],
                 return_type: Some(compartment_class.clone()),
                 body: vec![CodegenNode::NativeBlock {
                     code: deser_body,
@@ -2237,106 +2261,20 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // Recursive JSONArray → ArrayList<Object> converter.
-            // Handles arbitrary nesting depth (List<List<...>>) so
-            // the user's `(List<T>)` cast at the handler site sees a
-            // proper Java collection at every level. Generic erasure
-            // means the inner ArrayLists work as List<T> even though
-            // their actual element type is Object. Recurses into
-            // JSONObject children too via __convertJsonObject.
-            let mut conv_body = String::new();
-            conv_body.push_str("var __list = new java.util.ArrayList<Object>();\n");
-            conv_body.push_str("for (int __k = 0; __k < ja.length(); __k++) {\n");
-            conv_body.push_str("    Object __v = ja.get(__k);\n");
-            conv_body.push_str("    if (__v instanceof org.json.JSONArray) {\n");
-            conv_body.push_str("        __list.add(__convertJsonArray((org.json.JSONArray) __v));\n");
-            conv_body.push_str("    } else if (__v instanceof org.json.JSONObject) {\n");
-            conv_body.push_str("        __list.add(__convertJsonObject((org.json.JSONObject) __v));\n");
-            conv_body.push_str("    } else {\n");
-            conv_body.push_str("        __list.add(__v);\n");
-            conv_body.push_str("    }\n");
-            conv_body.push_str("}\n");
-            conv_body.push_str("return __list;");
-            methods.push(CodegenNode::Method {
-                name: "__convertJsonArray".to_string(),
-                params: vec![Param::new("ja").with_type("org.json.JSONArray")],
-                return_type: Some("Object".to_string()),
-                body: vec![CodegenNode::NativeBlock {
-                    code: conv_body,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: true,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-
-            // Recursive JSONObject → HashMap<String, Object> converter.
-            // Mirrors __convertJsonArray for dict/map state-args.
-            let mut conv_obj_body = String::new();
-            conv_obj_body.push_str("var __map = new java.util.HashMap<String, Object>();\n");
-            conv_obj_body.push_str("for (var __k : jo.keySet()) {\n");
-            conv_obj_body.push_str("    Object __v = jo.get(__k);\n");
-            conv_obj_body.push_str("    if (__v instanceof org.json.JSONArray) {\n");
-            conv_obj_body.push_str("        __map.put(__k, __convertJsonArray((org.json.JSONArray) __v));\n");
-            conv_obj_body.push_str("    } else if (__v instanceof org.json.JSONObject) {\n");
-            conv_obj_body.push_str("        __map.put(__k, __convertJsonObject((org.json.JSONObject) __v));\n");
-            conv_obj_body.push_str("    } else {\n");
-            conv_obj_body.push_str("        __map.put(__k, __v);\n");
-            conv_obj_body.push_str("    }\n");
-            conv_obj_body.push_str("}\n");
-            conv_obj_body.push_str("return __map;");
-            methods.push(CodegenNode::Method {
-                name: "__convertJsonObject".to_string(),
-                params: vec![Param::new("jo").with_type("org.json.JSONObject")],
-                return_type: Some("Object".to_string()),
-                body: vec![CodegenNode::NativeBlock {
-                    code: conv_obj_body,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: true,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-
-            // Top-level JSON value normaliser. Routes JSONArray /
-            // JSONObject through their recursive helpers; passes
-            // primitives through unchanged. Used by domain-var
-            // restore so user field types like `List<Integer>` /
-            // `Map<String, Integer>` accept the converted value
-            // via erasure cast.
-            let mut conv_val_body = String::new();
-            conv_val_body.push_str("if (v instanceof org.json.JSONArray) return __convertJsonArray((org.json.JSONArray) v);\n");
-            conv_val_body.push_str("if (v instanceof org.json.JSONObject) return __convertJsonObject((org.json.JSONObject) v);\n");
-            conv_val_body.push_str("return v;");
-            methods.push(CodegenNode::Method {
-                name: "__convertJsonValue".to_string(),
-                params: vec![Param::new("v").with_type("Object")],
-                return_type: Some("Object".to_string()),
-                body: vec![CodegenNode::NativeBlock {
-                    code: conv_val_body,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: true,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-
-            // save_state()
+            // save_state — Jackson handles nested Map/List/primitives at
+            // writeValueAsString time. Wraps Jackson's checked exception
+            // as RuntimeException so the public API stays unchecked.
             let mut save_body = String::new();
-            save_body.push_str("var __j = new org.json.JSONObject();\n");
+            save_body.push_str("var mapper = new com.fasterxml.jackson.databind.ObjectMapper();\n");
+            save_body.push_str("var __j = new java.util.LinkedHashMap<String, Object>();\n");
             save_body.push_str("__j.put(\"_compartment\", __serComp(__compartment));\n");
-            save_body.push_str("var __stack = new org.json.JSONArray();\n");
-            save_body.push_str("for (var c : _state_stack) { __stack.put(__serComp(c)); }\n");
+            save_body.push_str("var __stack = new java.util.ArrayList<Object>();\n");
+            save_body.push_str("for (var c : _state_stack) __stack.add(__serComp(c));\n");
             save_body.push_str("__j.put(\"_state_stack\", __stack);\n");
-
             for var in &system.domain {
                 save_body.push_str(&format!("__j.put(\"{}\", {});\n", var.name, var.name));
             }
-
-            save_body.push_str("return __j.toString();");
+            save_body.push_str("try { return mapper.writeValueAsString(__j); } catch (Exception e) { throw new RuntimeException(e); }");
 
             methods.push(CodegenNode::Method {
                 name: "save_state".to_string(),
@@ -2352,62 +2290,47 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state(json) — static method, uses static __deserComp.
-            //
-            // Sets the class-static `__skipInitialEnter` flag before
-            // invoking the ctor so the initial-state $>() handler does
-            // not fire on a restored instance. See Swift for rationale.
+            // restore_state — Jackson readTree + per-state typed restore.
+            // Domain vars use TypeReference per declared type so List<T> /
+            // Map<K,V> domain fields recover their full typed shape (no
+            // erasure-cast workaround needed at user-access sites).
             let mut restore_body = String::new();
-            restore_body.push_str("var __j = new org.json.JSONObject(json);\n");
+            restore_body.push_str("var mapper = new com.fasterxml.jackson.databind.ObjectMapper();\n");
+            restore_body.push_str(
+                "com.fasterxml.jackson.databind.JsonNode __j;\n",
+            );
+            restore_body.push_str(
+                "try { __j = mapper.readTree(json); } catch (Exception e) { throw new RuntimeException(e); }\n",
+            );
             restore_body.push_str("__skipInitialEnter = true;\n");
             restore_body.push_str(&format!("var __instance = new {}();\n", sys));
             restore_body.push_str("__skipInitialEnter = false;\n");
-            restore_body
-                .push_str("__instance.__compartment = __deserComp(__j.get(\"_compartment\"));\n");
+            restore_body.push_str(
+                "__instance.__compartment = __deserComp(__j.get(\"_compartment\"), mapper);\n",
+            );
             restore_body.push_str("if (__j.has(\"_state_stack\")) {\n");
-            restore_body.push_str("    var __stack = __j.getJSONArray(\"_state_stack\");\n");
-            restore_body.push_str("    __instance._state_stack = new ArrayList<>();\n");
-            restore_body.push_str("    for (int i = 0; i < __stack.length(); i++) { __instance._state_stack.add(__deserComp(__stack.get(i))); }\n");
+            restore_body.push_str("    __instance._state_stack = new java.util.ArrayList<>();\n");
+            restore_body.push_str(
+                "    for (var __sc : __j.get(\"_state_stack\")) __instance._state_stack.add(__deserComp(__sc, mapper));\n",
+            );
             restore_body.push_str("}\n");
-
-            // Restore domain vars. Primitives must use the org.json
-            // typed getters (only way to unbox JSON Number → int /
-            // long / double / boolean correctly). Reference types
-            // route through __convertJsonValue (recursive
-            // JSONArray/JSONObject → ArrayList/HashMap unwrapper)
-            // and then erasure-cast to the declared field type —
-            // works for List<T>, Map<K,V>, nested generics, and
-            // any user reference type.
             for var in &system.domain {
-                let java_type = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => java_map_type(t).leak(),
-                    _ => "Object",
+                let java_type: String = match &var.var_type {
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                        // Domain fields keep their declared Java type (incl.
+                        // primitives like `int x`); the TypeReference itself
+                        // needs the boxed form, but the assignment target is
+                        // the field, which Jackson will unbox correctly.
+                        java_box(&java_map_type(t))
+                    }
+                    _ => "Object".to_string(),
                 };
-                match java_type {
-                    "int" => restore_body.push_str(&format!(
-                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getInt(\"{0}\"); }}\n",
-                        var.name
-                    )),
-                    "double" | "float" => restore_body.push_str(&format!(
-                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getDouble(\"{0}\"); }}\n",
-                        var.name
-                    )),
-                    "boolean" => restore_body.push_str(&format!(
-                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getBoolean(\"{0}\"); }}\n",
-                        var.name
-                    )),
-                    "String" => restore_body.push_str(&format!(
-                        "if (__j.has(\"{0}\")) {{ __instance.{0} = __j.getString(\"{0}\"); }}\n",
-                        var.name
-                    )),
-                    other => restore_body.push_str(&format!(
-                        "if (__j.has(\"{name}\")) {{ __instance.{name} = ({t}) __convertJsonValue(__j.get(\"{name}\")); }}\n",
-                        name = var.name,
-                        t = other
-                    )),
-                }
+                restore_body.push_str(&format!(
+                    "if (__j.has(\"{name}\")) __instance.{name} = mapper.convertValue(__j.get(\"{name}\"), new com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}});\n",
+                    name = var.name,
+                    ty = java_type
+                ));
             }
-
             restore_body.push_str("return __instance;");
 
             methods.push(CodegenNode::Method {
@@ -2893,29 +2816,61 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
-            // Kotlin can use Java's org.json on JVM — same pattern as Java.
-            // Includes state_args + enter_args (compartment-context fields)
-            // — same root pattern as the Java fix above.
+            // Same per-state typed restore pattern as Java. Kotlin's
+            // reified generics make TypeReference work cleanly; primitives
+            // map naturally because Kotlin auto-boxes Int → java.lang.Integer
+            // etc. for generic contexts.
+            let kt_box = |t: &str| -> String {
+                match t {
+                    "Int" => "Int".to_string(),
+                    "Long" => "Long".to_string(),
+                    "Double" => "Double".to_string(),
+                    "Float" => "Float".to_string(),
+                    "Boolean" => "Boolean".to_string(),
+                    "String" => "String".to_string(),
+                    other => other.to_string(),
+                }
+            };
+            let state_param_types: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .filter(|s| !s.params.is_empty())
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .params
+                                .iter()
+                                .map(|p| match &p.param_type {
+                                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                                        kt_box(&kotlin_map_type(t))
+                                    }
+                                    _ => "Any".to_string(),
+                                })
+                                .collect();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // __serComp — builds Map<String, Any?> tree; Jackson handles
+            // nested types at writeValueAsString time.
             let mut ser_body = String::new();
             ser_body.push_str("if (comp == null) return null\n");
-            ser_body.push_str("val j = org.json.JSONObject()\n");
-            ser_body.push_str("j.put(\"state\", comp.state)\n");
-            ser_body.push_str("val sv = org.json.JSONObject()\n");
-            ser_body.push_str("for ((k, v) in comp.state_vars) { sv.put(k, v) }\n");
-            ser_body.push_str("j.put(\"state_vars\", sv)\n");
-            ser_body.push_str("val sa = org.json.JSONArray()\n");
-            ser_body.push_str("for (v in comp.state_args) { sa.put(v) }\n");
-            ser_body.push_str("j.put(\"state_args\", sa)\n");
-            ser_body.push_str("val ea = org.json.JSONArray()\n");
-            ser_body.push_str("for (v in comp.enter_args) { ea.put(v) }\n");
-            ser_body.push_str("j.put(\"enter_args\", ea)\n");
-            ser_body.push_str("j.put(\"parent\", __serComp(comp.parent_compartment))\n");
+            ser_body.push_str("val j = java.util.LinkedHashMap<String, Any?>()\n");
+            ser_body.push_str("j[\"state\"] = comp.state\n");
+            ser_body.push_str("j[\"state_vars\"] = java.util.LinkedHashMap(comp.state_vars)\n");
+            ser_body.push_str("j[\"state_args\"] = java.util.ArrayList(comp.state_args)\n");
+            ser_body.push_str("j[\"enter_args\"] = java.util.ArrayList(comp.enter_args)\n");
+            ser_body.push_str("j[\"parent\"] = __serComp(comp.parent_compartment)\n");
             ser_body.push_str("return j");
 
             methods.push(CodegenNode::Method {
                 name: "__serComp".to_string(),
                 params: vec![Param::new("comp").with_type(&format!("{}?", compartment_class))],
-                return_type: Some("org.json.JSONObject?".to_string()),
+                return_type: Some("Any?".to_string()),
                 body: vec![CodegenNode::NativeBlock {
                     code: ser_body,
                     span: None,
@@ -2926,159 +2881,93 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
+            // __deserComp — Jackson JsonNode walk + per-state typed restore.
             let mut deser_body = String::new();
-            deser_body
-                .push_str("if (obj == null || obj == org.json.JSONObject.NULL) return null\n");
-            deser_body.push_str("val d = obj as org.json.JSONObject\n");
+            deser_body.push_str("if (node == null || node.isNull) return null\n");
             deser_body.push_str(&format!(
-                "val c = {}(d.getString(\"state\"))\n",
+                "val c = {}(node.get(\"state\").asText())\n",
                 compartment_class
             ));
-            deser_body.push_str("if (d.has(\"state_vars\")) {\n");
-            deser_body.push_str("    val sv = d.getJSONObject(\"state_vars\")\n");
-            deser_body.push_str("    for (k in sv.keys()) { c.state_vars[k] = sv.get(k) }\n");
-            deser_body.push_str("}\n");
-            // Same conversion as Java: JSONArray entries inside
-            // state_args/enter_args came from list-typed args; cast
-            // back to ArrayList<Any?> so the user's `as List<T>`
-            // succeeds.
-            // Recursive __convertJsonArray / __convertJsonObject for
-            // arbitrary nesting depth (List<List<...>>, Map<...>).
-            // Same shape as the Java fix.
-            deser_body.push_str("if (d.has(\"state_args\")) {\n");
-            deser_body.push_str("    val sa = d.getJSONArray(\"state_args\")\n");
-            deser_body.push_str("    for (i in 0 until sa.length()) {\n");
-            deser_body.push_str("        val __v = sa.get(i)\n");
-            deser_body.push_str("        if (__v is org.json.JSONArray) {\n");
-            deser_body.push_str("            c.state_args.add(__convertJsonArray(__v))\n");
-            deser_body.push_str("        } else if (__v is org.json.JSONObject) {\n");
-            deser_body.push_str("            c.state_args.add(__convertJsonObject(__v))\n");
-            deser_body.push_str("        } else {\n");
-            deser_body.push_str("            c.state_args.add(__v)\n");
-            deser_body.push_str("        }\n");
+            deser_body.push_str("if (node.has(\"state_vars\")) {\n");
+            deser_body.push_str("    val fields = node.get(\"state_vars\").fields()\n");
+            deser_body.push_str("    while (fields.hasNext()) {\n");
+            deser_body.push_str("        val e = fields.next()\n");
+            deser_body.push_str(
+                "        c.state_vars[e.key] = mapper.convertValue(e.value, Any::class.java)\n",
+            );
             deser_body.push_str("    }\n");
             deser_body.push_str("}\n");
-            deser_body.push_str("if (d.has(\"enter_args\")) {\n");
-            deser_body.push_str("    val ea = d.getJSONArray(\"enter_args\")\n");
-            deser_body.push_str("    for (i in 0 until ea.length()) {\n");
-            deser_body.push_str("        val __v = ea.get(i)\n");
-            deser_body.push_str("        if (__v is org.json.JSONArray) {\n");
-            deser_body.push_str("            c.enter_args.add(__convertJsonArray(__v))\n");
-            deser_body.push_str("        } else if (__v is org.json.JSONObject) {\n");
-            deser_body.push_str("            c.enter_args.add(__convertJsonObject(__v))\n");
-            deser_body.push_str("        } else {\n");
-            deser_body.push_str("            c.enter_args.add(__v)\n");
-            deser_body.push_str("        }\n");
-            deser_body.push_str("    }\n");
-            deser_body.push_str("}\n");
-            deser_body.push_str("if (d.has(\"parent\") && !d.isNull(\"parent\")) {\n");
-            deser_body.push_str("    c.parent_compartment = __deserComp(d.get(\"parent\"))\n");
-            deser_body.push_str("}\n");
+            deser_body.push_str(
+                "val __sa: com.fasterxml.jackson.databind.JsonNode? = if (node.has(\"state_args\")) node.get(\"state_args\") else null\n",
+            );
+            deser_body.push_str(
+                "val __ea: com.fasterxml.jackson.databind.JsonNode? = if (node.has(\"enter_args\")) node.get(\"enter_args\") else null\n",
+            );
+            if !state_param_types.is_empty() {
+                deser_body.push_str("when (c.state) {\n");
+                for (state_name, param_types) in &state_param_types {
+                    deser_body.push_str(&format!("    \"{}\" -> {{\n", state_name));
+                    for (i, ty) in param_types.iter().enumerate() {
+                        deser_body.push_str(&format!(
+                            "        if (__sa != null && __sa.size() > {i}) c.state_args.add(mapper.convertValue(__sa.get({i}), object : com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}}))\n"
+                        ));
+                        deser_body.push_str(&format!(
+                            "        if (__ea != null && __ea.size() > {i}) c.enter_args.add(mapper.convertValue(__ea.get({i}), object : com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}}))\n"
+                        ));
+                    }
+                    deser_body.push_str("    }\n");
+                }
+                deser_body.push_str("    else -> {\n");
+                deser_body.push_str(
+                    "        if (__sa != null) for (n in __sa) c.state_args.add(mapper.convertValue(n, Any::class.java))\n",
+                );
+                deser_body.push_str(
+                    "        if (__ea != null) for (n in __ea) c.enter_args.add(mapper.convertValue(n, Any::class.java))\n",
+                );
+                deser_body.push_str("    }\n");
+                deser_body.push_str("}\n");
+            } else {
+                deser_body.push_str(
+                    "if (__sa != null) for (n in __sa) c.state_args.add(mapper.convertValue(n, Any::class.java))\n",
+                );
+                deser_body.push_str(
+                    "if (__ea != null) for (n in __ea) c.enter_args.add(mapper.convertValue(n, Any::class.java))\n",
+                );
+            }
+            deser_body.push_str(
+                "if (node.has(\"parent\") && !node.get(\"parent\").isNull) c.parent_compartment = __deserComp(node.get(\"parent\"), mapper)\n",
+            );
             deser_body.push_str("return c");
 
             methods.push(CodegenNode::Method {
                 name: "__deserComp".to_string(),
-                params: vec![Param::new("obj").with_type("Any?")],
+                params: vec![
+                    Param::new("node").with_type("com.fasterxml.jackson.databind.JsonNode?"),
+                    Param::new("mapper").with_type("com.fasterxml.jackson.databind.ObjectMapper"),
+                ],
                 return_type: Some(format!("{}?", compartment_class)),
                 body: vec![CodegenNode::NativeBlock {
                     code: deser_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: false,
+                is_static: true,
                 visibility: Visibility::Private,
                 decorators: vec![],
             });
 
-            // Recursive JSONArray → ArrayList<Any?> converter for
-            // arbitrary nesting depth (recurses via __convertJsonObject
-            // for Map values).
-            let mut conv_body = String::new();
-            conv_body.push_str("val __list = java.util.ArrayList<Any?>()\n");
-            conv_body.push_str("for (__k in 0 until ja.length()) {\n");
-            conv_body.push_str("    val __v = ja.get(__k)\n");
-            conv_body.push_str("    if (__v is org.json.JSONArray) {\n");
-            conv_body.push_str("        __list.add(__convertJsonArray(__v))\n");
-            conv_body.push_str("    } else if (__v is org.json.JSONObject) {\n");
-            conv_body.push_str("        __list.add(__convertJsonObject(__v))\n");
-            conv_body.push_str("    } else {\n");
-            conv_body.push_str("        __list.add(__v)\n");
-            conv_body.push_str("    }\n");
-            conv_body.push_str("}\n");
-            conv_body.push_str("return __list");
-            methods.push(CodegenNode::Method {
-                name: "__convertJsonArray".to_string(),
-                params: vec![Param::new("ja").with_type("org.json.JSONArray")],
-                return_type: Some("Any".to_string()),
-                body: vec![CodegenNode::NativeBlock {
-                    code: conv_body,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-
-            // Recursive JSONObject → HashMap<String, Any?> converter
-            // for dict/map state-args.
-            let mut conv_obj_body = String::new();
-            conv_obj_body.push_str("val __map = java.util.HashMap<String, Any?>()\n");
-            conv_obj_body.push_str("for (__k in jo.keys()) {\n");
-            conv_obj_body.push_str("    val __v = jo.get(__k)\n");
-            conv_obj_body.push_str("    if (__v is org.json.JSONArray) {\n");
-            conv_obj_body.push_str("        __map[__k] = __convertJsonArray(__v)\n");
-            conv_obj_body.push_str("    } else if (__v is org.json.JSONObject) {\n");
-            conv_obj_body.push_str("        __map[__k] = __convertJsonObject(__v)\n");
-            conv_obj_body.push_str("    } else {\n");
-            conv_obj_body.push_str("        __map[__k] = __v\n");
-            conv_obj_body.push_str("    }\n");
-            conv_obj_body.push_str("}\n");
-            conv_obj_body.push_str("return __map");
-            methods.push(CodegenNode::Method {
-                name: "__convertJsonObject".to_string(),
-                params: vec![Param::new("jo").with_type("org.json.JSONObject")],
-                return_type: Some("Any".to_string()),
-                body: vec![CodegenNode::NativeBlock {
-                    code: conv_obj_body,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-
-            // Top-level JSON value normaliser — same shape as Java.
-            let mut conv_val_body = String::new();
-            conv_val_body.push_str("if (v is org.json.JSONArray) return __convertJsonArray(v)\n");
-            conv_val_body.push_str("if (v is org.json.JSONObject) return __convertJsonObject(v)\n");
-            conv_val_body.push_str("return v");
-            methods.push(CodegenNode::Method {
-                name: "__convertJsonValue".to_string(),
-                params: vec![Param::new("v").with_type("Any")],
-                return_type: Some("Any".to_string()),
-                body: vec![CodegenNode::NativeBlock {
-                    code: conv_val_body,
-                    span: None,
-                }],
-                is_async: false,
-                is_static: false,
-                visibility: Visibility::Private,
-                decorators: vec![],
-            });
-
-            // save_state()
+            // save_state — Jackson writeValueAsString.
             let mut save_body = String::new();
-            save_body.push_str("val j = org.json.JSONObject()\n");
-            save_body.push_str("j.put(\"_compartment\", __serComp(__compartment))\n");
-            save_body.push_str("val stack = org.json.JSONArray()\n");
-            save_body.push_str("for (c in _state_stack) { stack.put(__serComp(c)) }\n");
-            save_body.push_str("j.put(\"_state_stack\", stack)\n");
+            save_body.push_str("val mapper = com.fasterxml.jackson.databind.ObjectMapper()\n");
+            save_body.push_str("val j = java.util.LinkedHashMap<String, Any?>()\n");
+            save_body.push_str("j[\"_compartment\"] = __serComp(__compartment)\n");
+            save_body.push_str("val stack = java.util.ArrayList<Any?>()\n");
+            save_body.push_str("for (c in _state_stack) stack.add(__serComp(c))\n");
+            save_body.push_str("j[\"_state_stack\"] = stack\n");
             for var in &system.domain {
-                save_body.push_str(&format!("j.put(\"{}\", {})\n", var.name, var.name));
+                save_body.push_str(&format!("j[\"{}\"] = {}\n", var.name, var.name));
             }
-            save_body.push_str("return j.toString()");
+            save_body.push_str("return mapper.writeValueAsString(j)");
 
             methods.push(CodegenNode::Method {
                 name: "save_state".to_string(),
@@ -3094,61 +2983,34 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state — companion object static method
-            // For Kotlin, static methods go in companion object, but for simplicity
-            // emit as a top-level function or use companion object in the class
-            // Actually, emit as a regular method and the test will call it on an instance
-            // OR use companion object pattern.
-            //
-            // Sets the companion-static __skipInitialEnter flag so the ctor
-            // does not re-fire the initial-state $>() handler on a restored
-            // instance. See Swift comment for rationale.
+            // restore_state — Jackson readTree + per-state typed restore.
             let mut restore_body = String::new();
-            restore_body.push_str("val j = org.json.JSONObject(json)\n");
+            restore_body.push_str("val mapper = com.fasterxml.jackson.databind.ObjectMapper()\n");
+            restore_body.push_str("val j = mapper.readTree(json)\n");
             restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
             restore_body.push_str(&format!("val instance = {}()\n", sys));
             restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
             restore_body.push_str(
-                "instance.__compartment = instance.__deserComp(j.get(\"_compartment\"))!!\n",
+                "instance.__compartment = __deserComp(j.get(\"_compartment\"), mapper)!!\n",
             );
             restore_body.push_str("if (j.has(\"_state_stack\")) {\n");
-            restore_body.push_str("    val stack = j.getJSONArray(\"_state_stack\")\n");
             restore_body.push_str("    instance._state_stack = mutableListOf()\n");
-            restore_body.push_str(&format!("    for (i in 0 until stack.length()) {{ instance._state_stack.add(instance.__deserComp(stack.get(i))!!) }}\n"));
+            restore_body.push_str(
+                "    for (sc in j.get(\"_state_stack\")) instance._state_stack.add(__deserComp(sc, mapper)!!)\n",
+            );
             restore_body.push_str("}\n");
-            // Same shape as Java: primitives must use the org.json
-            // typed getters; reference types route through
-            // __convertJsonValue + erasure cast so List<T>/Map<K,V>
-            // domain vars work.
             for var in &system.domain {
                 let mapped = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => kotlin_map_type(t),
+                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                        kt_box(&kotlin_map_type(t))
+                    }
                     _ => "Any".to_string(),
                 };
-                let primitive = matches!(
-                    mapped.as_str(),
-                    "Int" | "Long" | "Double" | "Float" | "Boolean" | "String"
-                );
-                if primitive {
-                    let getter = match mapped.as_str() {
-                        "Int" | "Long" => "getInt",
-                        "Double" | "Float" => "getDouble",
-                        "Boolean" => "getBoolean",
-                        "String" => "getString",
-                        _ => unreachable!(),
-                    };
-                    restore_body.push_str(&format!(
-                        "if (j.has(\"{name}\")) instance.{name} = j.{getter}(\"{name}\")\n",
-                        name = var.name,
-                        getter = getter
-                    ));
-                } else {
-                    restore_body.push_str(&format!(
-                        "if (j.has(\"{name}\")) instance.{name} = __convertJsonValue(j.get(\"{name}\")) as {t}\n",
-                        name = var.name,
-                        t = mapped
-                    ));
-                }
+                restore_body.push_str(&format!(
+                    "if (j.has(\"{name}\")) instance.{name} = mapper.convertValue(j.get(\"{name}\"), object : com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}})\n",
+                    name = var.name,
+                    ty = mapped
+                ));
             }
             restore_body.push_str("return instance");
 
@@ -3161,12 +3023,6 @@ pub(crate) fn generate_persistence_methods(
                     span: None,
                 }],
                 is_async: false,
-                // Route `restore_state` through Kotlin's companion-object
-                // pattern so callers can invoke it statically as
-                // `Sys.restore_state(blob)` — matching every other
-                // backend's persist API. The Kotlin backend's method
-                // partitioner groups `is_static: true` methods into a
-                // single `companion object { }` block.
                 is_static: true,
                 visibility: Visibility::Public,
                 decorators: vec![],
