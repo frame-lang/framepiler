@@ -2824,7 +2824,15 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("__j[\"_state_stack\"] = __stack;\n");
 
             for var in &system.domain {
-                save_body.push_str(&format!("__j[\"{}\"] = {};\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "__j[\"{0}\"] = {0} != null ? System.Text.Json.JsonDocument.Parse({0}.SaveState()).RootElement.Clone() : (object)null;\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("__j[\"{}\"] = {};\n", var.name, var.name));
+                }
             }
 
             save_body.push_str("var __opts = new System.Text.Json.JsonSerializerOptions { TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver() };\n");
@@ -2884,15 +2892,24 @@ pub(crate) fn generate_persistence_methods(
             // System.Text.Json reflection handles primitives, lists,
             // dicts, and user types with [JsonPropertyName].
             for var in &system.domain {
-                let declared = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => csharp_map_type(t),
-                    _ => "object".to_string(),
-                };
-                restore_body.push_str(&format!(
-                    "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ try {{ __instance.{name} = System.Text.Json.JsonSerializer.Deserialize<{t}>(__{name}.GetRawText()); }} catch {{ }} }}\n",
-                    name = var.name,
-                    t = declared
-                ));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ if (__{name}.ValueKind != System.Text.Json.JsonValueKind.Null) {{ __instance.{name} = {child}.RestoreState(__{name}.GetRawText()); }} }}\n",
+                        name = var.name,
+                        child = child_sys
+                    ));
+                } else {
+                    let declared = match &var.var_type {
+                        crate::frame_c::compiler::frame_ast::Type::Custom(t) => csharp_map_type(t),
+                        _ => "object".to_string(),
+                    };
+                    restore_body.push_str(&format!(
+                        "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ try {{ __instance.{name} = System.Text.Json.JsonSerializer.Deserialize<{t}>(__{name}.GetRawText()); }} catch {{ }} }}\n",
+                        name = var.name,
+                        t = declared
+                    ));
+                }
             }
 
             restore_body.push_str("return __instance;");
@@ -2979,8 +2996,18 @@ pub(crate) fn generate_persistence_methods(
                 "foreach ($this->_state_stack as $c) { $stack[] = $this->__serComp($c); }\n",
             );
             save_body.push_str("$j['_state_stack'] = $stack;\n");
+            // Domain vars: nested @@SystemName() instances round-trip via
+            // child's save_state/restore_state — preserves class identity.
             for var in &system.domain {
-                save_body.push_str(&format!("$j['{}'] = $this->{};\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "$j['{0}'] = $this->{0} !== null ? json_decode($this->{0}->save_state(), true) : null;\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("$j['{}'] = $this->{};\n", var.name, var.name));
+                }
             }
             save_body.push_str("return json_encode($j);");
 
@@ -3020,10 +3047,18 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    foreach ($j['_state_stack'] as $sc) { $instance->_state_stack[] = self::__deserComp($sc); }\n");
             restore_body.push_str("}\n");
             for var in &system.domain {
-                restore_body.push_str(&format!(
-                    "if (isset($j['{}'])) $instance->{} = $j['{}'];\n",
-                    var.name, var.name, var.name
-                ));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "if (isset($j['{0}']) && $j['{0}'] !== null) $instance->{0} = {1}::restore_state(json_encode($j['{0}']));\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "if (isset($j['{}'])) $instance->{} = $j['{}'];\n",
+                        var.name, var.name, var.name
+                    ));
+                }
             }
             restore_body.push_str("return $instance;");
 
@@ -3480,7 +3515,15 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("@_state_stack.each { |c| stack.push(__ser_comp(c)) }\n");
             save_body.push_str("j[\"_state_stack\"] = stack\n");
             for var in &system.domain {
-                save_body.push_str(&format!("j[\"{}\"] = @{}\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "j[\"{0}\"] = @{0}.nil? ? nil : JSON.parse(@{0}.save_state)\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("j[\"{}\"] = @{}\n", var.name, var.name));
+                }
             }
             save_body.push_str("JSON.generate(j)");
 
@@ -3519,10 +3562,18 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("  instance.instance_variable_set(:@_state_stack, [])\n");
             restore_body.push_str("end\n");
             for var in &system.domain {
-                restore_body.push_str(&format!(
-                    "instance.{} = j[\"{}\"] if j.key?(\"{}\")\n",
-                    var.name, var.name, var.name
-                ));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "if j.key?(\"{0}\") then instance.{0} = j[\"{0}\"].nil? ? nil : {1}.restore_state(JSON.generate(j[\"{0}\"])) end\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "instance.{} = j[\"{}\"] if j.key?(\"{}\")\n",
+                        var.name, var.name, var.name
+                    ));
+                }
             }
             restore_body.push_str("instance");
 
@@ -3817,7 +3868,15 @@ pub(crate) fn generate_persistence_methods(
                 "    '_state_stack': this._state_stack.map((c) => serializeComp(c)).toList(),\n",
             );
             for var in &system.domain {
-                save_body.push_str(&format!("    '{}': this.{},\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "    '{0}': this.{0} != null ? jsonDecode(this.{0}.saveState()) : null,\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("    '{}': this.{},\n", var.name, var.name));
+                }
             }
             save_body.push_str("});");
 
@@ -3964,13 +4023,24 @@ pub(crate) fn generate_persistence_methods(
             // This produces a genuinely typed collection rather than
             // the broken `.cast<>()` view that was in place before.
             for var in &system.domain {
-                let ty = match &var.var_type {
-                    crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.trim(),
-                    _ => "dynamic",
-                };
-                let parsed = parse_dart_type(ty);
-                let conv = dart_conv_expr(&parsed, &format!("data['{}']", var.name));
-                restore_body.push_str(&format!("instance.{} = {};\n", var.name, conv));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    // Nested @@SystemName instance: re-hydrate via child's
+                    // restoreState. data[name] is the embedded JSON object;
+                    // jsonEncode it back to string and let child rebuild.
+                    restore_body.push_str(&format!(
+                        "instance.{0} = data['{0}'] != null ? {1}.restoreState(jsonEncode(data['{0}'])) : {1}();\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    let ty = match &var.var_type {
+                        crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.trim(),
+                        _ => "dynamic",
+                    };
+                    let parsed = parse_dart_type(ty);
+                    let conv = dart_conv_expr(&parsed, &format!("data['{}']", var.name));
+                    restore_body.push_str(&format!("instance.{} = {};\n", var.name, conv));
+                }
             }
             restore_body.push_str("return instance;");
 
@@ -4015,7 +4085,15 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("result._compartment = serialize_comp(self.__compartment)\n");
             save_body.push_str("result._state_stack = stack\n");
             for var in &system.domain {
-                save_body.push_str(&format!("result.{} = self.{}\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "result.{0} = (self.{0} ~= nil) and json.decode(self.{0}:save_state()) or nil\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!("result.{} = self.{}\n", var.name, var.name));
+                }
             }
             save_body.push_str("return json.encode(result)");
 
@@ -4071,7 +4149,15 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    end\n");
             restore_body.push_str("end\n");
             for var in &system.domain {
-                restore_body.push_str(&format!("instance.{} = data.{}\n", var.name, var.name));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "if data.{0} ~= nil then instance.{0} = {1}.restore_state(json.encode(data.{0})) else instance.{0} = nil end\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    restore_body.push_str(&format!("instance.{} = data.{}\n", var.name, var.name));
+                }
             }
             restore_body.push_str("return instance");
 
@@ -4123,12 +4209,21 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("    stack_arr.append(_ser_chain.call(c))\n");
             save_body.push_str("state_data[\"_state_stack\"] = stack_arr\n");
 
-            // Add domain variables
+            // Add domain variables. Nested @@SystemName() instances
+            // round-trip via child save_state/restore_state.
             for var in &system.domain {
-                save_body.push_str(&format!(
-                    "state_data[\"{}\"] = self.{}\n",
-                    var.name, var.name
-                ));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if extract_tagged_system_name(init).is_some() {
+                    save_body.push_str(&format!(
+                        "state_data[\"{0}\"] = bytes_to_var(self.{0}.save_state()) if self.{0} != null else null\n",
+                        var.name
+                    ));
+                } else {
+                    save_body.push_str(&format!(
+                        "state_data[\"{}\"] = self.{}\n",
+                        var.name, var.name
+                    ));
+                }
             }
 
             save_body.push_str("return var_to_bytes(state_data)");
@@ -4191,10 +4286,22 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("instance._context_stack = []\n");
 
             for var in &system.domain {
-                restore_body.push_str(&format!(
-                    "instance.{} = state_data.get(\"{}\", null)\n",
-                    var.name, var.name
-                ));
+                let init = var.initializer_text.as_deref().unwrap_or("");
+                if let Some(child_sys) = extract_tagged_system_name(init) {
+                    restore_body.push_str(&format!(
+                        "var __raw_{0} = state_data.get(\"{0}\", null)\n",
+                        var.name
+                    ));
+                    restore_body.push_str(&format!(
+                        "instance.{0} = {1}.restore_state(var_to_bytes(__raw_{0})) if __raw_{0} != null else null\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "instance.{} = state_data.get(\"{}\", null)\n",
+                        var.name, var.name
+                    ));
+                }
             }
 
             restore_body.push_str("return instance");
