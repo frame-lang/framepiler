@@ -2157,11 +2157,13 @@ pub(crate) fn generate_persistence_methods(
 
             // Serialize domain vars. Nested @@SystemName() instances
             // round-trip via child save_state (recursing into JSON).
+            // Multi-system C++ wraps nested instances in shared_ptr<T>,
+            // so access uses arrow notation.
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
                     save_body.push_str(&format!(
-                        "__j[\"{0}\"] = nlohmann::json::parse({0}.save_state());\n",
+                        "__j[\"{0}\"] = {0} ? nlohmann::json::parse({0}->save_state()) : nlohmann::json(nullptr);\n",
                         var.name
                     ));
                 } else {
@@ -2319,8 +2321,9 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
+                    // shared_ptr field — wrap restored value in make_shared.
                     restore_body.push_str(&format!(
-                        "if (__j.contains(\"{0}\")) {{ __instance.{0} = {1}::restore_state(__j[\"{0}\"].dump()); }}\n",
+                        "if (__j.contains(\"{0}\") && !__j[\"{0}\"].is_null()) {{ __instance.{0} = std::make_shared<{1}>({1}::restore_state(__j[\"{0}\"].dump())); }}\n",
                         var.name, child_sys
                     ));
                 } else {

@@ -337,27 +337,36 @@ pub fn compile_ast_based(
         });
     }
 
-    // Java: one public class per file — reject multi-system files.
-    // E430, distinct from validator's E407 ("Frame statement in nested
-    // function scope") which fires from the unified scanner via
-    // `skip_nested_scope`. Both apply to source structure but on
+    // Java: one PUBLIC class per file. Multiple package-private
+    // (Frame `@@system private`) systems alongside at most one public
+    // system is fine — Java allows that.
+    //
+    // E430 only fires when >1 system would be emitted as public.
+    // Distinct from validator's E407 ("Frame statement in nested
+    // function scope"). Both apply to source structure but on
     // entirely separate axes, so they need distinct codes.
-    if matches!(config.target, TargetLanguage::Java) && system_asts.len() > 1 {
-        let names: Vec<&str> = system_asts.iter().map(|s| s.name.as_str()).collect();
-        return Ok(CompileResult {
-            code: String::new(),
-            errors: vec![CompileError::new(
-                "E430",
-                &format!(
-                    "Java allows only one public class per file, but this file contains {} systems: {}. \
-                     Split into separate files (one @@system per file).",
-                    system_asts.len(),
-                    names.join(", ")
-                ),
-            )],
-            warnings: vec![],
-            source_map: None,
-        });
+    if matches!(config.target, TargetLanguage::Java) {
+        let public_systems: Vec<&str> = system_asts
+            .iter()
+            .filter(|s| s.visibility.as_deref() != Some("private"))
+            .map(|s| s.name.as_str())
+            .collect();
+        if public_systems.len() > 1 {
+            return Ok(CompileResult {
+                code: String::new(),
+                errors: vec![CompileError::new(
+                    "E430",
+                    &format!(
+                        "Java allows only one public class per file, but this file contains {} public systems: {}. \
+                         Either split into separate files (one @@system per file), or mark all but one as `@@system private`.",
+                        public_systems.len(),
+                        public_systems.join(", ")
+                    ),
+                )],
+                warnings: vec![],
+                source_map: None,
+            });
+        }
     }
 
     // Build a shared arcanum containing ALL systems so they can reference each other
