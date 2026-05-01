@@ -278,6 +278,19 @@ for the test runner; production projects use their own.
 
 ---
 
+## Persist quiescent contract — E700
+
+`saveState()` requires the system to be quiescent (no event in
+flight, `_context_stack` empty). Calling it from inside a handler
+throws `Exception("E700: system not quiescent")`. Catchable via
+`try/catch`, but recovery isn't possible — the handler's context
+frame is corrupted; discard the instance and restore from a prior
+snapshot. See
+[`docs/frame_runtime.md`](../frame_runtime.md) and
+[`rfc-0012`](../rfcs/rfc-0012.md) for the full contract.
+
+---
+
 ## Cross-references
 
 - `docs/runtime-capability-matrix.md` — per-backend capability

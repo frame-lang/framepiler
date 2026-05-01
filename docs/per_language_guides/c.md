@@ -418,6 +418,20 @@ Print before the `@@:return`, then return.
 
 ---
 
+## Persist quiescent contract — E700
+
+`save_state(self)` requires the system to be quiescent (no event
+in flight, `_context_stack` empty). C has no exception support, so
+calling it from inside a handler prints `E700: system not
+quiescent` to stderr and calls `abort()`, terminating the process.
+Quiescent violations are programming errors, treated like a null
+pointer dereference. The only correct response is to fix the code
+so save_state isn't called from inside a handler. See
+[`docs/frame_runtime.md`](../frame_runtime.md) and
+[`rfc-0012`](../rfcs/rfc-0012.md) for the full contract.
+
+---
+
 ## Cross-references
 
 - `docs/runtime-capability-matrix.md` — per-backend capability

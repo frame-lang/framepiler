@@ -170,6 +170,19 @@ Node. The matrix harness uses CommonJS by default.
 
 ---
 
+## Persist quiescent contract — E700
+
+`saveState()` requires the system to be quiescent (no event in
+flight, `this._context_stack` empty). Calling it from inside a
+handler throws `Error("E700: system not quiescent")`. Catchable
+via `try/catch`, but recovery isn't possible — the handler's
+context frame is corrupted; discard the instance and restore from
+a prior snapshot. See
+[`docs/frame_runtime.md`](../frame_runtime.md) and
+[`rfc-0012`](../rfcs/rfc-0012.md) for the full contract.
+
+---
+
 ## Cross-references
 
 - `docs/runtime-capability-matrix.md` — JavaScript shows ✅ on

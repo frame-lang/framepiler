@@ -632,6 +632,35 @@ $Counting {
 
 ---
 
+## Persist quiescent contract — E700
+
+Erlang's quiescent contract is **implicit**, enforced by
+`gen_statem`'s run-to-completion semantics rather than an explicit
+runtime check.
+
+`save_state(Pid)` is implemented as a synchronous `sys:get_state`
+call to the `gen_statem` process. The actor processes one event
+to completion before accepting the next, so by the time
+`sys:get_state` runs, no callback is mid-execution — the system
+is quiescent by construction.
+
+Mid-handler save (a handler synchronously calling `save_state` on
+its own Pid) would attempt to send a message to itself and wait
+for a reply, but the actor is already busy processing the current
+event. The `gen_statem` deadlocks until the call times out (5
+seconds by default) and the calling process crashes with
+`{timeout, ...}`. This is functionally equivalent to E700 — the
+operation fails — but the mechanism differs from the typed
+backends.
+
+Workarounds (asynchronous save, persisting Data fields without
+the gen_statem callback) are out of scope for the standard
+Erlang persist generator. See
+[`docs/frame_runtime.md`](../frame_runtime.md) and
+[`rfc-0012`](../rfcs/rfc-0012.md) for the full contract.
+
+---
+
 ## Cross-references
 
 - `docs/runtime-capability-matrix.md` — per-backend capability

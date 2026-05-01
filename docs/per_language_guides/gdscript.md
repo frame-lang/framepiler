@@ -395,6 +395,21 @@ for explicit exit codes) at the end of your test driver.
 
 ---
 
+## Persist quiescent contract — E700
+
+`save_state()` requires the system to be quiescent (no event in
+flight, `self._context_stack` empty). GDScript has no exceptions,
+so calling it from inside a handler calls `push_error("E700:
+system not quiescent")` (visible in the Godot output panel) and
+returns an empty `PackedByteArray`. Callers must check
+`if snap.size() == 0:` to detect the violation. Recovery isn't
+possible — the handler's context frame is corrupted; discard the
+instance and restore from a prior snapshot. See
+[`docs/frame_runtime.md`](../frame_runtime.md) and
+[`rfc-0012`](../rfcs/rfc-0012.md) for the full contract.
+
+---
+
 ## Cross-references
 
 - `docs/runtime-capability-matrix.md` — per-backend capability

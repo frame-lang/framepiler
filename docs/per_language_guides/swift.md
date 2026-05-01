@@ -324,6 +324,20 @@ generated code easier to read.
 
 ---
 
+## Persist quiescent contract — E700
+
+`saveState()` requires the system to be quiescent (no event in
+flight, `_context_stack` empty). Calling it from inside a handler
+calls `fatalError("E700: system not quiescent")`, which terminates
+the process. Swift has no catchable runtime exceptions for this
+class of error — quiescent violations are programming errors,
+treated like array-out-of-bounds. The only correct response is to
+fix the code so save_state isn't called from inside a handler. See
+[`docs/frame_runtime.md`](../frame_runtime.md) and
+[`rfc-0012`](../rfcs/rfc-0012.md) for the full contract.
+
+---
+
 ## Cross-references
 
 - `docs/runtime-capability-matrix.md` — per-backend capability
