@@ -1510,6 +1510,13 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     // ── save_state ───────────────────────────────────────────────
     let mut save_body = String::new();
 
+    // Quiescent contract (E700): saving while a handler is on the
+    // call stack would persist partial state. See RFC-0012. Rust
+    // panics on contract violation rather than changing the public
+    // signature to Result, which would force every caller to add
+    // .unwrap() / ?.
+    save_body.push_str("if !self._context_stack.is_empty() { panic!(\"E700: system not quiescent\"); }\n");
+
     save_body.push_str(&format!(
         "fn serialize_state_context(ctx: &{}StateContext) -> serde_json::Value {{\n",
         system.name

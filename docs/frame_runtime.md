@@ -4124,9 +4124,49 @@ chain), and restores the domain.
 target's idiomatic equivalent — `RestoreException` in Java, a
 `Result::Err` variant in Rust, etc.) when restore detects a
 structural mismatch between the saved blob and the current
-system's topology. It's the only error class `@@persist` adds;
-the `save_state` and `restore_state` methods plus this one
-exception are the entire `@@persist` surface.
+system's topology.
+
+### The quiescent contract — E700
+
+`save_state()` requires the system to be **quiescent**: no event
+is being dispatched, no handler is in flight, no return is
+pending. Operationally: `_context_stack` must be empty.
+
+If `save_state()` is called while a handler frame is still on the
+stack (i.e., from inside a Frame handler body), the runtime
+raises `E700: system not quiescent`. Per-backend mechanism:
+
+| Group | Backends | Mechanism |
+|---|---|---|
+| Native exceptions | Java/Kotlin/C#/Python/Swift/Ruby/PHP/Dart/JS/TS/C++/Lua | Throw `RuntimeException`/`Error` with `E700: system not quiescent` |
+| Panic | Rust, Go | `panic!` / `panic` with `E700: system not quiescent` |
+| Abort | C, Swift | Print to stderr + `abort()` / `fatalError()` |
+| Error queue | GDScript | `push_error()`; save returns empty `PackedByteArray` |
+| Implicit | Erlang | gen_statem run-to-completion deadlocks if a handler tries to save its own Pid synchronously |
+
+**Why the contract is necessary.** Mid-handler save is genuinely
+undefined for three concrete reasons:
+
+- **Pending transition:** Frame queues `-> $New` until the handler
+  returns. Mid-handler, `__compartment.state` is still `$Old`. A
+  snapshot here loses the queued transition.
+- **Partial `@@:return`:** the return slot may be set on the top
+  context frame. Saving it persists a value no caller will consume.
+- **`@@:data["key"]` per-call data:** lives on the context frame.
+  Saving it captures partial intermediate state.
+
+**What's allowed.** `_state_stack` (push/pop) is orthogonal. Save
+between interface calls when push$ has built a multi-level stack
+is normal and supported; quiescent only forbids mid-call.
+
+**Recovery after E700.** None. The handler that called
+`save_state()` is still on the stack when the error fires; the
+context_stack is corrupted. Discard the instance and restore from
+the most recent valid snapshot.
+
+This is the only error class besides `RestoreError` that
+`@@persist` adds; together with `save_state`, `restore_state`,
+and the quiescent check, they are the entire `@@persist` surface.
 
 `_HSM_CHAIN` is the source of truth on restore, not the saved
 chain. This is deliberate. If the destination's Frame source has

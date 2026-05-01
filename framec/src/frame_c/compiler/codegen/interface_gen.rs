@@ -1333,7 +1333,7 @@ pub(crate) fn generate_persistence_methods(
                 params: vec![],
                 return_type: Some("bytes".to_string()),
                 body: vec![CodegenNode::NativeBlock {
-                    code: "import pickle\nreturn pickle.dumps(self)".to_string(),
+                    code: "if self._context_stack:\n    raise RuntimeError(\"E700: system not quiescent\")\nimport pickle\nreturn pickle.dumps(self)".to_string(),
                     span: None,
                 }],
                 is_async: false,
@@ -1362,6 +1362,9 @@ pub(crate) fn generate_persistence_methods(
             // Generate saveState method
             // Phase 14.6: Serialize compartment structure including HSM parent_compartment chain
             let mut save_body = String::new();
+            // Quiescent contract (E700): saving while a handler is on
+            // the call stack would persist partial state. See RFC-0012.
+            save_body.push_str("if (this._context_stack.length > 0) { throw new Error(\"E700: system not quiescent\"); }\n");
             // Helper to serialize compartment chain recursively
             if is_ts {
                 save_body.push_str("const serializeComp = (c: any): any => {\n");
@@ -1781,6 +1784,14 @@ pub(crate) fn generate_persistence_methods(
 
             // Generate save_state function - returns char* (JSON string, caller must free)
             let mut save_body = String::new();
+            // Quiescent contract (E700): C uses fprintf+abort since
+            // standard error returns are runtime-defined and the caller
+            // signature is char*. Aligns with assert-style fatal in
+            // other no-exception backends. See RFC-0012.
+            save_body.push_str(&format!(
+                "if ({0}_FrameVec_size(self->_context_stack) > 0) {{ fprintf(stderr, \"E700: system not quiescent\\n\"); abort(); }}\n",
+                system.name
+            ));
             save_body.push_str("cJSON* root = cJSON_CreateObject();\n");
             // Serialize entire compartment chain
             save_body.push_str(&format!("cJSON_AddItemToObject(root, \"_compartment\", {}_serialize_compartment(self->__compartment));\n", system.name));
@@ -1979,6 +1990,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state() — recursive compartment chain serialization
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if (!_context_stack.empty()) throw std::runtime_error(\"E700: system not quiescent\");\n");
 
             // Helper lambda to serialize a compartment and its parent chain
             save_body.push_str(&format!(
@@ -2515,6 +2528,8 @@ pub(crate) fn generate_persistence_methods(
             // writeValueAsString time. Wraps Jackson's checked exception
             // as RuntimeException so the public API stays unchecked.
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if (!_context_stack.isEmpty()) throw new RuntimeException(\"E700: system not quiescent\");\n");
             save_body.push_str("var mapper = new com.fasterxml.jackson.databind.ObjectMapper();\n");
             save_body.push_str("var __j = new java.util.LinkedHashMap<String, Object>();\n");
             save_body.push_str("__j.put(\"_compartment\", __serComp(__compartment));\n");
@@ -2855,6 +2870,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state()
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if (_context_stack.Count > 0) throw new System.Exception(\"E700: system not quiescent\");\n");
             save_body.push_str("var __j = new Dictionary<string, object>();\n");
             save_body.push_str("__j[\"_compartment\"] = __SerComp(__compartment);\n");
             save_body.push_str("var __stack = new List<object>();\n");
@@ -3027,6 +3044,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state()
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if (!empty($this->_context_stack)) throw new \\Exception(\"E700: system not quiescent\");\n");
             save_body.push_str("$j = [];\n");
             save_body.push_str("$j['_compartment'] = $this->__serComp($this->__compartment);\n");
             save_body.push_str("$stack = [];\n");
@@ -3260,6 +3279,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state — Jackson writeValueAsString.
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if (_context_stack.isNotEmpty()) throw RuntimeException(\"E700: system not quiescent\")\n");
             save_body.push_str("val mapper = com.fasterxml.jackson.databind.ObjectMapper()\n");
             save_body.push_str("val j = java.util.LinkedHashMap<String, Any?>()\n");
             save_body.push_str("j[\"_compartment\"] = __serComp(__compartment)\n");
@@ -3414,6 +3435,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state()
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if !_context_stack.isEmpty { fatalError(\"E700: system not quiescent\") }\n");
             save_body.push_str("var j: [String: Any] = [:]\n");
             save_body.push_str("j[\"_compartment\"] = __serComp(__compartment) as Any\n");
             save_body.push_str("var stack: [[String: Any]] = []\n");
@@ -3580,6 +3603,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state()
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("raise \"E700: system not quiescent\" unless @_context_stack.empty?\n");
             save_body.push_str("j = {}\n");
             save_body.push_str("j[\"_compartment\"] = __ser_comp(@__compartment)\n");
             save_body.push_str("stack = []\n");
@@ -3667,6 +3692,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state — serialize to JSON via encoding/json
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if len(s._context_stack) > 0 { panic(\"E700: system not quiescent\") }\n");
             save_body.push_str(&format!(
                 "var serializeComp func(c *{}) interface{{}}\n",
                 compartment_type
@@ -3931,6 +3958,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state — serialize to JSON via dart:convert
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if (_context_stack.isNotEmpty) throw Exception(\"E700: system not quiescent\");\n");
             save_body.push_str(&format!(
                 "Map<String, dynamic>? serializeComp({}? comp) {{\n",
                 compartment_type
@@ -4152,6 +4181,8 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state — serialize to JSON via cjson
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if #self._context_stack > 0 then error(\"E700: system not quiescent\") end\n");
             save_body.push_str("local json = require(\"cjson\")\n");
             save_body.push_str("local function serialize_comp(comp)\n");
             save_body.push_str("    if not comp then return nil end\n");
@@ -4286,6 +4317,10 @@ pub(crate) fn generate_persistence_methods(
 
             // save_state method - iterative serialization (GDScript lambdas can't recurse)
             let mut save_body = String::new();
+            // Quiescent contract (E700): see RFC-0012.
+            save_body.push_str("if not self._context_stack.is_empty():\n");
+            save_body.push_str("    push_error(\"E700: system not quiescent\")\n");
+            save_body.push_str("    return PackedByteArray()\n");
             // Serialize a compartment chain iteratively: collect into array, then build dicts bottom-up
             save_body.push_str("# Serialize compartment chain iteratively\n");
             save_body.push_str("var _ser_chain = func(comp):\n");
