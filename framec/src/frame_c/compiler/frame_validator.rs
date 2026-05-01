@@ -621,6 +621,126 @@ impl FrameValidator {
 
         // E615: Assignment to const domain field in handler bodies
         self.validate_const_field_assignments(system);
+
+        // E800/E801/E802: RFC-0013 attribute validation on
+        // per-item `@@[name(args?)]` attachments.
+        self.validate_attributes(system);
+    }
+
+    /// Validate `@@[name(args?)]` attributes attached to interface
+    /// methods, handlers, and domain fields.
+    ///
+    /// - **E800**: unknown attribute name. Recognized per-item kinds
+    ///   are currently just `target`.
+    /// - **E801**: known attribute name attached at a position where
+    ///   it isn't allowed. Today `persist` is module-scope-only and
+    ///   reaching this validator on it means the user put it on a
+    ///   per-item position.
+    /// - **E802**: invalid arg shape. `target` requires a single
+    ///   string argument naming a supported language.
+    fn validate_attributes(&mut self, system: &SystemAst) {
+        use crate::frame_c::compiler::frame_ast::Attribute;
+        use crate::frame_c::visitors::TargetLanguage;
+        use std::convert::TryFrom;
+
+        fn unquote(s: &str) -> &str {
+            let t = s.trim();
+            let bytes = t.as_bytes();
+            if bytes.len() >= 2
+                && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+                    || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+            {
+                &t[1..t.len() - 1]
+            } else {
+                t
+            }
+        }
+
+        let mut errs: Vec<ValidationError> = Vec::new();
+        let check = |a: &Attribute, position: &str, errs: &mut Vec<ValidationError>| {
+            match a.name.as_str() {
+                "target" => match &a.args {
+                    Some(raw) => {
+                        let lang = unquote(raw);
+                        if lang.is_empty() {
+                            errs.push(
+                                ValidationError::new(
+                                    "E802",
+                                    format!(
+                                        "@@[target(...)] requires a string language name on {} (got empty arg).",
+                                        position
+                                    ),
+                                )
+                                .with_span(a.span.clone()),
+                            );
+                        } else if TargetLanguage::try_from(lang).is_err() {
+                            errs.push(
+                                ValidationError::new(
+                                    "E802",
+                                    format!(
+                                        "@@[target(\"{}\")] on {} — '{}' is not a supported target language.",
+                                        lang, position, lang
+                                    ),
+                                )
+                                .with_span(a.span.clone()),
+                            );
+                        }
+                    }
+                    None => errs.push(
+                        ValidationError::new(
+                            "E802",
+                            format!(
+                                "@@[target] on {} requires a language argument, e.g. @@[target(\"python_3\")].",
+                                position
+                            ),
+                        )
+                        .with_span(a.span.clone()),
+                    ),
+                },
+                "persist" => errs.push(
+                    ValidationError::new(
+                        "E801",
+                        format!(
+                            "@@[persist] is only valid at module scope on a @@system declaration; not on {}.",
+                            position
+                        ),
+                    )
+                    .with_span(a.span.clone()),
+                ),
+                _ => errs.push(
+                    ValidationError::new(
+                        "E800",
+                        format!("Unknown attribute @@[{}] on {}.", a.name, position),
+                    )
+                    .with_span(a.span.clone()),
+                ),
+            }
+        };
+
+        for m in &system.interface {
+            for a in &m.attributes {
+                check(a, &format!("interface method '{}'", m.name), &mut errs);
+            }
+        }
+        for d in &system.domain {
+            for a in &d.attributes {
+                check(a, &format!("domain field '{}'", d.name), &mut errs);
+            }
+        }
+        if let Some(machine) = &system.machine {
+            for state in &machine.states {
+                for h in &state.handlers {
+                    for a in &h.attributes {
+                        check(
+                            a,
+                            &format!("handler '{}' in state '{}'", h.event, state.name),
+                            &mut errs,
+                        );
+                    }
+                }
+            }
+        }
+        self.errors.extend(errs);
     }
 
     /// Cross-check the system header parameter list against the start

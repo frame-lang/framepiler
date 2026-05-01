@@ -365,12 +365,9 @@ pub fn compile_ast_based(
                 );
             }
 
-            // RFC-0013 wave 2: filter items by `@@[target("X")]`
-            // attribute. Items whose `target` attributes don't include
-            // the current target are pruned before codegen sees them.
-            // No `target` attribute = always emit.
-            filter_by_target_attribute(&mut system_ast, config.target);
-
+            // RFC-0013 wave 2 phase 2: per-target filter runs LATER
+            // (after the validator), so that E800/E801/E802 can fire
+            // on attributes whose items would be filtered away.
             system_asts.push(system_ast);
         }
     }
@@ -445,7 +442,7 @@ pub fn compile_ast_based(
 
         let mut dot_systems: Vec<(String, String)> = Vec::new();
 
-        for system_ast in &system_asts {
+        for system_ast in &mut system_asts {
             // Validate with shared arcanum
             let frame_ast = FrameAst::System(system_ast.clone());
             let mut validator = FrameValidator::new();
@@ -487,6 +484,9 @@ pub fn compile_ast_based(
                     source_map: None,
                 });
             }
+
+            // Filter per `@@[target("X")]` (after validation)
+            filter_by_target_attribute(system_ast, config.target);
 
             // Build graph IR and emit DOT
             let graph = graphviz::build_system_graph(system_ast, &arcanum);
@@ -531,8 +531,11 @@ pub fn compile_ast_based(
     // from each per-system validator and attached to the final result.
     let mut module_warnings: Vec<CompileError> = Vec::new();
 
-    for system_ast in &system_asts {
-        // Validate with shared arcanum (all sibling systems visible)
+    for system_ast in &mut system_asts {
+        // Validate with shared arcanum (all sibling systems visible).
+        // Validation runs on the *unfiltered* AST so attribute-shape
+        // errors (E800/E801/E802) surface even on items that the
+        // per-target filter would later prune.
         let frame_ast = FrameAst::System(system_ast.clone());
         let mut validator = FrameValidator::new();
         if let Err(errs) = validator.validate_with_arcanum(&frame_ast, &arcanum) {
@@ -581,6 +584,11 @@ pub fn compile_ast_based(
         for w in validator.take_warnings() {
             module_warnings.push(CompileError::new(&w.code, &w.message));
         }
+
+        // RFC-0013 wave 2 phase 2: prune items whose `@@[target("X")]`
+        // attributes don't match the current target. Runs after all
+        // validators so attribute-shape errors fire first.
+        filter_by_target_attribute(system_ast, config.target);
 
         // Warn if async is used with C target (no native async support)
         let has_async = system_ast.interface.iter().any(|m| m.is_async)
@@ -753,6 +761,10 @@ fn filter_by_target_attribute(
     system_ast
         .interface
         .retain(|m| should_emit(&m.attributes, current));
+
+    system_ast
+        .domain
+        .retain(|d| should_emit(&d.attributes, current));
 
     if let Some(machine) = system_ast.machine.as_mut() {
         for state in machine.states.iter_mut() {

@@ -1253,6 +1253,10 @@ impl<'a> Parser<'a> {
         // comment-only lines (`# foo`); when we successfully parse a
         // field, we drain them onto its `leading_comments`.
         let mut pending_doc: Vec<String> = Vec::new();
+        // RFC-0013 wave 2 phase 2: pending attributes (from `@@[name(args?)]`
+        // lines preceding a field). Drain into the field's `attributes`
+        // when we successfully parse one.
+        let mut pending_attrs: Vec<crate::frame_c::compiler::frame_ast::Attribute> = Vec::new();
 
         // Skip initial whitespace/newlines after `domain:`
         while pos < src.len()
@@ -1286,6 +1290,81 @@ impl<'a> Parser<'a> {
                 // Reset cursor to before the `}` so the system parser sees it
                 self.lexer.set_cursor(line_start);
                 break;
+            }
+
+            // RFC-0013 wave 2 phase 2: attribute `@@[name(args?)]`
+            // attaches to the next field. Accepted on its own line or
+            // immediately preceding the field on the same line. Multiple
+            // attributes (separated by whitespace) accumulate.
+            while pos + 2 < src.len()
+                && src[pos] == b'@'
+                && src[pos + 1] == b'@'
+                && src[pos + 2] == b'['
+            {
+                let attr_start = pos;
+                pos += 3; // skip @@[
+                let name_start = pos;
+                while pos < src.len() {
+                    let c = src[pos];
+                    if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' {
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let name = std::str::from_utf8(&src[name_start..pos])
+                    .unwrap_or("")
+                    .to_string();
+                let mut args: Option<String> = None;
+                if pos < src.len() && src[pos] == b'(' {
+                    let args_inner_start = pos + 1;
+                    pos += 1;
+                    let mut depth: i32 = 1;
+                    while pos < src.len() && depth > 0 {
+                        match src[pos] {
+                            b'(' => depth += 1,
+                            b')' => depth -= 1,
+                            _ => {}
+                        }
+                        pos += 1;
+                    }
+                    if depth == 0 {
+                        args = Some(
+                            std::str::from_utf8(&src[args_inner_start..pos - 1])
+                                .unwrap_or("")
+                                .to_string(),
+                        );
+                    }
+                }
+                if pos < src.len() && src[pos] == b']' {
+                    pos += 1;
+                }
+                pending_attrs.push(crate::frame_c::compiler::frame_ast::Attribute {
+                    name,
+                    args,
+                    span: Span::new(attr_start, pos),
+                });
+                // Skip same-line whitespace; if we hit newline, attribute
+                // was on its own line — outer loop iterates fresh and any
+                // following attribute or field is parsed normally. If we
+                // hit non-whitespace, the field starts here on the same
+                // line and falls through to the word scan below.
+                while pos < src.len() && (src[pos] == b' ' || src[pos] == b'\t') {
+                    pos += 1;
+                }
+                if pos < src.len() && (src[pos] == b'\n' || src[pos] == b'\r') {
+                    break;
+                }
+                // Otherwise loop to allow back-to-back same-line attrs
+                // like `@@[a] @@[b] field = ...`.
+            }
+            // If we just consumed an attribute and are now at a newline,
+            // restart the outer loop so newline-skipping re-runs.
+            if !pending_attrs.is_empty()
+                && pos < src.len()
+                && (src[pos] == b'\n' || src[pos] == b'\r')
+            {
+                continue;
             }
 
             // Peek at the word to see if it's a section keyword
@@ -1419,7 +1498,7 @@ impl<'a> Parser<'a> {
                     initializer_text: None,
                     is_const,
                     leading_comments: std::mem::take(&mut pending_doc),
-                    attributes: Vec::new(),
+                    attributes: std::mem::take(&mut pending_attrs),
                     span: Span::new(field_start, pos),
                 });
                 continue;
@@ -1557,7 +1636,7 @@ impl<'a> Parser<'a> {
                 initializer_text: init_opt,
                 is_const,
                 leading_comments: std::mem::take(&mut pending_doc),
-                attributes: Vec::new(),
+                attributes: std::mem::take(&mut pending_attrs),
                 span: Span::new(field_start, pos),
             });
         }
