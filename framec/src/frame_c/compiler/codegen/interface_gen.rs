@@ -1201,6 +1201,98 @@ pub(crate) fn extract_body_content(
     }
 }
 
+/// Dart type-tree node. Used by the Dart persist-restore emitter to
+/// produce deep-typed comprehension expressions from type-string
+/// declarations. Architecturally type-ignorant: parses only `List<...>`
+/// and `Map<...,...>` shapes; everything else passes through as
+/// Primitive(name) and is emitted as `value as <name>`.
+enum DartTypeNode {
+    Primitive(String),
+    List(Box<DartTypeNode>),
+    Map(Box<DartTypeNode>, Box<DartTypeNode>),
+}
+
+fn parse_dart_type(s: &str) -> DartTypeNode {
+    let s = s.trim();
+    if let Some(inner) = s.strip_prefix("List<").and_then(|x| x.strip_suffix('>')) {
+        return DartTypeNode::List(Box::new(parse_dart_type(inner)));
+    }
+    if let Some(inner) = s.strip_prefix("Map<").and_then(|x| x.strip_suffix('>')) {
+        // Find top-level comma (not nested in <>).
+        let mut depth = 0i32;
+        let mut comma_pos: Option<usize> = None;
+        for (i, c) in inner.char_indices() {
+            match c {
+                '<' => depth += 1,
+                '>' => depth -= 1,
+                ',' if depth == 0 => {
+                    comma_pos = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if let Some(p) = comma_pos {
+            let k = parse_dart_type(&inner[..p]);
+            let v = parse_dart_type(&inner[p + 1..]);
+            return DartTypeNode::Map(Box::new(k), Box::new(v));
+        }
+    }
+    DartTypeNode::Primitive(s.to_string())
+}
+
+fn render_dart_type(t: &DartTypeNode) -> String {
+    match t {
+        DartTypeNode::Primitive(s) => s.clone(),
+        DartTypeNode::List(inner) => format!("List<{}>", render_dart_type(inner)),
+        DartTypeNode::Map(k, v) => {
+            format!("Map<{}, {}>", render_dart_type(k), render_dart_type(v))
+        }
+    }
+}
+
+/// Emit a Dart expression that converts `input` (type `dynamic`) to
+/// the typed shape described by `t`. Uses comprehensions (`<T>[for ...]`
+/// / `<K,V>{for ...}`) to produce genuinely-typed collections — the
+/// only Dart construct that reliably bridges `dynamic`-shaped JSON
+/// output to reified-generic typed fields without per-access casts.
+///
+/// Variable names carry a depth suffix so nested comprehensions don't
+/// shadow each other (`__e1`, `__me2`, etc.).
+fn dart_conv_expr(t: &DartTypeNode, input: &str) -> String {
+    dart_conv_expr_at(t, input, 0)
+}
+
+fn dart_conv_expr_at(t: &DartTypeNode, input: &str, depth: usize) -> String {
+    match t {
+        DartTypeNode::Primitive(name) => match name.as_str() {
+            "int" => format!("({input} as num).toInt()"),
+            "double" => format!("({input} as num).toDouble()"),
+            "num" => format!("{input} as num"),
+            "String" => format!("{input} as String"),
+            "bool" => format!("{input} as bool"),
+            "dynamic" | "Object" | "Object?" => input.to_string(),
+            other => format!("{input} as {other}"),
+        },
+        DartTypeNode::List(inner) => {
+            let var = format!("__e{}", depth);
+            let elem = dart_conv_expr_at(inner, &var, depth + 1);
+            let inner_t = render_dart_type(inner);
+            format!("<{inner_t}>[for (var {var} in ({input} as List)) {elem}]")
+        }
+        DartTypeNode::Map(k, v) => {
+            let var = format!("__me{}", depth);
+            let k_expr = dart_conv_expr_at(k, &format!("{var}.key"), depth + 1);
+            let v_expr = dart_conv_expr_at(v, &format!("{var}.value"), depth + 1);
+            let k_t = render_dart_type(k);
+            let v_t = render_dart_type(v);
+            format!(
+                "<{k_t}, {v_t}>{{for (var {var} in ({input} as Map).entries) {k_expr}: {v_expr}}}"
+            )
+        }
+    }
+}
+
 /// Generate persistence methods (save_state, restore_state) for @@persist
 pub(crate) fn generate_persistence_methods(
     system: &SystemAst,
@@ -3624,6 +3716,45 @@ pub(crate) fn generate_persistence_methods(
                 span: None,
             });
 
+            // Per-state typed restore data. For each state with declared
+            // params, we'll switch on the state name in deserializeComp
+            // and emit per-arg Dart comprehension conversion. Same idea
+            // as the JVM Jackson + TypeReference migration: framec emits
+            // the user's declared type strings verbatim into a
+            // comprehension; Dart's reified generics then carry the
+            // typed shape through the rest of the runtime so user
+            // handlers can index without defensive casts.
+            //
+            // .cast<>() (the previous pattern) silently fails for
+            // nested generics — `Map.cast<String, List<int>>()` returns
+            // a view that throws at element access because the inner
+            // List<dynamic> is not actually a List<int>. Comprehensions
+            // construct genuinely typed collections, which is the only
+            // bridge that survives Dart's reification rules.
+            let dart_state_param_types: Vec<(String, Vec<String>)> = system
+                .machine
+                .as_ref()
+                .map(|m| {
+                    m.states
+                        .iter()
+                        .filter(|s| !s.params.is_empty())
+                        .map(|s| {
+                            let types: Vec<String> = s
+                                .params
+                                .iter()
+                                .map(|p| match &p.param_type {
+                                    crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
+                                        t.trim().to_string()
+                                    }
+                                    _ => "dynamic".to_string(),
+                                })
+                                .collect();
+                            (s.name.clone(), types)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
             // restore_state — static method
             let mut restore_body = String::new();
             restore_body.push_str(&format!(
@@ -3636,17 +3767,45 @@ pub(crate) fn generate_persistence_methods(
                 compartment_type
             ));
             restore_body.push_str(
-                "    comp.state_args = List<dynamic>.from(data['state_args'] ?? <dynamic>[]);\n",
-            );
-            restore_body.push_str(
                 "    comp.state_vars = Map<String, dynamic>.from(data['state_vars'] ?? {});\n",
             );
             restore_body.push_str(
-                "    comp.enter_args = List<dynamic>.from(data['enter_args'] ?? <dynamic>[]);\n",
+                "    final __saRaw = (data['state_args'] as List?) ?? <dynamic>[];\n",
+            );
+            restore_body.push_str(
+                "    final __eaRaw = (data['enter_args'] as List?) ?? <dynamic>[];\n",
             );
             restore_body.push_str(
                 "    comp.exit_args = List<dynamic>.from(data['exit_args'] ?? <dynamic>[]);\n",
             );
+            if !dart_state_param_types.is_empty() {
+                restore_body.push_str("    switch (comp.state) {\n");
+                for (state_name, param_types) in &dart_state_param_types {
+                    restore_body.push_str(&format!("        case '{}':\n", state_name));
+                    for (i, ty_str) in param_types.iter().enumerate() {
+                        let parsed = parse_dart_type(ty_str);
+                        let conv_sa = dart_conv_expr(&parsed, &format!("__saRaw[{i}]"));
+                        let conv_ea = dart_conv_expr(&parsed, &format!("__eaRaw[{i}]"));
+                        restore_body.push_str(&format!(
+                            "            if (__saRaw.length > {i}) comp.state_args.add({conv_sa});\n"
+                        ));
+                        restore_body.push_str(&format!(
+                            "            if (__eaRaw.length > {i}) comp.enter_args.add({conv_ea});\n"
+                        ));
+                    }
+                    restore_body.push_str("            break;\n");
+                }
+                restore_body.push_str("        default:\n");
+                restore_body
+                    .push_str("            comp.state_args.addAll(__saRaw);\n");
+                restore_body
+                    .push_str("            comp.enter_args.addAll(__eaRaw);\n");
+                restore_body.push_str("            break;\n");
+                restore_body.push_str("    }\n");
+            } else {
+                restore_body.push_str("    comp.state_args.addAll(__saRaw);\n");
+                restore_body.push_str("    comp.enter_args.addAll(__eaRaw);\n");
+            }
             restore_body.push_str("    comp.forward_event = data['forward_event'];\n");
             restore_body.push_str(
                 "    comp.parent_compartment = deserializeComp(data['parent_compartment']);\n",
@@ -3662,36 +3821,19 @@ pub(crate) fn generate_persistence_methods(
                 "instance._state_stack = (data['_state_stack'] as List?)?.map((c) => deserializeComp(c)!).toList() ?? <{}>[];\n",
                 compartment_type
             ));
-            // Domain field restores. jsonDecode hands back dynamic values
-            // that on assignment are rejected when the field is a typed
-            // container (List<X>/Map<K,V>) — dynamic != String at runtime.
-            // Emit a `.cast<...>()` for those; leave primitives as direct
-            // assignment since dynamic→num/int/String is implicit.
+            // Domain field restores via the comprehension emitter.
+            // For Map<String, List<int>>, emits something like:
+            //   instance.x = <String, List<int>>{for (var __me in (data['x'] as Map).entries) __me.key as String: <int>[for (var __e in (__me.value as List)) (__e as num).toInt()]};
+            // This produces a genuinely typed collection rather than
+            // the broken `.cast<>()` view that was in place before.
             for var in &system.domain {
                 let ty = match &var.var_type {
                     crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.trim(),
-                    _ => "",
+                    _ => "dynamic",
                 };
-                if let Some(inner) = ty.strip_prefix("List<").and_then(|s| s.strip_suffix('>')) {
-                    restore_body.push_str(&format!(
-                        "instance.{name} = (data['{name}'] as List).cast<{inner}>();\n",
-                        name = var.name,
-                        inner = inner.trim(),
-                    ));
-                } else if let Some(inner) =
-                    ty.strip_prefix("Map<").and_then(|s| s.strip_suffix('>'))
-                {
-                    restore_body.push_str(&format!(
-                        "instance.{name} = (data['{name}'] as Map).cast<{inner}>();\n",
-                        name = var.name,
-                        inner = inner.trim(),
-                    ));
-                } else {
-                    restore_body.push_str(&format!(
-                        "instance.{name} = data['{name}'];\n",
-                        name = var.name,
-                    ));
-                }
+                let parsed = parse_dart_type(ty);
+                let conv = dart_conv_expr(&parsed, &format!("data['{}']", var.name));
+                restore_body.push_str(&format!("instance.{} = {};\n", var.name, conv));
             }
             restore_body.push_str("return instance;");
 
