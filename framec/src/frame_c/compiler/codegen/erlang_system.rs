@@ -373,8 +373,7 @@ fn replace_whole_word(s: &str, word: &str, replacement: &str) -> String {
         if i + word_bytes.len() <= bytes.len()
             && &bytes[i..i + word_bytes.len()] == word_bytes
             && (i == 0 || !is_word_char(bytes[i - 1]))
-            && (i + word_bytes.len() == bytes.len()
-                || !is_word_char(bytes[i + word_bytes.len()]))
+            && (i + word_bytes.len() == bytes.len() || !is_word_char(bytes[i + word_bytes.len()]))
         {
             out.push_str(replacement);
             i += word_bytes.len();
@@ -1283,8 +1282,7 @@ fn erlang_process_body_lines_full(
                             if end > open {
                                 let inner_args = rewritten[open + 1..end].to_string();
                                 if matched.is_none() {
-                                    matched =
-                                        Some((iface.clone(), start, end + 1, inner_args));
+                                    matched = Some((iface.clone(), start, end + 1, inner_args));
                                 }
                             }
                         }
@@ -2036,9 +2034,8 @@ fn erlang_wrap_self_call_guards(lines: &[String], state_atom: &str) -> Vec<Strin
                     let has_direct_assign = inner_wrapped
                         .iter()
                         .any(|x| x.trim().starts_with(&direct_assign_prefix));
-                    let has_tuple_bind = inner_wrapped
-                        .iter()
-                        .any(|x| x.contains(&tuple_bind_substr));
+                    let has_tuple_bind =
+                        inner_wrapped.iter().any(|x| x.contains(&tuple_bind_substr));
                     if has_tuple_bind && !has_direct_assign {
                         val
                     } else {
@@ -2250,8 +2247,7 @@ fn erlang_lower_native_if(text: &str) -> String {
         let t = line.trim();
         // Native if-opener: `if Cond ->` (NOT `if Cond {`, which the
         // existing transform already handles).
-        let is_native_if =
-            t.starts_with("if ") && t.ends_with(" ->") && !t.ends_with('{');
+        let is_native_if = t.starts_with("if ") && t.ends_with(" ->") && !t.ends_with('{');
         if !is_native_if {
             out.push(line.to_string());
             i += 1;
@@ -2269,8 +2265,7 @@ fn erlang_lower_native_if(text: &str) -> String {
         let mut end_idx: Option<usize> = None;
         while j < lines.len() {
             let lt = lines[j].trim();
-            let opens =
-                (lt.starts_with("if ") && lt.ends_with(" ->"))
+            let opens = (lt.starts_with("if ") && lt.ends_with(" ->"))
                 || ((lt.starts_with("case ") || lt.starts_with("case("))
                     && (lt.ends_with(" of") || lt.ends_with(" of,")));
             let closes = lt == "end" || lt == "end," || lt == "end;";
@@ -3408,8 +3403,7 @@ pub(crate) fn generate_erlang_system(
             for (i, sp) in state.params.iter().enumerate() {
                 let cap = erlang_safe_capitalize(&sp.name);
                 if let Some(body) = enter_body_src {
-                    let used =
-                        raw_contains_word(body, &sp.name) || raw_contains_word(body, &cap);
+                    let used = raw_contains_word(body, &sp.name) || raw_contains_word(body, &cap);
                     if !used {
                         continue;
                     }
@@ -3452,7 +3446,7 @@ pub(crate) fn generate_erlang_system(
                     event_param_names: std::collections::HashMap::new(),
                     state_hsm_parents: std::collections::HashMap::new(),
                     current_return_type: None,
-            state_param_types: std::collections::HashMap::new(),
+                    state_param_types: std::collections::HashMap::new(),
                 };
                 let enter_span = crate::frame_c::compiler::ast::Span {
                     start: enter.body.span.start,
@@ -3534,11 +3528,8 @@ pub(crate) fn generate_erlang_system(
                                         for sp in &state.params {
                                             let cap = erlang_safe_capitalize(&sp.name);
                                             if cap != sp.name {
-                                                state_args = replace_whole_word(
-                                                    &state_args,
-                                                    &sp.name,
-                                                    &cap,
-                                                );
+                                                state_args =
+                                                    replace_whole_word(&state_args, &sp.name, &cap);
                                             }
                                         }
                                         // Update Data with exit/enter/
@@ -3621,10 +3612,9 @@ pub(crate) fn generate_erlang_system(
                 // intentionally-unused and suppresses the warning;
                 // bare `Name` triggers an unused-variable warning on
                 // every clause that doesn't read it.
-                let handler_body_src_for_params = std::str::from_utf8(
-                    &source[handler.body.span.start..handler.body.span.end],
-                )
-                .unwrap_or("");
+                let handler_body_src_for_params =
+                    std::str::from_utf8(&source[handler.body.span.start..handler.body.span.end])
+                        .unwrap_or("");
                 // Frame source for Erlang target may reference the
                 // param by either its declared (lowercase) name OR
                 // its Erlang-capitalized name (e.g. `Mode` instead of
@@ -3637,9 +3627,8 @@ pub(crate) fn generate_erlang_system(
                         .iter()
                         .map(|p| {
                             let cap = erlang_safe_capitalize(&p.name);
-                            let used =
-                                raw_contains_word(handler_body_src_for_params, &p.name)
-                                    || raw_contains_word(handler_body_src_for_params, &cap);
+                            let used = raw_contains_word(handler_body_src_for_params, &p.name)
+                                || raw_contains_word(handler_body_src_for_params, &cap);
                             if used {
                                 cap
                             } else {
@@ -3668,10 +3657,9 @@ pub(crate) fn generate_erlang_system(
                 // happens not to use the cascaded state-arg. Check both
                 // the lowercase declared name and the Erlang-
                 // capitalized form (Frame source may use either).
-                let handler_body_src = std::str::from_utf8(
-                    &source[handler.body.span.start..handler.body.span.end],
-                )
-                .unwrap_or("");
+                let handler_body_src =
+                    std::str::from_utf8(&source[handler.body.span.start..handler.body.span.end])
+                        .unwrap_or("");
                 // Build the effective param list for this state: own
                 // params plus any params declared at a descendant's
                 // cascade arrow (`$Child => $Self(name: T)`). Erlang's
@@ -3721,8 +3709,7 @@ pub(crate) fn generate_erlang_system(
                     // match against the existing binding and crash if
                     // values differ (D9 follow-up — same shape as the
                     // typed-language D5 shadow check).
-                    let shadowed_by_event_param =
-                        handler.params.iter().any(|p| &p.name == name);
+                    let shadowed_by_event_param = handler.params.iter().any(|p| &p.name == name);
                     if shadowed_by_event_param {
                         continue;
                     }
@@ -3749,7 +3736,7 @@ pub(crate) fn generate_erlang_system(
                     event_param_names: std::collections::HashMap::new(),
                     state_hsm_parents: std::collections::HashMap::new(),
                     current_return_type: None,
-            state_param_types: std::collections::HashMap::new(),
+                    state_param_types: std::collections::HashMap::new(),
                 };
                 // Convert frame_ast::Span to ast::Span
                 let body_span = crate::frame_c::compiler::ast::Span {
@@ -4320,7 +4307,7 @@ pub(crate) fn generate_erlang_system(
                     event_param_names: std::collections::HashMap::new(),
                     state_hsm_parents: std::collections::HashMap::new(),
                     current_return_type: None,
-            state_param_types: std::collections::HashMap::new(),
+                    state_param_types: std::collections::HashMap::new(),
                 };
                 let enter_span = crate::frame_c::compiler::ast::Span {
                     start: enter.body.span.start,
@@ -4397,7 +4384,7 @@ pub(crate) fn generate_erlang_system(
                     event_param_names: std::collections::HashMap::new(),
                     state_hsm_parents: std::collections::HashMap::new(),
                     current_return_type: None,
-            state_param_types: std::collections::HashMap::new(),
+                    state_param_types: std::collections::HashMap::new(),
                 };
                 let enter_span = crate::frame_c::compiler::ast::Span {
                     start: enter.body.span.start,
@@ -4649,7 +4636,7 @@ pub(crate) fn generate_erlang_system(
                     event_param_names: std::collections::HashMap::new(),
                     state_hsm_parents: std::collections::HashMap::new(),
                     current_return_type: None,
-            state_param_types: std::collections::HashMap::new(),
+                    state_param_types: std::collections::HashMap::new(),
                 };
                 let exit_span = crate::frame_c::compiler::ast::Span {
                     start: exit.body.span.start,

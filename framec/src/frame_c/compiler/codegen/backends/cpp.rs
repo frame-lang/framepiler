@@ -700,10 +700,7 @@ impl CppBackend {
         params
             .iter()
             .map(|p| {
-                let raw_type = p
-                    .type_annotation
-                    .as_deref()
-                    .unwrap_or("auto");
+                let raw_type = p.type_annotation.as_deref().unwrap_or("auto");
                 // Route through the shared cpp_map_type so emit_params,
                 // map_type, and the std::any_cast prefetch agree on
                 // Frame → C++ mappings (esp. `float` → `double`,

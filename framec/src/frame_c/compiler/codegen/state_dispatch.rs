@@ -357,8 +357,12 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 // a different boxed numeric type (long vs double, etc.)
                 // than the declared parameter, so normalize via Convert.
                 let extract = match cs_type.as_str() {
-                    "double" => format!("System.Convert.ToDouble(__compartment.state_args[{index}])"),
-                    "float" => format!("System.Convert.ToSingle(__compartment.state_args[{index}])"),
+                    "double" => {
+                        format!("System.Convert.ToDouble(__compartment.state_args[{index}])")
+                    }
+                    "float" => {
+                        format!("System.Convert.ToSingle(__compartment.state_args[{index}])")
+                    }
                     "int" => format!("System.Convert.ToInt32(__compartment.state_args[{index}])"),
                     "long" => format!("System.Convert.ToInt64(__compartment.state_args[{index}])"),
                     _ => format!("({cs_type}) __compartment.state_args[{index}]"),
@@ -415,12 +419,22 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 // that org.json may hand back when loaded from JSON via
                 // @@persist. (D8 fix.)
                 let extract = match java_type.as_str() {
-                    "double" => format!("((Number) __compartment.state_args.get({index})).doubleValue()"),
-                    "float" => format!("((Number) __compartment.state_args.get({index})).floatValue()"),
-                    "long" => format!("((Number) __compartment.state_args.get({index})).longValue()"),
+                    "double" => {
+                        format!("((Number) __compartment.state_args.get({index})).doubleValue()")
+                    }
+                    "float" => {
+                        format!("((Number) __compartment.state_args.get({index})).floatValue()")
+                    }
+                    "long" => {
+                        format!("((Number) __compartment.state_args.get({index})).longValue()")
+                    }
                     "int" => format!("((Number) __compartment.state_args.get({index})).intValue()"),
-                    "short" => format!("((Number) __compartment.state_args.get({index})).shortValue()"),
-                    "byte" => format!("((Number) __compartment.state_args.get({index})).byteValue()"),
+                    "short" => {
+                        format!("((Number) __compartment.state_args.get({index})).shortValue()")
+                    }
+                    "byte" => {
+                        format!("((Number) __compartment.state_args.get({index})).byteValue()")
+                    }
                     _ => format!("({java_type}) __compartment.state_args.get({index})"),
                 };
                 format!("{java_type} {name} = {extract};\n")
@@ -533,10 +547,16 @@ pub(crate) fn dispatch_syntax_for(lang: TargetLanguage) -> Option<DispatchSyntax
                 // back NSNumber that doesn't satisfy `as! Double` directly
                 // when the underlying numeric tag differs.
                 let extract = match sw_type.as_str() {
-                    "Double" => format!("(__compartment.state_args[{index}] as! NSNumber).doubleValue"),
-                    "Float" => format!("(__compartment.state_args[{index}] as! NSNumber).floatValue"),
+                    "Double" => {
+                        format!("(__compartment.state_args[{index}] as! NSNumber).doubleValue")
+                    }
+                    "Float" => {
+                        format!("(__compartment.state_args[{index}] as! NSNumber).floatValue")
+                    }
                     "Int" => format!("(__compartment.state_args[{index}] as! NSNumber).intValue"),
-                    "Int64" => format!("(__compartment.state_args[{index}] as! NSNumber).int64Value"),
+                    "Int64" => {
+                        format!("(__compartment.state_args[{index}] as! NSNumber).int64Value")
+                    }
                     _ => format!("__compartment.state_args[{index}] as! {sw_type}"),
                 };
                 format!("let {name} = {extract}\n")
@@ -3233,10 +3253,7 @@ fn generate_c_handler_method(
                 (typ, extract)
             }
             _ if t.ends_with('*') => (t.to_string(), format!("({}){}", t, val_expr)),
-            _ => (
-                "int".to_string(),
-                format!("(int)(intptr_t){}", val_expr),
-            ),
+            _ => ("int".to_string(), format!("(int)(intptr_t){}", val_expr)),
         }
     };
     if let Some(sp_names) = state_param_names.get(state_name) {
@@ -3276,10 +3293,7 @@ fn generate_c_handler_method(
     };
     for (i, param) in handler.params.iter().enumerate() {
         let type_str = param.symbol_type.as_deref().unwrap_or("int");
-        let val_expr = format!(
-            "{}_FrameVec_get({}, {})",
-            system_name, param_source_pre, i
-        );
+        let val_expr = format!("{}_FrameVec_get({}, {})", system_name, param_source_pre, i);
         let (c_decl, extract) = c_extract(type_str, &val_expr);
         body.push_str(&format!("{} {} = {};\n", c_decl, param.name, extract));
         body.push_str(&format!("(void){};\n", param.name));
@@ -3907,7 +3921,7 @@ pub(crate) fn generate_state_method(
         // transitions. Empty map is safe here.
         state_hsm_parents: std::collections::HashMap::new(),
         current_return_type: None,
-            state_param_types: std::collections::HashMap::new(),
+        state_param_types: std::collections::HashMap::new(),
     };
 
     // Generate the dispatch body based on __e._message / __e.message

@@ -1955,63 +1955,83 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
     // types, which require the user's `#include <cjson/cJSON.h>` in
     // the prolog. Non-persist systems shouldn't pull cJSON.
     if system.persist_attr.is_some() {
-    code.push_str(&format!(
+        code.push_str(&format!(
         "// ============================================================================\n// {}_persist_pack_*  /  {}_persist_unpack_*  — persist dispatcher\n// ============================================================================\n\n",
         sys, sys
     ));
 
-    // Forward decls so the recursive list/dict packers compile.
-    code.push_str(&format!("static cJSON* {sys}_persist_pack_int(void* v);\n"));
-    code.push_str(&format!("static cJSON* {sys}_persist_pack_double(void* v);\n"));
-    code.push_str(&format!("static cJSON* {sys}_persist_pack_str(void* v);\n"));
-    code.push_str(&format!("static cJSON* {sys}_persist_pack_bool(void* v);\n"));
-    code.push_str(&format!("static cJSON* {sys}_persist_pack_list(void* v);\n"));
-    code.push_str(&format!("static cJSON* {sys}_persist_pack_dict(void* v);\n"));
-    code.push_str(&format!("static void* {sys}_persist_unpack_int(cJSON* j);\n"));
-    code.push_str(&format!("static void* {sys}_persist_unpack_double(cJSON* j);\n"));
-    code.push_str(&format!("static void* {sys}_persist_unpack_str(cJSON* j);\n"));
-    code.push_str(&format!("static void* {sys}_persist_unpack_bool(cJSON* j);\n"));
-    code.push_str(&format!("static void* {sys}_persist_unpack_list(cJSON* j);\n"));
-    code.push_str(&format!("static void* {sys}_persist_unpack_dict(cJSON* j);\n\n"));
+        // Forward decls so the recursive list/dict packers compile.
+        code.push_str(&format!("static cJSON* {sys}_persist_pack_int(void* v);\n"));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_double(void* v);\n"
+        ));
+        code.push_str(&format!("static cJSON* {sys}_persist_pack_str(void* v);\n"));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_bool(void* v);\n"
+        ));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_list(void* v);\n"
+        ));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_dict(void* v);\n"
+        ));
+        code.push_str(&format!(
+            "static void* {sys}_persist_unpack_int(cJSON* j);\n"
+        ));
+        code.push_str(&format!(
+            "static void* {sys}_persist_unpack_double(cJSON* j);\n"
+        ));
+        code.push_str(&format!(
+            "static void* {sys}_persist_unpack_str(cJSON* j);\n"
+        ));
+        code.push_str(&format!(
+            "static void* {sys}_persist_unpack_bool(cJSON* j);\n"
+        ));
+        code.push_str(&format!(
+            "static void* {sys}_persist_unpack_list(cJSON* j);\n"
+        ));
+        code.push_str(&format!(
+            "static void* {sys}_persist_unpack_dict(cJSON* j);\n\n"
+        ));
 
-    // int — `(intptr_t)int` round-trip.
-    code.push_str(&format!(
+        // int — `(intptr_t)int` round-trip.
+        code.push_str(&format!(
         "static cJSON* {sys}_persist_pack_int(void* v) {{ return cJSON_CreateNumber((double)(intptr_t)v); }}\n"
     ));
-    code.push_str(&format!(
+        code.push_str(&format!(
         "static void* {sys}_persist_unpack_int(cJSON* j) {{ return (void*)(intptr_t)(int)(j ? j->valuedouble : 0); }}\n\n"
     ));
 
-    // double — bit-pun via the existing helpers above.
-    code.push_str(&format!(
+        // double — bit-pun via the existing helpers above.
+        code.push_str(&format!(
         "static cJSON* {sys}_persist_pack_double(void* v) {{ return cJSON_CreateNumber({sys}_unpack_double(v)); }}\n"
     ));
-    code.push_str(&format!(
+        code.push_str(&format!(
         "static void* {sys}_persist_unpack_double(cJSON* j) {{ return {sys}_pack_double(j ? j->valuedouble : 0.0); }}\n\n"
     ));
 
-    // str — char* round-trip. Note: the void* slot stores the pointer
-    // directly; ownership semantics are the user's responsibility (same
-    // as the current C codegen).
-    code.push_str(&format!(
+        // str — char* round-trip. Note: the void* slot stores the pointer
+        // directly; ownership semantics are the user's responsibility (same
+        // as the current C codegen).
+        code.push_str(&format!(
         "static cJSON* {sys}_persist_pack_str(void* v) {{ return cJSON_CreateString(v ? (const char*)v : \"\"); }}\n"
     ));
-    code.push_str(&format!(
+        code.push_str(&format!(
         "static void* {sys}_persist_unpack_str(cJSON* j) {{ const char* s = (j && j->valuestring) ? j->valuestring : \"\"; return (void*)strdup(s); }}\n\n"
     ));
 
-    // bool — JSON true/false.
-    code.push_str(&format!(
+        // bool — JSON true/false.
+        code.push_str(&format!(
         "static cJSON* {sys}_persist_pack_bool(void* v) {{ return cJSON_CreateBool((intptr_t)v != 0); }}\n"
     ));
-    code.push_str(&format!(
+        code.push_str(&format!(
         "static void* {sys}_persist_unpack_bool(cJSON* j) {{ return (void*)(intptr_t)(j && cJSON_IsTrue(j) ? 1 : 0); }}\n\n"
     ));
 
-    // list — recurse into FrameVec elements as int. User extends by
-    // defining their own pack_<their_list_type> for non-int elements.
-    code.push_str(&format!(
-        "static cJSON* {sys}_persist_pack_list(void* v) {{\n\
+        // list — recurse into FrameVec elements as int. User extends by
+        // defining their own pack_<their_list_type> for non-int elements.
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_list(void* v) {{\n\
          \x20   {sys}_FrameVec* vec = ({sys}_FrameVec*)v;\n\
          \x20   cJSON* arr = cJSON_CreateArray();\n\
          \x20   if (vec) {{\n\
@@ -2021,9 +2041,9 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
          \x20   }}\n\
          \x20   return arr;\n\
          }}\n"
-    ));
-    code.push_str(&format!(
-        "static void* {sys}_persist_unpack_list(cJSON* j) {{\n\
+        ));
+        code.push_str(&format!(
+            "static void* {sys}_persist_unpack_list(cJSON* j) {{\n\
          \x20   if (!cJSON_IsArray(j)) return NULL;\n\
          \x20   {sys}_FrameVec* vec = {sys}_FrameVec_new();\n\
          \x20   cJSON* __child;\n\
@@ -2032,11 +2052,11 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
          \x20   }}\n\
          \x20   return vec;\n\
          }}\n\n"
-    ));
+        ));
 
-    // dict — recurse into FrameDict entries as int values (string keys
-    // — JSON's only key type).
-    code.push_str(&format!(
+        // dict — recurse into FrameDict entries as int values (string keys
+        // — JSON's only key type).
+        code.push_str(&format!(
         "static cJSON* {sys}_persist_pack_dict(void* v) {{\n\
          \x20   {sys}_FrameDict* d = ({sys}_FrameDict*)v;\n\
          \x20   cJSON* obj = cJSON_CreateObject();\n\
@@ -2052,8 +2072,8 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
          \x20   return obj;\n\
          }}\n"
     ));
-    code.push_str(&format!(
-        "static void* {sys}_persist_unpack_dict(cJSON* j) {{\n\
+        code.push_str(&format!(
+            "static void* {sys}_persist_unpack_dict(cJSON* j) {{\n\
          \x20   if (!cJSON_IsObject(j)) return NULL;\n\
          \x20   {sys}_FrameDict* d = {sys}_FrameDict_new();\n\
          \x20   cJSON* __child;\n\
@@ -2062,7 +2082,7 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
          \x20   }}\n\
          \x20   return d;\n\
          }}\n\n"
-    ));
+        ));
     } // end persist_attr guard
 
     // ============================================================================

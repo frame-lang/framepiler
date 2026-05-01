@@ -1129,7 +1129,8 @@ pub(crate) fn rust_expand_transition(
                     // Unit variant — nothing to write. Still descend
                     // the parent chain in case a higher ancestor has
                     // params.
-                    parent_chain_var = format!("{}.as_mut().unwrap().parent_compartment", parent_chain_var);
+                    parent_chain_var =
+                        format!("{}.as_mut().unwrap().parent_compartment", parent_chain_var);
                     continue;
                 }
                 code.push_str(&format!(
@@ -1150,7 +1151,8 @@ pub(crate) fn rust_expand_transition(
                 }
                 code.push_str(&format!("{}        }}\n", indent_str));
                 code.push_str(&format!("{}    }}\n", indent_str));
-                parent_chain_var = format!("{}.as_mut().unwrap().parent_compartment", parent_chain_var);
+                parent_chain_var =
+                    format!("{}.as_mut().unwrap().parent_compartment", parent_chain_var);
             }
 
             code.push_str(&format!("{}}}\n", indent_str));
@@ -1515,7 +1517,9 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     // panics on contract violation rather than changing the public
     // signature to Result, which would force every caller to add
     // .unwrap() / ?.
-    save_body.push_str("if !self._context_stack.is_empty() { panic!(\"E700: system not quiescent\"); }\n");
+    save_body.push_str(
+        "if !self._context_stack.is_empty() { panic!(\"E700: system not quiescent\"); }\n",
+    );
 
     save_body.push_str(&format!(
         "fn serialize_state_context(ctx: &{}StateContext) -> serde_json::Value {{\n",

@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **RFC-0012 expanded** with three new sections marked deferred pending customer feedback: cycles in the persist graph (Option A E702 recommended), Python pickle → JSON migration, adversarial input threat model + E701 corrupted-snapshot proposal.
 - **Python pickle security warning** — `frame_runtime.md` and the Python per-language guide now warn that `pickle.loads` on attacker-controlled input is RCE. JSON migration tracked in RFC-0012, deferred pending customer feedback.
 
+### Added — annotation syntax (RFC-0013)
+
+- **`@@[name]` and `@@[name(args)]` attribute grammar.** New C#/Java/Kotlin-style annotation form across the language. Wave 1 migrated `@@persist` → `@@[persist]` (and `@@[persist(library)]` for the library form); wave 2 migrated `@@target python_3` → `@@[target("python_3")]`. Both bare forms hard-cut: bare `@@persist` errors with **E803**, bare `@@target` errors with **E804**. Test corpus and docs migrated repo-wide (~4,800 fixtures + ~30 doc samples).
+- **Per-item `@@[target("lang")]`** attached to interface methods, handlers, and domain fields. Emits the item only when compiling for the named target — useful for mixed-target docs, polyglot demos, or scaffolding language-specific shim methods. Codegen filter pass (`filter_by_target_attribute`) prunes unmatched items just before emit.
+- **Validator codes**: **E800** (unknown attribute name), **E801** (attribute attached at wrong attachment position — currently fires for `@@[persist]` outside system declarations), **E802** (invalid `target` argument: missing arg or unsupported language). Filter pass runs after validation so attribute-shape errors surface even on items the filter would prune.
+- **Tests 89 + 90** added: per-item conditional emit on interface methods (test 89, Python + JS) and on domain fields (test 90, Python + JS). Domain-field attribute parsing supports both same-line (`@@[target("python_3")] field: int = 0`) and own-line forms.
+
 ### Added — async (carried from prior session)
 
 - Async codegen for six new targets: Dart (`Future<T> foo() async`), GDScript (bare `await`), Kotlin (`suspend fun`), Swift (`func … async`; async entry renamed to `initAsync` since `init` is reserved), C# (`async Task<T>`), Java (`CompletableFuture<T>` on the public interface only — internal dispatch stays sync; callers `.get()`), and C++23 (`FrameTask<T>` coroutine promise emitted header-guarded at file scope). Total: 11 of 17 targets now produce real async code.
