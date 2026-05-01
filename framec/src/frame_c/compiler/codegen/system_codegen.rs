@@ -375,6 +375,38 @@ pub(crate) fn make_system_async(
                 if name == "__prepareEnter" || name == "__prepareExit" || name == "__hsm_chain" {
                     continue;
                 }
+                // Skip persist machinery — save_state / restore_state and
+                // the recursive helpers (__serComp / __deserComp /
+                // __convertJsonValue and case-variant aliases) are pure
+                // data operations on the compartment chain. They don't
+                // dispatch events. Defects D16 (Swift) and D17 (cpp_23)
+                // surfaced here: marking save_state async on Swift caused
+                // its calls to __serComp/__deserComp to lack the matching
+                // `await` (those calls don't match the dispatch-call
+                // pattern in `add_await_to_string`); on cpp_23, marking
+                // save_state as a coroutine triggered the
+                // `rewrite_return_to_co_return` pass to also rewrite
+                // `return` statements inside the embedded `__ser` lambda,
+                // breaking compile because the lambda's nlohmann::json
+                // return type isn't a coroutine type. Keeping persist
+                // sync resolves both.
+                if name == "save_state"
+                    || name == "saveState"
+                    || name == "SaveState"
+                    || name == "restore_state"
+                    || name == "restoreState"
+                    || name == "RestoreState"
+                    || name == "__serComp"
+                    || name == "__SerComp"
+                    || name == "__deserComp"
+                    || name == "__DeserComp"
+                    || name == "__convertJsonValue"
+                    || name == "__convertJsonArray"
+                    || name == "__convertJsonObject"
+                    || name == "_restore"
+                {
+                    continue;
+                }
                 *is_async = true;
                 // Add `await` to internal dispatch calls in NativeBlock strings
                 add_await_to_dispatch_calls(body, lang);
