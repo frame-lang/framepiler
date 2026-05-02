@@ -1313,7 +1313,15 @@ fn parse_dart_type(s: &str) -> DartTypeNode {
             return DartTypeNode::Map(Box::new(k), Box::new(v));
         }
     }
-    DartTypeNode::Primitive(s.to_string())
+    // Normalize Frame keyword types to Dart's actual primitive names
+    // so the downstream cast emitter doesn't produce `as str` /
+    // `as float` (Dart errors). `int` and `bool` already match.
+    let normalized = match s {
+        "str" | "string" => "String",
+        "float" => "double",
+        other => other,
+    };
+    DartTypeNode::Primitive(normalized.to_string())
 }
 
 fn render_dart_type(t: &DartTypeNode) -> String {
