@@ -89,6 +89,13 @@ pub fn assemble(
         .map(|(name, params)| (name.as_str(), params.as_slice()))
         .collect();
 
+    // GDScript multi-system: track how many systems we've emitted so far
+    // so the second-and-later are wrapped as inner classes. Counting at
+    // the loop level is the only reliable signal — string-detection
+    // (e.g. searching for `extends`) would false-trigger on native
+    // prolog code such as `extends SceneTree` in fgd test fixtures.
+    let mut gdscript_systems_emitted: usize = 0;
+
     // Walk segments in order
     for segment in &source_map.segments {
         match segment {
@@ -129,7 +136,32 @@ pub fn assemble(
                         &params_by_name,
                         lang,
                     )?;
-                    output.push_str(&expanded);
+                    // GDScript multi-system: every system after the first
+                    // must be wrapped as an inner class. GDScript files
+                    // accept at most one script-level `extends` directive
+                    // and one set of script-level `var`/`func` declarations.
+                    // The first system stays as-is at script scope; systems
+                    // 2..N strip their leading `extends Base` line and wrap
+                    // the rest as `class <Name> extends Base:` with every
+                    // subsequent line indented one level.
+                    if matches!(lang, TargetLanguage::GDScript)
+                        && gdscript_systems_emitted >= 1
+                        && per_system_emits_at_module_scope(&expanded)
+                    {
+                        // Only systems whose codegen put them at script
+                        // scope (with a leading `extends Base`) need
+                        // wrapping. Systems without a base are already
+                        // emitted as `class Name:` inner-class form by
+                        // codegen — no wrap needed.
+                        let wrapped =
+                            wrap_gdscript_inner_system(name, &expanded);
+                        output.push_str(&wrapped);
+                    } else {
+                        output.push_str(&expanded);
+                    }
+                    if matches!(lang, TargetLanguage::GDScript) {
+                        gdscript_systems_emitted += 1;
+                    }
                 } else {
                     return Err(AssemblyError {
                         message: format!(
@@ -240,6 +272,87 @@ fn extract_text(source: &[u8], start: usize, end: usize) -> String {
     let end = end.min(source.len());
     let start = start.min(end);
     String::from_utf8_lossy(&source[start..end]).into_owned()
+}
+
+/// Did the GDScript codegen emit this system at script-module scope?
+///
+/// Module-scope emission starts with a leading `extends <Base>` line
+/// (after any blank lines) and lays the system's fields/methods flat
+/// at indent 0. Systems without a declared base are wrapped by codegen
+/// as `class <Name>:` inner classes from the start — those don't need
+/// the assembler-level wrap (it would double-nest the class).
+fn per_system_emits_at_module_scope(code: &str) -> bool {
+    code.lines()
+        .map(|l| l.trim_end())
+        .find(|l| !l.is_empty())
+        .map(|l| l.starts_with("extends "))
+        .unwrap_or(false)
+}
+
+/// Wrap a per-system GDScript emission as an inner class so multiple
+/// systems can co-exist in one `.gd` file.
+///
+/// Per-system codegen emits everything at script scope:
+///
+///   extends RefCounted
+///
+///   class FooFrameEvent: ...
+///   var __compartment
+///   func _init(): ...
+///
+/// GDScript files allow exactly one script-level `extends` and one
+/// set of script-level `var` / `func` declarations. Subsequent systems
+/// must be wrapped:
+///
+///   class Bar extends RefCounted:
+///       class BarFrameEvent: ...
+///       var __compartment
+///       func _init(): ...
+///
+/// This function:
+/// 1. Strips the leading `extends <Base>` line and any blank lines
+///    immediately after it.
+/// 2. Emits `class <SystemName> extends <Base>:` as the wrapper.
+/// 3. Indents every remaining non-empty line one level (4 spaces).
+fn wrap_gdscript_inner_system(name: &str, code: &str) -> String {
+    let mut lines = code.lines().peekable();
+    // Skip leading blank lines (codegen often starts with `\n`).
+    while matches!(lines.peek(), Some(l) if l.trim().is_empty()) {
+        lines.next();
+    }
+    // Pull the `extends <Base>` line. If absent (no base declared in
+    // Frame source), default to `RefCounted` — matches GDScript codegen.
+    let base = match lines.peek() {
+        Some(l) if l.starts_with("extends ") => {
+            let b = l.trim_start_matches("extends ").trim().to_string();
+            lines.next();
+            b
+        }
+        _ => "RefCounted".to_string(),
+    };
+    // Skip the blank line(s) the codegen pads after `extends`.
+    while matches!(lines.peek(), Some(l) if l.trim().is_empty()) {
+        lines.next();
+    }
+    let mut out = String::new();
+    out.push_str("\n\n");
+    out.push_str(&format!("class {} extends {}:\n", name, base));
+    let mut prev_blank = true; // collapse any leading blanks
+    for line in lines {
+        if line.is_empty() {
+            // Preserve blank lines but don't indent them.
+            if !prev_blank {
+                out.push('\n');
+            }
+            prev_blank = true;
+        } else {
+            out.push_str("    ");
+            out.push_str(line);
+            out.push('\n');
+            prev_blank = false;
+        }
+    }
+    out
 }
 
 /// Render a `CallArgsError` as a human-readable assembly diagnostic.
