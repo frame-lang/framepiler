@@ -1117,7 +1117,7 @@ self._context_stack.pop_back()"#,
 /// from source using the body span (Oceans Model).
 pub(crate) fn generate_action(
     action: &ActionAst,
-    _syntax: &super::backend::ClassSyntax,
+    syntax: &super::backend::ClassSyntax,
     source: &[u8],
 ) -> Vec<CodegenNode> {
     let params: Vec<Param> = action
@@ -1130,7 +1130,17 @@ pub(crate) fn generate_action(
         .collect();
 
     // Extract native code from source using span (oceans model)
-    let code = extract_body_content(source, &action.body.span);
+    let mut code = extract_body_content(source, &action.body.span);
+
+    // Lower `@@:(expr)` and `@@:system.state` in the action body. Per
+    // `_scratch/bug_at_at_colon_paren_in_actions_passthrough.md`, the
+    // concise return-sigil `@@:(expr)` is intuitive enough that users
+    // reach for it in actions even though the doc table prescribes
+    // native `return`. The shared expansion lowers it to
+    // `return expr` (target-language idiomatic) so action bodies
+    // get the DTRT treatment instead of passing the literal sigil
+    // through to the target compiler. Same path as `generate_operation`.
+    code = super::frame_expansion::expand_system_state_in_code(&code, syntax.language);
 
     let ret_type = match &action.return_type {
         crate::frame_c::compiler::frame_ast::Type::Unknown => None,
@@ -1385,10 +1395,27 @@ pub(crate) fn generate_persistence_methods(
 
     match syntax.language {
         TargetLanguage::Python3 => {
-            // Python uses pickle by default (stdlib, complete serialization)
-            // Generate save_state method - returns bytes
+            // RFC-0012 amendment: branch on new contract. Same pattern
+            // as GDScript — when @@[save] / @@[load] declared, emit
+            // both as instance methods under the user's chosen names.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "data".to_string());
+
+            // save_state — already an instance method; rename if user
+            // chose a different op name.
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("bytes".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -1401,20 +1428,51 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // Generate restore_state - takes bytes, returns instance
-            methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("data").with_type("bytes")],
-                return_type: Some(format!("'{}'", system.name)),
-                body: vec![CodegenNode::NativeBlock {
-                    code: "import pickle\nreturn pickle.loads(data)".to_string(),
-                    span: None,
-                }],
-                is_async: false,
-                is_static: true,
-                visibility: Visibility::Public,
-                decorators: vec![],
-            });
+            // Load shape diverges:
+            //   Legacy: @classmethod returning a new instance via
+            //           pickle.loads(data) — caller does
+            //           `Foo.restore_state(data)`.
+            //   New:    instance method that mutates self by copying
+            //           every attribute from the unpickled clone via
+            //           `self.__dict__.update(loaded.__dict__)`.
+            //           Caller does `inst = Foo(); inst.unpickle(data)`.
+            //
+            // Pickle restores a complete object graph; copying the
+            // dict is the cleanest way to map that into the existing
+            // instance without re-running pickle's `__setstate__`
+            // protocol (which can fight with Frame's `_init`).
+            if uses_new_contract {
+                methods.push(CodegenNode::Method {
+                    name: load_method_name.clone(),
+                    params: vec![Param::new(&load_param_name).with_type("bytes")],
+                    return_type: None,
+                    body: vec![CodegenNode::NativeBlock {
+                        code: format!(
+                            "import pickle\n_loaded = pickle.loads({})\nself.__dict__.update(_loaded.__dict__)",
+                            load_param_name
+                        ),
+                        span: None,
+                    }],
+                    is_async: false,
+                    is_static: false,
+                    visibility: Visibility::Public,
+                    decorators: vec![],
+                });
+            } else {
+                methods.push(CodegenNode::Method {
+                    name: "restore_state".to_string(),
+                    params: vec![Param::new("data").with_type("bytes")],
+                    return_type: Some(format!("'{}'", system.name)),
+                    body: vec![CodegenNode::NativeBlock {
+                        code: "import pickle\nreturn pickle.loads(data)".to_string(),
+                        span: None,
+                    }],
+                    is_async: false,
+                    is_static: true,
+                    visibility: Visibility::Public,
+                    decorators: vec![],
+                });
+            }
         }
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
             let is_ts = matches!(syntax.language, TargetLanguage::TypeScript);
