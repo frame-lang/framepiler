@@ -739,6 +739,54 @@ impl SystemAst {
         self.operations.iter().any(|o| o.name == name)
     }
 
+    // ----------------------------------------------------------------
+    // RFC-0012 amendment 2026-05-02: persist contract inspection.
+    //
+    // Three small lookups codegen uses to branch between the legacy
+    // static-`restore_state` shape and the new instance-method shape
+    // declared via `@@[save]` / `@@[load]` operation attributes.
+    // ----------------------------------------------------------------
+
+    /// Name of the user's operation marked `@@[save]`, if any. Returns
+    /// `None` when no operation carries the attribute (legacy contract).
+    pub fn save_op_name(&self) -> Option<&str> {
+        self.operations
+            .iter()
+            .find(|op| op.attributes.iter().any(|a| a.name == "save"))
+            .map(|op| op.name.as_str())
+    }
+
+    /// Name of the user's operation marked `@@[load]`, if any. Returns
+    /// `None` when no operation carries the attribute (legacy contract).
+    pub fn load_op_name(&self) -> Option<&str> {
+        self.operations
+            .iter()
+            .find(|op| op.attributes.iter().any(|a| a.name == "load"))
+            .map(|op| op.name.as_str())
+    }
+
+    /// True iff the system has `@@[persist]` AND declares at least one
+    /// of `@@[save]` / `@@[load]` operation. Codegen uses this as the
+    /// switch between the legacy static-method persist shape and the
+    /// new instance-method shape per the RFC-0012 amendment.
+    pub fn uses_new_persist_contract(&self) -> bool {
+        self.persist_attr.is_some()
+            && (self.save_op_name().is_some() || self.load_op_name().is_some())
+    }
+
+    /// Name of the load operation parameter (always at most one).
+    /// Codegen uses this as the parameter name in the framework-
+    /// generated load body so it matches what the user declared in
+    /// the operation signature (e.g., `unpickle(data: str)` →
+    /// `"data"`).
+    pub fn load_op_param_name(&self) -> Option<&str> {
+        let op = self
+            .operations
+            .iter()
+            .find(|op| op.attributes.iter().any(|a| a.name == "load"))?;
+        op.params.first().map(|p| p.name.as_str())
+    }
+
     /// Get section span for a given section kind
     pub fn get_section_span(&self, kind: SystemSectionKind) -> Option<&Span> {
         match kind {
@@ -908,5 +956,123 @@ mod tests {
             system.persist_attr.as_ref().unwrap().save_name,
             Some("custom_save".to_string())
         );
+    }
+
+    // ----------------------------------------------------------------
+    // RFC-0012 amendment 2026-05-02: persist contract inspection.
+    // Tests for SystemAst::save_op_name / load_op_name /
+    // uses_new_persist_contract / load_op_param_name.
+    // ----------------------------------------------------------------
+
+    fn make_op_with_attrs(name: &str, attr_names: &[&str]) -> OperationAst {
+        OperationAst {
+            name: name.to_string(),
+            params: vec![],
+            return_type: Type::Unknown,
+            body: OperationBody {
+                span: Span::new(0, 0),
+                code: None,
+            },
+            is_static: false,
+            is_async: false,
+            leading_comments: vec![],
+            attributes: attr_names
+                .iter()
+                .map(|n| Attribute {
+                    name: n.to_string(),
+                    args: None,
+                    span: Span::new(0, 0),
+                })
+                .collect(),
+            span: Span::new(0, 0),
+        }
+    }
+
+    #[test]
+    fn save_op_name_finds_marked_op() {
+        let mut sys = SystemAst::new("Foo".to_string(), Span::new(0, 0));
+        sys.operations.push(make_op_with_attrs("regular_op", &[]));
+        sys.operations.push(make_op_with_attrs("pickle", &["save"]));
+        sys.operations
+            .push(make_op_with_attrs("unpickle", &["load"]));
+        assert_eq!(sys.save_op_name(), Some("pickle"));
+        assert_eq!(sys.load_op_name(), Some("unpickle"));
+    }
+
+    #[test]
+    fn save_op_name_returns_none_when_no_op_marked() {
+        let mut sys = SystemAst::new("Bare".to_string(), Span::new(0, 0));
+        sys.operations.push(make_op_with_attrs("regular_op", &[]));
+        assert_eq!(sys.save_op_name(), None);
+        assert_eq!(sys.load_op_name(), None);
+    }
+
+    #[test]
+    fn uses_new_persist_contract_requires_persist_and_save_or_load() {
+        let mut sys = SystemAst::new("NoPersist".to_string(), Span::new(0, 0));
+        sys.operations.push(make_op_with_attrs("pickle", &["save"]));
+        // Has @@[save] but NOT @@[persist] → not the new contract.
+        assert!(!sys.uses_new_persist_contract());
+
+        sys.persist_attr = Some(PersistAttr {
+            save_name: None,
+            restore_name: None,
+            library: None,
+            span: Span::new(0, 0),
+        });
+        // Now has both → new contract active.
+        assert!(sys.uses_new_persist_contract());
+    }
+
+    #[test]
+    fn uses_new_persist_contract_active_with_only_load() {
+        let mut sys = SystemAst::new("OnlyLoad".to_string(), Span::new(0, 0));
+        sys.persist_attr = Some(PersistAttr {
+            save_name: None,
+            restore_name: None,
+            library: None,
+            span: Span::new(0, 0),
+        });
+        sys.operations
+            .push(make_op_with_attrs("unpickle", &["load"]));
+        // Either save or load is sufficient — system uses new contract.
+        // (Validator E810 catches the asymmetric case separately.)
+        assert!(sys.uses_new_persist_contract());
+    }
+
+    #[test]
+    fn uses_new_persist_contract_inactive_with_no_save_load() {
+        // Legacy persist systems (`@@[persist]` but no save/load ops)
+        // stay on the static-method contract — codegen branches on
+        // this flag.
+        let mut sys = SystemAst::new("Legacy".to_string(), Span::new(0, 0));
+        sys.persist_attr = Some(PersistAttr {
+            save_name: None,
+            restore_name: None,
+            library: None,
+            span: Span::new(0, 0),
+        });
+        sys.operations.push(make_op_with_attrs("regular_op", &[]));
+        assert!(!sys.uses_new_persist_contract());
+    }
+
+    #[test]
+    fn load_op_param_name_returns_user_chosen_name() {
+        let mut sys = SystemAst::new("Foo".to_string(), Span::new(0, 0));
+        let mut op = make_op_with_attrs("unpickle", &["load"]);
+        op.params.push(OperationParam {
+            name: "snap".to_string(),
+            param_type: Type::Custom("str".to_string()),
+            default: None,
+            span: Span::new(0, 0),
+        });
+        sys.operations.push(op);
+        assert_eq!(sys.load_op_param_name(), Some("snap"));
+    }
+
+    #[test]
+    fn load_op_param_name_none_when_no_load_op() {
+        let sys = SystemAst::new("Foo".to_string(), Span::new(0, 0));
+        assert_eq!(sys.load_op_param_name(), None);
     }
 }
