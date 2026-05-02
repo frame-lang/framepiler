@@ -93,6 +93,30 @@ fn cpp_wrap_string_literal(expr: &str) -> String {
     }
 }
 
+/// Wrap an expression in `(...)` when it spans multiple source lines.
+///
+/// Frame's `@@:(<expr>)` and `@@:return = <expr>` sigils carry parens
+/// that serve as syntactic markers for the return-value form. The
+/// codegen consumes those markers and emits the inner expression as
+/// the RHS of an assignment to the context-stack `_return` slot. On
+/// indent-sensitive targets (Python, GDScript) a multi-line RHS
+/// without grouping parens hits a parse error: the assignment closes
+/// at the first newline and the continuation line ("    and ...")
+/// becomes an unexpected `Indent`.
+///
+/// Re-introducing parens around a multi-line RHS restores the
+/// implicit line-continuation that those targets require. For
+/// curly-brace targets the parens are redundant but harmless. Single-
+/// line expressions skip the wrap so the common case stays
+/// paren-free.
+fn paren_wrap_if_multiline(expr: &str) -> String {
+    if expr.contains('\n') {
+        format!("({})", expr)
+    } else {
+        expr.to_string()
+    }
+}
+
 /// `@@:return` typed-read expansion across all 17 targets.
 ///
 /// The per-call context stack's `_return` slot is untyped in every
@@ -3098,7 +3122,7 @@ pub(crate) fn generate_frame_expansion(
                     let eq_pos = trimmed.find('=').unwrap();
                     trimmed[eq_pos + 1..].trim().trim_end_matches(';').trim()
                 };
-                let expanded_expr = expand_expression(expr, lang, ctx);
+                let expanded_expr = paren_wrap_if_multiline(&expand_expression(expr, lang, ctx));
                 match lang {
                     TargetLanguage::Python3 | TargetLanguage::GDScript => format!(
                         "{}self._context_stack[-1]._return = {}",
@@ -3260,7 +3284,7 @@ pub(crate) fn generate_frame_expansion(
                     (trimmed.to_string(), false)
                 }
             };
-            let expanded_expr = expand_expression(expr.trim(), lang, ctx);
+            let expanded_expr = paren_wrap_if_multiline(&expand_expression(expr.trim(), lang, ctx));
             // Standalone @@ constructs include indent_str on all lines.
             // The scanner trims trailing whitespace from preceding native
             // text for standalone constructs (computed_indent > 0), so
@@ -3584,7 +3608,7 @@ pub(crate) fn generate_frame_expansion(
                 };
                 &expr_owned
             };
-            let expanded_expr = expand_expression(expr, lang, ctx);
+            let expanded_expr = paren_wrap_if_multiline(&expand_expression(expr, lang, ctx));
 
             // Standalone @@ constructs include indent_str on all lines.
             let set_code = match lang {
@@ -5078,6 +5102,84 @@ mod tests {
         assert!(
             !result.contains("String::from"),
             "Rust @@:return = 42 should NOT wrap, got: {}",
+            result
+        );
+    }
+
+    // =========================================================
+    // paren_wrap_if_multiline — multi-line @@:(expr) assignments
+    // need re-wrapping in `(...)` so indent-sensitive targets
+    // (Python, GDScript) parse the continuation lines as part of
+    // the expression. Single-line expressions stay unwrapped.
+    // =========================================================
+
+    #[test]
+    fn paren_wrap_if_multiline_singleline_unchanged() {
+        assert_eq!(paren_wrap_if_multiline("self.x"), "self.x");
+        assert_eq!(paren_wrap_if_multiline("a + b"), "a + b");
+        assert_eq!(paren_wrap_if_multiline(""), "");
+    }
+
+    #[test]
+    fn paren_wrap_if_multiline_wraps_multiline() {
+        let inp = "self.timer >= self.threshold\n    and self.count < self.limit";
+        let want = "(self.timer >= self.threshold\n    and self.count < self.limit)";
+        assert_eq!(paren_wrap_if_multiline(inp), want);
+    }
+
+    #[test]
+    fn context_return_expr_gdscript_multiline_wraps() {
+        let ctx = make_ctx(vec![]);
+        let result = expand(
+            FrameSegmentKind::ContextReturnExpr,
+            "@@:(self.timer >= self.threshold\n    and self.count < self.limit)",
+            TargetLanguage::GDScript,
+            &ctx,
+        );
+        assert!(
+            result.contains(
+                "_return = (self.timer >= self.threshold\n    and self.count < self.limit)"
+            ),
+            "GDScript multi-line @@:() should re-wrap in parens, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn context_return_expr_python_multiline_wraps() {
+        let ctx = make_ctx(vec![]);
+        let result = expand(
+            FrameSegmentKind::ContextReturnExpr,
+            "@@:(self.timer >= self.threshold\n    and self.count < self.limit)",
+            TargetLanguage::Python3,
+            &ctx,
+        );
+        assert!(
+            result.contains(
+                "_return = (self.timer >= self.threshold\n    and self.count < self.limit)"
+            ),
+            "Python multi-line @@:() should re-wrap in parens, got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn context_return_expr_singleline_no_wrap() {
+        let ctx = make_ctx(vec![]);
+        let result = expand(
+            FrameSegmentKind::ContextReturnExpr,
+            "@@:(true)",
+            TargetLanguage::GDScript,
+            &ctx,
+        );
+        assert!(
+            result.contains("_return = true"),
+            "single-line @@:() should NOT add parens, got:\n{}",
+            result
+        );
+        assert!(
+            !result.contains("_return = (true)"),
+            "single-line @@:() must not gain parens, got:\n{}",
             result
         );
     }
