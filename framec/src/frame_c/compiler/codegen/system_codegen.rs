@@ -221,7 +221,20 @@ pub fn generate_system_shared(
     }
 
     // Operations - same pattern as actions.
+    //
+    // RFC-0012 amendment: operations marked `@@[save]` / `@@[load]`
+    // are framework-managed — their bodies are emitted by
+    // `generate_persistence_methods` below, NOT by the per-target
+    // operation codegen. We skip them here to avoid emitting the
+    // user's empty placeholder method alongside the framework one.
     for operation in &system.operations {
+        let is_framework_managed = operation
+            .attributes
+            .iter()
+            .any(|a| a.name == "save" || a.name == "load");
+        if is_framework_managed {
+            continue;
+        }
         methods.extend(generate_operation(operation, &syntax, source));
     }
 

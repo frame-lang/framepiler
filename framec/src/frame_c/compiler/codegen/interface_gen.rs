@@ -4421,6 +4421,33 @@ pub(crate) fn generate_persistence_methods(
             // GDScript: JSON-based persistence using serialize_comp helper
             let compartment_type = format!("{}Compartment", system.name);
 
+            // RFC-0012 amendment 2026-05-02: when the system declares
+            // `@@[save]` / `@@[load]` operations, we emit the
+            // framework body inside the user-named operation as an
+            // INSTANCE method, dropping the legacy static
+            // `restore_state` shape (and its `__skipInitialEnter`
+            // class-static flag dance — fragile in single-file and
+            // outright broken in Godot's class_name scoping).
+            //
+            // Branching is per-system: legacy `@@[persist]` systems
+            // without `@@[save]` / `@@[load]` ops keep their existing
+            // codegen unchanged. The two shapes co-exist so the
+            // 80+ existing GDScript persist tests stay green during
+            // the Phase A migration; Phase B sweeps the corpus.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "data".to_string());
+
             // save_state method - iterative serialization (GDScript lambdas can't recurse)
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
@@ -4474,8 +4501,12 @@ pub(crate) fn generate_persistence_methods(
 
             save_body.push_str("return var_to_bytes(state_data)");
 
+            // save_state body is identical regardless of contract — it
+            // was already an instance method that uses `self.` to read
+            // domain. Only the method NAME differs under the new
+            // contract (the user picks it via `@@[save]`).
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("PackedByteArray".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -4488,9 +4519,23 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state static method - iterative deserialization
+            // Load body — build it as an instance method body when the
+            // new contract is in use, or as a static factory body
+            // otherwise. The deserialization logic is identical; the
+            // structural differences are the populate target
+            // (`self.` vs `instance.`), whether we construct an
+            // instance, whether we toggle `__skipInitialEnter`, and
+            // whether we return.
+            let target = if uses_new_contract {
+                "self"
+            } else {
+                "instance"
+            };
             let mut restore_body = String::new();
-            restore_body.push_str("var state_data = bytes_to_var(data)\n");
+            restore_body.push_str(&format!(
+                "var state_data = bytes_to_var({})\n",
+                load_param_name
+            ));
             // Deserialize compartment chain iteratively
             restore_body.push_str("var _deser_chain = func(d):\n");
             restore_body.push_str("    if d == null:\n");
@@ -4516,20 +4561,32 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("        result = comp\n");
             restore_body.push_str("    return result\n");
 
-            // Set the class-static __skipInitialEnter before constructing
-            // so the initial-state $>() handler is not re-fired on a
-            // restored instance. See Swift comment for the pattern.
-            restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", system.name));
-            restore_body.push_str(&format!("var instance = {}.new()\n", system.name));
-            restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", system.name));
-            restore_body.push_str(
-                "instance.__compartment = _deser_chain.call(state_data[\"_compartment\"])\n",
-            );
-            restore_body.push_str("instance.__next_compartment = null\n");
-            restore_body.push_str("instance._state_stack = []\n");
+            // Legacy contract only: construct a fresh instance with
+            // the class-static `__skipInitialEnter` flag toggled so
+            // the start-state `>()` handler doesn't re-fire on the
+            // restored instance. The new contract sidesteps this
+            // entirely — `self` is the existing instance whose
+            // compartment we're about to overwrite, so the start-
+            // state enter has already fired (once, on `Foo.new()`).
+            // See the RFC-0012 amendment "$S0 enter on restore"
+            // section for the contract decision.
+            if !uses_new_contract {
+                restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", system.name));
+                restore_body.push_str(&format!("var instance = {}.new()\n", system.name));
+                restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", system.name));
+            }
+            restore_body.push_str(&format!(
+                "{}.__compartment = _deser_chain.call(state_data[\"_compartment\"])\n",
+                target
+            ));
+            restore_body.push_str(&format!("{}.__next_compartment = null\n", target));
+            restore_body.push_str(&format!("{}._state_stack = []\n", target));
             restore_body.push_str("for c in state_data.get(\"_state_stack\", []):\n");
-            restore_body.push_str("    instance._state_stack.append(_deser_chain.call(c))\n");
-            restore_body.push_str("instance._context_stack = []\n");
+            restore_body.push_str(&format!(
+                "    {}._state_stack.append(_deser_chain.call(c))\n",
+                target
+            ));
+            restore_body.push_str(&format!("{}._context_stack = []\n", target));
 
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
@@ -4538,30 +4595,56 @@ pub(crate) fn generate_persistence_methods(
                         "var __raw_{0} = state_data.get(\"{0}\", null)\n",
                         var.name
                     ));
+                    // For nested systems, the child's load operation
+                    // may also be the new contract; use the child's
+                    // legacy `restore_state` here. Phase B's sweep
+                    // will reconcile cross-system new-contract loads
+                    // (when both parent and child opt in).
                     restore_body.push_str(&format!(
-                        "instance.{0} = {1}.restore_state(var_to_bytes(__raw_{0})) if __raw_{0} != null else null\n",
-                        var.name, child_sys
+                        "{0}.{1} = {2}.restore_state(var_to_bytes(__raw_{1})) if __raw_{1} != null else null\n",
+                        target, var.name, child_sys
                     ));
                 } else {
                     restore_body.push_str(&format!(
-                        "instance.{} = state_data.get(\"{}\", null)\n",
-                        var.name, var.name
+                        "{}.{} = state_data.get(\"{}\", null)\n",
+                        target, var.name, var.name
                     ));
                 }
             }
 
-            restore_body.push_str("return instance");
+            // Legacy returns the constructed instance; the new
+            // instance-method shape has no return value (mutates self).
+            if !uses_new_contract {
+                restore_body.push_str("return instance");
+            }
 
+            // Push the load method with a shape determined by the
+            // contract: instance method (no return) under the new
+            // contract, static factory (returns the system) under
+            // the legacy one.
+            let (load_params, load_return, load_static) = if uses_new_contract {
+                (
+                    vec![Param::new(&load_param_name).with_type("PackedByteArray")],
+                    None,
+                    false,
+                )
+            } else {
+                (
+                    vec![Param::new(&load_param_name).with_type("PackedByteArray")],
+                    Some(system.name.clone()),
+                    true,
+                )
+            };
             methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("data").with_type("PackedByteArray")],
-                return_type: Some(system.name.clone()),
+                name: load_method_name.clone(),
+                params: load_params,
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
