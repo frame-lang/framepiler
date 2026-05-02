@@ -1120,11 +1120,27 @@ impl<'a> Parser<'a> {
 
     fn parse_operations(&mut self) -> Result<Vec<OperationAst>, ParseError> {
         let mut ops = Vec::new();
+        // Pending RFC-0013 attribute tokens accumulate here until the
+        // next operation declaration consumes them. RFC-0012 amendment
+        // 2026-05-02 uses this for `@@[save]` / `@@[load]` on persist
+        // operations; same plumbing as `interface:` and `machine:`.
+        let mut pending_attrs: Vec<crate::frame_c::compiler::frame_ast::Attribute> = Vec::new();
         loop {
             let tok = self.peek()?;
             match tok {
+                Token::Attribute { .. } => {
+                    let spanned = self.advance()?;
+                    if let Token::Attribute { name, args } = spanned.token {
+                        pending_attrs.push(crate::frame_c::compiler::frame_ast::Attribute {
+                            name,
+                            args,
+                            span: spanned.span,
+                        });
+                    }
+                }
                 Token::Ident(_) => {
-                    let op = self.parse_operation()?;
+                    let mut op = self.parse_operation()?;
+                    op.attributes = std::mem::take(&mut pending_attrs);
                     ops.push(op);
                 }
                 Token::Interface
@@ -1203,6 +1219,7 @@ impl<'a> Parser<'a> {
             is_static,
             is_async,
             leading_comments,
+            attributes: vec![],
             span: Span::new(start, self.lexer.cursor()),
         })
     }

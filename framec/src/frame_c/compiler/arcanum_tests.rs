@@ -222,6 +222,7 @@ mod tests {
             is_static: false,
             is_async: false,
             leading_comments: Vec::new(),
+            attributes: Vec::new(),
             span: FrameSpan::new(40, 50),
         });
 

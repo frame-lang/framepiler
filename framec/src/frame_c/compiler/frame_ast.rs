@@ -612,6 +612,11 @@ pub struct OperationAst {
     /// `take_pending_comments()` and emitted by codegen before the
     /// per-target operation method definition.
     pub leading_comments: Vec<String>,
+    /// RFC-0013 attributes attached via `@@[name(args?)]` immediately
+    /// before this declaration. RFC-0012 amendment 2026-05-02 uses
+    /// this for `@@[save]` / `@@[load]` to mark persist endpoints
+    /// whose bodies the framework generates.
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
