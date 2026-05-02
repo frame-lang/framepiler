@@ -1,22 +1,19 @@
 // GDScript multi-system assembler — wrapper module.
 //
 // Wires the Frame-generated state machine in `multisys_assembler.gen.rs`
-// to the assembler's per-system emit loop. The FSM walks a single
-// per-system emission and wraps it as a sibling inner class:
+// to the assembler's per-system emit loop:
 //
-//   * `wrap_inner(name)` — every system after the first. Strips the
+//   * `wrap_inner(name)` — every non-primary system. Strips the
 //     leading `extends <Base>` line, emits `class <name> extends <Base>:`
 //     as the wrapper, and indents every non-blank body line one level
 //     (4 spaces). GDScript inner classes resolve sibling lookups, so
-//     this restores cross-system addressability among systems 2..N.
+//     this lets non-primary systems reference each other by bare name
+//     and lets the primary (script-level) system instantiate them.
 //
-//   * `prepend_class_name(output, name)` — file-level, post-loop.
-//     Inserts `class_name <name>` at the very top of the assembled
-//     output so the inner-class systems (and external preload callers)
-//     can resolve the first system by bare identifier. GDScript
-//     requires `class_name` to come before any `extends`, so this
-//     can't live inside the per-system FSM (the prolog's `extends
-//     SceneTree` comes before the first system's emission).
+// "Primary" selection is the assembler's job, not this module's.
+// Today the assembler picks lexically-first; RFC-0014 introduces
+// `@@[main]` to let developers mark the intended primary explicitly.
+// This module just wraps whatever it's given.
 //
 // Why the FSM expression: per
 // `docs/articles/research/Parsers_as_Composed_State_Machines.md`,
@@ -42,28 +39,6 @@ pub fn wrap_inner(name: &str, code: &str) -> String {
     fsm.bytes = code.as_bytes().to_vec();
     fsm.wrap_inner(name.to_string());
     fsm.out
-}
-
-/// Prepend `class_name <name>\n` at the very top of an assembled
-/// GDScript file. Used for multi-system files so the first system's
-/// name registers in Godot's global class registry — inner-class
-/// systems (and external preload callers) then resolve it by bare
-/// identifier (`var sub = First.new()`).
-///
-/// Idempotent: if the file already starts with `class_name`, returns
-/// it unchanged. GDScript requires `class_name` before any `extends`
-/// directive, so this must run after the assembler has finished
-/// concatenating the native prolog with the per-system emissions.
-pub fn prepend_class_name(output: &str, name: &str) -> String {
-    if output.trim_start().starts_with("class_name ") {
-        return output.to_string();
-    }
-    let mut out = String::with_capacity(output.len() + name.len() + 16);
-    out.push_str("class_name ");
-    out.push_str(name);
-    out.push('\n');
-    out.push_str(output);
-    out
 }
 
 // ---------------------------------------------------------------------
@@ -190,26 +165,6 @@ mod tests {
             "default base not RefCounted:\n{got}"
         );
         assert!(got.contains("    class Bare:"));
-    }
-
-    #[test]
-    fn prepend_class_name_lands_at_top() {
-        let assembled = "extends SceneTree\n\nfunc _init():\n    pass\n";
-        let got = prepend_class_name(assembled, "AppLogger");
-        assert!(
-            got.starts_with("class_name AppLogger\n"),
-            "class_name not at top:\n{got}"
-        );
-        let cn_idx = got.find("class_name AppLogger").unwrap();
-        let ext_idx = got.find("extends SceneTree").unwrap();
-        assert!(cn_idx < ext_idx);
-    }
-
-    #[test]
-    fn prepend_class_name_idempotent() {
-        let already = "class_name First\nextends Node\n";
-        let got = prepend_class_name(already, "First");
-        assert_eq!(got, already);
     }
 
     #[test]

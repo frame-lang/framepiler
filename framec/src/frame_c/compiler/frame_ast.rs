@@ -118,6 +118,14 @@ pub struct SystemAst {
     /// Visibility modifier: "private" overrides the public default.
     /// None or absent means public (the default).
     pub visibility: Option<String>,
+    /// RFC-0014 module-level attributes attached via `@@[name(args?)]`
+    /// immediately preceding a `@@system` declaration. The first
+    /// recognized attribute is `@@[main]`, which marks the system as
+    /// the file's primary for targets that privilege one class per
+    /// file (GDScript, Java, etc.). RFC-0013's `@@[persist]` is
+    /// special-cased into `persist_attr` for backwards compatibility
+    /// — future attributes use this generic vec.
+    pub attributes: Vec<Attribute>,
 }
 
 /// Which group a system header parameter belongs to.
@@ -686,7 +694,15 @@ impl SystemAst {
             persist_attr: None,
             section_order: vec![],
             visibility: None,
+            attributes: vec![],
         }
+    }
+
+    /// True iff this system carries the RFC-0014 `@@[main]` attribute,
+    /// marking it as the file's primary system for targets that
+    /// privilege one class per file (GDScript, Java, etc.).
+    pub fn is_main(&self) -> bool {
+        self.attributes.iter().any(|a| a.name == "main")
     }
 
     /// Get the start state of the machine (first state defined)

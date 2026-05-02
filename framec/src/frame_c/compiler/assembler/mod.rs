@@ -52,12 +52,17 @@ impl std::error::Error for AssemblyError {}
 ///   (sigil checks, named lookup, default substitution).
 /// `lang` — target language for tagged instantiation expansion
 /// `runtime_imports` — imports required by generated code (emitted before any native code)
+/// `main_system` — RFC-0014 primary system. For multi-system GDScript files this
+///   is the system whose code emits at script-module scope; every other system
+///   wraps as an inner class. None for single-system files (no special handling
+///   needed) or for non-GDScript targets where the attribute is metadata-only.
 pub fn assemble(
     source_map: &SourceMap,
     generated_systems: &[(String, String)],
     system_params: &[(String, Vec<SystemParam>)],
     lang: TargetLanguage,
     runtime_imports: &[String],
+    main_system: Option<&str>,
 ) -> Result<String, AssemblyError> {
     let source = &source_map.source;
     let mut output = String::new();
@@ -89,18 +94,37 @@ pub fn assemble(
         .map(|(name, params)| (name.as_str(), params.as_slice()))
         .collect();
 
-    // GDScript multi-system: track how many systems we've emitted so far
-    // so the second-and-later are wrapped as inner classes. Counting at
-    // the loop level is the only reliable signal — string-detection
-    // (e.g. searching for `extends`) would false-trigger on native
-    // prolog code such as `extends SceneTree` in fgd test fixtures.
-    // Also remember the first system's name for the file-level
-    // `class_name` post-pass that runs after the loop, and whether
-    // codegen put it at module-scope (which determines whether
-    // `class_name` is safe to add — see post-pass for rationale).
-    let mut gdscript_systems_emitted: usize = 0;
-    let mut gdscript_first_system: Option<String> = None;
-    let mut gdscript_first_at_module_scope: bool = false;
+    // GDScript multi-system: the system whose name matches
+    // `main_system` (RFC-0014's `@@[main]`) emits at script-module
+    // scope; every other system wraps as a sibling inner class.
+    // `main_system` is None for single-system files (no special
+    // handling needed — the lone system is implicitly primary) and
+    // for non-GDScript targets.
+    //
+    // GDScript additionally requires the script-level `extends Base`
+    // directive to appear before any other declaration (after
+    // optional `class_name`). The main system's per-system emission
+    // begins with its `extends Base` line, but in source order the
+    // main system is typically NOT first (frame-arcade convention:
+    // primitives first, composer last). We hoist the main system's
+    // `extends` line to the top of the file and strip it from the
+    // main system's emission during the walk so the script parses
+    // cleanly.
+    let main_extends_line: Option<String> =
+        if matches!(lang, TargetLanguage::GDScript) {
+            main_system.and_then(|m| {
+                generated_systems
+                    .iter()
+                    .find(|(name, _)| name == m)
+                    .and_then(|(_, code)| extract_leading_extends_line(code))
+            })
+        } else {
+            None
+        };
+    if let Some(ref ext_line) = main_extends_line {
+        output.push_str(ext_line);
+        output.push_str("\n\n");
+    }
 
     // Walk segments in order
     for segment in &source_map.segments {
@@ -151,18 +175,20 @@ pub fn assemble(
                     // the rest as `class <Name> extends Base:` with every
                     // subsequent line indented one level.
                     if matches!(lang, TargetLanguage::GDScript) {
-                        if gdscript_first_system.is_none() {
-                            gdscript_first_system = Some(name.clone());
-                            gdscript_first_at_module_scope =
-                                per_system_emits_at_module_scope(&expanded);
-                        }
+                        let is_main = main_system
+                            .map(|m| m == name.as_str())
+                            .unwrap_or(false);
+                        // When the main system's `extends Base` line
+                        // was hoisted to the top of the file, strip
+                        // it from the in-line emission to avoid a
+                        // duplicate `extends`.
                         let rewritten = rewrite_gdscript_per_system(
                             name,
                             &expanded,
-                            gdscript_systems_emitted,
+                            is_main,
+                            is_main && main_extends_line.is_some(),
                         );
                         output.push_str(&rewritten);
-                        gdscript_systems_emitted += 1;
                     } else {
                         output.push_str(&expanded);
                     }
@@ -264,37 +290,6 @@ pub fn assemble(
         }
     }
 
-    // GDScript file-level post-pass: when 2+ systems share the file
-    // AND the first system was emitted at script-module scope (i.e.
-    // its body owns the script's `extends` and lives at indent 0),
-    // prepend `class_name <FirstSystem>` so the first system registers
-    // in Godot's global class registry. Inner-class systems (and
-    // external preload callers) then resolve sibling references via
-    // bare identifier (`var sub = First.new()`).
-    //
-    // Skipped when codegen wrapped the first system as `class
-    // <First>:` inner-class form (no declared base in Frame source) —
-    // the inner class shares its name with what would be the
-    // `class_name`, and Godot resolves the global class_name first,
-    // shadowing the inner class. That breaks every script-internal
-    // reference to the first system. The inner-class form is already
-    // sibling-resolvable from the other systems; no global registry
-    // entry needed.
-    //
-    // GDScript requires `class_name` before any `extends`, so this
-    // runs after the assembly loop has committed the native prolog
-    // and first system to `output`.
-    if matches!(lang, TargetLanguage::GDScript)
-        && gdscript_systems_emitted >= 2
-        && gdscript_first_at_module_scope
-    {
-        if let Some(first) = gdscript_first_system.as_deref() {
-            output = crate::frame_c::compiler::gdscript_multisys::prepend_class_name(
-                &output, first,
-            );
-        }
-    }
-
     Ok(output)
 }
 
@@ -324,34 +319,106 @@ fn per_system_emits_at_module_scope(code: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Rewrite a single per-system GDScript emission for its position in
-/// the multi-system file:
+/// Rewrite a single per-system GDScript emission according to whether
+/// it's the file's `@@[main]` system (RFC-0014):
 ///
-/// * **First system** (`emitted_so_far == 0`): pass through. Its
-///   per-system codegen owns the script-level `extends` directive
-///   and any `var` / `func` declarations. The file-level
-///   `class_name <First>` line is added by `prepend_class_name`
-///   after the assembly loop completes.
+/// * **Main system** (`is_main == true`): pass through unchanged.
+///   Its per-system codegen owns the script-level `extends` directive
+///   and any `var` / `func` declarations. From here, references to
+///   non-main systems resolve as `Inner.new()` — sibling inner
+///   classes are visible from the script's own `_init` and method
+///   bodies.
 ///
-/// * **Subsequent systems** (`emitted_so_far >= 1`) whose codegen
-///   went out at script-module scope (leading `extends <Base>`):
-///   wrap as `class <name> extends <Base>:` with the body indented
-///   one level. Systems whose codegen already produced inner-class
-///   form (`class <Name>:`, no declared base) pass through unchanged —
-///   wrapping again would double-nest the class.
+/// * **Non-main systems** whose codegen emitted at script-module
+///   scope (leading `extends <Base>`): wrap as `class <name> extends
+///   <Base>:` with the body indented one level. Sibling inner classes
+///   in GDScript can reference each other by bare name.
+///
+/// * **Non-main systems** whose codegen already produced inner-class
+///   form (`class <name>:`, no declared base): pass through unchanged.
+///   Wrapping again would double-nest the class.
 ///
 /// All wrapping/indenting work delegates to the Frame state machine
 /// in `compiler/gdscript_multisys/multisys_assembler.frs`.
-fn rewrite_gdscript_per_system(name: &str, code: &str, emitted_so_far: usize) -> String {
+fn rewrite_gdscript_per_system(
+    name: &str,
+    code: &str,
+    is_main: bool,
+    strip_leading_extends: bool,
+) -> String {
     use crate::frame_c::compiler::gdscript_multisys;
 
-    if emitted_so_far == 0 {
-        code.to_string()
+    if is_main {
+        if strip_leading_extends {
+            strip_leading_extends_line(code)
+        } else {
+            code.to_string()
+        }
     } else if per_system_emits_at_module_scope(code) {
         gdscript_multisys::wrap_inner(name, code)
     } else {
         code.to_string()
     }
+}
+
+/// Find the leading `extends <Base>` line in a per-system GDScript
+/// emission and return it (without the trailing newline). Used by the
+/// main-system hoist so the script-level `extends` directive lands at
+/// the very top of the file, before any inner-class declarations from
+/// non-main systems.
+///
+/// Returns None when the system's emission doesn't begin with an
+/// `extends` directive — typically because codegen wrapped it as
+/// inner-class form (no declared base in source). In that case the
+/// hoist is a no-op.
+fn extract_leading_extends_line(code: &str) -> Option<String> {
+    for line in code.lines() {
+        let t = line.trim_start();
+        if t.is_empty() {
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("extends ") {
+            return Some(format!("extends {}", rest.trim_end()));
+        }
+        return None;
+    }
+    None
+}
+
+/// Drop the first `extends <Base>` line (and any blank lines
+/// immediately preceding it) from a per-system emission. Mirrors the
+/// inverse of `extract_leading_extends_line`.
+fn strip_leading_extends_line(code: &str) -> String {
+    let mut lines = code.lines().peekable();
+    let mut leading_blanks: Vec<&str> = Vec::new();
+    while let Some(&l) = lines.peek() {
+        if l.trim().is_empty() {
+            leading_blanks.push(l);
+            lines.next();
+        } else {
+            break;
+        }
+    }
+    let stripped = match lines.peek() {
+        Some(l) if l.trim_start().starts_with("extends ") => {
+            lines.next();
+            true
+        }
+        _ => false,
+    };
+    if !stripped {
+        return code.to_string();
+    }
+    let mut out = String::with_capacity(code.len());
+    for l in leading_blanks {
+        out.push_str(l);
+        out.push('\n');
+    }
+    for l in lines {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
 }
 
 /// Render a `CallArgsError` as a human-readable assembly diagnostic.
@@ -632,7 +699,7 @@ mod tests {
                 },
             }],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], None).unwrap();
         assert_eq!(result, src);
     }
 
@@ -675,7 +742,7 @@ mod tests {
             ],
         );
         let generated = vec![("Foo".to_string(), "class Foo:\n  pass\n".to_string())];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], None).unwrap();
         assert_eq!(result, "prolog\nclass Foo:\n  pass\nepilogue\n");
     }
 
@@ -698,7 +765,7 @@ mod tests {
                 },
             ],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], None).unwrap();
         assert_eq!(result, "import os\n");
     }
 
@@ -849,7 +916,7 @@ mod tests {
             ("Alpha".to_string(), "class Alpha: pass\n".to_string()),
             ("Beta".to_string(), "class Beta: pass\n".to_string()),
         ];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], None).unwrap();
         assert!(result.contains("prolog\n"));
         assert!(result.contains("class Alpha: pass\n"));
         assert!(result.contains("\nnative_between\n"));
@@ -874,7 +941,7 @@ mod tests {
                 visibility: None,
             }],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[]);
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], None);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("Foo"));
     }
@@ -926,7 +993,7 @@ mod tests {
             "MySystem".to_string(),
             "class MySystem:\n  pass\n".to_string(),
         )];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[]).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], None).unwrap();
         assert_eq!(result, "s = MySystem()\nclass MySystem:\n  pass\n");
     }
 
@@ -968,6 +1035,7 @@ mod tests {
             &[],
             TargetLanguage::Python3,
             &runtime_imports,
+            None,
         )
         .unwrap();
         // Runtime imports should come first, then the native prolog, then system

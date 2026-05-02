@@ -265,6 +265,7 @@ to a single `.kt` file with multiple class definitions:
 
 ```frame
 @@system Producer { ... }
+@@[main]
 @@system Consumer { ... }
 ```
 

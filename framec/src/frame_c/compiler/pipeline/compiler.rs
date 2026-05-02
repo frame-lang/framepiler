@@ -207,9 +207,27 @@ pub fn compile_ast_based(
         }
     }
 
-    // Pass 1: Parse all systems into ASTs
+    // Pass 1: Parse all systems into ASTs.
+    //
+    // Walk segments in source order so module-level `@@[main]`
+    // pragmas (RFC-0014) attach to the *next* `@@system` declaration
+    // they precede. The flag resets after attachment so a stray
+    // `@@[main]` followed by native code-then-system doesn't bleed
+    // into a later system.
     let mut system_asts: Vec<crate::frame_c::compiler::frame_ast::SystemAst> = Vec::new();
+    let mut pending_main_attr_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
     for segment in &source_map.segments {
+        if let Segment::Pragma {
+            kind: crate::frame_c::compiler::segmenter::PragmaKind::Main,
+            span,
+            ..
+        } = segment
+        {
+            pending_main_attr_span = Some(crate::frame_c::compiler::frame_ast::Span::new(
+                span.start, span.end,
+            ));
+            continue;
+        }
         if let Segment::System {
             name,
             body_span,
@@ -315,6 +333,19 @@ pub fn compile_ast_based(
                     library: None,
                     span: AstSpan::new(0, 0),
                 });
+            }
+
+            // RFC-0014: attach pending `@@[main]` attribute (if any)
+            // to this system. The attribute resets after attachment so
+            // it can't bleed onto a later system.
+            if let Some(main_span) = pending_main_attr_span.take() {
+                system_ast.attributes.push(
+                    crate::frame_c::compiler::frame_ast::Attribute {
+                        name: "main".to_string(),
+                        args: None,
+                        span: main_span,
+                    },
+                );
             }
 
             // Enrich transition metadata (`exit_args`, `enter_args`,
@@ -435,6 +466,26 @@ pub fn compile_ast_based(
         span: AstSpan::new(0, 0),
     });
     let arcanum = build_arcanum_from_frame_ast(&module_ast);
+
+    // RFC-0014 module-level pass: enforce exactly one `@@[main]` in
+    // multi-system files (E805 zero, E806 multiple). Runs once per
+    // module, before either codegen path forks. Single-system files
+    // are exempt.
+    {
+        let mut module_validator = FrameValidator::new();
+        if let Err(errs) = module_validator.validate_module_main_attr(&module_ast) {
+            let errors = errs
+                .iter()
+                .map(|e| CompileError::new(&e.code, &e.message))
+                .collect();
+            return Ok(CompileResult {
+                code: String::new(),
+                errors,
+                warnings: vec![],
+                source_map: None,
+            });
+        }
+    }
 
     // GraphViz target: bypass CodegenNode pipeline, use graph IR → DOT emitter
     if matches!(config.target, TargetLanguage::Graphviz) {
@@ -683,12 +734,24 @@ pub fn compile_ast_based(
         .iter()
         .map(|s| (s.name.clone(), s.params.clone()))
         .collect();
+    // RFC-0014: identify the file's primary system. Multi-system files
+    // require exactly one `@@[main]` (already validated by E805/E806);
+    // single-system files take their lone system as implicit primary.
+    let main_system: Option<String> = if system_asts.len() == 1 {
+        Some(system_asts[0].name.clone())
+    } else {
+        system_asts
+            .iter()
+            .find(|s| s.is_main())
+            .map(|s| s.name.clone())
+    };
     let code = match assembler::assemble(
         &source_map,
         &generated_systems,
         &system_params,
         config.target,
         &runtime_imports,
+        main_system.as_deref(),
     ) {
         Ok(output) => output,
         Err(e) => {

@@ -985,6 +985,7 @@ Frame systems are plain classes. They compose through normal object interaction 
         }
 }
 
+@@[main]
 @@system Orchestrator {
     interface:
         start(task: str)

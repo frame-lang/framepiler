@@ -65,6 +65,7 @@ with **E430** ("Java requires one system per file").
 @@[target("java")]
 
 @@system Producer { ... }
+@@[main]
 @@system Consumer { ... }   // ← E430 fires here
 ```
 

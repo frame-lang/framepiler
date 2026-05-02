@@ -259,6 +259,7 @@ its own metatable-based class:
 
 ```frame
 @@system Producer { ... }
+@@[main]
 @@system Consumer { ... }
 ```
 

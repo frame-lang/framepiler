@@ -202,6 +202,7 @@ to a single `.dart` file with multiple class definitions:
 
 ```frame
 @@system Producer { ... }
+@@[main]
 @@system Consumer { ... }
 ```
 

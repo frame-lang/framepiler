@@ -119,6 +119,7 @@ A system can declare base classes or interfaces using `:` after the name (and op
 ```
 @@system Pong : RefCounted { ... }
 @@system NetworkPlayer : Node, Serializable { ... }
+@@[main]
 @@system Robot($(x: int)) : Controller { ... }
 ```
 
@@ -946,6 +947,7 @@ r = @@Robot($(7), "R2D2")
 w = @@Worker($>(50))
 
 // All three groups in one header
+@@[main]
 @@system Service($(slot: int), $>(timeout: int), name: str) { ... }
 s = @@Service($(0), $>(1000), "primary")
 ```
@@ -958,6 +960,7 @@ The named form omits ordering requirements and lets you supply args by declared 
 @@system Robot($(x: int), name: str) { ... }
 r = @@Robot($(x=7), name="R2D2")
 
+@@[main]
 @@system Service($(slot: int), $>(timeout: int), name: str) { ... }
 s = @@Service($(slot=0), $>(timeout=1000), name="primary")
 ```

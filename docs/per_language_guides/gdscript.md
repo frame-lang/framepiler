@@ -260,19 +260,54 @@ async fixtures for canonical examples.
 
 ---
 
-## Multi-system per file: works as you'd expect
+## Multi-system per file: pick a primary with `@@[main]`
 
-A `.fgd` source containing multiple `@@system` blocks compiles to a
-single `.gd` file with multiple inner classes:
+GDScript scripts privilege one class per file: the script-level
+`extends` directive, `_init()`, and module-scope `var`/`func`
+declarations all belong to a single class identity. A `.fgd` source
+with multiple `@@system` blocks therefore needs one — and only one —
+system marked as the file's primary. Per RFC-0014, that's
+`@@[main]`:
 
 ```frame
-@@system Producer { ... }
-@@system Consumer { ... }
+@@system Sub {
+    interface: ping(): int
+    machine:
+        $Idle { ping(): int { @@:(42) } }
+}
+
+@@[main]
+@@system Top {
+    interface: run(): int
+    machine:
+        $Active { run(): int { @@:(self.sub.ping()) } }
+    domain:
+        sub: Sub = @@Sub()
+}
 ```
 
-Both `FrameProducer` and `FrameConsumer` end up in the same `.gd`
-output. There's no per-file structural constraint in GDScript
-(unlike Java's one-public-class rule).
+The `@@[main]` system emits at script-module scope. Every other
+system wraps as an inner class (`class Sub extends RefCounted:`)
+beneath it. Cross-references inside `@@[main]` resolve to inner
+classes (`var sub = Sub.new()` finds `Sub` as a sibling); cross-
+references between non-main systems resolve as sibling inner classes.
+
+**Without `@@[main]`** in a multi-system file, framec rejects the
+build with **E805**:
+
+```
+E805: Module declares 2 systems (Sub, Top) but no `@@[main]` attribute.
+Add `@@[main]` above the system that callers should instantiate via
+the module's primary entry point. For GDScript this is the system
+returned by `preload("<file>.gd").new()`.
+```
+
+Single-system files don't need the attribute — the lone system is
+implicitly primary. Adding `@@[main]` to a single-system file is
+allowed (redundant but harmless) and simplifies the rule.
+
+**Two `@@[main]`** in the same file is **E806** — only one system
+per file may occupy the script-level slot.
 
 ---
 

@@ -1261,6 +1261,7 @@ asyncio.run(main())
         }
 }
 
+@@[main]
 @@system App {
     interface:
         start()
@@ -1930,6 +1931,7 @@ if __name__ == '__main__':
         timeout_ticks: int = 10
 }
 
+@@[main]
 @@system App {
     interface:
         submit(field: str, value: str): str = ""
@@ -2047,6 +2049,7 @@ import random
         final_score: int = 0
 }
 
+@@[main]
 @@system Game {
     interface:
         start()
@@ -2407,6 +2410,7 @@ if __name__ == '__main__':
         current_params: dict = {}
 }
 
+@@[main]
 @@system Agent {
     interface:
         task(description: str)
@@ -3313,6 +3317,7 @@ if __name__ == '__main__':
         current: str = ""
 }
 
+@@[main]
 @@system Dispatcher {
     interface:
         submit(msg: str): str
@@ -4327,6 +4332,7 @@ if __name__ == '__main__':
 }
 
 # --- Flight Computer (main controller) ---
+@@[main]
 @@system FlightComputer {
     interface:
         start_countdown()
@@ -12935,6 +12941,7 @@ if __name__ == '__main__':
         arriving_at: int = 1
 }
 
+@@[main]
 @@system DeliveryRobot {
     interface:
         deliver(from_floor: int, to_floor: int)
@@ -14203,6 +14210,7 @@ if __name__ == '__main__':
         task_duration: int = 5
 }
 
+@@[main]
 @@system FleetDispatcher {
     operations:
         fleet_status(): dict {

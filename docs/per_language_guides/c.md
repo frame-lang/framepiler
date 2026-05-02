@@ -283,6 +283,7 @@ free-standing function families:
 
 ```frame
 @@system Producer { ... }
+@@[main]
 @@system Consumer { ... }
 ```
 

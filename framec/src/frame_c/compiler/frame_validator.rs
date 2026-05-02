@@ -193,6 +193,84 @@ impl FrameValidator {
     /// Validate @@:self.method() calls and bare @@: references using the scanner.
     /// The scanner identifies Frame segments correctly (handling comments, strings),
     /// so the validator walks structured output instead of byte-scanning.
+    /// RFC-0014 module-level pass: ensure that `.fgd` files with 2+
+    /// `@@system` declarations include exactly one `@@[main]` to mark
+    /// the file's primary system.
+    ///
+    /// - **E805**: multi-system module with zero `@@[main]`. The fix
+    ///   is for the user to add `@@[main]` above the system that
+    ///   callers expect to instantiate via the module's primary entry
+    ///   point (e.g. `preload(file).new()` for GDScript).
+    /// - **E806**: multi-system module with multiple `@@[main]`.
+    ///   Only one system can occupy the script-level slot per file.
+    ///
+    /// Single-system files are exempt — the lone system is implicitly
+    /// the primary; explicit `@@[main]` is allowed (redundant but
+    /// harmless) for symmetry with multi-system corpora.
+    ///
+    /// Today this only affects targets where `@@[main]` is observable
+    /// (GDScript file structure). Other targets (Python, JS, Rust,
+    /// etc.) ignore the attribute. The validator runs unconditionally
+    /// because shipping `@@[main]` semantics into the source contract
+    /// shouldn't depend on which target is being compiled.
+    pub fn validate_module_main_attr(
+        &mut self,
+        ast: &FrameAst,
+    ) -> Result<(), Vec<ValidationError>> {
+        if let FrameAst::Module(module) = ast {
+            let systems = &module.systems;
+            if systems.len() <= 1 {
+                return if self.errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(self.errors.clone())
+                };
+            }
+            let main_systems: Vec<&SystemAst> =
+                systems.iter().filter(|s| s.is_main()).collect();
+            match main_systems.len() {
+                0 => {
+                    let names: Vec<&str> =
+                        systems.iter().map(|s| s.name.as_str()).collect();
+                    self.errors.push(ValidationError::new(
+                        "E805",
+                        format!(
+                            "Module declares {} systems ({}) but no `@@[main]` \
+                             attribute. Add `@@[main]` above the system that \
+                             callers should instantiate via the module's \
+                             primary entry point. For GDScript this is the \
+                             system returned by `preload(\"<file>.gd\").new()`. \
+                             For Java this is the file's `public class`.",
+                            systems.len(),
+                            names.join(", ")
+                        ),
+                    ));
+                }
+                1 => {
+                    // Exactly one main — the happy path.
+                }
+                _ => {
+                    let names: Vec<&str> =
+                        main_systems.iter().map(|s| s.name.as_str()).collect();
+                    self.errors.push(ValidationError::new(
+                        "E806",
+                        format!(
+                            "Module declares multiple `@@[main]` attributes \
+                             ({}). Only one system per file may be the \
+                             primary; remove `@@[main]` from all but one.",
+                            names.join(", ")
+                        ),
+                    ));
+                }
+            }
+        }
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors.clone())
+        }
+    }
+
     pub fn validate_self_calls(
         &mut self,
         ast: &FrameAst,
@@ -2173,6 +2251,7 @@ mod tests {
             write() { }
         }
 }
+@@[main]
 @@system Promise {
     interface:
         resolve()

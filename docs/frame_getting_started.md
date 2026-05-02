@@ -1859,6 +1859,7 @@ A single file can contain multiple `@@system` blocks:
         }
 }
 
+@@[main]
 @@system App {
     interface:
         start()

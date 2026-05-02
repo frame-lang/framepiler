@@ -277,6 +277,7 @@ a single `.go` file with multiple struct/method-family definitions:
 
 ```frame
 @@system Producer { ... }
+@@[main]
 @@system Consumer { ... }
 ```
 

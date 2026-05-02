@@ -4,7 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased] - 2026-05-01
+## [Unreleased] - 2026-05-02
+
+### Added — RFC-0014 `@@[main]` (wave 1)
+
+- **`@@[main]` system attribute** to mark the file's primary system in multi-system `.fgd` files. The primary owns the script-module slot in targets that privilege one class per file (GDScript today; Java/C#/TypeScript planned in later waves). Non-main systems wrap as inner classes (sibling-resolvable from the main system's domain initializers and from each other).
+- **`SystemAst.attributes: Vec<Attribute>`** — generic system-level attribute storage parallel to RFC-0013 wave 2 phase 2's per-item attributes. RFC-0014 ships `@@[main]` as the first user; `@@[persist]` stays special-cased in `persist_attr` for backwards compatibility (a follow-up will migrate it).
+- **E805** — multi-system module declares zero `@@[main]`. Hard cut at parse time with a one-line migration message.
+- **E806** — multi-system module declares multiple `@@[main]`. Only one system per file may occupy the primary slot.
+- **GDScript multi-system fix.** Solves the long-standing "first system silently becomes the primary" bug that broke every multi-system `.fgd` whose driver instantiated the lexically-last system (the natural authoring order: primitives first, composer last). The main system's `extends Base` directive is hoisted to the top of the file so the developer-natural source order produces a valid script.
+- **Reverted** the D22 `class_name` post-pass — it didn't actually solve cross-reference resolution (Godot's inner classes can't see their own script's `class_name`) and added Godot global-namespace pollution.
+- **Test corpus migrated** — 204 multi-system fixtures (88 `.fgd` and 116 across other targets) updated to mark the lexically-last system `@@[main]`, matching every test driver's instantiation pattern. New fixture `tests/common/positive/primary/91_main_attr_cross_ref.fgd` exercises the cross-reference shape end-to-end in Godot.
 
 ### Added — persist contract (wave 8 closure)
 

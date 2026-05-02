@@ -45,6 +45,10 @@ pub enum PragmaKind {
     Target,
     /// @@persist (optionally with library)
     Persist,
+    /// @@[main] — RFC-0014. Marks the next `@@system` declaration as
+    /// the file's primary system for targets that privilege one class
+    /// per file (GDScript, Java, etc.).
+    Main,
     /// @@codegen { ... }
     Codegen,
     /// @@run-expect <pattern>
@@ -604,6 +608,7 @@ fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
         let kind = match name {
             b"persist" => PragmaKind::Persist,
             b"target" => PragmaKind::Target,
+            b"main" => PragmaKind::Main,
             _ => PragmaKind::Other,
         };
 

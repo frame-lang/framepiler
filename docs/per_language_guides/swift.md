@@ -228,6 +228,7 @@ to a single `.swift` file with multiple class definitions:
 
 ```frame
 @@system Producer { ... }
+@@[main]
 @@system Consumer { ... }
 ```
 
