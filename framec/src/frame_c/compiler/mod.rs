@@ -14,6 +14,7 @@ pub mod splice;
 pub mod validator;
 
 pub mod assembler;
+pub mod attribute_scanner;
 pub mod codegen;
 pub mod frame_ast;
 pub mod frame_validator;
