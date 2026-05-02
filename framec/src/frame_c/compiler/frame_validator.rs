@@ -782,6 +782,33 @@ impl FrameValidator {
                     )
                     .with_span(a.span.clone()),
                 ),
+                // RFC-0012 amendment: @@[save] / @@[load] are valid
+                // only on operations of @@[persist] systems. Reject
+                // here if attached to a non-operation position
+                // (interface method, handler, domain field).
+                "save" | "load" => errs.push(
+                    ValidationError::new(
+                        "E801",
+                        format!(
+                            "@@[{}] is only valid on operations of @@[persist] systems; not on {}.",
+                            a.name, position
+                        ),
+                    )
+                    .with_span(a.span.clone()),
+                ),
+                // RFC-0012 amendment: @@[no_persist] is valid only on
+                // domain fields. The per-position iteration below
+                // exempts the domain check via the same name match.
+                "no_persist" => errs.push(
+                    ValidationError::new(
+                        "E801",
+                        format!(
+                            "@@[no_persist] is only valid on domain fields of @@[persist] systems; not on {}.",
+                            position
+                        ),
+                    )
+                    .with_span(a.span.clone()),
+                ),
                 _ => errs.push(
                     ValidationError::new(
                         "E800",
@@ -797,10 +824,93 @@ impl FrameValidator {
                 check(a, &format!("interface method '{}'", m.name), &mut errs);
             }
         }
+        // Domain field attributes — `no_persist` is valid here, so we
+        // don't run the generic `check` for it; everything else falls
+        // through to the standard set.
         for d in &system.domain {
             for a in &d.attributes {
+                if a.name == "no_persist" {
+                    if system.persist_attr.is_none() {
+                        errs.push(
+                            ValidationError::new(
+                                "E801",
+                                format!(
+                                    "@@[no_persist] on domain field '{}' requires the system to have @@[persist].",
+                                    d.name
+                                ),
+                            )
+                            .with_span(a.span.clone()),
+                        );
+                    }
+                    continue;
+                }
                 check(a, &format!("domain field '{}'", d.name), &mut errs);
             }
+        }
+        // Operation attributes — `save` / `load` are valid here; other
+        // names fall through to the generic check.
+        let mut save_count = 0usize;
+        let mut load_count = 0usize;
+        let mut first_save_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
+        let mut first_load_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
+        for op in &system.operations {
+            for a in &op.attributes {
+                if a.name == "save" || a.name == "load" {
+                    if system.persist_attr.is_none() {
+                        errs.push(
+                            ValidationError::new(
+                                "E801",
+                                format!(
+                                    "@@[{}] on operation '{}' requires the system to have @@[persist].",
+                                    a.name, op.name
+                                ),
+                            )
+                            .with_span(a.span.clone()),
+                        );
+                    }
+                    if a.name == "save" {
+                        save_count += 1;
+                        if first_save_span.is_none() {
+                            first_save_span = Some(a.span.clone());
+                        }
+                    } else {
+                        load_count += 1;
+                        if first_load_span.is_none() {
+                            first_load_span = Some(a.span.clone());
+                        }
+                    }
+                    continue;
+                }
+                check(a, &format!("operation '{}'", op.name), &mut errs);
+            }
+        }
+        // E810: at most one @@[save] and one @@[load] per system. Two
+        // ops can't both fill the same persist endpoint — codegen
+        // wouldn't know which to invoke, and the contract requires
+        // a single primary entry point per direction.
+        if save_count > 1 {
+            errs.push(
+                ValidationError::new(
+                    "E810",
+                    format!(
+                        "@@[save] declared {} times in system '{}'; expected at most one.",
+                        save_count, system.name
+                    ),
+                )
+                .with_span(first_save_span.unwrap_or_else(|| system.span.clone())),
+            );
+        }
+        if load_count > 1 {
+            errs.push(
+                ValidationError::new(
+                    "E810",
+                    format!(
+                        "@@[load] declared {} times in system '{}'; expected at most one.",
+                        load_count, system.name
+                    ),
+                )
+                .with_span(first_load_span.unwrap_or_else(|| system.span.clone())),
+            );
         }
         if let Some(machine) = &system.machine {
             for state in &machine.states {
