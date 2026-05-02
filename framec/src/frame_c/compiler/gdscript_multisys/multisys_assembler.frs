@@ -1,0 +1,120 @@
+@@[target("rust")]
+
+// GDScript multi-system assembler — Frame-generated state machine.
+//
+// Source:    multisys_assembler.frs (Frame specification)
+// Generated: multisys_assembler.gen.rs (via framec --target rust)
+//
+// Wraps a sequence of per-system GDScript emissions into a valid
+// multi-system .gd file. The first system stays at script-module
+// scope (its `extends` is the script-level extends, its fields/funcs
+// are script-level). Subsequent systems get wrapped as inner classes
+// (`class <Name> extends <Base>:` with body indented one level).
+//
+// When the file holds 2+ systems, the first system also gets a
+// `class_name <Name>` line so the inner-class systems can resolve
+// cross-references via bare identifier (`var sub = First.new()`).
+//
+// To regenerate:
+//   ./target/release/framec compile -l rust \
+//     framec/src/frame_c/compiler/gdscript_multisys/multisys_assembler.frs \
+//     -o framec/src/frame_c/compiler/gdscript_multisys/
+//
+// State machine flow:
+//
+//   $Init.wrap_inner() → $SkipLeading → $ReadExtends → $IndentBody → done
+//
+// `class_name` injection lives in the assembler's file-level post-
+// pass (`prepend_gdscript_class_name`), not in this FSM — it touches
+// the assembled output after both the native prolog and the first
+// system have been written, and GDScript requires `class_name` to
+// come before any `extends` in the file.
+//
+// Helpers used (from the wrapper module's helpers section):
+//   line_is_blank, next_line_start, read_line_text, line_starts_with,
+//   strip_extends_prefix
+
+@@system GDScriptMultiSysAssemblerFsm {
+    interface:
+        wrap_inner(name: String)
+
+    machine:
+        $Init {
+            wrap_inner(name: String) {
+                self.system_name = name;
+                -> $SkipLeading
+            }
+        }
+
+        // Skip leading blank lines until first content. Frame's
+        // codegen often emits a blank line before `extends`; the
+        // wrapped output should start at the actual content.
+        $SkipLeading {
+            $>() {
+                while self.pos < self.bytes.len() && line_is_blank(&self.bytes, self.pos) {
+                    self.pos = next_line_start(&self.bytes, self.pos);
+                }
+                -> $ReadExtends
+            }
+        }
+
+        // Capture the `extends <Base>` line (or default to RefCounted
+        // if absent — defensive; codegen always emits one for the
+        // module-scope path that reaches this FSM). Emit the wrapper
+        // header, then skip any blanks before the body.
+        $ReadExtends {
+            $>() {
+                let n = self.bytes.len();
+                let base = if self.pos < n && line_starts_with(&self.bytes, self.pos, b"extends ") {
+                    let line = read_line_text(&self.bytes, self.pos);
+                    self.pos = next_line_start(&self.bytes, self.pos);
+                    strip_extends_prefix(&line)
+                } else {
+                    "RefCounted".to_string()
+                };
+                self.out.push_str("\n\n");
+                self.out.push_str("class ");
+                self.out.push_str(&self.system_name);
+                self.out.push_str(" extends ");
+                self.out.push_str(&base);
+                self.out.push_str(":\n");
+                while self.pos < self.bytes.len() && line_is_blank(&self.bytes, self.pos) {
+                    self.pos = next_line_start(&self.bytes, self.pos);
+                }
+                -> $IndentBody
+            }
+        }
+
+        // Indent every remaining non-blank line by 4 spaces (one
+        // level deeper than the wrapper class). Preserve blank lines
+        // verbatim — the assembler relies on visual blank-line
+        // separators to keep diffs readable.
+        $IndentBody {
+            $>() {
+                let n = self.bytes.len();
+                let mut prev_blank: bool = true;
+                while self.pos < n {
+                    let blank = line_is_blank(&self.bytes, self.pos);
+                    let line = read_line_text(&self.bytes, self.pos);
+                    self.pos = next_line_start(&self.bytes, self.pos);
+                    if blank {
+                        if !prev_blank {
+                            self.out.push('\n');
+                        }
+                        prev_blank = true;
+                    } else {
+                        self.out.push_str("    ");
+                        self.out.push_str(&line);
+                        self.out.push('\n');
+                        prev_blank = false;
+                    }
+                }
+            }
+        }
+
+    domain:
+        bytes: Vec<u8> = Vec::new()
+        pos: usize = 0
+        system_name: String = String::new()
+        out: String = String::new()
+}
