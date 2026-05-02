@@ -683,10 +683,7 @@ pub(crate) fn generate_rust_state_dispatch(
             }
             code.push_str(&format!("    \"{}\" => {{\n", message));
             for (idx, param) in handler.params.iter().enumerate() {
-                // Normalize Frame type keywords to Rust ones (the
-                // typed `Box<dyn Any>` boxing in the interface push
-                // records the raw value, so the downcast type must
-                // match the user-declared Rust type exactly).
+                // Normalize Frame type keywords to Rust ones.
                 let raw_type = param.symbol_type.as_deref().unwrap_or("String");
                 let param_type = match raw_type {
                     "int" => "i64",
@@ -694,10 +691,22 @@ pub(crate) fn generate_rust_state_dispatch(
                     "str" | "string" => "String",
                     other => other,
                 };
-                let extraction = format!(
-                    "        let {}: {} = __e.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).cloned().unwrap_or_default();\n",
-                    param.name, param_type, idx, param_type
-                );
+                // Lifecycle events ($>, $<) carry their args via the
+                // compartment's `enter_args: Vec<String>` (so persist
+                // round-trip works). The dispatcher must therefore
+                // downcast to `String` first, then parse to the
+                // declared receiver type.
+                let extraction = if param_type == "String" {
+                    format!(
+                        "        let {}: String = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
+                        param.name, idx
+                    )
+                } else {
+                    format!(
+                        "        let {}: {} = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse::<{}>().ok()).unwrap_or_default();\n",
+                        param.name, param_type, idx, param_type
+                    )
+                };
                 code.push_str(&extraction);
             }
             let param_names: Vec<_> = handler.params.iter().map(|p| p.name.clone()).collect();
