@@ -339,13 +339,13 @@ pub fn compile_ast_based(
             // to this system. The attribute resets after attachment so
             // it can't bleed onto a later system.
             if let Some(main_span) = pending_main_attr_span.take() {
-                system_ast.attributes.push(
-                    crate::frame_c::compiler::frame_ast::Attribute {
+                system_ast
+                    .attributes
+                    .push(crate::frame_c::compiler::frame_ast::Attribute {
                         name: "main".to_string(),
                         args: None,
                         span: main_span,
-                    },
-                );
+                    });
             }
 
             // Enrich transition metadata (`exit_args`, `enter_args`,

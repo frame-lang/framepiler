@@ -110,17 +110,16 @@ pub fn assemble(
     // `extends` line to the top of the file and strip it from the
     // main system's emission during the walk so the script parses
     // cleanly.
-    let main_extends_line: Option<String> =
-        if matches!(lang, TargetLanguage::GDScript) {
-            main_system.and_then(|m| {
-                generated_systems
-                    .iter()
-                    .find(|(name, _)| name == m)
-                    .and_then(|(_, code)| extract_leading_extends_line(code))
-            })
-        } else {
-            None
-        };
+    let main_extends_line: Option<String> = if matches!(lang, TargetLanguage::GDScript) {
+        main_system.and_then(|m| {
+            generated_systems
+                .iter()
+                .find(|(name, _)| name == m)
+                .and_then(|(_, code)| extract_leading_extends_line(code))
+        })
+    } else {
+        None
+    };
     if let Some(ref ext_line) = main_extends_line {
         output.push_str(ext_line);
         output.push_str("\n\n");
@@ -175,9 +174,7 @@ pub fn assemble(
                     // the rest as `class <Name> extends Base:` with every
                     // subsequent line indented one level.
                     if matches!(lang, TargetLanguage::GDScript) {
-                        let is_main = main_system
-                            .map(|m| m == name.as_str())
-                            .unwrap_or(false);
+                        let is_main = main_system.map(|m| m == name.as_str()).unwrap_or(false);
                         // When the main system's `extends Base` line
                         // was hoisted to the top of the file, strip
                         // it from the in-line emission to avoid a

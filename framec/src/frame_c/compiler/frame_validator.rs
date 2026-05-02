@@ -226,12 +226,10 @@ impl FrameValidator {
                     Err(self.errors.clone())
                 };
             }
-            let main_systems: Vec<&SystemAst> =
-                systems.iter().filter(|s| s.is_main()).collect();
+            let main_systems: Vec<&SystemAst> = systems.iter().filter(|s| s.is_main()).collect();
             match main_systems.len() {
                 0 => {
-                    let names: Vec<&str> =
-                        systems.iter().map(|s| s.name.as_str()).collect();
+                    let names: Vec<&str> = systems.iter().map(|s| s.name.as_str()).collect();
                     self.errors.push(ValidationError::new(
                         "E805",
                         format!(
@@ -250,8 +248,7 @@ impl FrameValidator {
                     // Exactly one main — the happy path.
                 }
                 _ => {
-                    let names: Vec<&str> =
-                        main_systems.iter().map(|s| s.name.as_str()).collect();
+                    let names: Vec<&str> = main_systems.iter().map(|s| s.name.as_str()).collect();
                     self.errors.push(ValidationError::new(
                         "E806",
                         format!(
