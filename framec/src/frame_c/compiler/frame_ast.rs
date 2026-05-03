@@ -774,6 +774,17 @@ impl SystemAst {
             && (self.save_op_name().is_some() || self.load_op_name().is_some())
     }
 
+    /// Name of the `@@[on_load]` post-load hook operation, if declared.
+    /// Codegen calls this op (with user-written body) at the end of
+    /// the framework-managed restore body so the user can re-establish
+    /// derived state, fire watchers, etc. RFC-0012 amendment Phase D.
+    pub fn on_load_op_name(&self) -> Option<&str> {
+        self.operations
+            .iter()
+            .find(|op| op.attributes.iter().any(|a| a.name == "on_load"))
+            .map(|op| op.name.as_str())
+    }
+
     /// Name of the load operation parameter (always at most one).
     /// Codegen uses this as the parameter name in the framework-
     /// generated load body so it matches what the user declared in

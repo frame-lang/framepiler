@@ -852,15 +852,17 @@ impl FrameValidator {
                 check(a, &format!("domain field '{}'", d.name), &mut errs);
             }
         }
-        // Operation attributes — `save` / `load` are valid here; other
-        // names fall through to the generic check.
+        // Operation attributes — `save` / `load` / `on_load` are valid
+        // here; other names fall through to the generic check.
         let mut save_count = 0usize;
         let mut load_count = 0usize;
+        let mut on_load_count = 0usize;
         let mut first_save_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
         let mut first_load_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
+        let mut first_on_load_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
         for op in &system.operations {
             for a in &op.attributes {
-                if a.name == "save" || a.name == "load" {
+                if a.name == "save" || a.name == "load" || a.name == "on_load" {
                     if system.persist_attr.is_none() {
                         errs.push(
                             ValidationError::new(
@@ -878,10 +880,15 @@ impl FrameValidator {
                         if first_save_span.is_none() {
                             first_save_span = Some(a.span.clone());
                         }
-                    } else {
+                    } else if a.name == "load" {
                         load_count += 1;
                         if first_load_span.is_none() {
                             first_load_span = Some(a.span.clone());
+                        }
+                    } else {
+                        on_load_count += 1;
+                        if first_on_load_span.is_none() {
+                            first_on_load_span = Some(a.span.clone());
                         }
                     }
                     continue;
@@ -915,6 +922,18 @@ impl FrameValidator {
                     ),
                 )
                 .with_span(first_load_span.unwrap_or_else(|| system.span.clone())),
+            );
+        }
+        if on_load_count > 1 {
+            errs.push(
+                ValidationError::new(
+                    "E810",
+                    format!(
+                        "@@[on_load] declared {} times in system '{}'; expected at most one.",
+                        on_load_count, system.name
+                    ),
+                )
+                .with_span(first_on_load_span.unwrap_or_else(|| system.span.clone())),
             );
         }
         // E814: hard-cut for the RFC-0012 amendment. `@@[persist]`
