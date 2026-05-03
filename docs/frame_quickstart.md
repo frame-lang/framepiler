@@ -204,7 +204,7 @@ push$ -> $State                       # usual: save + transition to new compartm
 
 Within one call: **don't mix positional and named**. Defaults are substituted at the call site.
 
-> **Known framec bug**: `$(...)` at call sites *inside handler bodies* is not expanded (see `_scratch/bug_state_arg_call_site_in_handler.md`). Use a bare domain param as a workaround until fixed.
+> **Known framec bug**: `$(...)` at call sites *inside handler bodies* is not expanded. Use a bare domain param as a workaround until fixed.
 
 ---
 
