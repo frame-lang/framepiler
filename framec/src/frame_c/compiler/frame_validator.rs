@@ -67,6 +67,11 @@
 //!
 //! ## Warnings (W4xx)
 //! - W414: Unreachable state from start state
+//! - W415: `return <expr>` in event handler — value is silently lost
+//!
+//! ## Deprecation Warnings (W7xx)
+//! - W706: Legacy `@@[persist]` contract (no `@@[save]`/`@@[load]` ops);
+//!   migrate to RFC-0012 four-attribute form. Hard-cut planned (E814).
 //!
 //! ## Compartment Field Mapping (Canonical 6-field model)
 //!
@@ -910,6 +915,32 @@ impl FrameValidator {
                     ),
                 )
                 .with_span(first_load_span.unwrap_or_else(|| system.span.clone())),
+            );
+        }
+        // W706: deprecation warning for the legacy persist contract.
+        // The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops)
+        // emits the legacy `save_state` / `restore_state` pair, where
+        // load is a static factory. This works on every backend except
+        // GDScript (target-language scoping limit). RFC-0012 amendment
+        // introduces the four-attribute contract (`@@[save]` /
+        // `@@[load]` operations + instance-method load) that works
+        // uniformly across all 17 backends. Both contracts coexist
+        // additively today; W706 surfaces the migration direction.
+        // The hard-cut (E814) is gated on the legacy fixture migration
+        // sweep — see RFC-0012 "Phase B3".
+        if system.persist_attr.is_some() && save_count == 0 && load_count == 0 {
+            self.warnings.push(
+                ValidationError::new(
+                    "W706",
+                    format!(
+                        "@@[persist] system '{}' uses the legacy save_state/restore_state contract. \
+                         RFC-0012 amendment introduces @@[save] and @@[load] operation attributes for a \
+                         uniform contract across all 17 backends (including GDScript). The legacy form \
+                         remains supported. See docs/rfcs/rfc-0012.md.",
+                        system.name
+                    ),
+                )
+                .with_span(system.span.clone()),
             );
         }
         if let Some(machine) = &system.machine {
