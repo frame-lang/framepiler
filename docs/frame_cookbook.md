@@ -1131,6 +1131,13 @@ if __name__ == '__main__':
 
 @@[persist]
 @@system Session {
+    operations:
+        @@[save]
+        save_state(): str {}
+
+        @@[load]
+        restore_state(data: str) {}
+
     interface:
         login(user: str)
         logout()
@@ -1164,12 +1171,13 @@ if __name__ == '__main__':
     # Save
     data = s.save_state()
 
-    # Restore into a new instance
-    s2 = Session.restore_state(data)
+    # Restore into a new instance (two-step: alloc + populate)
+    s2 = Session()
+    s2.restore_state(data)
     print(s2.who())              # alice (state preserved)
 ```
 
-**How it works:** `@@[persist]` generates `save_state()` and `restore_state()`. The saved data includes the current state (`$LoggedIn`), domain variables (`user = "alice"`), and the state stack. Restore does NOT fire the enter handler — it reconstructs the exact state.
+**How it works:** `@@[save]` and `@@[load]` operation attributes mark the framework-managed save/restore methods. The saved data includes the current state (`$LoggedIn`), domain variables (`user = "alice"`), and the state stack. Restore is an instance method that mutates self; it does NOT fire the enter handler.
 
 **Features used:** `@@[persist]`, save/restore, domain variables
 
@@ -2968,6 +2976,13 @@ if __name__ == '__main__':
 @@[persist]
 
 @@system DeadLetterProcessor {
+    operations:
+        @@[save]
+        save_state(): str {}
+
+        @@[load]
+        restore_state(data: str) {}
+
     interface:
         accept(msg_id: str, payload: str): str
         process_tick(): str
@@ -3038,7 +3053,8 @@ if __name__ == '__main__':
     p.process_tick()        # retrying
 
     snapshot = p.save_state()
-    p2 = DeadLetterProcessor.restore_state(snapshot)
+    p2 = DeadLetterProcessor()
+    p2.restore_state(snapshot)
     p2.process_tick()        # dead_lettered
 ```
 
