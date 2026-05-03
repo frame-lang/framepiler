@@ -13,6 +13,14 @@ They complement (rather than replace):
 - `framepiler_test_env/docs/runtime-capability-matrix.md` — the
   per-backend capability table.
 
+> **Persist contract update (2026-05-02)**: The new four-attribute
+> contract from RFC-0012 amendment (`@@[persist]` + `@@[save]` /
+> `@@[load]` / `@@[no_persist]`) ships across all 17 backends.
+> See [frame_runtime.md "Naming the save/load methods"](../frame_runtime.md)
+> and [RFC-0012](../rfcs/rfc-0012.md) for the canonical pattern.
+> The bare `@@[persist]` form remains available for backwards
+> compatibility — both contracts work today.
+
 ## Status
 
 | Backend  | Guide |

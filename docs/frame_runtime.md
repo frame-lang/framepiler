@@ -3936,6 +3936,55 @@ existing data structures and serialize them: `save_state()`
 returns a blob, and `restore_state(blob)` rebuilds the system
 from one.
 
+### Naming the save/load methods (RFC-0012 amendment)
+
+The bare `@@[persist]` form above gets you `save_state` /
+`restore_state` (legacy contract — works on every backend except
+GDScript, where a target-language scoping limitation prevents the
+static factory shape from resolving its own class). To pick your
+own method names — `pickle` / `unpickle`, `snapshot` / `restore`,
+whatever fits — declare them as operations under the `operations:`
+section and tag with `@@[save]` and `@@[load]`:
+
+```frame
+@@[persist]
+@@system Counter {
+    operations:
+        @@[save]
+        snapshot(): str {}     // body framework-emitted
+
+        @@[load]
+        restore(data: str) {}  // body framework-emitted
+
+    interface:
+        bump()
+
+    machine:
+        $Active { bump() { self.n = self.n + 1 } }
+
+    domain:
+        n: int = 0
+}
+```
+
+The new contract changes the load shape from a static factory to
+an instance method (works on every backend including GDScript):
+
+```python
+# Legacy: static factory (Counter.restore_state(data) -> Counter)
+c = Counter.restore_state(data)
+
+# New: two-step (Counter() then c.restore(data))
+c = Counter()
+c.restore(data)
+```
+
+The two-step shape sidesteps the target-language scoping issues of
+static-method `class_name` resolution and makes load uniformly
+available across all 17 backends. Both contracts ship today; the
+new contract is preferred for new code. See RFC-0012 for the full
+rationale.
+
 ### What gets saved
 
 Persistence serializes the data that defines the system's

@@ -197,6 +197,46 @@ for `import` declarations.
 
 ---
 
+## Custom save/load names (RFC-0012 amendment)
+
+The bare `@@[persist]` form gives you `save_state` / `restore_state`
+(legacy contract). To pick your own method names, declare them as
+operations and tag with `@@[save]` / `@@[load]`:
+
+```frame
+@@[persist]
+@@system Counter {
+    operations:
+        @@[save]
+        pickle(): str {}        # body framework-emitted
+
+        @@[load]
+        unpickle(data: str) {}  # body framework-emitted
+
+    interface:  bump()
+    machine:    $Active { bump() { self.n = self.n + 1 } }
+    domain:     n: int = 0
+}
+```
+
+The new contract uses an **instance-method load** instead of a
+static factory:
+
+```python
+# Legacy: static factory
+c = Counter.restore_state(data)
+
+# New: two-step (preferred for new code)
+c = Counter()
+c.unpickle(data)
+```
+
+Both contracts ship today; matrix-tested across all 17 backends.
+See [`frame_runtime.md`](../frame_runtime.md) "Naming the save/load
+methods" and [RFC-0012](../rfcs/rfc-0012.md) for the rationale.
+
+---
+
 ## Persist quiescent contract — E700
 
 `save_state()` requires the system to be quiescent (no event in
