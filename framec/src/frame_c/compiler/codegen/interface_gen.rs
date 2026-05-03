@@ -1699,6 +1699,31 @@ pub(crate) fn generate_persistence_methods(
             ));
         }
         TargetLanguage::C => {
+            // RFC-0012 amendment: branch on new contract. C is the
+            // most divergent backend — there's no implicit `self`,
+            // every "method" is `Sys_method(Sys* self, args)`. Under
+            // legacy, restore is a factory `Sys_restore_state(json)`
+            // that returns a fresh `Sys*`. Under new contract, load
+            // takes `Sys* self` as first arg and populates it.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            let target = if uses_new_contract {
+                "self"
+            } else {
+                "instance"
+            };
+
             // C uses cJSON library (requires cJSON.h/cJSON.c or -lcjson)
             // HSM persistence: serialize entire compartment chain including parent_compartment
 
@@ -2061,7 +2086,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("return json;");
 
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("char*".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -2074,31 +2099,50 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // Generate restore_state function - takes const char*, returns instance pointer
+            // Load function — instance method (new contract, takes
+            // `Sys* self` as the implicit first arg via is_static=
+            // false) or static factory (legacy, returns `Sys*`).
+            // Frame's C codegen translates `is_static=false` into a
+            // function with `Sys*` first parameter; we use that for
+            // both shapes but the body and return shape differ.
             let mut restore_body = String::new();
-            restore_body.push_str("cJSON* root = cJSON_Parse(json);\n");
-            restore_body.push_str("if (!root) return NULL;\n\n");
+            restore_body.push_str(&format!(
+                "cJSON* root = cJSON_Parse({});\n",
+                load_param_name
+            ));
+            // Legacy: NULL on parse error (returning function);
+            // new contract: just bail without writing.
+            if uses_new_contract {
+                restore_body.push_str("if (!root) return;\n\n");
+            } else {
+                restore_body.push_str("if (!root) return NULL;\n\n");
+            }
 
-            restore_body.push_str(&format!(
-                "{}* instance = malloc(sizeof({}));\n",
-                system.name, system.name
-            ));
-            restore_body.push_str(&format!(
-                "instance->_state_stack = {}_FrameVec_new();\n",
-                system.name
-            ));
-            restore_body.push_str(&format!(
-                "instance->_context_stack = {}_FrameVec_new();\n",
-                system.name
-            ));
-            restore_body.push_str("instance->__next_compartment = NULL;\n\n");
+            // Legacy: malloc a fresh `Sys*` and init its lists. New
+            // contract: `self` is already constructed; we'll
+            // overwrite its compartment + state stack below.
+            if !uses_new_contract {
+                restore_body.push_str(&format!(
+                    "{}* instance = malloc(sizeof({}));\n",
+                    system.name, system.name
+                ));
+                restore_body.push_str(&format!(
+                    "instance->_state_stack = {}_FrameVec_new();\n",
+                    system.name
+                ));
+                restore_body.push_str(&format!(
+                    "instance->_context_stack = {}_FrameVec_new();\n",
+                    system.name
+                ));
+            }
+            restore_body.push_str(&format!("{}->__next_compartment = NULL;\n\n", target));
 
             // Restore entire compartment chain
             restore_body
                 .push_str("cJSON* comp_data = cJSON_GetObjectItem(root, \"_compartment\");\n");
             restore_body.push_str(&format!(
-                "instance->__compartment = {}_deserialize_compartment(comp_data);\n\n",
-                system.name
+                "{}->__compartment = {}_deserialize_compartment(comp_data);\n\n",
+                target, system.name
             ));
 
             // Restore state stack — uses deserialize_compartment so each
@@ -2115,8 +2159,8 @@ pub(crate) fn generate_persistence_methods(
             ));
             restore_body.push_str("        if (comp) {\n");
             restore_body.push_str(&format!(
-                "            {}_FrameVec_push(instance->_state_stack, comp);\n",
-                system.name
+                "            {}_FrameVec_push({}->_state_stack, comp);\n",
+                system.name, target
             ));
             restore_body.push_str("        }\n");
             restore_body.push_str("    }\n");
@@ -2134,12 +2178,13 @@ pub(crate) fn generate_persistence_methods(
                          \x20   cJSON* __child_obj_{name} = cJSON_GetObjectItem(root, \"{name}\");\n\
                          \x20   if (__child_obj_{name} && !cJSON_IsNull(__child_obj_{name})) {{\n\
                          \x20       char* __child_json_{name} = cJSON_PrintUnformatted(__child_obj_{name});\n\
-                         \x20       instance->{name} = {child}_restore_state(__child_json_{name});\n\
+                         \x20       {tgt}->{name} = {child}_restore_state(__child_json_{name});\n\
                          \x20       free(__child_json_{name});\n\
                          \x20   }} else {{\n\
-                         \x20       instance->{name} = NULL;\n\
+                         \x20       {tgt}->{name} = NULL;\n\
                          \x20   }}\n\
                          }}\n",
+                        tgt = target,
                         name = var.name,
                         child = child_sys
                     ));
@@ -2149,46 +2194,55 @@ pub(crate) fn generate_persistence_methods(
 
                 let json_get = if is_int_type(&type_str) {
                     format!(
-                        "instance->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
-                        var.name, var.name
+                        "{}->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
+                        target, var.name, var.name
                     )
                 } else if is_float_type(&type_str) {
                     format!(
-                        "instance->{} = cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
-                        var.name, var.name
+                        "{}->{} = cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
+                        target, var.name, var.name
                     )
                 } else if is_bool_type(&type_str) {
                     format!(
-                        "instance->{} = cJSON_IsTrue(cJSON_GetObjectItem(root, \"{}\"));\n",
-                        var.name, var.name
+                        "{}->{} = cJSON_IsTrue(cJSON_GetObjectItem(root, \"{}\"));\n",
+                        target, var.name, var.name
                     )
                 } else if is_string_type(&type_str) {
                     format!(
-                        "instance->{} = strdup(cJSON_GetObjectItem(root, \"{}\")->valuestring);\n",
-                        var.name, var.name
+                        "{}->{} = strdup(cJSON_GetObjectItem(root, \"{}\")->valuestring);\n",
+                        target, var.name, var.name
                     )
                 } else {
                     format!(
-                        "instance->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
-                        var.name, var.name
+                        "{}->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
+                        target, var.name, var.name
                     )
                 };
                 restore_body.push_str(&json_get);
             }
 
             restore_body.push_str("\ncJSON_Delete(root);\n");
-            restore_body.push_str("return instance;");
+            if !uses_new_contract {
+                restore_body.push_str("return instance;");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                // Instance method (takes Sys* self implicitly).
+                (None, false)
+            } else {
+                // Static factory: returns Sys*.
+                (Some(format!("{}*", system.name)), true)
+            };
             methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("json").with_type("const char*")],
-                return_type: Some(format!("{}*", system.name)),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("const char*")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
@@ -4187,6 +4241,28 @@ pub(crate) fn generate_persistence_methods(
         TargetLanguage::Go => {
             let compartment_type = format!("{}Compartment", system.name);
 
+            // RFC-0012 amendment: branch on new contract. Go uses
+            // PascalCase legacy: SaveState (method on s) and
+            // RestoreSysName (package function returning *SysName).
+            // New contract makes both receiver methods on `s`.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "SaveState".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("Restore{}", system.name));
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "jsonStr".to_string());
+            // Go: methods on the receiver use `s.` (the standard
+            // receiver name framec emits); package-level factory
+            // populates a fresh `instance := &Sys{}` via `instance.`.
+            let target = if uses_new_contract { "s" } else { "instance" };
+
             // save_state — serialize to JSON via encoding/json
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
@@ -4237,7 +4313,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("return string(jsonBytes)");
 
             methods.push(CodegenNode::Method {
-                name: "SaveState".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("string".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -4250,10 +4326,16 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state — static function
+            // Load body — receiver method (new contract) or package
+            // factory (legacy). Go's `is_static=true` here means
+            // "package-level free function with no receiver"; `false`
+            // means "method with `(s *Sys)` receiver".
             let mut restore_body = String::new();
             restore_body.push_str("var data map[string]interface{}\n");
-            restore_body.push_str("json.Unmarshal([]byte(jsonStr), &data)\n");
+            restore_body.push_str(&format!(
+                "json.Unmarshal([]byte({}), &data)\n",
+                load_param_name
+            ));
             restore_body.push_str(&format!(
                 "var deserializeComp func(d interface{{}}) *{}\n",
                 compartment_type
@@ -4396,28 +4478,32 @@ pub(crate) fn generate_persistence_methods(
             );
             restore_body.push_str("    return comp\n");
             restore_body.push_str("}\n");
-            restore_body.push_str(&format!("instance := &{}{{}}\n", system.name));
-            restore_body
-                .push_str("instance.__compartment = deserializeComp(data[\"_compartment\"])\n");
-            restore_body.push_str("instance.__next_compartment = nil\n");
+            // Legacy only: allocate a fresh instance struct. New
+            // contract mutates `s` (the receiver) in place.
+            if !uses_new_contract {
+                restore_body.push_str(&format!("instance := &{}{{}}\n", system.name));
+            }
+            restore_body.push_str(&format!(
+                "{}.__compartment = deserializeComp(data[\"_compartment\"])\n",
+                target
+            ));
+            restore_body.push_str(&format!("{}.__next_compartment = nil\n", target));
             restore_body.push_str("if stack, ok := data[\"_state_stack\"].([]interface{}); ok {\n");
             restore_body.push_str(&format!(
-                "    instance._state_stack = make([]*{}, 0, len(stack))\n",
-                compartment_type
+                "    {}._state_stack = make([]*{}, 0, len(stack))\n",
+                target, compartment_type
             ));
-            restore_body.push_str("    for _, c := range stack { instance._state_stack = append(instance._state_stack, deserializeComp(c)) }\n");
+            restore_body.push_str(&format!(
+                "    for _, c := range stack {{ {0}._state_stack = append({0}._state_stack, deserializeComp(c)) }}\n",
+                target
+            ));
             restore_body.push_str("}\n");
-            // Type-ignorant domain restore via marshal-roundtrip.
-            // framec emits the declared Go type verbatim;
-            // encoding/json reflection handles primitives, slices,
-            // maps, and user structs alike.
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    // Nested @@SystemName(): re-hydrate via child Restore<Name>.
                     restore_body.push_str(&format!(
-                        "if __raw_{0}, err_{0} := json.Marshal(data[\"{0}\"]); err_{0} == nil {{ instance.{0} = Restore{1}(string(__raw_{0})) }}\n",
-                        var.name, child_sys
+                        "if __raw_{1}, err_{1} := json.Marshal(data[\"{1}\"]); err_{1} == nil {{ {0}.{1} = Restore{2}(string(__raw_{1})) }}\n",
+                        target, var.name, child_sys
                     ));
                 } else {
                     let declared = match &var.var_type {
@@ -4431,21 +4517,28 @@ pub(crate) fn generate_persistence_methods(
                         t = declared,
                         name = var.name,
                     );
-                    restore_body.push_str(&format!("instance.{} = {}\n", var.name, go_extract));
+                    restore_body.push_str(&format!("{}.{} = {}\n", target, var.name, go_extract));
                 }
             }
-            restore_body.push_str("return instance");
+            if !uses_new_contract {
+                restore_body.push_str("return instance");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                (None, false)
+            } else {
+                (Some(format!("*{}", system.name)), true)
+            };
             methods.push(CodegenNode::Method {
-                name: format!("Restore{}", system.name),
-                params: vec![Param::new("jsonStr").with_type("string")],
-                return_type: Some(format!("*{}", system.name)),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("string")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });

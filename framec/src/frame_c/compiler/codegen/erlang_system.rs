@@ -5203,6 +5203,24 @@ pub(crate) fn generate_erlang_system(
 
     // Persistence methods (when @@persist is present)
     if system.persist_attr.is_some() {
+        // RFC-0012 amendment: respect user-named @@[save] / @@[load]
+        // operations. Erlang's persist is a documented design
+        // exclusion for the instance-method shape: the gen_statem
+        // actor model means save_state takes a Pid, load_state
+        // returns a fresh Pid (you can't mutate an actor in place
+        // — Pids are immutable handles, the process holds state).
+        // Both are module-level functions naturally; we just rename
+        // them under the user's chosen op names. The function shapes
+        // stay the same.
+        let save_method_name = system
+            .save_op_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "save_state".to_string());
+        let load_method_name = system
+            .load_op_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "load_state".to_string());
+
         // Collect domain fields with nested-system metadata. For
         // each domain var with `inner: T = @@T()` shape, store
         // (field_name, Some(child_module)) so save_state can
@@ -5251,7 +5269,7 @@ pub(crate) fn generate_erlang_system(
 
         // save_state/1 — serializes current state + Data to a map.
         // Nested @@SystemName fields recurse through child save_state.
-        code.push_str("save_state(Pid) ->\n");
+        code.push_str(&format!("{}(Pid) ->\n", save_method_name));
         code.push_str("    {State, Data} = sys:get_state(Pid),\n");
         code.push_str("    #{state => State,\n");
         let mut emitted = 0;
@@ -5291,7 +5309,7 @@ pub(crate) fn generate_erlang_system(
 
         // load_state/1 — deserializes map and starts a new gen_statem.
         // Nested fields spawn fresh child processes via child:load_state.
-        code.push_str("load_state(Map) ->\n");
+        code.push_str(&format!("{}(Map) ->\n", load_method_name));
         code.push_str("    State = maps:get(state, Map),\n");
         code.push_str("    Data = #data{\n");
         let mut emitted = 0;
@@ -5334,9 +5352,12 @@ pub(crate) fn generate_erlang_system(
         code.push_str("    sys:replace_state(Pid, fun(_) -> {State, Data} end),\n");
         code.push_str("    {ok, Pid}.\n\n");
 
-        // Add save_state/load_state to exports
-        // Need to insert into the export list — prepend to code
-        let save_export = format!("-export([save_state/1, load_state/1]).\n");
+        // Add save/load to exports under their user-named (or
+        // legacy-default) names.
+        let save_export = format!(
+            "-export([{}/1, {}/1]).\n",
+            save_method_name, load_method_name
+        );
         // Find position after the last -export line
         if let Some(pos) = code.rfind("-export([callback_mode/0") {
             if let Some(newline) = code[pos..].find('\n') {
