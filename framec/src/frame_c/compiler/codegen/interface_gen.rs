@@ -4278,6 +4278,29 @@ pub(crate) fn generate_persistence_methods(
         TargetLanguage::Dart => {
             let compartment_type = format!("{}Compartment", system.name);
 
+            // RFC-0012 amendment: branch on new contract.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "saveState".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restoreState".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            // Dart: new contract uses `this` (instance method); legacy
+            // uses `instance` (the `_restore()` named constructor's
+            // result that the static method returns).
+            let target = if uses_new_contract {
+                "this"
+            } else {
+                "instance"
+            };
+
             // save_state — serialize to JSON via dart:convert
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
@@ -4323,7 +4346,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("});");
 
             methods.push(CodegenNode::Method {
-                name: "saveState".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("String".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -4336,23 +4359,29 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // _restore — private named constructor for deserialization.
-            // Creates an uninitialized instance (skips the normal
-            // constructor's $> enter event and compartment setup).
-            // Initializes `late` fields (_state_stack, _context_stack)
-            // so the instance is safe to touch before restoreState()
-            // finishes populating the compartment chain.
-            methods.push(CodegenNode::NativeBlock {
-                code: format!(
-                    "{system}._restore() : __compartment = {comp}(\"\"), __next_compartment = null {{\n\
-                     \x20   _state_stack = [];\n\
-                     \x20   _context_stack = [];\n\
-                     }}",
-                    system = system.name,
-                    comp = compartment_type,
-                ),
-                span: None,
-            });
+            // _restore named constructor — only emitted on the legacy
+            // contract. The new contract calls restoreState as an
+            // instance method on an existing instance, so there's no
+            // need for a constructor-bypass path.
+            if !uses_new_contract {
+                // _restore — private named constructor for deserialization.
+                // Creates an uninitialized instance (skips the normal
+                // constructor's $> enter event and compartment setup).
+                // Initializes `late` fields (_state_stack, _context_stack)
+                // so the instance is safe to touch before restoreState()
+                // finishes populating the compartment chain.
+                methods.push(CodegenNode::NativeBlock {
+                    code: format!(
+                        "{system}._restore() : __compartment = {comp}(\"\"), __next_compartment = null {{\n\
+                         \x20   _state_stack = [];\n\
+                         \x20   _context_stack = [];\n\
+                         }}",
+                        system = system.name,
+                        comp = compartment_type,
+                    ),
+                    span: None,
+                });
+            }
 
             // Per-state typed restore data. For each state with declared
             // params, we'll switch on the state name in deserializeComp
@@ -4446,29 +4475,36 @@ pub(crate) fn generate_persistence_methods(
             );
             restore_body.push_str("    return comp;\n");
             restore_body.push_str("}\n");
-            restore_body.push_str("final data = jsonDecode(json) as Map<String, dynamic>;\n");
-            restore_body.push_str(&format!("final instance = {}._restore();\n", system.name));
-            restore_body
-                .push_str("instance.__compartment = deserializeComp(data['_compartment'])!;\n");
-            restore_body.push_str("instance.__next_compartment = null;\n");
             restore_body.push_str(&format!(
-                "instance._state_stack = (data['_state_stack'] as List?)?.map((c) => deserializeComp(c)!).toList() ?? <{}>[];\n",
-                compartment_type
+                "final _parsed = jsonDecode({}) as Map<String, dynamic>;\n",
+                load_param_name
+            ));
+            // Legacy only: construct a bare instance via the
+            // `_restore()` named constructor that bypasses the regular
+            // ctor's $> enter dispatch. New contract just mutates
+            // `this` (the existing instance whose ctor already ran).
+            if !uses_new_contract {
+                restore_body.push_str(&format!("final instance = {}._restore();\n", system.name));
+            }
+            restore_body.push_str(&format!(
+                "{}.__compartment = deserializeComp(_parsed['_compartment'])!;\n",
+                target
+            ));
+            restore_body.push_str(&format!("{}.__next_compartment = null;\n", target));
+            restore_body.push_str(&format!(
+                "{}._state_stack = (_parsed['_state_stack'] as List?)?.map((c) => deserializeComp(c)!).toList() ?? <{}>[];\n",
+                target, compartment_type
             ));
             // Domain field restores via the comprehension emitter.
-            // For Map<String, List<int>>, emits something like:
-            //   instance.x = <String, List<int>>{for (var __me in (data['x'] as Map).entries) __me.key as String: <int>[for (var __e in (__me.value as List)) (__e as num).toInt()]};
-            // This produces a genuinely typed collection rather than
-            // the broken `.cast<>()` view that was in place before.
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    // Nested @@SystemName instance: re-hydrate via child's
-                    // restoreState. data[name] is the embedded JSON object;
-                    // jsonEncode it back to string and let child rebuild.
+                    // Nested @@SystemName instance: re-hydrate via
+                    // child's restoreState (still the legacy static
+                    // factory until those targets migrate).
                     restore_body.push_str(&format!(
-                        "instance.{0} = data['{0}'] != null ? {1}.restoreState(jsonEncode(data['{0}'])) : {1}();\n",
-                        var.name, child_sys
+                        "{0}.{1} = _parsed['{1}'] != null ? {2}.restoreState(jsonEncode(_parsed['{1}'])) : {2}();\n",
+                        target, var.name, child_sys
                     ));
                 } else {
                     let ty = match &var.var_type {
@@ -4476,22 +4512,29 @@ pub(crate) fn generate_persistence_methods(
                         _ => "dynamic",
                     };
                     let parsed = parse_dart_type(ty);
-                    let conv = dart_conv_expr(&parsed, &format!("data['{}']", var.name));
-                    restore_body.push_str(&format!("instance.{} = {};\n", var.name, conv));
+                    let conv = dart_conv_expr(&parsed, &format!("_parsed['{}']", var.name));
+                    restore_body.push_str(&format!("{}.{} = {};\n", target, var.name, conv));
                 }
             }
-            restore_body.push_str("return instance;");
+            if !uses_new_contract {
+                restore_body.push_str("return instance;");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                (None, false)
+            } else {
+                (Some(system.name.clone()), true)
+            };
             methods.push(CodegenNode::Method {
-                name: "restoreState".to_string(),
-                params: vec![Param::new("json").with_type("String")],
-                return_type: Some(system.name.clone()),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("String")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
