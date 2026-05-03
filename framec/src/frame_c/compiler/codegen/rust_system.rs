@@ -1518,6 +1518,21 @@ pub(crate) fn rust_pop_transition(indent: &str) -> String {
 pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<CodegenNode> {
     let mut methods = Vec::new();
 
+    // RFC-0012 amendment: branch on new contract.
+    let uses_new_contract = system.uses_new_persist_contract();
+    let save_method_name = system
+        .save_op_name()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "save_state".to_string());
+    let load_method_name = system
+        .load_op_name()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "restore_state".to_string());
+    let load_param_name = system
+        .load_op_param_name()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "json".to_string());
+
     // ── save_state ───────────────────────────────────────────────
     let mut save_body = String::new();
 
@@ -1620,7 +1635,7 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     save_body.push_str("}).to_string()");
 
     methods.push(CodegenNode::Method {
-        name: "save_state".to_string(),
+        name: save_method_name.clone(),
         params: vec![],
         return_type: Some("String".to_string()),
         body: vec![CodegenNode::NativeBlock {
@@ -1635,7 +1650,10 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
 
     // ── restore_state ────────────────────────────────────────────
     let mut restore_body = String::new();
-    restore_body.push_str("let data: serde_json::Value = serde_json::from_str(json).unwrap();\n");
+    restore_body.push_str(&format!(
+        "let data: serde_json::Value = serde_json::from_str({}).unwrap();\n",
+        load_param_name
+    ));
 
     restore_body.push_str(&format!(
         "fn deserialize_state_context(state: &str, data: &serde_json::Value) -> {}StateContext {{\n",
@@ -1714,38 +1732,70 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
 
     restore_body.push_str("let compartment = deserialize_comp(&data[\"_compartment\"]);\n");
 
-    restore_body.push_str(&format!("let instance = {} {{\n", system.name));
-    restore_body.push_str("    _state_stack: stack,\n");
-    restore_body.push_str("    _context_stack: vec![],\n");
-    restore_body.push_str("    __compartment: compartment,\n");
-    restore_body.push_str("    __next_compartment: None,\n");
-
-    for var in &system.domain {
-        let init = var.initializer_text.as_deref().unwrap_or("");
-        if let Some(child_sys) = super::interface_gen::extract_tagged_system_name(init) {
-            restore_body.push_str(&format!(
-                "    {0}: {1}::restore_state(&data[\"{0}\"].to_string()),\n",
-                var.name, child_sys
-            ));
-        } else {
-            let json_extract = rust_json_extract_unwrap(&var.name, &var.var_type);
-            restore_body.push_str(&format!("    {}: {},\n", var.name, json_extract));
+    if uses_new_contract {
+        // Instance method: mutate &mut self in place. Write each
+        // field directly. No struct literal needed because `self`
+        // is the existing instance.
+        restore_body.push_str("self._state_stack = stack;\n");
+        restore_body.push_str("self._context_stack = vec![];\n");
+        restore_body.push_str("self.__compartment = compartment;\n");
+        restore_body.push_str("self.__next_compartment = None;\n");
+        for var in &system.domain {
+            let init = var.initializer_text.as_deref().unwrap_or("");
+            if let Some(child_sys) = super::interface_gen::extract_tagged_system_name(init) {
+                restore_body.push_str(&format!(
+                    "self.{0} = {1}::restore_state(&data[\"{0}\"].to_string());\n",
+                    var.name, child_sys
+                ));
+            } else {
+                let json_extract = rust_json_extract_unwrap(&var.name, &var.var_type);
+                restore_body.push_str(&format!("self.{} = {};\n", var.name, json_extract));
+            }
         }
+    } else {
+        // Legacy: build the struct literal and return it. Frame's
+        // ctor-bypass via direct struct literal — equivalent of
+        // GetUninitializedObject + manual field population in one
+        // expression.
+        restore_body.push_str(&format!("let instance = {} {{\n", system.name));
+        restore_body.push_str("    _state_stack: stack,\n");
+        restore_body.push_str("    _context_stack: vec![],\n");
+        restore_body.push_str("    __compartment: compartment,\n");
+        restore_body.push_str("    __next_compartment: None,\n");
+        for var in &system.domain {
+            let init = var.initializer_text.as_deref().unwrap_or("");
+            if let Some(child_sys) = super::interface_gen::extract_tagged_system_name(init) {
+                restore_body.push_str(&format!(
+                    "    {0}: {1}::restore_state(&data[\"{0}\"].to_string()),\n",
+                    var.name, child_sys
+                ));
+            } else {
+                let json_extract = rust_json_extract_unwrap(&var.name, &var.var_type);
+                restore_body.push_str(&format!("    {}: {},\n", var.name, json_extract));
+            }
+        }
+        restore_body.push_str("};\n");
+        restore_body.push_str("instance");
     }
 
-    restore_body.push_str("};\n");
-    restore_body.push_str("instance");
-
+    let (load_return, load_static, load_param_type) = if uses_new_contract {
+        // Instance method: takes &mut self implicitly via Method node
+        // (is_static=false), no return.
+        (None, false, "&str")
+    } else {
+        // Static factory: takes only the json param, returns Self.
+        (Some(system.name.clone()), true, "&str")
+    };
     methods.push(CodegenNode::Method {
-        name: "restore_state".to_string(),
-        params: vec![Param::new("json").with_type("&str")],
-        return_type: Some(system.name.clone()),
+        name: load_method_name.clone(),
+        params: vec![Param::new(&load_param_name).with_type(load_param_type)],
+        return_type: load_return,
         body: vec![CodegenNode::NativeBlock {
             code: restore_body,
             span: None,
         }],
         is_async: false,
-        is_static: true,
+        is_static: load_static,
         visibility: Visibility::Public,
         decorators: vec![],
     });

@@ -2197,6 +2197,26 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
+            // RFC-0012 amendment: branch on new contract.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            let target = if uses_new_contract {
+                "(*this)"
+            } else {
+                "__instance"
+            };
+
             // Collect all state vars with their types for serialization
             let all_state_vars: Vec<(&str, &str, &str)> = system
                 .machine
@@ -2412,7 +2432,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("return __j.dump();");
 
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("std::string".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -2425,7 +2445,9 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state(json) — static method with recursive compartment deserialization
+            // Load body — instance method (new contract) or static
+            // factory (legacy with __skipInitialEnter dance around
+            // value-init `T __instance;`).
             let mut restore_body = String::new();
 
             // Helper lambda to deserialize compartment chain recursively
@@ -2537,18 +2559,31 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    return c;\n");
             restore_body.push_str("};\n");
 
-            restore_body.push_str("auto __j = nlohmann::json::parse(json);\n");
-            // Suppress the initial-state $>() dispatch on the restored
-            // instance. See Swift for rationale.
-            restore_body.push_str(&format!("{}::__skipInitialEnter = true;\n", sys));
-            restore_body.push_str(&format!("{} __instance;\n", sys));
-            restore_body.push_str(&format!("{}::__skipInitialEnter = false;\n", sys));
-            restore_body.push_str("__instance.__compartment = __deser(__j[\"_compartment\"]);\n");
+            restore_body.push_str(&format!(
+                "auto __j = nlohmann::json::parse({});\n",
+                load_param_name
+            ));
+            // Legacy only: suppress the initial-state $>() dispatch
+            // on the restored instance via __skipInitialEnter toggled
+            // around value-init `T __instance;`. New contract mutates
+            // `*this` in place — the ctor already ran on construction.
+            if !uses_new_contract {
+                restore_body.push_str(&format!("{}::__skipInitialEnter = true;\n", sys));
+                restore_body.push_str(&format!("{} __instance;\n", sys));
+                restore_body.push_str(&format!("{}::__skipInitialEnter = false;\n", sys));
+            }
+            restore_body.push_str(&format!(
+                "{}.__compartment = __deser(__j[\"_compartment\"]);\n",
+                target
+            ));
 
             // Restore state stack
             restore_body.push_str("if (__j.contains(\"_state_stack\")) {\n");
             restore_body.push_str("    for (auto& __sc : __j[\"_state_stack\"]) {\n");
-            restore_body.push_str("        __instance._state_stack.push_back(__deser(__sc));\n");
+            restore_body.push_str(&format!(
+                "        {}._state_stack.push_back(__deser(__sc));\n",
+                target
+            ));
             restore_body.push_str("    }\n");
             restore_body.push_str("}\n");
 
@@ -2557,31 +2592,38 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    // shared_ptr field — wrap restored value in make_shared.
                     restore_body.push_str(&format!(
-                        "if (__j.contains(\"{0}\") && !__j[\"{0}\"].is_null()) {{ __instance.{0} = std::make_shared<{1}>({1}::restore_state(__j[\"{0}\"].dump())); }}\n",
-                        var.name, child_sys
+                        "if (__j.contains(\"{0}\") && !__j[\"{0}\"].is_null()) {{ {tgt}.{0} = std::make_shared<{1}>({1}::restore_state(__j[\"{0}\"].dump())); }}\n",
+                        var.name, child_sys, tgt = target
                     ));
                 } else {
                     restore_body.push_str(&format!(
-                        "if (__j.contains(\"{0}\")) {{ __j[\"{0}\"].get_to(__instance.{0}); }}\n",
-                        var.name
+                        "if (__j.contains(\"{0}\")) {{ __j[\"{0}\"].get_to({tgt}.{0}); }}\n",
+                        var.name,
+                        tgt = target
                     ));
                 }
             }
 
-            restore_body.push_str("return __instance;");
+            if !uses_new_contract {
+                restore_body.push_str("return __instance;");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                (None, false)
+            } else {
+                (Some(sys.clone()), true)
+            };
             methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("json").with_type("const std::string&")],
-                return_type: Some(sys.clone()),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("const std::string&")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
