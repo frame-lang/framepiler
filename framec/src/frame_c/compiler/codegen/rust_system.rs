@@ -2258,7 +2258,7 @@ fn rewrite_arg_if_non_copy_field(arg: &str, non_copy_fields: &[String]) -> Strin
     let trimmed = arg.trim();
     // Preserve original whitespace around the arg so formatting stays intact.
     let prefix_end = arg.len() - arg.trim_start().len();
-    let suffix_start = arg.trim_end().len() + prefix_end;
+    let suffix_start = prefix_end + trimmed.len();
     let prefix = &arg[..prefix_end];
     let suffix = &arg[suffix_start..];
     if let Some(rest) = trimmed.strip_prefix("self.") {
