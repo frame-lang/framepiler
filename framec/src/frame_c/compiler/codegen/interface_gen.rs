@@ -3214,6 +3214,28 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
+            // RFC-0012 amendment: branch on new contract.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            // PHP target: `$this` for new (instance method), `$instance`
+            // for legacy (static factory + ReflectionClass).
+            let target = if uses_new_contract {
+                "$this"
+            } else {
+                "$instance"
+            };
+
             // Private helper for recursive compartment serialization.
             // Includes state_args + enter_args (compartment-context fields)
             // — same root pattern as Java/Kotlin/C#/Swift fixes.
@@ -3300,7 +3322,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("return json_encode($j);");
 
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: None,
                 body: vec![CodegenNode::NativeBlock {
@@ -3313,53 +3335,70 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state($json) — static.
-            //
-            // Uses ReflectionClass::newInstanceWithoutConstructor so the
-            // generated class's __construct does NOT run. __construct
-            // dispatches the initial state's $>() enter handler; a
-            // restored instance must not re-fire that. Instance props
-            // that __construct would normally set up are populated here
-            // from the saved blob.
+            // Load body — instance method (new contract) or static
+            // factory (legacy). Legacy uses
+            // ReflectionClass::newInstanceWithoutConstructor to bypass
+            // __construct (which would re-fire the initial-state
+            // $>() enter handler); new contract mutates $this in
+            // place. `__deserComp` reference: legacy uses `self::`
+            // (it's static); new contract calls $this->__deserComp.
             let mut restore_body = String::new();
-            restore_body.push_str("$j = json_decode($json, true);\n");
             restore_body.push_str(&format!(
-                "$instance = (new \\ReflectionClass({}::class))->newInstanceWithoutConstructor();\n",
-                sys
+                "$_parsed = json_decode(${}, true);\n",
+                load_param_name
             ));
-            restore_body.push_str("$instance->_state_stack = [];\n");
-            restore_body.push_str("$instance->_context_stack = [];\n");
-            restore_body
-                .push_str("$instance->__compartment = self::__deserComp($j['_compartment']);\n");
-            restore_body.push_str("if (isset($j['_state_stack'])) {\n");
-            restore_body.push_str("    foreach ($j['_state_stack'] as $sc) { $instance->_state_stack[] = self::__deserComp($sc); }\n");
+            if !uses_new_contract {
+                restore_body.push_str(&format!(
+                    "$instance = (new \\ReflectionClass({}::class))->newInstanceWithoutConstructor();\n",
+                    sys
+                ));
+            }
+            // Method-call expression for __deserComp differs by form.
+            let deser = if uses_new_contract {
+                "$this->__deserComp"
+            } else {
+                "self::__deserComp"
+            };
+            restore_body.push_str(&format!("{}->_state_stack = [];\n", target));
+            restore_body.push_str(&format!("{}->_context_stack = [];\n", target));
+            restore_body.push_str(&format!(
+                "{}->__compartment = {}($_parsed['_compartment']);\n",
+                target, deser
+            ));
+            restore_body.push_str("if (isset($_parsed['_state_stack'])) {\n");
+            restore_body.push_str(&format!(
+                "    foreach ($_parsed['_state_stack'] as $sc) {{ {}->_state_stack[] = {}($sc); }}\n",
+                target, deser
+            ));
             restore_body.push_str("}\n");
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "if (isset($j['{0}']) && $j['{0}'] !== null) $instance->{0} = {1}::restore_state(json_encode($j['{0}']));\n",
-                        var.name, child_sys
+                        "if (isset($_parsed['{1}']) && $_parsed['{1}'] !== null) {0}->{1} = {2}::restore_state(json_encode($_parsed['{1}']));\n",
+                        target, var.name, child_sys
                     ));
                 } else {
                     restore_body.push_str(&format!(
-                        "if (isset($j['{}'])) $instance->{} = $j['{}'];\n",
-                        var.name, var.name, var.name
+                        "if (isset($_parsed['{1}'])) {0}->{1} = $_parsed['{1}'];\n",
+                        target, var.name
                     ));
                 }
             }
-            restore_body.push_str("return $instance;");
+            if !uses_new_contract {
+                restore_body.push_str("return $instance;");
+            }
 
             methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("json")],
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name)],
                 return_type: None,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: !uses_new_contract,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
