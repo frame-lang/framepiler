@@ -331,8 +331,7 @@ declared `: type` annotation is required for the wrapper to expose a
 return value — without it, the method is `void`. In **dynamic targets**
 (Python, JavaScript, Ruby, Lua, PHP, GDScript, Erlang) the wrapper
 always exposes the FrameContext's return slot, so `: type` is
-documentation only. See [Frame Runtime — Return values across target
-languages](frame_runtime.md#return-values-across-target-languages).
+documentation only. See [Frame Runtime — Step 8: Return value](frame_runtime.md#step-8--return-value).
 
 ---
 
@@ -630,7 +629,7 @@ See [System Context](#system-context) for full semantics.
 
 `@@:self` and `@@:system` are syntactic prefixes — neither is a first-class value. Bare `@@:self` (E603) and bare `@@:system` (E604) are errors.
 
-See [Self Reference](#self-reference-1) and [System Runtime](#system-runtime) for full semantics.
+See [Self Reference](#self-reference) and [System Runtime](#system-runtime) for full semantics.
 
 **`return` is always native.** It exits the current function — it does NOT set `@@:return`. In event handlers, `return expr` silently loses the value (W415 warning). Use `@@:(expr)` or `@@:return = expr` to set return values.
 

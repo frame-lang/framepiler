@@ -836,6 +836,6 @@ Frame is a language for defining state machines that lives inside your source fi
 
 Key concepts: `$Idle` and `$Running` are **states**. `start()` and `stop()` are **events**. `-> $Running` is a **transition**. Events not handled in a state are silently ignored — `stop()` in `$Idle` does nothing. The first state listed is the start state. `@@:(expr)` sets the return value. `$>` and `<$` are enter/exit handlers.
 
-For the full language, see [Getting Started with Frame](frame_getting_started.md).
-For complete syntax, see the [Frame Language Reference](frame_language.md).
-For agent workflow patterns, see [Frame for AI Agents](AGENTS.md).
+For the full language, see [Getting Started with Frame](../frame_getting_started.md).
+For complete syntax, see the [Frame Language Reference](../frame_language.md).
+For agent workflow patterns, see [Frame for AI Agents](../AGENTS_README.md).

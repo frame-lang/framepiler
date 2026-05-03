@@ -1975,4 +1975,4 @@ agent.run("analyze this codebase")
 
 For the full Frame language tutorial, see [Getting Started with Frame](frame_getting_started.md).
 For complete syntax reference, see the [Frame Language Reference](frame_language.md).
-For 21 runnable examples, see the [Frame Cookbook](frame_cookbook.md).
+For 110 runnable examples, see the [Frame Cookbook](frame_cookbook.md).
