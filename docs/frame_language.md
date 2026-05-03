@@ -98,8 +98,18 @@ Marks a system as serializable. The system **must** declare two
 operations under `operations:` — one tagged `@@[save]` (returns
 the serialized blob) and one tagged `@@[load]` (instance method
 populating self). Bare `@@[persist]` without ops is rejected with
-**E814**. See [Persistence](#persistence) and
-[RFC-0012](rfcs/rfc-0012.md).
+**E814**.
+
+Optional companions on operations / domain fields:
+
+| Attribute      | Position    | Purpose                                                 |
+|----------------|-------------|---------------------------------------------------------|
+| `@@[save]`     | operation   | Marks the framework-managed save method                 |
+| `@@[load]`     | operation   | Marks the framework-managed load method                 |
+| `@@[on_load]`  | operation   | Hook fired after `@@[load]` completes (user-written)    |
+| `@@[no_persist]` | domain field | Excludes this field from the serialized blob          |
+
+See [Persistence](#persistence) and [RFC-0012](rfcs/rfc-0012.md).
 
 ---
 

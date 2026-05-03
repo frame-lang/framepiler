@@ -233,6 +233,27 @@ rejected with **E814** since framepiler `b3aebc5` (2026-05-03).
 See [`frame_runtime.md`](../frame_runtime.md) "Naming the save/load
 methods" and [RFC-0012](../rfcs/rfc-0012.md) for the design.
 
+### Post-load hook: `@@[on_load]`
+
+A third optional attribute fires user code after `restore_state`
+finishes populating self — useful for re-establishing derived
+state, firing watchers, validating invariants:
+
+```frame
+operations:
+    @@[save]    pickle(): str {}
+    @@[load]    unpickle(data: str) {}
+
+    @@[on_load]
+    rebuild_derived() {
+        self.doubled = self.n * 2
+    }
+```
+
+After `c2.unpickle(data)` returns, `c2.doubled` has already been
+set by the hook. At-most-one per system (E810). framepiler
+`a61390e` (2026-05-03).
+
 ---
 
 ## Persist quiescent contract — E700

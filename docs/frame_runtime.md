@@ -3982,6 +3982,39 @@ target-specific scoping limitations (notably GDScript's
 `class_name` resolution). See RFC-0012 amendment for the full
 rationale.
 
+### Post-load hook: `@@[on_load]`
+
+A third optional attribute, `@@[on_load]`, marks an operation
+that fires automatically after `restore_state` finishes
+populating self. The user writes the body; framec calls it
+at the end of the framework-managed restore. Useful for
+re-establishing derived state, firing watchers, validating
+invariants — anything that shouldn't be serialized but must
+be in place after a restore.
+
+```frame
+@@[persist]
+@@system Counter {
+    operations:
+        @@[save]    save_state(): bytes {}
+        @@[load]    restore_state(data: bytes) {}
+
+        @@[on_load]
+        rebuild_derived() {
+            self.doubled = self.n * 2
+        }
+    ...
+}
+
+# After restore, on_load fires before the caller sees control:
+c2 = Counter()
+c2.restore_state(data)
+# c2.doubled is now n*2 — set by the on_load hook
+```
+
+At most one `@@[on_load]` per system (E810). Requires
+`@@[persist]` like the other persist attributes.
+
 ### What gets saved
 
 Persistence serializes the data that defines the system's
