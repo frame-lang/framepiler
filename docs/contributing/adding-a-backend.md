@@ -421,7 +421,7 @@ cp /tmp/output_block_parser.rs \
     framec/src/frame_c/compiler/codegen/output_block_parser.gen.rs
 ```
 
-Then `cargo test --release` and the full 16-language regression. The regen used to be broken because the framec scanner had a substring-matching bug — it would land on the `r` in identifiers like `after_return` and match the `return` keyword mid-identifier, shredding the Rust code into invalid output. **Fixed in TODO #42**: `match_frame_statement` in `native_region_scanner/unified.rs` now requires a leading word boundary on the `return`/`push$`/`pop$` keyword matches. The corresponding regression tests are in `unified.rs`'s `tests` module.
+Then `cargo test --release` and the full 17-language regression. The regen used to be broken because the framec scanner had a substring-matching bug — it would land on the `r` in identifiers like `after_return` and match the `return` keyword mid-identifier, shredding the Rust code into invalid output. **Fixed in TODO #42**: `match_frame_statement` in `native_region_scanner/unified.rs` now requires a leading word boundary on the `return`/`push$`/`pop$` keyword matches. The corresponding regression tests are in `unified.rs`'s `tests` module.
 
 If you ever see the regen output containing mangled identifiers (`after_                              return = false`) again, the leading-boundary check has regressed — fix the scanner before re-running.
 

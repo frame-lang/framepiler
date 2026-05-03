@@ -45,36 +45,10 @@ They complement (rather than replace):
 | TypeScript | [typescript.md](typescript.md) — typed class, `Promise<T>` async |
 | JavaScript | [javascript.md](javascript.md) — untyped class, `async`/`await` |
 
-## Roadmap
-
-The remaining 15 backends are queued. Priority order: backends whose
-idioms diverge furthest from C-family default first.
-
-| Backend     | Why it warrants a guide                       | Status   |
-|-------------|-----------------------------------------------|----------|
-| **Erlang**  | Actor / `gen_statem` / no `while`             | ✅ done  |
-| **Rust**    | Typed StateContext / ownership / `&String`    | ✅ done  |
-| **GDScript**| Godot integration / E501 reserved names       | ✅ done  |
-| **C**       | Raw pointers / `typedef` for list types       | ✅ done  |
-| **C++**     | `shared_ptr<T>` / `co_await`                  | ✅ done  |
-| **Lua**     | No `class` / metatable patterns               | ✅ done  |
-| **Go**      | Pointer receivers / interface satisfaction    | ✅ done  |
-| **Swift**   | `async throws` / optionals / nil-safety       | ✅ done  |
-| **Kotlin**  | `suspend fun` / coroutine scopes              | ✅ done  |
-| **Java**    | One class per file / CompletableFuture        | ✅ done  |
-| **C#**      | `Task<T>` / `partial class`                   | ✅ done  |
-| **Dart**    | `Future<T>` / null safety / AOT vs JIT        | ✅ done  |
-| **PHP**     | `$this->`, `.` for concat, `<?php` prolog     | ✅ done  |
-| **Ruby**    | `@field` instance vars, `#{...}` interpolation | ✅ done  |
-| **Python**  | `async def` / dynamic dispatch (baseline)     | ✅ done  |
-| **TypeScript**| Type narrowing / `Promise<T>` (baseline)    | ✅ done  |
-| **JavaScript**| Prototype chain / no types (baseline)       | ✅ done  |
-
-All 17 backends now have per-language guides. Python, TypeScript,
-and JavaScript are deliberately shorter than the more-divergent
-guides — they're the baseline against which the others are
-contrasted, and most cookbook recipes already exercise their
-patterns.
+All 17 backends have per-language guides. Python, TypeScript, and
+JavaScript are deliberately shorter than the more-divergent guides —
+they're the baseline against which the others are contrasted, and
+most cookbook recipes already exercise their patterns.
 
 ## Authoring a new guide
 
