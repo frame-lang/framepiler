@@ -3778,6 +3778,21 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
+            // RFC-0012 amendment: branch on new contract.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+
             // Ruby uses JSON (stdlib) — hash-based serialization
             // Private helper: serialize compartment chain
             let mut ser_body = String::new();
@@ -3858,7 +3873,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("JSON.generate(j)");
 
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: None,
                 body: vec![CodegenNode::NativeBlock {
@@ -3871,52 +3886,83 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state(json) — class method (static).
-            //
-            // Uses `allocate` instead of `new` so the constructor does NOT
-            // run. This matters because the generated `initialize` dispatches
-            // the initial state's `$>()` enter handler; a restored instance
-            // must not re-fire that (it would leak side effects of a state
-            // the caller never logically entered from). Instance variables
-            // that `initialize` would normally set up are populated here
-            // explicitly from the saved blob.
+            // Load body — instance method (new contract) or class
+            // method static factory (legacy). Under legacy, use
+            // `allocate` to bypass `initialize` (which would re-fire
+            // the initial-state `$>()` enter handler); under new
+            // contract `_init` already ran on `Foo.new()` and we
+            // overwrite the instance vars in place via `@var = ...`.
             let mut restore_body = String::new();
-            restore_body.push_str("j = JSON.parse(json)\n");
-            restore_body.push_str(&format!("instance = {}.allocate\n", sys));
-            restore_body.push_str("instance.instance_variable_set(:@_context_stack, [])\n");
-            restore_body.push_str("instance.instance_variable_set(:@__next_compartment, nil)\n");
-            restore_body.push_str("instance.instance_variable_set(:@__compartment, instance.send(:__deser_comp, j[\"_compartment\"]))\n");
-            restore_body.push_str("if j[\"_state_stack\"]\n");
-            restore_body.push_str("  instance.instance_variable_set(:@_state_stack, j[\"_state_stack\"].map { |sc| instance.send(:__deser_comp, sc) })\n");
-            restore_body.push_str("else\n");
-            restore_body.push_str("  instance.instance_variable_set(:@_state_stack, [])\n");
-            restore_body.push_str("end\n");
-            for var in &system.domain {
-                let init = var.initializer_text.as_deref().unwrap_or("");
-                if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if j.key?(\"{0}\") then instance.{0} = j[\"{0}\"].nil? ? nil : {1}.restore_state(JSON.generate(j[\"{0}\"])) end\n",
-                        var.name, child_sys
-                    ));
-                } else {
-                    restore_body.push_str(&format!(
-                        "instance.{} = j[\"{}\"] if j.key?(\"{}\")\n",
-                        var.name, var.name, var.name
-                    ));
+            restore_body.push_str(&format!("_parsed = JSON.parse({})\n", load_param_name));
+            if uses_new_contract {
+                // Instance method form: write directly to `@var`s on
+                // self. No `instance.send(:__deser_comp, ...)` dance —
+                // `__deser_comp` is on `self` and is `private` so a
+                // direct call works inside the class body.
+                restore_body.push_str("@_context_stack = []\n");
+                restore_body.push_str("@__next_compartment = nil\n");
+                restore_body.push_str("@__compartment = __deser_comp(_parsed[\"_compartment\"])\n");
+                restore_body.push_str("if _parsed[\"_state_stack\"]\n");
+                restore_body.push_str(
+                    "  @_state_stack = _parsed[\"_state_stack\"].map { |sc| __deser_comp(sc) }\n",
+                );
+                restore_body.push_str("else\n");
+                restore_body.push_str("  @_state_stack = []\n");
+                restore_body.push_str("end\n");
+                for var in &system.domain {
+                    let init = var.initializer_text.as_deref().unwrap_or("");
+                    if let Some(child_sys) = extract_tagged_system_name(init) {
+                        restore_body.push_str(&format!(
+                            "if _parsed.key?(\"{0}\") then @{0} = _parsed[\"{0}\"].nil? ? nil : {1}.restore_state(JSON.generate(_parsed[\"{0}\"])) end\n",
+                            var.name, child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "@{} = _parsed[\"{}\"] if _parsed.key?(\"{}\")\n",
+                            var.name, var.name, var.name
+                        ));
+                    }
                 }
+            } else {
+                // Static factory: use allocate + instance_variable_set
+                // to populate without firing initialize.
+                restore_body.push_str(&format!("instance = {}.allocate\n", sys));
+                restore_body.push_str("instance.instance_variable_set(:@_context_stack, [])\n");
+                restore_body
+                    .push_str("instance.instance_variable_set(:@__next_compartment, nil)\n");
+                restore_body.push_str("instance.instance_variable_set(:@__compartment, instance.send(:__deser_comp, _parsed[\"_compartment\"]))\n");
+                restore_body.push_str("if _parsed[\"_state_stack\"]\n");
+                restore_body.push_str("  instance.instance_variable_set(:@_state_stack, _parsed[\"_state_stack\"].map { |sc| instance.send(:__deser_comp, sc) })\n");
+                restore_body.push_str("else\n");
+                restore_body.push_str("  instance.instance_variable_set(:@_state_stack, [])\n");
+                restore_body.push_str("end\n");
+                for var in &system.domain {
+                    let init = var.initializer_text.as_deref().unwrap_or("");
+                    if let Some(child_sys) = extract_tagged_system_name(init) {
+                        restore_body.push_str(&format!(
+                            "if _parsed.key?(\"{0}\") then instance.{0} = _parsed[\"{0}\"].nil? ? nil : {1}.restore_state(JSON.generate(_parsed[\"{0}\"])) end\n",
+                            var.name, child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "instance.{} = _parsed[\"{}\"] if _parsed.key?(\"{}\")\n",
+                            var.name, var.name, var.name
+                        ));
+                    }
+                }
+                restore_body.push_str("instance");
             }
-            restore_body.push_str("instance");
 
             methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("json")],
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name)],
                 return_type: None,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: !uses_new_contract,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
@@ -4414,6 +4460,26 @@ pub(crate) fn generate_persistence_methods(
         TargetLanguage::Lua => {
             let compartment_type = format!("{}Compartment", system.name);
 
+            // RFC-0012 amendment: branch on new contract.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json_str".to_string());
+            let target = if uses_new_contract {
+                "self"
+            } else {
+                "instance"
+            };
+
             // save_state — serialize to JSON via cjson
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
@@ -4455,7 +4521,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("return json.encode(result)");
 
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("string".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -4468,10 +4534,15 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state — module-level function
+            // Load body — instance method (new) or static factory
+            // (legacy). New contract mutates `self`; legacy creates a
+            // bare table + sets metatable to bypass `:new(...)`.
             let mut restore_body = String::new();
             restore_body.push_str("local json = require(\"cjson\")\n");
-            restore_body.push_str("local data = json.decode(json_str)\n");
+            restore_body.push_str(&format!(
+                "local _parsed = json.decode({})\n",
+                load_param_name
+            ));
             restore_body.push_str("local function deserialize_comp(d)\n");
             restore_body.push_str("    if not d then return nil end\n");
             restore_body.push_str(&format!(
@@ -4487,30 +4558,36 @@ pub(crate) fn generate_persistence_methods(
                 .push_str("    comp.parent_compartment = deserialize_comp(d.parent_compartment)\n");
             restore_body.push_str("    return comp\n");
             restore_body.push_str("end\n");
-            restore_body.push_str(&format!("local instance = {{}}\n"));
+            if !uses_new_contract {
+                // Legacy: allocate bare table with metatable so
+                // method lookup works without firing `:new()`.
+                restore_body.push_str("local instance = {}\n");
+                restore_body.push_str(&format!(
+                    "setmetatable(instance, {{__index = {}}})\n",
+                    system.name
+                ));
+            }
             restore_body.push_str(&format!(
-                "setmetatable(instance, {{__index = {}}})\n",
-                system.name
+                "{}.__compartment = deserialize_comp(_parsed._compartment)\n",
+                target
             ));
-            restore_body.push_str("instance.__compartment = deserialize_comp(data._compartment)\n");
-            restore_body.push_str("instance.__next_compartment = nil\n");
-            restore_body.push_str("instance._state_stack = {}\n");
-            // _context_stack is pushed/popped per interface call; a restored
-            // instance starts with an empty context just like a fresh one.
-            restore_body.push_str("instance._context_stack = {}\n");
-            restore_body.push_str("if data._state_stack then\n");
-            restore_body.push_str("    for _, c in ipairs(data._state_stack) do\n");
-            restore_body.push_str(
-                "        instance._state_stack[#instance._state_stack + 1] = deserialize_comp(c)\n",
-            );
+            restore_body.push_str(&format!("{}.__next_compartment = nil\n", target));
+            restore_body.push_str(&format!("{}._state_stack = {{}}\n", target));
+            restore_body.push_str(&format!("{}._context_stack = {{}}\n", target));
+            restore_body.push_str("if _parsed._state_stack then\n");
+            restore_body.push_str("    for _, c in ipairs(_parsed._state_stack) do\n");
+            restore_body.push_str(&format!(
+                "        {0}._state_stack[#{0}._state_stack + 1] = deserialize_comp(c)\n",
+                target
+            ));
             restore_body.push_str("    end\n");
             restore_body.push_str("end\n");
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "if data.{0} ~= nil then instance.{0} = {1}.restore_state(json.encode(data.{0})) else instance.{0} = nil end\n",
-                        var.name, child_sys
+                        "if _parsed.{1} ~= nil then {0}.{1} = {2}.restore_state(json.encode(_parsed.{1})) else {0}.{1} = nil end\n",
+                        target, var.name, child_sys
                     ));
                     continue;
                 }
@@ -4519,31 +4596,34 @@ pub(crate) fn generate_persistence_methods(
                     crate::frame_c::compiler::frame_ast::Type::Custom(t) if t.trim() == "int"
                 );
                 if is_int {
-                    // cjson decodes JSON numbers as Lua floats; coerce
-                    // back to integer subtype (Lua 5.3+) so tostring()
-                    // round-trips as "0" rather than "0.0". Benign on
-                    // Lua 5.1/5.2 where floats already print without
-                    // decimal when integral.
                     restore_body.push_str(&format!(
-                        "instance.{0} = (data.{0} ~= nil) and math.floor(data.{0}) or nil\n",
-                        var.name
+                        "{0}.{1} = (_parsed.{1} ~= nil) and math.floor(_parsed.{1}) or nil\n",
+                        target, var.name
                     ));
                 } else {
-                    restore_body.push_str(&format!("instance.{} = data.{}\n", var.name, var.name));
+                    restore_body
+                        .push_str(&format!("{}.{} = _parsed.{}\n", target, var.name, var.name));
                 }
             }
-            restore_body.push_str("return instance");
+            if !uses_new_contract {
+                restore_body.push_str("return instance");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                (None, false)
+            } else {
+                (Some(system.name.clone()), true)
+            };
             methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("json_str").with_type("string")],
-                return_type: Some(system.name.clone()),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("string")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
