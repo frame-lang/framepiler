@@ -787,6 +787,23 @@ impl SystemAst {
         op.params.first().map(|p| p.name.as_str())
     }
 
+    /// Get the declared type of the load operation's first parameter
+    /// (the one that receives the serialized data). Returns `None` if
+    /// no @@[load] op exists or its param has no declared type.
+    /// Backends that need a target-specific default (e.g. Rust's
+    /// `&str`) should fall back to that when this returns `None`.
+    pub fn load_op_param_type(&self) -> Option<String> {
+        let op = self
+            .operations
+            .iter()
+            .find(|op| op.attributes.iter().any(|a| a.name == "load"))?;
+        let p = op.params.first()?;
+        match &p.param_type {
+            Type::Custom(s) => Some(s.clone()),
+            Type::Unknown => None,
+        }
+    }
+
     /// Get section span for a given section kind
     pub fn get_section_span(&self, kind: SystemSectionKind) -> Option<&Span> {
         match kind {

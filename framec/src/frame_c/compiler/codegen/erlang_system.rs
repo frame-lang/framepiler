@@ -3092,6 +3092,15 @@ pub(crate) fn generate_erlang_system(
         if op.is_static {
             continue;
         }
+        // RFC-0012 amendment: framework-managed ops are emitted by
+        // the persistence block (with their own export). Skip here.
+        if op
+            .attributes
+            .iter()
+            .any(|a| a.name == "save" || a.name == "load")
+        {
+            continue;
+        }
         let arity = op.params.len() + 1; // +1 for Pid (external) / Data (internal)
         api_exports.push(format!("{}/{}", erlang_op_name(&op.name), arity));
     }
@@ -4185,6 +4194,16 @@ pub(crate) fn generate_erlang_system(
                 if op.is_static {
                     continue;
                 }
+                // RFC-0012 amendment: framework-managed save/load are
+                // emitted as module-level functions, not state dispatch
+                // clauses. Skip here.
+                if op
+                    .attributes
+                    .iter()
+                    .any(|a| a.name == "save" || a.name == "load")
+                {
+                    continue;
+                }
                 let op_lc = erlang_op_name(&op.name);
                 let n = op.params.len();
                 let arg_vars: Vec<String> = (0..n).map(|i| format!("A{}", i + 1)).collect();
@@ -4872,6 +4891,15 @@ pub(crate) fn generate_erlang_system(
     // already use. `is_pid/1` is a guard — safe, builtin, compile-time
     // verified.
     for op in &system.operations {
+        // RFC-0012 amendment: framework-managed ops are emitted as
+        // module-level functions in the persistence block.
+        if op
+            .attributes
+            .iter()
+            .any(|a| a.name == "save" || a.name == "load")
+        {
+            continue;
+        }
         if !op.is_static {
             let op_snake = erlang_op_name(&op.name);
             let param_vars: Vec<String> = op

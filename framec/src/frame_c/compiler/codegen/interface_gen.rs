@@ -4331,9 +4331,11 @@ pub(crate) fn generate_persistence_methods(
             // "package-level free function with no receiver"; `false`
             // means "method with `(s *Sys)` receiver".
             let mut restore_body = String::new();
-            restore_body.push_str("var data map[string]interface{}\n");
+            // Rename internal var to `_parsed` so the user's load-op
+            // param can also be named `data` (RFC-0012 amendment).
+            restore_body.push_str("var _parsed map[string]interface{}\n");
             restore_body.push_str(&format!(
-                "json.Unmarshal([]byte({}), &data)\n",
+                "json.Unmarshal([]byte({}), &_parsed)\n",
                 load_param_name
             ));
             restore_body.push_str(&format!(
@@ -4484,11 +4486,12 @@ pub(crate) fn generate_persistence_methods(
                 restore_body.push_str(&format!("instance := &{}{{}}\n", system.name));
             }
             restore_body.push_str(&format!(
-                "{}.__compartment = deserializeComp(data[\"_compartment\"])\n",
+                "{}.__compartment = deserializeComp(_parsed[\"_compartment\"])\n",
                 target
             ));
             restore_body.push_str(&format!("{}.__next_compartment = nil\n", target));
-            restore_body.push_str("if stack, ok := data[\"_state_stack\"].([]interface{}); ok {\n");
+            restore_body
+                .push_str("if stack, ok := _parsed[\"_state_stack\"].([]interface{}); ok {\n");
             restore_body.push_str(&format!(
                 "    {}._state_stack = make([]*{}, 0, len(stack))\n",
                 target, compartment_type
@@ -4502,7 +4505,7 @@ pub(crate) fn generate_persistence_methods(
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "if __raw_{1}, err_{1} := json.Marshal(data[\"{1}\"]); err_{1} == nil {{ {0}.{1} = Restore{2}(string(__raw_{1})) }}\n",
+                        "if __raw_{1}, err_{1} := json.Marshal(_parsed[\"{1}\"]); err_{1} == nil {{ {0}.{1} = Restore{2}(string(__raw_{1})) }}\n",
                         target, var.name, child_sys
                     ));
                 } else {
@@ -4513,7 +4516,7 @@ pub(crate) fn generate_persistence_methods(
                         _ => "interface{}".to_string(),
                     };
                     let go_extract = format!(
-                        "func() {t} {{ var __typed {t}; if __raw, err := json.Marshal(data[\"{name}\"]); err == nil {{ json.Unmarshal(__raw, &__typed) }}; return __typed }}()",
+                        "func() {t} {{ var __typed {t}; if __raw, err := json.Marshal(_parsed[\"{name}\"]); err == nil {{ json.Unmarshal(__raw, &__typed) }}; return __typed }}()",
                         t = declared,
                         name = var.name,
                     );

@@ -79,6 +79,16 @@ pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]
         ));
     }
     for operation in &system.operations {
+        // RFC-0012 amendment: framework-managed ops are emitted by
+        // generate_rust_persistence_methods. Skip the user's empty
+        // placeholder to avoid duplicate definitions.
+        let is_framework_managed = operation
+            .attributes
+            .iter()
+            .any(|a| a.name == "save" || a.name == "load");
+        if is_framework_managed {
+            continue;
+        }
         methods.extend(super::interface_gen::generate_operation(
             operation, &syntax, source,
         ));
@@ -1649,11 +1659,12 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     });
 
     // ── restore_state ────────────────────────────────────────────
+    // Coerce-via-borrow: works for `&str` (legacy) or `String`
+    // (new contract user-declared) without per-type branching.
     let mut restore_body = String::new();
-    restore_body.push_str(&format!(
-        "let data: serde_json::Value = serde_json::from_str({}).unwrap();\n",
-        load_param_name
-    ));
+    restore_body.push_str(&format!("let __json_str: &str = &{};\n", load_param_name));
+    restore_body
+        .push_str("let data: serde_json::Value = serde_json::from_str(__json_str).unwrap();\n");
 
     restore_body.push_str(&format!(
         "fn deserialize_state_context(state: &str, data: &serde_json::Value) -> {}StateContext {{\n",
@@ -1778,17 +1789,29 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
         restore_body.push_str("instance");
     }
 
+    let user_load_type = system.load_op_param_type();
     let (load_return, load_static, load_param_type) = if uses_new_contract {
         // Instance method: takes &mut self implicitly via Method node
-        // (is_static=false), no return.
-        (None, false, "&str")
+        // (is_static=false), no return. Honor the user-declared param
+        // type (e.g. `String`); fall back to `&str` if not declared.
+        let t = user_load_type
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| "&str".to_string());
+        (None, false, t)
     } else {
         // Static factory: takes only the json param, returns Self.
-        (Some(system.name.clone()), true, "&str")
+        (Some(system.name.clone()), true, "&str".to_string())
     };
+    // Borrow-or-own dance: the body unconditionally calls
+    // `serde_json::from_str(&data)`, which requires a `&str`. If the
+    // user declared `String` (owned), `&data` already coerces to
+    // `&str` via deref. If the declared type is something exotic,
+    // codegen still emits `&data` and the user's type must implement
+    // Deref<Target=str>.
     methods.push(CodegenNode::Method {
         name: load_method_name.clone(),
-        params: vec![Param::new(&load_param_name).with_type(load_param_type)],
+        params: vec![Param::new(&load_param_name).with_type(&load_param_type)],
         return_type: load_return,
         body: vec![CodegenNode::NativeBlock {
             code: restore_body,
