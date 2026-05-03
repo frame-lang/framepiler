@@ -582,6 +582,19 @@ pub fn compile_ast_based(
     // from each per-system validator and attached to the final result.
     let mut module_warnings: Vec<CompileError> = Vec::new();
 
+    // RFC-0012 amendment: register which systems use the new persist
+    // contract (have `@@[save]` / `@@[load]` ops) so nested-system
+    // restore emission can pick the right shape (instance method vs
+    // legacy static factory).
+    {
+        let new_contract: std::collections::HashSet<String> = system_asts
+            .iter()
+            .filter(|s| s.uses_new_persist_contract())
+            .map(|s| s.name.clone())
+            .collect();
+        crate::frame_c::compiler::codegen::interface_gen::set_new_contract_systems(new_contract);
+    }
+
     for system_ast in &mut system_asts {
         // Validate with shared arcanum (all sibling systems visible).
         // Validation runs on the *unfiltered* AST so attribute-shape

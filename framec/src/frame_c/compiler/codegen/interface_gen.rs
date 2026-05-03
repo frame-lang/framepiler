@@ -6,6 +6,32 @@
 //! - Operation method bodies (static/class methods)
 //! - Persistence serialization/deserialization methods
 
+use std::cell::RefCell;
+use std::collections::HashSet;
+
+thread_local! {
+    /// Set of system names that use the RFC-0012 amendment new
+    /// persist contract (have `@@[save]` and/or `@@[load]` ops).
+    /// Populated by the pipeline before per-system codegen so that
+    /// nested-system restore emission can branch on the inner
+    /// system's contract — `Inner` on new contract has only the
+    /// instance-method load, not the legacy static factory.
+    static NEW_CONTRACT_SYSTEMS: RefCell<HashSet<String>> =
+        RefCell::new(HashSet::new());
+}
+
+/// Set the names of systems using the new persist contract. Called
+/// once per compilation, before per-system codegen runs.
+pub fn set_new_contract_systems(names: HashSet<String>) {
+    NEW_CONTRACT_SYSTEMS.with(|s| *s.borrow_mut() = names);
+}
+
+/// True if a system uses the new persist contract. Used by nested-
+/// system restore emission to pick the right call shape.
+pub fn nested_uses_new_contract(name: &str) -> bool {
+    NEW_CONTRACT_SYSTEMS.with(|s| s.borrow().contains(name))
+}
+
 use super::ast::{CodegenNode, Param, Visibility};
 use super::codegen_utils::{
     cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string, go_map_type,
@@ -1647,10 +1673,17 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "{0}.{1} = _parsed.{1} != null ? {2}.restoreState(JSON.stringify(_parsed.{1})) : null;\n",
-                        target, var.name, child_sys
-                    ));
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "if (_parsed.{1} != null) {{ {0}.{1} = new {2}(); {0}.{1}.restoreState(JSON.stringify(_parsed.{1})); }} else {{ {0}.{1} = null; }}\n",
+                            target, var.name, child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "{0}.{1} = _parsed.{1} != null ? {2}.restoreState(JSON.stringify(_parsed.{1})) : null;\n",
+                            target, var.name, child_sys
+                        ));
+                    }
                 } else {
                     restore_body.push_str(&format!(
                         "{}.{} = _parsed.{};\n",
@@ -2173,21 +2206,41 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "{{\n\
-                         \x20   cJSON* __child_obj_{name} = cJSON_GetObjectItem(root, \"{name}\");\n\
-                         \x20   if (__child_obj_{name} && !cJSON_IsNull(__child_obj_{name})) {{\n\
-                         \x20       char* __child_json_{name} = cJSON_PrintUnformatted(__child_obj_{name});\n\
-                         \x20       {tgt}->{name} = {child}_restore_state(__child_json_{name});\n\
-                         \x20       free(__child_json_{name});\n\
-                         \x20   }} else {{\n\
-                         \x20       {tgt}->{name} = NULL;\n\
-                         \x20   }}\n\
-                         }}\n",
-                        tgt = target,
-                        name = var.name,
-                        child = child_sys
-                    ));
+                    let body = if nested_uses_new_contract(child_sys) {
+                        format!(
+                            "{{\n\
+                             \x20   cJSON* __child_obj_{name} = cJSON_GetObjectItem(root, \"{name}\");\n\
+                             \x20   if (__child_obj_{name} && !cJSON_IsNull(__child_obj_{name})) {{\n\
+                             \x20       char* __child_json_{name} = cJSON_PrintUnformatted(__child_obj_{name});\n\
+                             \x20       {tgt}->{name} = {child}_new();\n\
+                             \x20       {child}_restore_state({tgt}->{name}, __child_json_{name});\n\
+                             \x20       free(__child_json_{name});\n\
+                             \x20   }} else {{\n\
+                             \x20       {tgt}->{name} = NULL;\n\
+                             \x20   }}\n\
+                             }}\n",
+                            tgt = target,
+                            name = var.name,
+                            child = child_sys
+                        )
+                    } else {
+                        format!(
+                            "{{\n\
+                             \x20   cJSON* __child_obj_{name} = cJSON_GetObjectItem(root, \"{name}\");\n\
+                             \x20   if (__child_obj_{name} && !cJSON_IsNull(__child_obj_{name})) {{\n\
+                             \x20       char* __child_json_{name} = cJSON_PrintUnformatted(__child_obj_{name});\n\
+                             \x20       {tgt}->{name} = {child}_restore_state(__child_json_{name});\n\
+                             \x20       free(__child_json_{name});\n\
+                             \x20   }} else {{\n\
+                             \x20       {tgt}->{name} = NULL;\n\
+                             \x20   }}\n\
+                             }}\n",
+                            tgt = target,
+                            name = var.name,
+                            child = child_sys
+                        )
+                    };
+                    restore_body.push_str(&body);
                     continue;
                 }
                 let type_str = type_to_string(&var.var_type);
@@ -2646,10 +2699,17 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if (__j.contains(\"{0}\") && !__j[\"{0}\"].is_null()) {{ {tgt}.{0} = std::make_shared<{1}>({1}::restore_state(__j[\"{0}\"].dump())); }}\n",
-                        var.name, child_sys, tgt = target
-                    ));
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "if (__j.contains(\"{0}\") && !__j[\"{0}\"].is_null()) {{ {tgt}.{0} = std::make_shared<{1}>(); {tgt}.{0}->restore_state(__j[\"{0}\"].dump()); }}\n",
+                            var.name, child_sys, tgt = target
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "if (__j.contains(\"{0}\") && !__j[\"{0}\"].is_null()) {{ {tgt}.{0} = std::make_shared<{1}>({1}::restore_state(__j[\"{0}\"].dump())); }}\n",
+                            var.name, child_sys, tgt = target
+                        ));
+                    }
                 } else {
                     restore_body.push_str(&format!(
                         "if (__j.contains(\"{0}\")) {{ __j[\"{0}\"].get_to({tgt}.{0}); }}\n",
@@ -2943,12 +3003,21 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if (__j.has(\"{name}\") && !__j.get(\"{name}\").isNull()) {tgt}.{name} = {child}.restore_state(__j.get(\"{name}\").toString());\n",
-                        tgt = target,
-                        name = var.name,
-                        child = child_sys
-                    ));
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "if (__j.has(\"{name}\") && !__j.get(\"{name}\").isNull()) {{ {tgt}.{name} = new {child}(); {tgt}.{name}.restore_state(__j.get(\"{name}\").toString()); }}\n",
+                            tgt = target,
+                            name = var.name,
+                            child = child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "if (__j.has(\"{name}\") && !__j.get(\"{name}\").isNull()) {tgt}.{name} = {child}.restore_state(__j.get(\"{name}\").toString());\n",
+                            tgt = target,
+                            name = var.name,
+                            child = child_sys
+                        ));
+                    }
                     continue;
                 }
                 let java_type: String = match &var.var_type {
@@ -3332,12 +3401,22 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ if (__{name}.ValueKind != System.Text.Json.JsonValueKind.Null) {{ {tgt}.{name} = {child}.RestoreState(__{name}.GetRawText()); }} }}\n",
-                        tgt = target,
-                        name = var.name,
-                        child = child_sys
-                    ));
+                    let body = if nested_uses_new_contract(child_sys) {
+                        format!(
+                            "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ if (__{name}.ValueKind != System.Text.Json.JsonValueKind.Null) {{ {tgt}.{name} = new {child}(); {tgt}.{name}.RestoreState(__{name}.GetRawText()); }} }}\n",
+                            tgt = target,
+                            name = var.name,
+                            child = child_sys
+                        )
+                    } else {
+                        format!(
+                            "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ if (__{name}.ValueKind != System.Text.Json.JsonValueKind.Null) {{ {tgt}.{name} = {child}.RestoreState(__{name}.GetRawText()); }} }}\n",
+                            tgt = target,
+                            name = var.name,
+                            child = child_sys
+                        )
+                    };
+                    restore_body.push_str(&body);
                 } else {
                     let declared = match &var.var_type {
                         crate::frame_c::compiler::frame_ast::Type::Custom(t) => csharp_map_type(t),
@@ -3539,10 +3618,17 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if (isset($_parsed['{1}']) && $_parsed['{1}'] !== null) {0}->{1} = {2}::restore_state(json_encode($_parsed['{1}']));\n",
-                        target, var.name, child_sys
-                    ));
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "if (isset($_parsed['{1}']) && $_parsed['{1}'] !== null) {{ {0}->{1} = new {2}(); {0}->{1}->restore_state(json_encode($_parsed['{1}'])); }}\n",
+                            target, var.name, child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "if (isset($_parsed['{1}']) && $_parsed['{1}'] !== null) {0}->{1} = {2}::restore_state(json_encode($_parsed['{1}']));\n",
+                            target, var.name, child_sys
+                        ));
+                    }
                 } else {
                     restore_body.push_str(&format!(
                         "if (isset($_parsed['{1}'])) {0}->{1} = $_parsed['{1}'];\n",
@@ -3796,12 +3882,22 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if (_parsed.has(\"{name}\") && !_parsed.get(\"{name}\").isNull) {tgt}.{name} = {child}.restore_state(_parsed.get(\"{name}\").toString())\n",
-                        tgt = target,
-                        name = var.name,
-                        child = child_sys
-                    ));
+                    let body = if nested_uses_new_contract(child_sys) {
+                        format!(
+                            "if (_parsed.has(\"{name}\") && !_parsed.get(\"{name}\").isNull) {{ {tgt}.{name} = {child}(); {tgt}.{name}.restore_state(_parsed.get(\"{name}\").toString()) }}\n",
+                            tgt = target,
+                            name = var.name,
+                            child = child_sys
+                        )
+                    } else {
+                        format!(
+                            "if (_parsed.has(\"{name}\") && !_parsed.get(\"{name}\").isNull) {tgt}.{name} = {child}.restore_state(_parsed.get(\"{name}\").toString())\n",
+                            tgt = target,
+                            name = var.name,
+                            child = child_sys
+                        )
+                    };
+                    restore_body.push_str(&body);
                     continue;
                 }
                 let mapped = match &var.var_type {
@@ -3998,10 +4094,17 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if let __raw_{1} = _parsed[\"{1}\"], let __data_{1} = try? JSONSerialization.data(withJSONObject: __raw_{1}), let __json_{1} = String(data: __data_{1}, encoding: .utf8) {{ {0}.{1} = {2}.restoreState(__json_{1}) }}\n",
-                        target, var.name, child_sys
-                    ));
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "if let __raw_{1} = _parsed[\"{1}\"], let __data_{1} = try? JSONSerialization.data(withJSONObject: __raw_{1}), let __json_{1} = String(data: __data_{1}, encoding: .utf8) {{ {0}.{1} = {2}(); {0}.{1}.restoreState(__json_{1}) }}\n",
+                            target, var.name, child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "if let __raw_{1} = _parsed[\"{1}\"], let __data_{1} = try? JSONSerialization.data(withJSONObject: __raw_{1}), let __json_{1} = String(data: __data_{1}, encoding: .utf8) {{ {0}.{1} = {2}.restoreState(__json_{1}) }}\n",
+                            target, var.name, child_sys
+                        ));
+                    }
                 } else {
                     let swift_type = match &var.var_type {
                         crate::frame_c::compiler::frame_ast::Type::Custom(t) => swift_map_type(t),
@@ -4183,10 +4286,17 @@ pub(crate) fn generate_persistence_methods(
                 for var in &system.domain {
                     let init = var.initializer_text.as_deref().unwrap_or("");
                     if let Some(child_sys) = extract_tagged_system_name(init) {
-                        restore_body.push_str(&format!(
-                            "if _parsed.key?(\"{0}\") then @{0} = _parsed[\"{0}\"].nil? ? nil : {1}.restore_state(JSON.generate(_parsed[\"{0}\"])) end\n",
-                            var.name, child_sys
-                        ));
+                        if nested_uses_new_contract(child_sys) {
+                            restore_body.push_str(&format!(
+                                "if _parsed.key?(\"{0}\") && !_parsed[\"{0}\"].nil? then @{0} = {1}.new; @{0}.restore_state(JSON.generate(_parsed[\"{0}\"])) end\n",
+                                var.name, child_sys
+                            ));
+                        } else {
+                            restore_body.push_str(&format!(
+                                "if _parsed.key?(\"{0}\") then @{0} = _parsed[\"{0}\"].nil? ? nil : {1}.restore_state(JSON.generate(_parsed[\"{0}\"])) end\n",
+                                var.name, child_sys
+                            ));
+                        }
                     } else {
                         restore_body.push_str(&format!(
                             "@{} = _parsed[\"{}\"] if _parsed.key?(\"{}\")\n",
@@ -4504,10 +4614,17 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if __raw_{1}, err_{1} := json.Marshal(_parsed[\"{1}\"]); err_{1} == nil {{ {0}.{1} = Restore{2}(string(__raw_{1})) }}\n",
-                        target, var.name, child_sys
-                    ));
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "if __raw_{1}, err_{1} := json.Marshal(_parsed[\"{1}\"]); err_{1} == nil {{ {0}.{1} = New{2}(); {0}.{1}.LoadState(string(__raw_{1})) }}\n",
+                            target, var.name, child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "if __raw_{1}, err_{1} := json.Marshal(_parsed[\"{1}\"]); err_{1} == nil {{ {0}.{1} = Restore{2}(string(__raw_{1})) }}\n",
+                            target, var.name, child_sys
+                        ));
+                    }
                 } else {
                     let declared = match &var.var_type {
                         crate::frame_c::compiler::frame_ast::Type::Custom(name) => {
@@ -4773,6 +4890,13 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "{0}.{1} = {2}(); if (_parsed['{1}'] != null) {0}.{1}.restoreState(jsonEncode(_parsed['{1}']));\n",
+                            target, var.name, child_sys
+                        ));
+                        continue;
+                    }
                     // Nested @@SystemName instance: re-hydrate via
                     // child's restoreState (still the legacy static
                     // factory until those targets migrate).
@@ -4941,10 +5065,17 @@ pub(crate) fn generate_persistence_methods(
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
-                    restore_body.push_str(&format!(
-                        "if _parsed.{1} ~= nil then {0}.{1} = {2}.restore_state(json.encode(_parsed.{1})) else {0}.{1} = nil end\n",
-                        target, var.name, child_sys
-                    ));
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "if _parsed.{1} ~= nil then {0}.{1} = {2}:new(); {0}.{1}:restore_state(json.encode(_parsed.{1})) else {0}.{1} = nil end\n",
+                            target, var.name, child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "if _parsed.{1} ~= nil then {0}.{1} = {2}.restore_state(json.encode(_parsed.{1})) else {0}.{1} = nil end\n",
+                            target, var.name, child_sys
+                        ));
+                    }
                     continue;
                 }
                 let is_int = matches!(
@@ -5162,15 +5293,17 @@ pub(crate) fn generate_persistence_methods(
                         "var __raw_{0} = state_data.get(\"{0}\", null)\n",
                         var.name
                     ));
-                    // For nested systems, the child's load operation
-                    // may also be the new contract; use the child's
-                    // legacy `restore_state` here. Phase B's sweep
-                    // will reconcile cross-system new-contract loads
-                    // (when both parent and child opt in).
-                    restore_body.push_str(&format!(
-                        "{0}.{1} = {2}.restore_state(var_to_bytes(__raw_{1})) if __raw_{1} != null else null\n",
-                        target, var.name, child_sys
-                    ));
+                    if nested_uses_new_contract(child_sys) {
+                        restore_body.push_str(&format!(
+                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new()\n    {0}.{1}.restore_state(var_to_bytes(__raw_{1}))\nelse:\n    {0}.{1} = null\n",
+                            target, var.name, child_sys
+                        ));
+                    } else {
+                        restore_body.push_str(&format!(
+                            "{0}.{1} = {2}.restore_state(var_to_bytes(__raw_{1})) if __raw_{1} != null else null\n",
+                            target, var.name, child_sys
+                        ));
+                    }
                 } else {
                     restore_body.push_str(&format!(
                         "{}.{} = state_data.get(\"{}\", null)\n",

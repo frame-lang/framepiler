@@ -1754,10 +1754,20 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
         for var in &system.domain {
             let init = var.initializer_text.as_deref().unwrap_or("");
             if let Some(child_sys) = super::interface_gen::extract_tagged_system_name(init) {
-                restore_body.push_str(&format!(
-                    "self.{0} = {1}::restore_state(&data[\"{0}\"].to_string());\n",
-                    var.name, child_sys
-                ));
+                if super::interface_gen::nested_uses_new_contract(child_sys) {
+                    // Nested system on new contract: instance-method
+                    // load (no static factory available).
+                    restore_body.push_str(&format!(
+                        "self.{0} = {1}::new();\n\
+                         self.{0}.restore_state(data[\"{0}\"].to_string());\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "self.{0} = {1}::restore_state(&data[\"{0}\"].to_string());\n",
+                        var.name, child_sys
+                    ));
+                }
             } else {
                 let json_extract = rust_json_extract_unwrap(&var.name, &var.var_type);
                 restore_body.push_str(&format!("self.{} = {};\n", var.name, json_extract));
@@ -1776,10 +1786,20 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
         for var in &system.domain {
             let init = var.initializer_text.as_deref().unwrap_or("");
             if let Some(child_sys) = super::interface_gen::extract_tagged_system_name(init) {
-                restore_body.push_str(&format!(
-                    "    {0}: {1}::restore_state(&data[\"{0}\"].to_string()),\n",
-                    var.name, child_sys
-                ));
+                if super::interface_gen::nested_uses_new_contract(child_sys) {
+                    // Nested on new contract — can't use static factory
+                    // in struct-literal init. Allocate, populate, then
+                    // close struct with this field as a temporary.
+                    restore_body.push_str(&format!(
+                        "    {0}: {{ let mut __c = {1}::new(); __c.restore_state(data[\"{0}\"].to_string()); __c }},\n",
+                        var.name, child_sys
+                    ));
+                } else {
+                    restore_body.push_str(&format!(
+                        "    {0}: {1}::restore_state(&data[\"{0}\"].to_string()),\n",
+                        var.name, child_sys
+                    ));
+                }
             } else {
                 let json_extract = rust_json_extract_unwrap(&var.name, &var.var_type);
                 restore_body.push_str(&format!("    {}: {},\n", var.name, json_extract));
