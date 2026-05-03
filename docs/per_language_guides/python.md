@@ -197,11 +197,12 @@ for `import` declarations.
 
 ---
 
-## Custom save/load names (RFC-0012 amendment)
+## Persist contract — `@@[save]` / `@@[load]`
 
-The bare `@@[persist]` form gives you `save_state` / `restore_state`
-(legacy contract). To pick your own method names, declare them as
-operations and tag with `@@[save]` / `@@[load]`:
+A `@@[persist]` system must declare two operations under the
+`operations:` section: one tagged `@@[save]` (returns the
+serialized blob) and one tagged `@@[load]` (instance method that
+mutates self from a blob). The op names are yours to pick.
 
 ```frame
 @@[persist]
@@ -219,21 +220,18 @@ operations and tag with `@@[save]` / `@@[load]`:
 }
 ```
 
-The new contract uses an **instance-method load** instead of a
-static factory:
+Load is an instance method (allocate, then populate):
 
 ```python
-# Legacy: static factory
-c = Counter.restore_state(data)
-
-# New: two-step (preferred for new code)
-c = Counter()
-c.unpickle(data)
+data = c1.pickle()
+c2 = Counter()
+c2.unpickle(data)
 ```
 
-Both contracts ship today; matrix-tested across all 17 backends.
+The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops) is
+rejected with **E814** since framepiler `b3aebc5` (2026-05-03).
 See [`frame_runtime.md`](../frame_runtime.md) "Naming the save/load
-methods" and [RFC-0012](../rfcs/rfc-0012.md) for the rationale.
+methods" and [RFC-0012](../rfcs/rfc-0012.md) for the design.
 
 ---
 

@@ -94,7 +94,12 @@ The framepiler auto-enables `frame_event` when features that require it are used
 @@[persist(exclude=[field3])]
 ```
 
-Generates `save_state()` and `restore_state()` methods. See [Persistence](#persistence).
+Marks a system as serializable. The system **must** declare two
+operations under `operations:` — one tagged `@@[save]` (returns
+the serialized blob) and one tagged `@@[load]` (instance method
+populating self). Bare `@@[persist]` without ops is rejected with
+**E814**. See [Persistence](#persistence) and
+[RFC-0012](rfcs/rfc-0012.md).
 
 ---
 

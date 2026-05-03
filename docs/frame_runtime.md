@@ -3938,13 +3938,12 @@ from one.
 
 ### Naming the save/load methods (RFC-0012 amendment)
 
-The bare `@@[persist]` form above gets you `save_state` /
-`restore_state` (legacy contract — works on every backend except
-GDScript, where a target-language scoping limitation prevents the
-static factory shape from resolving its own class). To pick your
-own method names — `pickle` / `unpickle`, `snapshot` / `restore`,
-whatever fits — declare them as operations under the `operations:`
-section and tag with `@@[save]` and `@@[load]`:
+A `@@[persist]` system must declare two operations under the
+`operations:` section: one tagged `@@[save]` (returns the
+serialized blob) and one tagged `@@[load]` (instance method that
+populates self from a blob). The op names are yours to pick —
+`save_state` / `restore_state`, `pickle` / `unpickle`, `snapshot`
+/ `restore`, whatever fits.
 
 ```frame
 @@[persist]
@@ -3967,22 +3966,20 @@ section and tag with `@@[save]` and `@@[load]`:
 }
 ```
 
-The new contract changes the load shape from a static factory to
-an instance method (works on every backend including GDScript):
+Load is an instance method (allocate, then populate). Two-step
+call site:
 
 ```python
-# Legacy: static factory (Counter.restore_state(data) -> Counter)
-c = Counter.restore_state(data)
-
-# New: two-step (Counter() then c.restore(data))
-c = Counter()
-c.restore(data)
+data = c1.snapshot()
+c2 = Counter()
+c2.restore(data)
 ```
 
-The two-step shape sidesteps the target-language scoping issues of
-static-method `class_name` resolution and makes load uniformly
-available across all 17 backends. Both contracts ship today; the
-new contract is preferred for new code. See RFC-0012 for the full
+The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops) is
+rejected with **E814**. The instance-method shape is uniform
+across all 17 backends — the legacy static-factory form had
+target-specific scoping limitations (notably GDScript's
+`class_name` resolution). See RFC-0012 amendment for the full
 rationale.
 
 ### What gets saved

@@ -1775,13 +1775,22 @@ Use operations for utility methods, version info, debug introspection — anythi
 
 ### Persistence
 
-Add `@@[persist]` before a system to generate save/restore methods:
+Add `@@[persist]` before a system and declare two operations — one
+tagged `@@[save]` (returns the serialized blob), one tagged
+`@@[load]` (instance method populating self). The framepiler emits
+the bodies; you pick the names.
 
 ```frame
 @@[target("python_3")]
 @@[persist]
-
 @@system Session {
+    operations:
+        @@[save]
+        save_state(): str {}
+
+        @@[load]
+        restore_state(data: str) {}
+
     interface:
         login(user)
         logout()
@@ -1806,10 +1815,8 @@ Add `@@[persist]` before a system to generate save/restore methods:
 }
 ```
 
-The framepiler generates:
-
-- `save_state()` — serializes the current state, state variables, state stack, and domain variables
-- `restore_state(data)` — static method that reconstructs a system from saved data
+Save returns the blob; load is an instance method (allocate, then
+populate):
 
 ```python
 # Save
@@ -1818,11 +1825,14 @@ store_to_database(data)
 
 # Restore later
 data = load_from_database()
-session = Session.restore_state(data)
+session = Session()
+session.restore_state(data)
 # session is now in whatever state it was in when saved
 ```
 
-What gets persisted: current state, state variables, state stack, state arguments, and domain variables.
+What gets persisted: current state, state variables, state stack,
+state arguments, and domain variables. Bare `@@[persist]` without
+`@@[save]` / `@@[load]` ops is rejected with **E814**.
 
 ### Codegen Options
 

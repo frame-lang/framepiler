@@ -210,18 +210,33 @@ Within one call: **don't mix positional and named**. Defaults are substituted at
 
 ## Persistence
 
+A `@@[persist]` system **must** declare two operations under
+`operations:`:
+
 ```frame
-@@[persist]                             # persist everything (all domain vars)
-@@[persist(domain=[a, b])]              # whitelist specific domain fields
-@@[persist(exclude=[c])]                # blacklist specific domain fields
+@@[persist]
+@@system Foo {
+    operations:
+        @@[save]
+        save_state(): str {}        // returns serialized blob
+
+        @@[load]
+        restore_state(data: str) {} // instance method, mutates self
+    ...
+}
 ```
 
-Generated methods:
-
-| Method | Kind | Returns |
+| Method | Kind | Behavior |
 |---|---|---|
-| `save_state()` | instance | JSON string (Python: pickle bytes — see warning below) |
-| `SystemName.restore_state(data)` | **static** | new restored instance |
+| `save_state()` | instance | returns the serialized blob |
+| `restore_state(data)` | instance | mutates self from blob |
+
+Bare `@@[persist]` (no `@@[save]` / `@@[load]` ops) is rejected
+with **E814**.
+
+The op names are yours to pick (`pickle` / `unpickle`, `snapshot`
+/ `restore`, etc.). Load is two-step: `s = @@Foo()` then
+`s.restore_state(data)`.
 
 **Restore does NOT invoke `$>`**. The state is being restored, not entered.
 
