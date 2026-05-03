@@ -1476,6 +1476,32 @@ pub(crate) fn generate_persistence_methods(
         }
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
             let is_ts = matches!(syntax.language, TargetLanguage::TypeScript);
+            // RFC-0012 amendment: branch on new contract. Save was
+            // already an instance method; load was a static factory
+            // using `Object.create(Foo.prototype)`. Under the new
+            // contract, both become user-named instance methods that
+            // mutate `this` directly — no construction bypass needed.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "saveState".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restoreState".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            // Populate target — `this` for instance method (new), or
+            // `instance` for the constructed-then-returned static
+            // factory (legacy).
+            let target = if uses_new_contract {
+                "this"
+            } else {
+                "instance"
+            };
             // Generate saveState method
             // Phase 14.6: Serialize compartment structure including HSM parent_compartment chain
             let mut save_body = String::new();
@@ -1532,7 +1558,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("});\n");
 
             methods.push(CodegenNode::Method {
-                name: "saveState".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("string".to_string()), // Returns JSON string
                 body: vec![CodegenNode::NativeBlock {
@@ -1545,7 +1571,8 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // Generate restoreState static method
+            // Generate restoreState method (instance-method form under
+            // the new contract, static factory under the legacy contract)
             // Phase 14.6: Restore compartment structure including HSM parent_compartment chain
             let mut restore_body = String::new();
             // Helper to deserialize compartment chain recursively
@@ -1572,21 +1599,46 @@ pub(crate) fn generate_persistence_methods(
             );
             restore_body.push_str("    return comp;\n");
             restore_body.push_str("};\n");
-            restore_body.push_str("const data = JSON.parse(json);\n");
+            // Use `_parsed` for the parsed object — under the new
+            // contract the user's load param name might collide with
+            // a local called `data` (e.g., `unpickle(data: string)`).
             restore_body.push_str(&format!(
-                "const instance = Object.create({}.prototype);\n",
-                system.name
+                "const _parsed = JSON.parse({});\n",
+                load_param_name
             ));
-            // Restore compartment with full parent chain
-            restore_body.push_str("instance.__compartment = deserializeComp(data._compartment);\n");
-            restore_body.push_str("instance.__next_compartment = null;\n");
+            // Legacy only: construct via Object.create (skips constructor →
+            // no initial-state enter side effects). The new contract
+            // form mutates `this` in place — `_init` already ran on
+            // `Foo.new()` so the start-state enter has fired once
+            // (acceptable for typical persist use cases per the RFC
+            // amendment's "$S0 enter on restore" section).
+            if !uses_new_contract {
+                restore_body.push_str(&format!(
+                    "const instance = Object.create({}.prototype);\n",
+                    system.name
+                ));
+            }
+            // Restore compartment with full parent chain. Read from
+            // `_parsed` (the renamed local) so the user's load param
+            // name can't collide.
+            restore_body.push_str(&format!(
+                "{}.__compartment = deserializeComp(_parsed._compartment);\n",
+                target
+            ));
+            restore_body.push_str(&format!("{}.__next_compartment = null;\n", target));
             // Restore stack - each element is a serialized compartment with its parent chain
             if is_ts {
-                restore_body.push_str("instance._state_stack = (data._state_stack || []).map((c: any) => deserializeComp(c));\n");
+                restore_body.push_str(&format!(
+                    "{}._state_stack = (_parsed._state_stack || []).map((c: any) => deserializeComp(c));\n",
+                    target
+                ));
             } else {
-                restore_body.push_str("instance._state_stack = (data._state_stack || []).map((c) => deserializeComp(c));\n");
+                restore_body.push_str(&format!(
+                    "{}._state_stack = (_parsed._state_stack || []).map((c) => deserializeComp(c));\n",
+                    target
+                ));
             }
-            restore_body.push_str("instance._context_stack = [];\n");
+            restore_body.push_str(&format!("{}._context_stack = [];\n", target));
 
             // Restore domain variables. Nested system instances rebuild
             // via the child's restoreState — recovering class identity
@@ -1596,26 +1648,47 @@ pub(crate) fn generate_persistence_methods(
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "instance.{0} = data.{0} != null ? {1}.restoreState(JSON.stringify(data.{0})) : null;\n",
-                        var.name, child_sys
+                        "{0}.{1} = _parsed.{1} != null ? {2}.restoreState(JSON.stringify(_parsed.{1})) : null;\n",
+                        target, var.name, child_sys
                     ));
                 } else {
-                    restore_body.push_str(&format!("instance.{} = data.{};\n", var.name, var.name));
+                    restore_body.push_str(&format!(
+                        "{}.{} = _parsed.{};\n",
+                        target, var.name, var.name
+                    ));
                 }
             }
 
-            restore_body.push_str("return instance;");
+            // Legacy returns the constructed instance; new contract is
+            // an instance method that mutates self — no return value.
+            if !uses_new_contract {
+                restore_body.push_str("return instance;");
+            }
 
+            // Push the load method with shape determined by contract.
+            let (load_params, load_return, load_static) = if uses_new_contract {
+                (
+                    vec![Param::new(&load_param_name).with_type("string")],
+                    None,
+                    false,
+                )
+            } else {
+                (
+                    vec![Param::new(&load_param_name).with_type("string")],
+                    Some(system.name.clone()),
+                    true,
+                )
+            };
             methods.push(CodegenNode::Method {
-                name: "restoreState".to_string(),
-                params: vec![Param::new("json").with_type("string")],
-                return_type: Some(system.name.clone()),
+                name: load_method_name.clone(),
+                params: load_params,
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
