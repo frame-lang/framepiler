@@ -2590,6 +2590,28 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
+            // RFC-0012 amendment: branch on new contract.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            // Java target: `this` for instance method (new), `__instance`
+            // for the constructed-and-returned static factory (legacy).
+            let target = if uses_new_contract {
+                "this"
+            } else {
+                "__instance"
+            };
+
             // Collect (state_name, [param_java_types]) for states with declared
             // params. Used to emit per-state typed restore for state_args /
             // enter_args via Jackson's TypeReference. The architecture is
@@ -2775,7 +2797,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("try { return mapper.writeValueAsString(__j); } catch (Exception e) { throw new RuntimeException(e); }");
 
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("String".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -2788,34 +2810,46 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state — Jackson readTree + per-state typed restore.
-            // Domain vars use TypeReference per declared type so List<T> /
-            // Map<K,V> domain fields recover their full typed shape (no
-            // erasure-cast workaround needed at user-access sites).
+            // Load body — instance method (new) or static factory
+            // (legacy). Legacy uses `__skipInitialEnter` static flag
+            // toggled around `new Sys()` so the start-state $> enter
+            // doesn't fire. New contract mutates `this` directly —
+            // `_init` already ran so the start-state enter has fired
+            // once (acceptable per the RFC's "$S0 enter on restore"
+            // section).
             let mut restore_body = String::new();
             restore_body
                 .push_str("var mapper = new com.fasterxml.jackson.databind.ObjectMapper();\n");
             restore_body.push_str("com.fasterxml.jackson.databind.JsonNode __j;\n");
-            restore_body.push_str(
-                "try { __j = mapper.readTree(json); } catch (Exception e) { throw new RuntimeException(e); }\n",
-            );
-            restore_body.push_str("__skipInitialEnter = true;\n");
-            restore_body.push_str(&format!("var __instance = new {}();\n", sys));
-            restore_body.push_str("__skipInitialEnter = false;\n");
-            restore_body.push_str(
-                "__instance.__compartment = __deserComp(__j.get(\"_compartment\"), mapper);\n",
-            );
+            restore_body.push_str(&format!(
+                "try {{ __j = mapper.readTree({}); }} catch (Exception e) {{ throw new RuntimeException(e); }}\n",
+                load_param_name
+            ));
+            if !uses_new_contract {
+                restore_body.push_str("__skipInitialEnter = true;\n");
+                restore_body.push_str(&format!("var __instance = new {}();\n", sys));
+                restore_body.push_str("__skipInitialEnter = false;\n");
+            }
+            restore_body.push_str(&format!(
+                "{}.__compartment = __deserComp(__j.get(\"_compartment\"), mapper);\n",
+                target
+            ));
             restore_body.push_str("if (__j.has(\"_state_stack\")) {\n");
-            restore_body.push_str("    __instance._state_stack = new java.util.ArrayList<>();\n");
-            restore_body.push_str(
-                "    for (var __sc : __j.get(\"_state_stack\")) __instance._state_stack.add(__deserComp(__sc, mapper));\n",
-            );
+            restore_body.push_str(&format!(
+                "    {}._state_stack = new java.util.ArrayList<>();\n",
+                target
+            ));
+            restore_body.push_str(&format!(
+                "    for (var __sc : __j.get(\"_state_stack\")) {}._state_stack.add(__deserComp(__sc, mapper));\n",
+                target
+            ));
             restore_body.push_str("}\n");
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "if (__j.has(\"{name}\") && !__j.get(\"{name}\").isNull()) __instance.{name} = {child}.restore_state(__j.get(\"{name}\").toString());\n",
+                        "if (__j.has(\"{name}\") && !__j.get(\"{name}\").isNull()) {tgt}.{name} = {child}.restore_state(__j.get(\"{name}\").toString());\n",
+                        tgt = target,
                         name = var.name,
                         child = child_sys
                     ));
@@ -2823,32 +2857,36 @@ pub(crate) fn generate_persistence_methods(
                 }
                 let java_type: String = match &var.var_type {
                     crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                        // Domain fields keep their declared Java type (incl.
-                        // primitives like `int x`); the TypeReference itself
-                        // needs the boxed form, but the assignment target is
-                        // the field, which Jackson will unbox correctly.
                         java_box(&java_map_type(t))
                     }
                     _ => "Object".to_string(),
                 };
                 restore_body.push_str(&format!(
-                    "if (__j.has(\"{name}\")) __instance.{name} = mapper.convertValue(__j.get(\"{name}\"), new com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}});\n",
+                    "if (__j.has(\"{name}\")) {tgt}.{name} = mapper.convertValue(__j.get(\"{name}\"), new com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}});\n",
+                    tgt = target,
                     name = var.name,
                     ty = java_type
                 ));
             }
-            restore_body.push_str("return __instance;");
+            if !uses_new_contract {
+                restore_body.push_str("return __instance;");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                (None, false)
+            } else {
+                (Some(sys.clone()), true)
+            };
             methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("json").with_type("String")],
-                return_type: Some(sys.clone()),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("String")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
@@ -2856,6 +2894,29 @@ pub(crate) fn generate_persistence_methods(
         TargetLanguage::CSharp => {
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
+
+            // RFC-0012 amendment: branch on new contract. C# uses
+            // PascalCase by convention so the legacy method names are
+            // SaveState / RestoreState; user @@[save]/@@[load] op
+            // names override.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "SaveState".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "RestoreState".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            let target = if uses_new_contract {
+                "this"
+            } else {
+                "__instance"
+            };
 
             // Private helper method for recursive compartment serialization.
             // Includes state_args + enter_args (compartment-context fields)
@@ -3121,7 +3182,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("return System.Text.Json.JsonSerializer.Serialize(__j, __opts);");
 
             methods.push(CodegenNode::Method {
-                name: "SaveState".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("string".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -3134,50 +3195,50 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // RestoreState(json) — static method.
-            //
-            // Uses `RuntimeHelpers.GetUninitializedObject` to create the
-            // instance WITHOUT running the constructor. The constructor
-            // would otherwise dispatch the initial-state $>() enter
-            // handler, leaking side effects on every restore. Instance
-            // fields that the ctor would have populated (_state_stack,
-            // _context_stack) are set up explicitly below.
+            // Load body — instance method (new) or static factory
+            // (legacy with RuntimeHelpers.GetUninitializedObject).
             let mut restore_body = String::new();
-            restore_body.push_str("var __doc = System.Text.Json.JsonDocument.Parse(json);\n");
+            restore_body.push_str(&format!(
+                "var __doc = System.Text.Json.JsonDocument.Parse({});\n",
+                load_param_name
+            ));
             restore_body.push_str("var __root = __doc.RootElement;\n");
+            if !uses_new_contract {
+                restore_body.push_str(&format!(
+                    "var __instance = ({0})System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({0}));\n",
+                    sys,
+                ));
+                restore_body.push_str(&format!(
+                    "__instance._state_stack = new List<{}>();\n",
+                    compartment_class,
+                ));
+                restore_body.push_str(&format!(
+                    "__instance._context_stack = new List<{}FrameContext>();\n",
+                    sys,
+                ));
+            }
             restore_body.push_str(&format!(
-                "var __instance = ({0})System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({0}));\n",
-                sys,
+                "{}.__compartment = __DeserComp(__root.GetProperty(\"_compartment\"));\n",
+                target
             ));
-            restore_body.push_str(&format!(
-                "__instance._state_stack = new List<{}>();\n",
-                compartment_class,
-            ));
-            restore_body.push_str(&format!(
-                "__instance._context_stack = new List<{}FrameContext>();\n",
-                sys,
-            ));
-            restore_body.push_str(
-                "__instance.__compartment = __DeserComp(__root.GetProperty(\"_compartment\"));\n",
-            );
             restore_body
                 .push_str("if (__root.TryGetProperty(\"_state_stack\", out var __stack)) {\n");
             restore_body.push_str(&format!(
-                "    __instance._state_stack = new List<{}>();\n",
-                compartment_class
+                "    {}._state_stack = new List<{}>();\n",
+                target, compartment_class
             ));
-            restore_body.push_str("    foreach (var item in __stack.EnumerateArray()) { __instance._state_stack.Add(__DeserComp(item)); }\n");
+            restore_body.push_str(&format!(
+                "    foreach (var item in __stack.EnumerateArray()) {{ {}._state_stack.Add(__DeserComp(item)); }}\n",
+                target
+            ));
             restore_body.push_str("}\n");
 
-            // Type-ignorant: emit the declared type verbatim as
-            // JsonSerializer.Deserialize<T>'s generic parameter.
-            // System.Text.Json reflection handles primitives, lists,
-            // dicts, and user types with [JsonPropertyName].
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ if (__{name}.ValueKind != System.Text.Json.JsonValueKind.Null) {{ __instance.{name} = {child}.RestoreState(__{name}.GetRawText()); }} }}\n",
+                        "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ if (__{name}.ValueKind != System.Text.Json.JsonValueKind.Null) {{ {tgt}.{name} = {child}.RestoreState(__{name}.GetRawText()); }} }}\n",
+                        tgt = target,
                         name = var.name,
                         child = child_sys
                     ));
@@ -3187,25 +3248,33 @@ pub(crate) fn generate_persistence_methods(
                         _ => "object".to_string(),
                     };
                     restore_body.push_str(&format!(
-                        "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ try {{ __instance.{name} = System.Text.Json.JsonSerializer.Deserialize<{t}>(__{name}.GetRawText()); }} catch {{ }} }}\n",
+                        "if (__root.TryGetProperty(\"{name}\", out var __{name})) {{ try {{ {tgt}.{name} = System.Text.Json.JsonSerializer.Deserialize<{t}>(__{name}.GetRawText()); }} catch {{ }} }}\n",
+                        tgt = target,
                         name = var.name,
                         t = declared
                     ));
                 }
             }
 
-            restore_body.push_str("return __instance;");
+            if !uses_new_contract {
+                restore_body.push_str("return __instance;");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                (None, false)
+            } else {
+                (Some(sys.clone()), true)
+            };
             methods.push(CodegenNode::Method {
-                name: "RestoreState".to_string(),
-                params: vec![Param::new("json").with_type("string")],
-                return_type: Some(sys.clone()),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("string")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
@@ -3407,6 +3476,26 @@ pub(crate) fn generate_persistence_methods(
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
 
+            // RFC-0012 amendment: branch on new contract.
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "save_state".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restore_state".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            let target = if uses_new_contract {
+                "this"
+            } else {
+                "instance"
+            };
+
             // Same per-state typed restore pattern as Java. Kotlin's
             // reified generics make TypeReference work cleanly; primitives
             // map naturally because Kotlin auto-boxes Int → java.lang.Integer
@@ -3571,7 +3660,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("return mapper.writeValueAsString(j)");
 
             methods.push(CodegenNode::Method {
-                name: "save_state".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("String".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -3584,27 +3673,36 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restore_state — Jackson readTree + per-state typed restore.
+            // Load body — instance method (new) or static factory
+            // (legacy with __skipInitialEnter dance).
             let mut restore_body = String::new();
             restore_body.push_str("val mapper = com.fasterxml.jackson.databind.ObjectMapper()\n");
-            restore_body.push_str("val j = mapper.readTree(json)\n");
-            restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
-            restore_body.push_str(&format!("val instance = {}()\n", sys));
-            restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
-            restore_body.push_str(
-                "instance.__compartment = __deserComp(j.get(\"_compartment\"), mapper)!!\n",
-            );
-            restore_body.push_str("if (j.has(\"_state_stack\")) {\n");
-            restore_body.push_str("    instance._state_stack = mutableListOf()\n");
-            restore_body.push_str(
-                "    for (sc in j.get(\"_state_stack\")) instance._state_stack.add(__deserComp(sc, mapper)!!)\n",
-            );
+            restore_body.push_str(&format!(
+                "val _parsed = mapper.readTree({})\n",
+                load_param_name
+            ));
+            if !uses_new_contract {
+                restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
+                restore_body.push_str(&format!("val instance = {}()\n", sys));
+                restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
+            }
+            restore_body.push_str(&format!(
+                "{}.__compartment = __deserComp(_parsed.get(\"_compartment\"), mapper)!!\n",
+                target
+            ));
+            restore_body.push_str("if (_parsed.has(\"_state_stack\")) {\n");
+            restore_body.push_str(&format!("    {}._state_stack = mutableListOf()\n", target));
+            restore_body.push_str(&format!(
+                "    for (sc in _parsed.get(\"_state_stack\")) {}._state_stack.add(__deserComp(sc, mapper)!!)\n",
+                target
+            ));
             restore_body.push_str("}\n");
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "if (j.has(\"{name}\") && !j.get(\"{name}\").isNull) instance.{name} = {child}.restore_state(j.get(\"{name}\").toString())\n",
+                        "if (_parsed.has(\"{name}\") && !_parsed.get(\"{name}\").isNull) {tgt}.{name} = {child}.restore_state(_parsed.get(\"{name}\").toString())\n",
+                        tgt = target,
                         name = var.name,
                         child = child_sys
                     ));
@@ -3617,23 +3715,31 @@ pub(crate) fn generate_persistence_methods(
                     _ => "Any".to_string(),
                 };
                 restore_body.push_str(&format!(
-                    "if (j.has(\"{name}\")) instance.{name} = mapper.convertValue(j.get(\"{name}\"), object : com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}})\n",
+                    "if (_parsed.has(\"{name}\")) {tgt}.{name} = mapper.convertValue(_parsed.get(\"{name}\"), object : com.fasterxml.jackson.core.type.TypeReference<{ty}>(){{}})\n",
+                    tgt = target,
                     name = var.name,
                     ty = mapped
                 ));
             }
-            restore_body.push_str("return instance");
+            if !uses_new_contract {
+                restore_body.push_str("return instance");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                (None, false)
+            } else {
+                (Some(sys.clone()), true)
+            };
             methods.push(CodegenNode::Method {
-                name: "restore_state".to_string(),
-                params: vec![Param::new("json").with_type("String")],
-                return_type: Some(sys.clone()),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("String")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
@@ -3641,6 +3747,27 @@ pub(crate) fn generate_persistence_methods(
         TargetLanguage::Swift => {
             let sys = &system.name;
             let compartment_class = format!("{}Compartment", sys);
+
+            // RFC-0012 amendment: branch on new contract. Swift uses
+            // camelCase legacy method names (saveState/restoreState).
+            let uses_new_contract = system.uses_new_persist_contract();
+            let save_method_name = system
+                .save_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "saveState".to_string());
+            let load_method_name = system
+                .load_op_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "restoreState".to_string());
+            let load_param_name = system
+                .load_op_param_name()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "json".to_string());
+            let target = if uses_new_contract {
+                "self"
+            } else {
+                "instance"
+            };
 
             // Swift uses Foundation JSONSerialization — dict-based serialization.
             // Includes state_args + enter_args (compartment-context fields)
@@ -3731,7 +3858,7 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("return String(data: data, encoding: .utf8)!");
 
             methods.push(CodegenNode::Method {
-                name: "saveState".to_string(),
+                name: save_method_name.clone(),
                 params: vec![],
                 return_type: Some("String".to_string()),
                 body: vec![CodegenNode::NativeBlock {
@@ -3744,39 +3871,40 @@ pub(crate) fn generate_persistence_methods(
                 decorators: vec![],
             });
 
-            // restoreState — static method.
-            //
-            // Sets `__skipInitialEnter` before calling init so the
-            // initial-state $>() enter handler does NOT fire on a
-            // restored instance. The flag is a class-level static;
-            // it's reset immediately after init to keep the default
-            // (fire-ENTER-on-construct) behavior for subsequent
-            // `Canary()` calls. Matches Python's pickle semantics
-            // where restore does not invoke __init__.
+            // Load body — instance method (new contract) or static
+            // factory (legacy with `__skipInitialEnter` toggle around
+            // `Sys()` ctor).
             let mut restore_body = String::new();
-            restore_body.push_str("let data = json.data(using: .utf8)!\n");
+            restore_body.push_str(&format!(
+                "let data = {}.data(using: .utf8)!\n",
+                load_param_name
+            ));
             restore_body.push_str(
-                "let j = try! JSONSerialization.jsonObject(with: data) as! [String: Any]\n",
+                "let _parsed = try! JSONSerialization.jsonObject(with: data) as! [String: Any]\n",
             );
-            restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
-            restore_body.push_str(&format!("let instance = {}()\n", sys));
-            restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
-            restore_body.push_str("instance.__compartment = instance.__deserComp(j[\"_compartment\"] as? [String: Any])!\n");
-            restore_body.push_str("if let stack = j[\"_state_stack\"] as? [[String: Any]] {\n");
-            restore_body.push_str("    instance._state_stack = []\n");
-            restore_body.push_str("    for sc in stack { if let c = instance.__deserComp(sc) { instance._state_stack.append(c) } }\n");
+            if !uses_new_contract {
+                restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
+                restore_body.push_str(&format!("let instance = {}()\n", sys));
+                restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
+            }
+            restore_body.push_str(&format!(
+                "{}.__compartment = {}.__deserComp(_parsed[\"_compartment\"] as? [String: Any])!\n",
+                target, target
+            ));
+            restore_body
+                .push_str("if let stack = _parsed[\"_state_stack\"] as? [[String: Any]] {\n");
+            restore_body.push_str(&format!("    {}._state_stack = []\n", target));
+            restore_body.push_str(&format!(
+                "    for sc in stack {{ if let c = {}.__deserComp(sc) {{ {}._state_stack.append(c) }} }}\n",
+                target, target
+            ));
             restore_body.push_str("}\n");
-            // Type-ignorant: wrap the value in an array, encode to
-            // JSON via JSONSerialization, then decode as [T].first.
-            // The array-wrap trick avoids JSONSerialization's
-            // top-level-must-be-container restriction. framec emits
-            // `T` verbatim; Codable conformance handles the typing.
             for var in &system.domain {
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(
-                        "if let __raw_{0} = j[\"{0}\"], let __data_{0} = try? JSONSerialization.data(withJSONObject: __raw_{0}), let __json_{0} = String(data: __data_{0}, encoding: .utf8) {{ instance.{0} = {1}.restoreState(__json_{0}) }}\n",
-                        var.name, child_sys
+                        "if let __raw_{1} = _parsed[\"{1}\"], let __data_{1} = try? JSONSerialization.data(withJSONObject: __raw_{1}), let __json_{1} = String(data: __data_{1}, encoding: .utf8) {{ {0}.{1} = {2}.restoreState(__json_{1}) }}\n",
+                        target, var.name, child_sys
                     ));
                 } else {
                     let swift_type = match &var.var_type {
@@ -3785,30 +3913,38 @@ pub(crate) fn generate_persistence_methods(
                     };
                     if swift_type == "Any" {
                         restore_body.push_str(&format!(
-                            "if let v = j[\"{0}\"] {{ instance.{0} = v }}\n",
-                            var.name
+                            "if let v = _parsed[\"{1}\"] {{ {0}.{1} = v }}\n",
+                            target, var.name
                         ));
                     } else {
                         restore_body.push_str(&format!(
-                            "if let __raw = j[\"{name}\"], let __data = try? JSONSerialization.data(withJSONObject: [__raw]), let __arr = try? JSONDecoder().decode([{t}].self, from: __data), let __v = __arr.first {{ instance.{name} = __v }}\n",
+                            "if let __raw = _parsed[\"{name}\"], let __data = try? JSONSerialization.data(withJSONObject: [__raw]), let __arr = try? JSONDecoder().decode([{t}].self, from: __data), let __v = __arr.first {{ {tgt}.{name} = __v }}\n",
+                            tgt = target,
                             name = var.name,
                             t = swift_type
                         ));
                     }
                 }
             }
-            restore_body.push_str("return instance");
+            if !uses_new_contract {
+                restore_body.push_str("return instance");
+            }
 
+            let (load_return, load_static) = if uses_new_contract {
+                (None, false)
+            } else {
+                (Some(sys.clone()), true)
+            };
             methods.push(CodegenNode::Method {
-                name: "restoreState".to_string(),
-                params: vec![Param::new("json").with_type("String")],
-                return_type: Some(sys.clone()),
+                name: load_method_name.clone(),
+                params: vec![Param::new(&load_param_name).with_type("String")],
+                return_type: load_return,
                 body: vec![CodegenNode::NativeBlock {
                     code: restore_body,
                     span: None,
                 }],
                 is_async: false,
-                is_static: true,
+                is_static: load_static,
                 visibility: Visibility::Public,
                 decorators: vec![],
             });
