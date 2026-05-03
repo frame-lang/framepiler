@@ -69,9 +69,9 @@
 //! - W414: Unreachable state from start state
 //! - W415: `return <expr>` in event handler — value is silently lost
 //!
-//! ## Deprecation Warnings (W7xx)
-//! - W706: Legacy `@@[persist]` contract (no `@@[save]`/`@@[load]` ops);
-//!   migrate to RFC-0012 four-attribute form. Hard-cut planned (E814).
+//! ## RFC-0012 amendment hard-cut (E814)
+//! - E814: bare `@@[persist]` form rejected — declare `@@[save]` /
+//!   `@@[load]` operation attributes per RFC-0012 amendment.
 //!
 //! ## Compartment Field Mapping (Canonical 6-field model)
 //!
@@ -917,26 +917,31 @@ impl FrameValidator {
                 .with_span(first_load_span.unwrap_or_else(|| system.span.clone())),
             );
         }
-        // W706: deprecation warning for the legacy persist contract.
-        // The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops)
-        // emits the legacy `save_state` / `restore_state` pair, where
-        // load is a static factory. This works on every backend except
-        // GDScript (target-language scoping limit). RFC-0012 amendment
-        // introduces the four-attribute contract (`@@[save]` /
-        // `@@[load]` operations + instance-method load) that works
-        // uniformly across all 17 backends. Both contracts coexist
-        // additively today; W706 surfaces the migration direction.
-        // The hard-cut (E814) is gated on the legacy fixture migration
-        // sweep — see RFC-0012 "Phase B3".
+        // E814: hard-cut for the RFC-0012 amendment. `@@[persist]`
+        // requires explicit `@@[save]` and `@@[load]` operation
+        // attributes. The bare form is no longer accepted — the
+        // legacy `save_state` / `restore_state` static-factory shape
+        // doesn't work on GDScript (target-language scoping limit)
+        // and the four-attribute contract is uniform across all 17
+        // backends. Migration: declare two operations under the
+        // `operations:` section, one tagged `@@[save]` (returns a
+        // serialized blob), one tagged `@@[load]` (instance method
+        // taking the blob). See docs/rfcs/rfc-0012.md.
         if system.persist_attr.is_some() && save_count == 0 && load_count == 0 {
-            self.warnings.push(
+            errs.push(
                 ValidationError::new(
-                    "W706",
+                    "E814",
                     format!(
-                        "@@[persist] system '{}' uses the legacy save_state/restore_state contract. \
-                         RFC-0012 amendment introduces @@[save] and @@[load] operation attributes for a \
-                         uniform contract across all 17 backends (including GDScript). The legacy form \
-                         remains supported. See docs/rfcs/rfc-0012.md.",
+                        "@@[persist] system '{}' must declare @@[save] and @@[load] operation \
+                         attributes (RFC-0012 amendment). The bare `@@[persist]` form is no longer \
+                         accepted. Add to your `operations:` section:\n\
+                         \x20   @@[save]\n\
+                         \x20   save_state(): <blob_type> {{}}\n\n\
+                         \x20   @@[load]\n\
+                         \x20   restore_state(data: <blob_type>) {{}}\n\
+                         The save op returns a serialized blob; the load op is an instance method \
+                         that mutates self. See docs/rfcs/rfc-0012.md \"Naming the save/load \
+                         methods\".",
                         system.name
                     ),
                 )
