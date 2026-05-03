@@ -378,6 +378,64 @@ module file.
 
 ---
 
+## Persist contract — `@@[save]` / `@@[load]`
+
+A `@@[persist]` system must declare two operations under the
+`operations:` section: one tagged `@@[save]` (returns the
+serialized blob) and one tagged `@@[load]` (instance method
+that mutates self from a blob). The op names are yours to
+pick — these match the Lua convention.
+
+```frame
+@@[persist]
+@@system Counter {
+    operations:
+        @@[save]
+        save_state(): string {}
+
+        @@[load]
+        restore_state(data: string) {}
+
+    interface:  bump()
+    machine:    $Active { bump() { self.n = self.n + 1 } }
+    domain:     n: int = 0
+}
+```
+
+Load is an instance method (allocate, then populate):
+
+```lua
+local c2 = Counter:new()
+c2:restore_state(data)
+```
+
+The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops) is
+rejected with **E814** since framepiler `b3aebc5` (2026-05-03).
+
+### Post-load hook: `@@[on_load]`
+
+A third optional attribute fires user code after
+`restore_state` finishes populating self — useful for re-establishing
+derived state, firing watchers, validating invariants:
+
+```frame
+operations:
+    @@[save]    save_state(): string {}
+    @@[load]    restore_state(data: string) {}
+
+    @@[on_load]
+    rebuild_derived() {
+        self.doubled = self.n * 2
+    }
+```
+
+At-most-one per system (E810). framepiler `a61390e`
+(2026-05-03). See [`frame_runtime.md`](../frame_runtime.md)
+"Naming the save/load methods" and [RFC-0012](../rfcs/rfc-0012.md)
+for the design.
+
+---
+
 ## Persist quiescent contract — E700
 
 `save_state()` requires the system to be quiescent (no event in

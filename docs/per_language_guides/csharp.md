@@ -304,6 +304,64 @@ Oceans Model passthrough, you can use `var` freely.
 
 ---
 
+## Persist contract — `@@[save]` / `@@[load]`
+
+A `@@[persist]` system must declare two operations under the
+`operations:` section: one tagged `@@[save]` (returns the
+serialized blob) and one tagged `@@[load]` (instance method
+that mutates self from a blob). The op names are yours to
+pick — these match the C# convention.
+
+```frame
+@@[persist]
+@@system Counter {
+    operations:
+        @@[save]
+        SaveState(): string {}
+
+        @@[load]
+        RestoreState(data: string) {}
+
+    interface:  bump()
+    machine:    $Active { bump() { self.n = self.n + 1 } }
+    domain:     n: int = 0
+}
+```
+
+Load is an instance method (allocate, then populate):
+
+```csharp
+var c2 = new Counter();
+c2.RestoreState(data);
+```
+
+The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops) is
+rejected with **E814** since framepiler `b3aebc5` (2026-05-03).
+
+### Post-load hook: `@@[on_load]`
+
+A third optional attribute fires user code after
+`RestoreState` finishes populating self — useful for re-establishing
+derived state, firing watchers, validating invariants:
+
+```frame
+operations:
+    @@[save]    SaveState(): string {}
+    @@[load]    RestoreState(data: string) {}
+
+    @@[on_load]
+    rebuild_derived() {
+        self.doubled = self.n * 2
+    }
+```
+
+At-most-one per system (E810). framepiler `a61390e`
+(2026-05-03). See [`frame_runtime.md`](../frame_runtime.md)
+"Naming the save/load methods" and [RFC-0012](../rfcs/rfc-0012.md)
+for the design.
+
+---
+
 ## Persist quiescent contract — E700
 
 `SaveState()` requires the system to be quiescent (no event in
