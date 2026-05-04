@@ -170,6 +170,10 @@ For language syntax details, see the [Frame Language Reference](frame_language.m
 
 110. [Statement Disambiguator](#110-statement-disambiguator--bounded-lookahead-oracle) — bounded-lookahead oracle, kernel-loop chain returning a verdict
 
+**Language Patterns (111)**
+
+111. [Init Logic in `$>`](#111-init-logic-in---where-setup-code-lives) — where setup code lives under RFC-0015's factory-only contract
+
 -----
 
 ## 1. Traffic Light
@@ -14500,6 +14504,74 @@ if __name__ == '__main__':
 **Real-world disambiguators will be larger.** Rust’s path-vs-expression classifier, TypeScript’s `<` disambiguator, and similar non-trivial lookahead problems can easily reach a dozen states. The claim isn’t that every disambiguator is tiny — it’s that each one’s state count scales with the complexity of the question it answers, not with the complexity of the whole grammar.
 
 **Features stressed:** kernel-loop pattern (per-state `$>` enter handlers driving the next transition), `@@:return` set on a still-live caller context across a transition chain, enter args (`-> ("decl") $Verdict`) carrying classification results into the terminal state, oracle-specialist composition pattern, terminal state self-reset for re-use across multiple calls
+
+-----
+
+## 111. Init Logic in `$>` — Where Setup Code Lives
+
+[↑ up](#110-statement-disambiguator--bounded-lookahead-oracle) · [top](#table-of-contents)
+
+**Problem:** A Frame system needs to do non-trivial initialization — load a config file, register a callback, allocate a resource, log a startup message — before its first event arrives. There is no user-defined constructor; framec emits an empty blank allocator (per RFC-0015's factory-only contract). Where does init code go?
+
+**Pattern:** The start state's `$>` enter handler is the canonical home. It runs once when the system is constructed, with full access to domain fields and the ability to call actions / operations / cross-system methods. Static init (literal defaults) goes in domain field defaults; dynamic init goes in `$>`.
+
+```frame
+@@[target("python_3")]
+
+@@system Greeter ($>(name: str)) {
+    interface:
+        say_hello()
+        get_count(): int
+
+    machine:
+        $Ready {
+            $>(name: str) {
+                # Init logic: runs once at construction.
+                self.name = name
+                self.greeting = self.__build_greeting(name)
+                print(f"Greeter ready for {name}")
+            }
+            say_hello() {
+                self.count = self.count + 1
+                print(self.greeting)
+            }
+            get_count(): int { @@:(self.count) }
+        }
+
+    actions:
+        __build_greeting(name: str): str {
+            return f"Hello, {name}!"
+        }
+
+    domain:
+        name: str = ""        # static default — overwritten by $>
+        greeting: str = ""    # static default — overwritten by $>
+        count: int = 0        # static default — kept; never re-init'd
+}
+
+if __name__ == '__main__':
+    g = @@Greeter($>("Alice"))
+    g.say_hello()
+    g.say_hello()
+    print(g.get_count())  # 2
+```
+
+**How it works:**
+
+1. **Static init** lives in domain field defaults (`count: int = 0`). Framec emits these as the blank allocator's only side effect — every domain field starts at its declared default.
+2. **Dynamic init** lives in the start state's `$>(...)` enter handler. The constructor allocates the system with all defaults, then the start-state's `$>` fires automatically with whatever args the caller supplied (`@@Greeter($>("Alice"))` here). `$>` can do anything: read files, call actions, launch tasks, log.
+3. **Persist restore skips `$>`.** This is RFC-0015's D4 contract: `restore_state(blob)` writes the saved state directly into the system's fields without firing any enter handlers. Logic that should fire on every fresh construction (a counter increment, a log line, a registration call) goes in `$>`. Logic that's a pure function of saved state — that would corrupt the restore if it re-fired — also belongs in `$>` for the same reason: it doesn't need to re-fire because the saved blob already captures its result.
+4. **No user-defined `_init` / constructor.** Frame 4.1.0 deliberately removes the user-arg constructor escape hatch. There is exactly one place to put init logic: `$>`. This eliminates an entire class of bugs around persist restore failing because `_init(seed)` was called with the wrong arity (the original Issue #2 in `FRAMEC_BUGS.md`, fixed by RFC-0015).
+
+**Where this matters most:**
+
+- **Parameterized sub-systems** (recipe 21). The outer system constructs an inner system via `domain: inner: Inner = @@Inner(seed_value)`. The inner's `$>(seed: int)` receives the value and stores it. On persist restore, framec threads the saved seed back through the constructor call automatically — no user code involved.
+- **Cross-system wiring**. A driver system that holds a logger and a network client wires both up in `$>`. Construction is a single allocation; the wiring runs predictably on first start.
+- **Fail-on-bad-input init**. If init can fail (config file missing, env var unset, etc.), `$>` is where the error surfaces. Throwing from `$>` aborts construction; the user gets the exception immediately rather than at first event dispatch.
+
+**Anti-pattern:** initializing in interface methods conditionally (`if not self._initialized: ...`). That pollutes every method, has to be remembered, and breaks under multi-threading. Use `$>` and stop reasoning about init state.
+
+**Features used:** `$>` enter handler with system params, domain field defaults, action call from `$>`, factory-only construction (RFC-0015), persist-restore-skips-`$>` (D4 contract). See [RFC-0015](rfcs/rfc-0015.md) for the design rationale.
 
 -----
 
