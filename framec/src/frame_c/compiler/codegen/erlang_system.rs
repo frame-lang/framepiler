@@ -4891,16 +4891,24 @@ pub(crate) fn generate_erlang_system(
             let body_text = std::str::from_utf8(body_bytes).unwrap_or("    ok");
             let trimmed = body_text.trim();
             let inner_raw = if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                trimmed[1..trimmed.len() - 1].trim()
+                trimmed[1..trimmed.len() - 1].trim().to_string()
             } else {
-                trimmed
+                trimmed.to_string()
             };
+            // Lower `@@:(<expr>)` to bare `<expr>` (Erlang's last
+            // expression is the return value). Operations get this
+            // upstream; actions did not, causing the literal sigil to
+            // leak into the generated source.
+            let inner_raw = super::frame_expansion::expand_system_state_in_code(
+                &inner_raw,
+                TargetLanguage::Erlang,
+            );
             // Run `if {...} else {...}` → `case X of true -> ...; false -> ... end`
             // conversion over the action body before the classifier pipeline.
             // Handler bodies get this via erlang_transform_blocks at their
             // emission sites; action bodies previously skipped it, causing
             // malformed output for any action containing control flow.
-            let transformed = erlang_transform_blocks(inner_raw);
+            let transformed = erlang_transform_blocks(&inner_raw);
             let inner = transformed.as_str();
             // Build param name mappings for capitalization
             let act_params: Vec<(&str, String)> = action
