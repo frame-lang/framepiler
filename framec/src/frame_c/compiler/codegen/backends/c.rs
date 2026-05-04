@@ -174,6 +174,30 @@ impl LanguageBackend for CBackend {
                     result.push_str(&self.emit(method, ctx));
                     result.push('\n');
                 }
+
+                // Cross-system call rewrite. Frame source like
+                // `self.inner.bump()` is emitted verbatim by the
+                // native passthrough path. C structs don't carry
+                // methods, so the call has to be lowered to a
+                // free-function call: `Inner_bump(self->inner)`.
+                // Same handling as Erlang's post-pass at
+                // `erlang_system.rs:5538`. Cross-system fields are
+                // identified via `field.type_annotation` ∈
+                // `ctx.defined_systems`.
+                let cross_sys_fields: Vec<(String, String)> = fields
+                    .iter()
+                    .filter_map(|field| {
+                        let raw = field.type_annotation.as_deref().unwrap_or("");
+                        if ctx.defined_systems.contains(raw) {
+                            Some((field.name.clone(), raw.to_string()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for (field_name, sys_name) in &cross_sys_fields {
+                    result = rewrite_c_cross_system_calls(&result, field_name, sys_name);
+                }
                 result
             }
 
@@ -842,4 +866,118 @@ impl CBackend {
             Some(other) => other.to_string(),
         }
     }
+}
+
+/// Rewrite `self[.|->]FIELD[.|->]METHOD(ARGS)` in `code` to
+/// `<sys_name>_METHOD(self->FIELD[, ARGS])`. C structs don't carry
+/// methods, so cross-system dot-call sites have to be lowered to
+/// free-function calls. Mirrors Erlang's post-pass at
+/// `erlang_system.rs:5538`.
+fn rewrite_c_cross_system_calls(code: &str, field_name: &str, sys_name: &str) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut cursor = 0;
+    let bytes = code.as_bytes();
+    while cursor < bytes.len() {
+        let rel = match code[cursor..].find("self") {
+            Some(r) => r,
+            None => break,
+        };
+        let abs = cursor + rel;
+        // Token-boundary: previous char must not be an identifier char.
+        if abs > 0 {
+            let prev = bytes[abs - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                out.push_str(&code[cursor..abs + 4]);
+                cursor = abs + 4;
+                continue;
+            }
+        }
+        let after_self = abs + 4;
+        // After `self`, expect `.` or `->`.
+        let after_sep1 = if code[after_self..].starts_with("->") {
+            after_self + 2
+        } else if code[after_self..].starts_with('.') {
+            after_self + 1
+        } else {
+            out.push_str(&code[cursor..after_self]);
+            cursor = after_self;
+            continue;
+        };
+        // Match the field name.
+        if !code[after_sep1..].starts_with(field_name) {
+            out.push_str(&code[cursor..after_self]);
+            cursor = after_self;
+            continue;
+        }
+        let field_end = after_sep1 + field_name.len();
+        // Token-boundary: next char must not be an identifier char.
+        if field_end < bytes.len() {
+            let nx = bytes[field_end];
+            if nx.is_ascii_alphanumeric() || nx == b'_' {
+                out.push_str(&code[cursor..after_self]);
+                cursor = after_self;
+                continue;
+            }
+        }
+        // After the field, expect `.` or `->`.
+        let after_sep2 = if code[field_end..].starts_with("->") {
+            field_end + 2
+        } else if code[field_end..].starts_with('.') {
+            field_end + 1
+        } else {
+            out.push_str(&code[cursor..after_self]);
+            cursor = after_self;
+            continue;
+        };
+        // Match a method identifier.
+        let method_start = after_sep2;
+        let mut method_end = method_start;
+        while method_end < bytes.len()
+            && (bytes[method_end].is_ascii_alphanumeric() || bytes[method_end] == b'_')
+        {
+            method_end += 1;
+        }
+        if method_end == method_start
+            || method_end >= bytes.len()
+            || bytes[method_end] != b'('
+        {
+            out.push_str(&code[cursor..after_self]);
+            cursor = after_self;
+            continue;
+        }
+        let method = &code[method_start..method_end];
+        // Find the matching `)` — paren-balance, ignore strings/chars
+        // for now (C call args rarely contain unbalanced ones; matches
+        // Erlang precedent).
+        let args_open = method_end;
+        let mut depth: i32 = 1;
+        let mut p = args_open + 1;
+        while p < bytes.len() && depth > 0 {
+            match bytes[p] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            p += 1;
+        }
+        if depth != 0 {
+            out.push_str(&code[cursor..p.min(bytes.len())]);
+            cursor = p;
+            continue;
+        }
+        let args_inner = &code[args_open + 1..p - 1];
+        let args_inner_trim = args_inner.trim();
+        out.push_str(&code[cursor..abs]);
+        if args_inner_trim.is_empty() {
+            out.push_str(&format!("{}_{}(self->{})", sys_name, method, field_name));
+        } else {
+            out.push_str(&format!(
+                "{}_{}(self->{}, {})",
+                sys_name, method, field_name, args_inner
+            ));
+        }
+        cursor = p;
+    }
+    out.push_str(&code[cursor..]);
+    out
 }
