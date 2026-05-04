@@ -1000,6 +1000,59 @@ mod tests {
     }
 
     #[test]
+    fn test_rfc0015_create_pragma_no_arg() {
+        let (kind, _) = identify_pragma(b"@@[create]", 0);
+        assert_eq!(kind, PragmaKind::Create);
+    }
+
+    #[test]
+    fn test_rfc0015_create_pragma_with_name() {
+        let (kind, value) = identify_pragma(b"@@[create(make)]", 0);
+        assert_eq!(kind, PragmaKind::Create);
+        assert_eq!(value.as_deref(), Some("(make)"));
+    }
+
+    #[test]
+    fn test_rfc0015_save_pragma_with_name() {
+        let (kind, value) = identify_pragma(b"@@[save(pickle)]", 0);
+        assert_eq!(kind, PragmaKind::Save);
+        assert_eq!(value.as_deref(), Some("(pickle)"));
+    }
+
+    #[test]
+    fn test_rfc0015_load_pragma_with_name() {
+        let (kind, value) = identify_pragma(b"@@[load(unpickle)]", 0);
+        assert_eq!(kind, PragmaKind::Load);
+        assert_eq!(value.as_deref(), Some("(unpickle)"));
+    }
+
+    #[test]
+    fn test_rfc0015_pragmas_in_segment_stream() {
+        // End-to-end: scan a source with all four lifecycle pragmas
+        // and confirm each lands as the right PragmaKind.
+        let source = "@@[target(\"python_3\")]\n\
+                      @@[persist(JSON)]\n\
+                      @@[create(make)]\n\
+                      @@[save(pickle)]\n\
+                      @@[load(unpickle)]\n\
+                      @@system Inner {\n    machine:\n        $A {\n        }\n}\n";
+        let map = segment_py(source);
+        let kinds: Vec<&PragmaKind> = map
+            .segments
+            .iter()
+            .filter_map(|s| match s {
+                Segment::Pragma { kind, .. } => Some(kind),
+                _ => None,
+            })
+            .collect();
+        assert!(kinds.contains(&&PragmaKind::Target));
+        assert!(kinds.contains(&&PragmaKind::Persist));
+        assert!(kinds.contains(&&PragmaKind::Create));
+        assert!(kinds.contains(&&PragmaKind::Save));
+        assert!(kinds.contains(&&PragmaKind::Load));
+    }
+
+    #[test]
     fn test_simple_system() {
         let source =
             "@@[target(\"python_3\")]\n\n@@system Foo {\n    machine:\n        $A {\n        }\n}\n";
