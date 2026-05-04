@@ -423,6 +423,113 @@ impl FrameValidator {
                 }
             }
         }
+
+        // W705: transition in a non-void handler without a preceding
+        // `@@:(value)` may leak the return type's default (None /
+        // Nil / null / 0) on the transition's execution path.
+        //
+        // Per `frame_language.md`: "Every transition is implicitly
+        // followed by a `return` — code after a transition is
+        // unreachable." The codegen's same-scope hoist makes the
+        // simple shape `-> $X; @@:(value)` work (the @@:(value)
+        // gets reordered before the bare return), but a
+        // `@@:(value)` in an enclosing scope after the transition
+        // remains genuinely unreachable on the transition path.
+        //
+        // Two safe shapes that suppress this warning:
+        //   1. `@@:(value)` (or `@@:return(value)`) appears earlier
+        //      in the body at an indent ≤ the transition's indent —
+        //      `_return` was already set before the transition runs.
+        //   2. `@@:(value)` immediately follows the transition at
+        //      the same indent — the codegen hoists it before the
+        //      bare return.
+        //
+        // The check is intentionally heuristic. It catches the
+        // common "I wrote `@@:(value)` outside the if; why is it
+        // returning Nil?" mistake (Issue #4 in FRAMEC_BUGS.md). It
+        // can produce a false negative for sibling-block cases
+        // where an earlier @@:(value) exists in a non-preceding
+        // branch — that's accepted; the warning is meant to catch
+        // the easy mistake without flagging legitimate patterns.
+        if let Some(iface_method) = interface_methods.get(scope_inner) {
+            let returns_value = match &iface_method.return_type {
+                Some(t) => {
+                    let s = match t {
+                        crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+                        crate::frame_c::compiler::frame_ast::Type::Unknown => "",
+                    };
+                    !s.is_empty() && s != "void"
+                }
+                None => false,
+            };
+            if returns_value {
+                let frame_regs: Vec<&Region> = scan_result
+                    .regions
+                    .iter()
+                    .filter(|r| matches!(r, Region::FrameSegment { .. }))
+                    .collect();
+                for (i, r) in frame_regs.iter().enumerate() {
+                    if let Region::FrameSegment {
+                        kind: FrameSegmentKind::Transition,
+                        indent: t_indent,
+                        ..
+                    } = **r
+                    {
+                        // Check 1: any @@:(value) at indent ≤ t_indent earlier in body.
+                        let preceded = frame_regs[..i].iter().any(|r2| {
+                            if let Region::FrameSegment {
+                                kind: k,
+                                indent: i2,
+                                ..
+                            } = **r2
+                            {
+                                matches!(
+                                    k,
+                                    FrameSegmentKind::ContextReturnExpr
+                                        | FrameSegmentKind::ReturnCall
+                                ) && i2 <= t_indent
+                            } else {
+                                false
+                            }
+                        });
+                        // Check 2: same-indent @@:(value) immediately following
+                        // (codegen's same-scope hoist applies).
+                        let immediately_followed =
+                            frame_regs.get(i + 1).map(|r2| {
+                                if let Region::FrameSegment {
+                                    kind: k,
+                                    indent: i2,
+                                    ..
+                                } = **r2
+                                {
+                                    matches!(
+                                        k,
+                                        FrameSegmentKind::ContextReturnExpr
+                                            | FrameSegmentKind::ReturnCall
+                                    ) && i2 == t_indent
+                                } else {
+                                    false
+                                }
+                            }).unwrap_or(false);
+                        if !preceded && !immediately_followed {
+                            self.warnings.push(ValidationError::new(
+                                "W705",
+                                format!(
+                                    "transition in {}/{} may leak the return type's default value \
+                                     (None/Nil/null/0): no `@@:(value)` precedes the transition at \
+                                     this scope or any enclosing scope, and no same-scope `@@:(value)` \
+                                     immediately follows it. The transition's implicit `return` will \
+                                     short-circuit before any later `@@:(value)` in an outer scope. \
+                                     Fix: place `@@:(value)` before the transition, or use \
+                                     `@@:return(value)` at the transition site.",
+                                    scope_outer, scope_inner
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn validate_target_specific(

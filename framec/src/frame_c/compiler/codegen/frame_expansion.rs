@@ -359,6 +359,15 @@ pub(crate) fn emit_handler_body_via_statements(
                                 // Together these handle both brace languages
                                 // (content stops the scan) and indent languages
                                 // (indent mismatch stops the consume).
+                                //
+                                // For nested-control-flow transitions where
+                                // the user expected an outer-scope
+                                // `@@:(value)` to apply on the transition path,
+                                // see W705 in `frame_validator.rs` — the spec
+                                // is "code after a transition is unreachable",
+                                // and the validator warns when the user's
+                                // pattern would silently leak a default value
+                                // (Issue #4 in FRAMEC_BUGS.md).
                                 let next_frame_idx = frame_idx + 1;
                                 for j in (stmt_idx + 1)..statements.len() {
                                     match &statements[j] {
