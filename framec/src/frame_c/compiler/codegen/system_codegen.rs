@@ -286,10 +286,59 @@ pub fn generate_system_shared(
                     ),
                 ));
             }
+            TargetLanguage::C => {
+                // C: factory is a free function that delegates to
+                // the existing `<System>_new(...)` constructor.
+                // The C backend prefixes static-method names with
+                // `<System>_` so `make` becomes `Counter_make`.
+                // Return type is `<System>*` (pointer to allocated
+                // struct), matching `<System>_new`.
+                let mut method = generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!(
+                        "return {}_new({});",
+                        system.name,
+                        params_arg_list(system)
+                    ),
+                );
+                if let CodegenNode::Method {
+                    ref mut return_type,
+                    ..
+                } = method
+                {
+                    *return_type = Some(format!("{}*", system.name));
+                }
+                methods.push(method);
+            }
+            TargetLanguage::Go => {
+                // Go: factory is a package-level function. The Go
+                // backend renders `is_static: true` methods as
+                // `func Name(...)` (capitalized for public visibility).
+                // Default constructor is `New<System>(...)` returning
+                // `*<System>` — the factory delegates to it.
+                let mut method = generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!(
+                        "return New{}({})",
+                        system.name,
+                        params_arg_list(system)
+                    ),
+                );
+                if let CodegenNode::Method {
+                    ref mut return_type,
+                    ..
+                } = method
+                {
+                    *return_type = Some(format!("*{}", system.name));
+                }
+                methods.push(method);
+            }
             _ => {
-                // Other backends (C, Go, Erlang): follow in
-                // subsequent phases. Rust uses its own codegen
-                // path in `rust_system.rs` (covered in Phase 1.5).
+                // Other backends (Erlang): follow in subsequent
+                // phases. Rust uses its own codegen path in
+                // `rust_system.rs` (covered in Phase 1.5).
             }
         }
     }
