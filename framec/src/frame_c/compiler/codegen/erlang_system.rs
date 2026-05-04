@@ -2118,12 +2118,104 @@ fn erlang_rewrite_expr(line: &str, action_names: &[String]) -> String {
 
 /// Transform C-family `if/else { }` block syntax to Erlang `case/of/end`.
 ///
+/// True if `line` has more open parens/brackets/braces than closes —
+/// meaning the line is in the middle of an expression that continues
+/// on subsequent lines. String/atom-quote and comment regions are
+/// excluded from the count.
+fn paren_balance_unclosed(line: &str) -> bool {
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut in_atom = false;
+    let mut escape = false;
+    for c in line.chars() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if c == '\\' && (in_string || in_atom) {
+            escape = true;
+            continue;
+        }
+        if c == '"' && !in_atom {
+            in_string = !in_string;
+            continue;
+        }
+        if c == '\'' && !in_string {
+            in_atom = !in_atom;
+            continue;
+        }
+        if in_string || in_atom {
+            continue;
+        }
+        if c == '%' {
+            // Comment runs to end of line — but we've already stripped
+            // comments at the caller (`pt_full[..code_end].trim_end()`).
+            // This guard is for defense-in-depth.
+            break;
+        }
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth > 0
+}
+
+/// True if `line` ends with an Erlang binary operator that requires a
+/// right operand on a subsequent line. Such a line is mid-expression;
+/// the next line is the operand and must NOT be separated by `,`.
+fn ends_with_binary_op(line: &str) -> bool {
+    let t = line.trim_end();
+    // Word operators: must be preceded by whitespace (or start-of-line)
+    // to avoid matching identifier suffixes like `foo_andalso`.
+    for op in &[
+        "andalso", "orelse", "and", "or", "xor", "not", "div", "rem", "band",
+        "bor", "bxor", "bnot", "bsl", "bsr",
+    ] {
+        if t.ends_with(op) {
+            // Confirm the preceding char is whitespace or the line is
+            // exactly the operator (rare). Otherwise it's an identifier
+            // ending — not a binary op.
+            let before_op_len = t.len() - op.len();
+            if before_op_len == 0 {
+                return true;
+            }
+            let preceding = t.as_bytes()[before_op_len - 1];
+            if preceding == b' ' || preceding == b'\t' {
+                return true;
+            }
+        }
+    }
+    // Symbolic operators: end-of-line tokens.
+    for op in &[
+        "+", "-", "*", "/", "++", "--", "=:=", "=/=", "==", "/=", "<", ">",
+        "=<", ">=", "->", "=>", "|", "||", "::",
+    ] {
+        if t.ends_with(op) {
+            // Avoid false positive: a `>` that closes a binary
+            // construction (`<<...>>`) is NOT a binary op. But binary
+            // construction ends with `>>`, which our `>` match would
+            // also flag. Filter that out.
+            if *op == ">" && t.ends_with(">>") {
+                continue;
+            }
+            return true;
+        }
+    }
+    false
+}
+
 /// Join processed Erlang lines with proper comma/newline separators.
 /// In Erlang, all expressions in a function clause are comma-separated except:
 /// - Inside case blocks: branches are separated by `;`, values by comma only within a branch
 /// - After `case ... of`, `true ->`, `; false ->` (structural, no comma)
 /// - Before `end`, `; false`, `true ->` (structural, no comma)
 /// - Lines already ending with `,` or `;` get a newline only
+/// - Lines in the middle of an expression (unclosed parens or trailing
+///   binary operator) — see `paren_balance_unclosed` and
+///   `ends_with_binary_op`. The next line is the continuation and must
+///   not be separated by `,`.
 fn erlang_smart_join(lines: &[String], code: &mut String) {
     let mut case_depth = 0i32;
 
@@ -2205,7 +2297,32 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
             let prev_is_structural_case = prev_is_case_head || prev_is_branch;
             let curr_is_structural_case = curr_is_end || curr_is_branch;
 
-            if prev_ends_punctuated || prev_is_structural_case || curr_is_structural_case {
+            // Multi-line expression continuation: when the previous
+            // line is in the MIDDLE of an expression — has unbalanced
+            // open parens/brackets/braces or ends with a binary
+            // operator that requires a right operand — the current
+            // line is the operand or continuation. Inserting `,\n`
+            // would break the expression. Detect this and emit just
+            // a newline.
+            //
+            // Examples (D1 in `_scratch/phase5_test92_defects.md`):
+            //   __ReturnVal_1 = (A andalso     <-- unbalanced `(` AND
+            //       B)                          ends with `andalso`
+            //   {keep_state, ...}                <-- needs `,` *after*
+            //                                       the closing `)`
+            //
+            // The check is conservative: we only suppress the comma
+            // when we can prove the expression is unfinished. If the
+            // detection misses a case, we fall back to inserting `,`
+            // (preserving the existing behavior).
+            let prev_in_mid_expression =
+                paren_balance_unclosed(pt) || ends_with_binary_op(pt);
+
+            if prev_ends_punctuated
+                || prev_is_structural_case
+                || curr_is_structural_case
+                || prev_in_mid_expression
+            {
                 code.push('\n');
             } else {
                 code.push_str(",\n");
