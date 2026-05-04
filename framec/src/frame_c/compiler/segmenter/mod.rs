@@ -49,6 +49,22 @@ pub enum PragmaKind {
     /// the file's primary system for targets that privilege one class
     /// per file (GDScript, Java, etc.).
     Main,
+    /// @@[create(<name>?)] — RFC-0015. System-level lifecycle attribute
+    /// that renames the auto-generated factory. The signature is
+    /// dictated entirely by the @@system three-group header; only
+    /// the user-facing name is overridable. Body is framework-
+    /// generated; users never write factory bodies.
+    Create,
+    /// @@[save(<name>?)] — RFC-0015. System-level lifecycle attribute
+    /// that renames the auto-generated save op. Signature dictated by
+    /// `@@[persist(<Format>)]` (returns Format). Body framework-
+    /// generated.
+    Save,
+    /// @@[load(<name>?)] — RFC-0015. System-level lifecycle attribute
+    /// that renames the auto-generated load op. Signature dictated by
+    /// `@@[persist(<Format>)]` (takes Format). Body framework-
+    /// generated.
+    Load,
     /// @@codegen { ... }
     Codegen,
     /// @@run-expect <pattern>
@@ -609,6 +625,13 @@ fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
             b"persist" => PragmaKind::Persist,
             b"target" => PragmaKind::Target,
             b"main" => PragmaKind::Main,
+            // RFC-0015: lifecycle attributes recognized at module
+            // level. Currently parsed-only — downstream consumers
+            // (validator, AST, codegen) land in subsequent commits
+            // as Phase 1.1 of the RFC-0015 arc proceeds.
+            b"create" => PragmaKind::Create,
+            b"save" => PragmaKind::Save,
+            b"load" => PragmaKind::Load,
             _ => PragmaKind::Other,
         };
 
