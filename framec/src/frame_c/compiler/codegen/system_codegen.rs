@@ -200,8 +200,62 @@ pub fn generate_system_shared(
             TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
                 methods.push(generate_js_static_factory_alias(system, factory_name));
             }
+            TargetLanguage::GDScript => {
+                methods.push(generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!(
+                        "return {}.new({})",
+                        system.name,
+                        params_arg_list(system)
+                    ),
+                ));
+            }
+            TargetLanguage::Lua => {
+                methods.push(generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!(
+                        "return {}:new({})",
+                        system.name,
+                        params_arg_list(system)
+                    ),
+                ));
+            }
+            TargetLanguage::Ruby => {
+                methods.push(generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!("new({})", params_arg_list(system)),
+                ));
+            }
+            TargetLanguage::Php => {
+                let php_args = system
+                    .params
+                    .iter()
+                    .map(|p| format!("${}", p.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                methods.push(generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!("return new {}({});", system.name, php_args),
+                ));
+            }
+            TargetLanguage::Dart => {
+                methods.push(generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!(
+                        "return {}({});",
+                        system.name,
+                        params_arg_list(system)
+                    ),
+                ));
+            }
             _ => {
-                // Other backends: follow in subsequent phases.
+                // Other backends (Rust, Java, C#, Kotlin, Swift, C, C++,
+                // Go, Erlang): follow in subsequent phases.
             }
         }
     }
@@ -2343,6 +2397,56 @@ fn generate_js_static_factory_alias(system: &SystemAst, factory_name: &str) -> C
 
     let body = vec![CodegenNode::NativeBlock {
         code: format!("return new {}({});", system.name, arg_list),
+        span: None,
+    }];
+
+    CodegenNode::Method {
+        name: factory_name.to_string(),
+        params,
+        return_type: Some(system.name.clone()),
+        body,
+        is_async: false,
+        is_static: true,
+        visibility: Visibility::Public,
+        decorators: vec![],
+    }
+}
+
+/// RFC-0015: param-name list for a system, comma-separated.
+/// Used by factory aliases to forward arguments to the constructor.
+fn params_arg_list(system: &SystemAst) -> String {
+    system
+        .params
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// RFC-0015 phase 1.1d: shared static-factory alias generator for
+/// backends whose `is_static: true` Method renders cleanly as a
+/// static method on the class. The body is supplied as a raw
+/// target-language snippet that constructs and returns an instance.
+///
+/// Used by GDScript, Lua, Ruby, PHP, and Dart. Python uses its own
+/// path (classmethod with `cls`); JS/TS use their own path (no
+/// param types in body).
+fn generate_static_factory_alias(
+    system: &SystemAst,
+    factory_name: &str,
+    body_code: &str,
+) -> CodegenNode {
+    let params: Vec<Param> = system
+        .params
+        .iter()
+        .map(|p| {
+            let type_str = type_to_string(&p.param_type);
+            Param::new(&p.name).with_type(&type_str)
+        })
+        .collect();
+
+    let body = vec![CodegenNode::NativeBlock {
+        code: body_code.to_string(),
         span: None,
     }];
 
