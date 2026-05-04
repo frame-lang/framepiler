@@ -138,7 +138,16 @@ impl LanguageBackend for CBackend {
                         };
                         let params_str =
                             self.emit_params_with_self(params, ctx, !*is_static, &system_name);
-                        let static_kw = if *is_static { "static " } else { "" };
+                        // User-named actions/operations starting with `_`
+                        // are emitted `static` in the function definition
+                        // (see the Method arm below). The forward declaration
+                        // must match — otherwise the C compiler reports
+                        // `static declaration follows non-static declaration`.
+                        let static_kw = if *is_static || method_name.starts_with('_') {
+                            "static "
+                        } else {
+                            ""
+                        };
                         result.push_str(&format!(
                             "{}{} {}_{} ({});\n",
                             static_kw, return_str, name, method_name, params_str
@@ -244,14 +253,17 @@ impl LanguageBackend for CBackend {
                     if name.starts_with("__") {
                         // Private methods like __kernel, __router -> System_kernel
                         format!("{}_{}", system_name, name.trim_start_matches('_'))
-                    } else if name.starts_with("_state_") {
-                        // State handlers like _state_Start -> System_state_Start
-                        format!("{}_{}", system_name, name.trim_start_matches('_'))
-                    } else if name.starts_with("_") {
-                        // Other private methods
+                    } else if name.starts_with("_state_") || name.starts_with("_s_") {
+                        // State handlers like _state_Start -> System_state_Start.
+                        // Per-handler emission uses `_s_*`. Both shapes match
+                        // the forward-declaration loop that already strips `_`.
                         format!("{}_{}", system_name, name.trim_start_matches('_'))
                     } else {
-                        // Public methods
+                        // Public methods, and user-named private methods
+                        // (e.g. action `_read`). The leading `_` is part of
+                        // the user's name and must be preserved so the
+                        // forward declaration (which uses `name` verbatim)
+                        // matches the function definition at link time.
                         format!("{}_{}", system_name, name)
                     }
                 } else {
