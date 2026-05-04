@@ -172,22 +172,17 @@ Node. The matrix harness uses CommonJS by default.
 
 ## Persist contract — `@@[save]` / `@@[load]`
 
-A `@@[persist]` system must declare two operations under the
-`operations:` section: one tagged `@@[save]` (returns the
-serialized blob) and one tagged `@@[load]` (instance method
-that mutates self from a blob). The op names are yours to
-pick — these match the JavaScript convention.
+A persisted system declares three system-level attributes:
+`@@[persist(<blob_type>)]`, `@@[save(<save_method_name>)]`, and
+`@@[load(<load_method_name>)]`. Framec generates the save/load pair
+on the system class — save returns the blob, load is an instance
+method that mutates self.
 
 ```frame
-@@[persist]
+@@[persist(string)]
+@@[save(saveState)]
+@@[load(restoreState)]
 @@system Counter {
-    operations:
-        @@[save]
-        saveState(): string {}
-
-        @@[load]
-        restoreState(data: string) {}
-
     interface:  bump()
     machine:    $Active { bump() { self.n = self.n + 1 } }
     domain:     n: int = 0
@@ -201,8 +196,10 @@ const c2 = new Counter();
 c2.restoreState(data);
 ```
 
-The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops) is
-rejected with **E814** since framepiler `b3aebc5` (2026-05-03).
+Bare `@@[persist]` (no save/load names) is rejected with **E814**.
+The legacy operation-attribute form (`operations: @@[save] foo()`)
+is rejected with **E819** at framec 4.1.0+; the codemod at
+`scripts/migrate_rfc0015.py` rewrites old fixtures mechanically.
 
 ## Persist quiescent contract — E700
 

@@ -1134,7 +1134,9 @@ import logging
     frame_event: on,
 }
 
-@@[persist]
+@@[persist(str)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system OrderProcessor (max_retries: int) {
 
     operations:

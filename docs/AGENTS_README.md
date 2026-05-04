@@ -708,7 +708,9 @@ Frame's `@@[persist]` annotation generates `save_state()` and `restore_state()` 
 
 import json
 
-@@[persist]
+@@[persist(str)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system CodebaseAnalyzer {
     interface:
         start(repo_path: str)
@@ -806,7 +808,8 @@ if __name__ == '__main__':
         # Resume from checkpoint
         with open(checkpoint) as f:
             data = json.load(f)
-        analyzer = CodebaseAnalyzer.restore_state(data)
+        analyzer = CodebaseAnalyzer()
+        analyzer.restore_state(data)
         print(f"Resumed: {analyzer.get_progress()}")
     else:
         # Fresh start

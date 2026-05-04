@@ -1129,15 +1129,10 @@ if __name__ == '__main__':
 ```frame
 @@[target("python_3")]
 
-@@[persist]
+@@[persist(str)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Session {
-    operations:
-        @@[save]
-        save_state(): str {}
-
-        @@[load]
-        restore_state(data: str) {}
-
     interface:
         login(user: str)
         logout()
@@ -1177,7 +1172,7 @@ if __name__ == '__main__':
     print(s2.who())              # alice (state preserved)
 ```
 
-**How it works:** `@@[save]` and `@@[load]` operation attributes mark the framework-managed save/restore methods. The saved data includes the current state (`$LoggedIn`), domain variables (`user = "alice"`), and the state stack. Restore is an instance method that mutates self; it does NOT fire the enter handler.
+**How it works:** `@@[persist(<type>)]`, `@@[save(<name>)]`, and `@@[load(<name>)]` are system-level attributes that ask framec to generate a save/restore pair for the system. The saved data includes the current state (`$LoggedIn`), domain variables (`user = "alice"`), and the state stack. Restore is an instance method that mutates self; it does NOT fire the enter handler.
 
 **Features used:** `@@[persist]`, save/restore, domain variables
 
@@ -2973,16 +2968,11 @@ if __name__ == '__main__':
 ```frame
 @@[target("python_3")]
 
-@@[persist]
+@@[persist(str)]
+@@[save(save_state)]
+@@[load(restore_state)]
 
 @@system DeadLetterProcessor {
-    operations:
-        @@[save]
-        save_state(): str {}
-
-        @@[load]
-        restore_state(data: str) {}
-
     interface:
         accept(msg_id: str, payload: str): str
         process_tick(): str
@@ -3395,8 +3385,9 @@ if __name__ == '__main__':
 ```frame
 @@[target("python_3")]
 
-@@[persist]
-
+@@[persist(bytes)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system MessageStore {
     interface:
         record(topic: str, payload: str)
@@ -3432,7 +3423,8 @@ if __name__ == '__main__':
     s.record("refunds", "R-1")
 
     snap = s.save_state()
-    s2 = MessageStore.restore_state(snap)
+    s2 = MessageStore()
+    s2.restore_state(snap)
     print(s2.total())             # 3
     print(s2.count_for("orders")) # 2
     s2.record("orders", "O-3")
@@ -3458,8 +3450,9 @@ if __name__ == '__main__':
 
 import json
 
-@@[persist]
-
+@@[persist(str)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system WizardMachine {
     operations:
         next_event(): str {
@@ -3546,7 +3539,8 @@ import json
 
 
 def handle_on_server(blob: bytes) -> bytes:
-    m = WizardMachine.restore_state(blob)
+    m = WizardMachine()
+    m.restore_state(blob)
     while m.where_next() == "server":
         evt = m.next_event()
         if evt == "server_validate":
@@ -3564,13 +3558,15 @@ if __name__ == '__main__':
     m.client_collect("alice@example.com")
 
     blob = handle_on_server(m.save_state())
-    m = WizardMachine.restore_state(blob)
+    m = WizardMachine()
+    m.restore_state(blob)
     print(m.where_next())           # client
 
     m.client_confirm(True)
 
     blob = handle_on_server(m.save_state())
-    m = WizardMachine.restore_state(blob)
+    m = WizardMachine()
+    m.restore_state(blob)
 
     print(m.where_next())           # done
     print(m.summary())
@@ -7641,7 +7637,9 @@ The 4-way handshake uses a state variable (`$.key_step`) that resets on every en
 ```frame
 @@[target("python_3")]
 
-@@[persist]
+@@[persist(bytes)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system BgpSession {
     interface:
         manual_start()
@@ -7831,7 +7829,8 @@ if __name__ == '__main__':
 
     # Persist across daemon restart
     snap = bgp.save_state()
-    bgp = BgpSession.restore_state(snap)
+    bgp = BgpSession()
+    bgp.restore_state(snap)
     print(bgp.status())               # established — session preserved
 
     # Keepalive exchange
@@ -13769,7 +13768,9 @@ if __name__ == '__main__':
 ```frame
 @@[target("python_3")]
 
-@@[persist(domain=["mission_id", "site_list", "site_index", "findings", "inspection_retries"])]
+@@[persist(str)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system MissionController {
     operations:
         progress(): dict {
@@ -13922,7 +13923,8 @@ if __name__ == '__main__':
     # Simulate power loss mid-mission: snapshot, destroy, restore
     snapshot = m.save_state()
     print("--- simulated reboot ---")
-    m2 = MissionController.restore_state(snapshot)
+    m2 = MissionController()
+    m2.restore_state(snapshot)
     print(m2.progress())
 
     # Resume from the restored state — inspection retry for site 2

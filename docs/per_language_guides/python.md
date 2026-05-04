@@ -199,21 +199,17 @@ for `import` declarations.
 
 ## Persist contract — `@@[save]` / `@@[load]`
 
-A `@@[persist]` system must declare two operations under the
-`operations:` section: one tagged `@@[save]` (returns the
-serialized blob) and one tagged `@@[load]` (instance method that
-mutates self from a blob). The op names are yours to pick.
+A persisted system declares three system-level attributes:
+`@@[persist(<blob_type>)]`, `@@[save(<save_method_name>)]`, and
+`@@[load(<load_method_name>)]`. Framec generates the save/load pair
+on the system class — save returns the blob, load is an instance
+method that mutates self.
 
 ```frame
-@@[persist]
+@@[persist(str)]
+@@[save(pickle)]
+@@[load(unpickle)]
 @@system Counter {
-    operations:
-        @@[save]
-        pickle(): str {}        # body framework-emitted
-
-        @@[load]
-        unpickle(data: str) {}  # body framework-emitted
-
     interface:  bump()
     machine:    $Active { bump() { self.n = self.n + 1 } }
     domain:     n: int = 0
@@ -228,10 +224,12 @@ c2 = Counter()
 c2.unpickle(data)
 ```
 
-The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops) is
-rejected with **E814** since framepiler `b3aebc5` (2026-05-03).
+Bare `@@[persist]` (no save/load names) is rejected with **E814**.
+The legacy operation-attribute form (`operations: @@[save] foo()`)
+is rejected with **E819** at framec 4.1.0+; the codemod at
+`scripts/migrate_rfc0015.py` rewrites old fixtures mechanically.
 See [`frame_runtime.md`](../frame_runtime.md) "Naming the save/load
-methods" and [RFC-0012](../rfcs/rfc-0012.md) for the design.
+methods" and [RFC-0015](../rfcs/rfc-0015.md) for the design.
 
 ## Persist quiescent contract — E700
 

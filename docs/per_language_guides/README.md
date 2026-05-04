@@ -13,13 +13,16 @@ They complement (rather than replace):
 - `framepiler_test_env/docs/runtime-capability-matrix.md` — the
   per-backend capability table.
 
-> **Persist contract**: A `@@[persist]` system must declare two
-> operations under `operations:` — one tagged `@@[save]` (returns
-> the serialized blob), one tagged `@@[load]` (instance method
-> populating self). Bare `@@[persist]` is rejected with **E814**.
-> See
+> **Persist contract**: a persisted system declares three system-level
+> attributes — `@@[persist(<type>)]` (the serialized blob type),
+> `@@[save(<name>)]` (the save method name), and `@@[load(<name>)]`
+> (the load method name). The save method returns the blob; the load
+> method is an instance method that mutates self. Bare `@@[persist]`
+> is rejected with **E814**, and the older operation-attribute form
+> (`operations: @@[save] foo()`) is rejected with **E819** — see
+> `scripts/migrate_rfc0015.py` for the codemod. See
 > [frame_runtime.md "Naming the save/load methods"](../frame_runtime.md)
-> and [RFC-0012](../rfcs/rfc-0012.md) for the design.
+> and [RFC-0015](../rfcs/rfc-0015.md) for the design.
 
 ## Status
 
