@@ -1348,7 +1348,12 @@ pub(crate) fn on_load_call(system: &SystemAst, lang: TargetLanguage, target: &st
         TargetLanguage::Go => format!("\n{}.{}()", target, name),
         TargetLanguage::GDScript => format!("\n{}.{}()", target, name),
         TargetLanguage::Rust => format!("\n{}.{}();", target, name),
-        TargetLanguage::Erlang => String::new(), // handled in erlang_system.rs
+        TargetLanguage::Erlang => String::new(), // emitted directly in
+        // erlang_system.rs's load_state body (after sys:replace_state
+        // and before `{ok, Pid}` return). The shared on_load_call
+        // helper isn't used because Erlang's op-call shape is
+        // module-qualified `<module>:<name>(Pid)` rather than the
+        // method-call shape used by every other backend.
         _ => String::new(),                      // graphviz, smcat — no persist
     }
 }
