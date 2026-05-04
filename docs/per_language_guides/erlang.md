@@ -668,35 +668,6 @@ Load is an instance method (allocate, then populate):
 The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops) is
 rejected with **E814** since framepiler `b3aebc5` (2026-05-03).
 
-### Post-load hook: `@@[on_load]`
-
-A third optional attribute fires user code after
-`load_state` finishes populating self — useful for re-establishing
-derived state, firing watchers, validating invariants:
-
-```frame
-operations:
-    @@[save]    save_state(): map() {}
-    @@[load]    load_state(data: map()) {}
-
-    @@[on_load]
-    rebuild_derived() {
-        self.doubled = self.n * 2
-    }
-```
-
-Erlang's gen_statem persist dispatch for `@@[on_load]` is
-deferred — separate from the typed/dynamic backends. The
-attribute parses cleanly today; the dispatch hook lands
-with the gen_statem-specific codegen.
-
-At-most-one per system (E810). framepiler `a61390e`
-(2026-05-03). See [`frame_runtime.md`](../frame_runtime.md)
-"Naming the save/load methods" and [RFC-0012](../rfcs/rfc-0012.md)
-for the design.
-
----
-
 ## Persist quiescent contract — E700
 
 Erlang's quiescent contract is **implicit**, enforced by

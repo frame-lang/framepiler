@@ -17,9 +17,7 @@ They complement (rather than replace):
 > operations under `operations:` — one tagged `@@[save]` (returns
 > the serialized blob), one tagged `@@[load]` (instance method
 > populating self). Bare `@@[persist]` is rejected with **E814**.
-> An optional third attribute `@@[on_load]` marks an operation
-> that fires automatically after `restore_state` completes (for
-> re-establishing derived state). See
+> See
 > [frame_runtime.md "Naming the save/load methods"](../frame_runtime.md)
 > and [RFC-0012](../rfcs/rfc-0012.md) for the design.
 
