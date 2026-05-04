@@ -322,6 +322,14 @@ fn erlang_op_name(name: &str) -> String {
     match chars.next() {
         None => String::new(),
         Some(c) if c.is_ascii_uppercase() => c.to_ascii_lowercase().to_string() + chars.as_str(),
+        // Frame allows `_<name>` for "private/internal" actions and
+        // operations (a Python/JS convention). Erlang's bare-atom
+        // grammar rejects identifiers that begin with `_` — those
+        // are reserved for ignored bindings. Quote the atom so the
+        // user's name is preserved verbatim. Both the function
+        // declaration and call sites route through this helper, so
+        // the quoted form propagates uniformly.
+        Some('_') => format!("'{}'", name),
         Some(_) => name.to_string(),
     }
 }
@@ -5000,7 +5008,66 @@ pub(crate) fn generate_erlang_system(
                     }
                 };
 
-                if last_is_value && processed.len() > 0 {
+                // Detect a multi-line trailing `case ... of … end` or
+                // `if ... -> … end` block as the action's return
+                // value. Without this, an action whose body is a
+                // multi-line case-as-value lowers to `{Data, ok}`,
+                // dropping the user's intended return.
+                let trailing_block_start: Option<usize> = if matches!(
+                    last_line.as_str(),
+                    "end" | "end," | "end."
+                ) {
+                    let mut depth = 1i32;
+                    let mut start: Option<usize> = None;
+                    for i in (0..processed.len() - 1).rev() {
+                        let lt = processed[i].trim();
+                        if lt == "end" || lt == "end," || lt == "end." {
+                            depth += 1;
+                        } else if (lt.starts_with("case ") || lt.starts_with("case("))
+                            && (lt.ends_with(" of") || lt.ends_with(" of,"))
+                        {
+                            depth -= 1;
+                            if depth == 0 {
+                                start = Some(i);
+                                break;
+                            }
+                        } else if lt.starts_with("if ") && lt.ends_with(" ->") {
+                            depth -= 1;
+                            if depth == 0 {
+                                start = Some(i);
+                                break;
+                            }
+                        }
+                    }
+                    start
+                } else {
+                    None
+                };
+
+                if let Some(block_start) = trailing_block_start {
+                    // Emit pre-block lines (if any), bind the block to
+                    // a fresh result var, return `{Data, var}`.
+                    if block_start > 0 {
+                        erlang_smart_join(&processed[..block_start], &mut code);
+                        code.push_str(",\n");
+                    }
+                    code.push_str("    __ActionRetVal__ = ");
+                    let block_lines = &processed[block_start..];
+                    // The block's own internal `,` separators between
+                    // arms are case-statement structural; smart_join
+                    // already handles them correctly.
+                    let mut block_buf = String::new();
+                    erlang_smart_join(block_lines, &mut block_buf);
+                    // Strip the leading "    " from the first line —
+                    // the binding adds its own indent.
+                    let block_buf = block_buf.trim_start_matches(' ').to_string();
+                    code.push_str(&block_buf);
+                    code.push_str(",\n");
+                    code.push_str(&format!(
+                        "    {{{}, __ActionRetVal__}}",
+                        final_data
+                    ));
+                } else if last_is_value && processed.len() > 0 {
                     // Last expression is the return value — emit body up to last line,
                     // then return {FinalData, LastExpr}
                     let body_lines = &processed[..processed.len() - 1];
@@ -5661,6 +5728,58 @@ pub(crate) fn generate_erlang_system(
                 ));
             }
             cursor = p;
+        }
+        out.push_str(&code[cursor..]);
+        code = out;
+    }
+
+    // Underscore-prefixed action / operation names must be quoted in
+    // Erlang because `_<name>` is reserved for ignored bindings, not
+    // a bare-atom function name. The function declaration is already
+    // emitted via `erlang_op_name` (which quotes), but call sites in
+    // user passthrough text (`_inc(Data, ...)` written in handler or
+    // operation bodies) preserve the unquoted form. Walk the emitted
+    // text once and rewrite each occurrence of `<name>(` to
+    // `'<name>'(` for every user action/op that starts with `_`.
+    let mut underscore_names: Vec<String> = Vec::new();
+    for action in &system.actions {
+        if action.name.starts_with('_') {
+            underscore_names.push(action.name.clone());
+        }
+    }
+    for op in &system.operations {
+        if op.name.starts_with('_') {
+            underscore_names.push(op.name.clone());
+        }
+    }
+    for name in &underscore_names {
+        let needle = format!("{}(", name);
+        let replacement = format!("'{}'(", name);
+        // Word-boundary check: previous char must not be alphanumeric
+        // or `_`, and must not be a single quote (already-quoted
+        // form). Stops bogus matches like `Data#data._inc(` or
+        // `'_inc(` (already quoted).
+        let mut out = String::with_capacity(code.len());
+        let mut cursor = 0;
+        while cursor < code.len() {
+            let rel = match code[cursor..].find(&needle) {
+                Some(r) => r,
+                None => break,
+            };
+            let abs = cursor + rel;
+            let prev_ok = if abs == 0 {
+                true
+            } else {
+                let prev = code.as_bytes()[abs - 1];
+                !(prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'\'')
+            };
+            out.push_str(&code[cursor..abs]);
+            if prev_ok {
+                out.push_str(&replacement);
+            } else {
+                out.push_str(&needle);
+            }
+            cursor = abs + needle.len();
         }
         out.push_str(&code[cursor..]);
         code = out;
