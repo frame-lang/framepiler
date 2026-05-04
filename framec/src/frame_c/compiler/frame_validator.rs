@@ -705,6 +705,10 @@ impl FrameValidator {
         // E800/E801/E802: RFC-0013 attribute validation on
         // per-item `@@[name(args?)]` attachments.
         self.validate_attributes(system);
+
+        // E815/E817/E818: RFC-0015 lifecycle attributes
+        // (`@@[create]`, `@@[save]`, `@@[load]`) at system level.
+        self.validate_rfc0015_lifecycle_attrs(system);
     }
 
     /// Validate `@@[name(args?)]` attributes attached to interface
@@ -782,6 +786,24 @@ impl FrameValidator {
                         "E801",
                         format!(
                             "@@[persist] is only valid at module scope on a @@system declaration; not on {}.",
+                            position
+                        ),
+                    )
+                    .with_span(a.span.clone()),
+                ),
+                // RFC-0015: `@@[create]` is system-level only. There is
+                // no operation-attribute form for create — user code
+                // never lives in the factory body. If `@@[create]`
+                // appears on an interface method, handler, domain
+                // field, or operation, reject with E815 and point to
+                // the system-level form.
+                "create" => errs.push(
+                    ValidationError::new(
+                        "E815",
+                        format!(
+                            "@@[create] is a system-level attribute only; not valid on {}. \
+                             Place it above the @@system declaration as @@[create] or \
+                             @@[create(name)].",
                             position
                         ),
                     )
@@ -1118,6 +1140,102 @@ impl FrameValidator {
                     );
                 }
             }
+        }
+    }
+
+    /// RFC-0015 system-level lifecycle attributes:
+    ///   `@@[create(<name>?)]`, `@@[save(<name>?)]`, `@@[load(<name>?)]`
+    ///
+    /// - **E817**: name argument, when present, must be a valid identifier
+    ///   (alphanumeric + underscore, starting with letter or underscore).
+    ///   This rule also catches multi-argument forms like `@@[create(a, b)]`
+    ///   because the parsed arg fails the identifier shape.
+    /// - **E818**: at most one of each lifecycle attribute per system.
+    ///   `@@[create(a)]` followed by `@@[create(b)]` on the same system is
+    ///   ambiguous and rejected.
+    fn validate_rfc0015_lifecycle_attrs(&mut self, system: &SystemAst) {
+        fn is_valid_identifier(s: &str) -> bool {
+            if s.is_empty() {
+                return false;
+            }
+            let mut chars = s.chars();
+            let first = chars.next().unwrap();
+            if !(first.is_ascii_alphabetic() || first == '_') {
+                return false;
+            }
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+
+        let mut create_count = 0;
+        let mut save_count = 0;
+        let mut load_count = 0;
+
+        for attr in &system.attributes {
+            let name = attr.name.as_str();
+            if !matches!(name, "create" | "save" | "load") {
+                continue;
+            }
+
+            match name {
+                "create" => create_count += 1,
+                "save" => save_count += 1,
+                "load" => load_count += 1,
+                _ => unreachable!(),
+            }
+
+            // E817: argument shape — must be a valid host identifier.
+            if let Some(arg) = &attr.args {
+                let trimmed = arg.trim();
+                if !is_valid_identifier(trimmed) {
+                    self.errors.push(
+                        ValidationError::new(
+                            "E817",
+                            format!(
+                                "@@[{}({})] argument must be a single valid \
+                                 identifier (alphanumeric + underscore, starting \
+                                 with letter or underscore). Multi-argument forms \
+                                 like @@[{}(a, b)] are not supported — RFC-0015 \
+                                 lifecycle attributes take exactly one optional \
+                                 name argument.",
+                                name, arg, name
+                            ),
+                        )
+                        .with_span(attr.span.clone()),
+                    );
+                }
+            }
+        }
+
+        // E818: at most one of each.
+        if create_count > 1 {
+            self.errors.push(ValidationError::new(
+                "E818",
+                format!(
+                    "System '{}' declares {} @@[create] attributes; at most one is \
+                     allowed per system.",
+                    system.name, create_count
+                ),
+            ));
+        }
+        if save_count > 1 {
+            self.errors.push(ValidationError::new(
+                "E818",
+                format!(
+                    "System '{}' declares {} @@[save] attributes; at most one is \
+                     allowed per system.",
+                    system.name, save_count
+                ),
+            ));
+        }
+        if load_count > 1 {
+            self.errors.push(ValidationError::new(
+                "E818",
+                format!(
+                    "System '{}' declares {} @@[load] attributes; at most one is \
+                     allowed per system.",
+                    system.name, load_count
+                ),
+            ));
         }
     }
 

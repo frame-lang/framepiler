@@ -217,9 +217,13 @@ pub fn compile_ast_based(
     // system.
     let mut system_asts: Vec<crate::frame_c::compiler::frame_ast::SystemAst> = Vec::new();
     let mut pending_main_attr_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
-    let mut pending_create_attr: Option<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = None;
-    let mut pending_save_attr: Option<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = None;
-    let mut pending_load_attr: Option<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = None;
+    // Vec (not Option) so multiple occurrences of the same lifecycle
+    // pragma — `@@[create(a)]` followed by `@@[create(b)]` — all
+    // arrive at the validator and trigger E818 (at most one per
+    // system). Option-based capture would silently coalesce.
+    let mut pending_create_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = Vec::new();
+    let mut pending_save_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = Vec::new();
+    let mut pending_load_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = Vec::new();
     // Strip `(arg)` wrapper from the captured pragma value.
     // Returns None for absent / empty / whitespace-only args.
     fn strip_paren_arg(value: &Option<String>) -> Option<String> {
@@ -246,7 +250,7 @@ pub fn compile_ast_based(
             value,
         } = segment
         {
-            pending_create_attr = Some((
+            pending_create_attrs.push((
                 strip_paren_arg(value),
                 crate::frame_c::compiler::frame_ast::Span::new(span.start, span.end),
             ));
@@ -258,7 +262,7 @@ pub fn compile_ast_based(
             value,
         } = segment
         {
-            pending_save_attr = Some((
+            pending_save_attrs.push((
                 strip_paren_arg(value),
                 crate::frame_c::compiler::frame_ast::Span::new(span.start, span.end),
             ));
@@ -270,7 +274,7 @@ pub fn compile_ast_based(
             value,
         } = segment
         {
-            pending_load_attr = Some((
+            pending_load_attrs.push((
                 strip_paren_arg(value),
                 crate::frame_c::compiler::frame_ast::Span::new(span.start, span.end),
             ));
@@ -397,12 +401,12 @@ pub fn compile_ast_based(
             }
 
             // RFC-0015: attach pending lifecycle attributes (`@@[create]`,
-            // `@@[save]`, `@@[load]`) to this system. Each holds the
-            // user-supplied factory/save/load name (or None for
-            // per-backend default). Currently parsed-only — downstream
-            // consumers (validator, codegen) land in subsequent
-            // commits.
-            if let Some((arg, span)) = pending_create_attr.take() {
+            // `@@[save]`, `@@[load]`) to this system. All occurrences
+            // are attached so the validator (E818) can detect
+            // duplicates. The buffers drain to empty after
+            // attachment so a stray pragma followed by native
+            // code-then-system can't bleed onto a later system.
+            for (arg, span) in pending_create_attrs.drain(..) {
                 system_ast
                     .attributes
                     .push(crate::frame_c::compiler::frame_ast::Attribute {
@@ -411,7 +415,7 @@ pub fn compile_ast_based(
                         span,
                     });
             }
-            if let Some((arg, span)) = pending_save_attr.take() {
+            for (arg, span) in pending_save_attrs.drain(..) {
                 system_ast
                     .attributes
                     .push(crate::frame_c::compiler::frame_ast::Attribute {
@@ -420,7 +424,7 @@ pub fn compile_ast_based(
                         span,
                     });
             }
-            if let Some((arg, span)) = pending_load_attr.take() {
+            for (arg, span) in pending_load_attrs.drain(..) {
                 system_ast
                     .attributes
                     .push(crate::frame_c::compiler::frame_ast::Attribute {
