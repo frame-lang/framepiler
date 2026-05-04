@@ -253,9 +253,31 @@ pub fn generate_system_shared(
                     ),
                 ));
             }
+            TargetLanguage::Java | TargetLanguage::CSharp => {
+                methods.push(generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!(
+                        "return new {}({});",
+                        system.name,
+                        params_arg_list(system)
+                    ),
+                ));
+            }
+            TargetLanguage::Kotlin | TargetLanguage::Swift => {
+                methods.push(generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!(
+                        "return {}({})",
+                        system.name,
+                        params_arg_list(system)
+                    ),
+                ));
+            }
             _ => {
-                // Other backends (Rust, Java, C#, Kotlin, Swift, C, C++,
-                // Go, Erlang): follow in subsequent phases.
+                // Other backends (Rust, C, C++, Go, Erlang):
+                // follow in subsequent phases.
             }
         }
     }
