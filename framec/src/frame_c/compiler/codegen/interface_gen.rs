@@ -1314,50 +1314,6 @@ pub(crate) fn extract_body_content(
     }
 }
 
-/// Generate the post-restore call to the user's `@@[on_load]` op,
-/// to be appended to the framework-managed restore body. Returns
-/// the empty string when no on_load op is declared.
-///
-/// RFC-0012 amendment Phase D: the `@@[on_load]` hook fires after
-/// `restore_state` has populated self, giving user code a chance
-/// to re-establish derived state, fire watchers, validate
-/// invariants, etc.
-///
-/// `target` is the receiver expression in the surrounding restore
-/// body (`self`, `this`, `instance`, `s`, etc.).
-pub(crate) fn on_load_call(system: &SystemAst, lang: TargetLanguage, target: &str) -> String {
-    let Some(name) = system.on_load_op_name() else {
-        return String::new();
-    };
-    match lang {
-        TargetLanguage::Python3 => format!("\n{}.{}()", target, name),
-        TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
-            format!("\n{}.{}();", target, name)
-        }
-        TargetLanguage::Ruby => format!("\n{}.{}", target, name),
-        TargetLanguage::Lua => format!("\n{}:{}()", target, name),
-        TargetLanguage::Php => format!("\n{}->{}();", target, name),
-        TargetLanguage::Dart => format!("\n{}.{}();", target, name),
-        TargetLanguage::Java | TargetLanguage::Kotlin => {
-            format!("\n{}.{}();", target, name)
-        }
-        TargetLanguage::CSharp => format!("\n{}.{}();", target, name),
-        TargetLanguage::Swift => format!("\n{}.{}()", target, name),
-        TargetLanguage::Cpp => format!("\n{}.{}();", target, name),
-        TargetLanguage::C => format!("\n{}_{}({});", system.name, name, target),
-        TargetLanguage::Go => format!("\n{}.{}()", target, name),
-        TargetLanguage::GDScript => format!("\n{}.{}()", target, name),
-        TargetLanguage::Rust => format!("\n{}.{}();", target, name),
-        TargetLanguage::Erlang => String::new(), // emitted directly in
-        // erlang_system.rs's load_state body (after sys:replace_state
-        // and before `{ok, Pid}` return). The shared on_load_call
-        // helper isn't used because Erlang's op-call shape is
-        // module-qualified `<module>:<name>(Pid)` rather than the
-        // method-call shape used by every other backend.
-        _ => String::new(),                      // graphviz, smcat — no persist
-    }
-}
-
 /// Extract the child @@System() name from a domain field's initializer text.
 /// Returns Some("Counter") for `@@Counter()`, `@@Counter(args)`, etc.
 /// Returns None for any non-tagged-system initializer (primitives, native
@@ -1542,7 +1498,6 @@ pub(crate) fn generate_persistence_methods(
                     "import pickle\n_loaded = pickle.loads({})\nself.__dict__.update(_loaded.__dict__)",
                     load_param_name
                 );
-                body_code.push_str(&on_load_call(system, syntax.language, "self"));
                 methods.push(CodegenNode::Method {
                     name: load_method_name.clone(),
                     params: vec![Param::new(&load_param_name).with_type("bytes")],
@@ -1784,9 +1739,6 @@ pub(crate) fn generate_persistence_methods(
                     true,
                 )
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: load_params,
@@ -2361,9 +2313,6 @@ pub(crate) fn generate_persistence_methods(
                 // Static factory: returns Sys*.
                 (Some(format!("{}*", system.name)), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("const char*")],
@@ -2806,9 +2755,6 @@ pub(crate) fn generate_persistence_methods(
             } else {
                 (Some(sys.clone()), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("const std::string&")],
@@ -3123,9 +3069,6 @@ pub(crate) fn generate_persistence_methods(
             } else {
                 (Some(sys.clone()), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("String")],
@@ -3524,9 +3467,6 @@ pub(crate) fn generate_persistence_methods(
             } else {
                 (Some(sys.clone()), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("string")],
@@ -3726,10 +3666,6 @@ pub(crate) fn generate_persistence_methods(
             if !uses_new_contract {
                 restore_body.push_str("return $instance;");
             }
-
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name)],
@@ -4012,9 +3948,6 @@ pub(crate) fn generate_persistence_methods(
             } else {
                 (Some(sys.clone()), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("String")],
@@ -4227,9 +4160,6 @@ pub(crate) fn generate_persistence_methods(
             } else {
                 (Some(sys.clone()), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("String")],
@@ -4430,13 +4360,6 @@ pub(crate) fn generate_persistence_methods(
                 restore_body.push_str("instance");
             }
 
-            // RFC-0012 amendment Phase D: append the user's @@[on_load]
-            // hook call. Ruby uses `self` (private method on the
-            // class) under new contract. Legacy path is dead under
-            // E814 — no on_load to fire there.
-            if uses_new_contract {
-                restore_body.push_str(&on_load_call(system, syntax.language, "self"));
-            }
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name)],
@@ -4752,9 +4675,6 @@ pub(crate) fn generate_persistence_methods(
             } else {
                 (Some(format!("*{}", system.name)), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("string")],
@@ -5029,9 +4949,6 @@ pub(crate) fn generate_persistence_methods(
             } else {
                 (Some(system.name.clone()), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("String")],
@@ -5210,9 +5127,6 @@ pub(crate) fn generate_persistence_methods(
             } else {
                 (Some(system.name.clone()), true)
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: vec![Param::new(&load_param_name).with_type("string")],
@@ -5466,9 +5380,6 @@ pub(crate) fn generate_persistence_methods(
                     true,
                 )
             };
-            // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-            // call after the framework-managed restore body completes.
-            restore_body.push_str(&on_load_call(system, syntax.language, target));
             methods.push(CodegenNode::Method {
                 name: load_method_name.clone(),
                 params: load_params,

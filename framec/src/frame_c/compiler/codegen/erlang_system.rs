@@ -5401,19 +5401,6 @@ pub(crate) fn generate_erlang_system(
         code.push_str("    },\n");
         code.push_str("    {ok, Pid} = gen_statem:start_link(?MODULE, [], []),\n");
         code.push_str("    sys:replace_state(Pid, fun(_) -> {State, Data} end),\n");
-        // RFC-0015 D6 / RFC-0012 amendment Phase D: `@@[on_load]`
-        // post-restore hook is **not yet implemented for Erlang.**
-        // Wiring the call site is straightforward
-        // (`<module>:<on_load_name>(Pid)` here would invoke the op
-        // through the two-clause Pid path), but the user's op body
-        // cannot legally mutate state via the cross-target `$.X = ...`
-        // syntax — Erlang's validator rejects state-var access from
-        // operations (E401), and Erlang's ops return op-shape values
-        // rather than gen_statem callback shapes. Adding meaningful
-        // on_load support requires either (a) relaxing E401 for
-        // on_load ops with explicit Erlang-native record-update
-        // semantics, or (b) a self-cast pattern that fires a state
-        // event after restore. Tracked in RFC-0015 follow-ups.
         code.push_str("    {ok, Pid}.\n\n");
 
         // Add save/load to exports under their user-named (or

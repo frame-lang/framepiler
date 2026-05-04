@@ -368,11 +368,11 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
 /// RFC-0015 phase 1.5: factory alias for Rust.
 ///
 /// When `@@[create(<name>)]` is set, emit a public associated
-/// function that delegates to `Self::new`:
+/// function that delegates to `Self::new`. For example, the
+/// rendered Rust looks like
+/// `pub fn make(seed: i32) -> Self { Self::new(seed) }`.
 ///
-///     pub fn <name>(seed: i32) -> Self { Self::new(seed) }
-///
-/// The call site `Counter::<name>(seed)` resolves naturally;
+/// The call site `Counter::make(seed)` resolves naturally;
 /// the existing `Counter::new(seed)` call site is unaffected.
 pub(crate) fn generate_rust_factory_alias(
     system: &SystemAst,
@@ -1881,16 +1881,6 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     // `&str` via deref. If the declared type is something exotic,
     // codegen still emits `&data` and the user's type must implement
     // Deref<Target=str>.
-    //
-    // RFC-0012 amendment Phase D: append the user's @@[on_load] hook
-    // call. Under new contract `self` is the populated instance.
-    if uses_new_contract {
-        restore_body.push_str(&super::interface_gen::on_load_call(
-            system,
-            crate::frame_c::visitors::TargetLanguage::Rust,
-            "self",
-        ));
-    }
     methods.push(CodegenNode::Method {
         name: load_method_name.clone(),
         params: vec![Param::new(&load_param_name).with_type(&load_param_type)],
