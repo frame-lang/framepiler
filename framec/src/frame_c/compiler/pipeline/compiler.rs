@@ -209,13 +209,25 @@ pub fn compile_ast_based(
 
     // Pass 1: Parse all systems into ASTs.
     //
-    // Walk segments in source order so module-level `@@[main]`
-    // pragmas (RFC-0014) attach to the *next* `@@system` declaration
-    // they precede. The flag resets after attachment so a stray
-    // `@@[main]` followed by native code-then-system doesn't bleed
-    // into a later system.
+    // Walk segments in source order so module-level lifecycle pragmas
+    // (RFC-0014 `@@[main]` and RFC-0015 `@@[create]` / `@@[save]` /
+    // `@@[load]`) attach to the *next* `@@system` declaration they
+    // precede. The buffers reset after attachment so a stray pragma
+    // followed by native code-then-system doesn't bleed into a later
+    // system.
     let mut system_asts: Vec<crate::frame_c::compiler::frame_ast::SystemAst> = Vec::new();
     let mut pending_main_attr_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
+    let mut pending_create_attr: Option<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = None;
+    let mut pending_save_attr: Option<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = None;
+    let mut pending_load_attr: Option<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = None;
+    // Strip `(arg)` wrapper from the captured pragma value.
+    // Returns None for absent / empty / whitespace-only args.
+    fn strip_paren_arg(value: &Option<String>) -> Option<String> {
+        let raw = value.as_deref()?;
+        let trimmed = raw.trim();
+        let inner = trimmed.strip_prefix('(')?.strip_suffix(')')?.trim();
+        if inner.is_empty() { None } else { Some(inner.to_string()) }
+    }
     for segment in &source_map.segments {
         if let Segment::Pragma {
             kind: crate::frame_c::compiler::segmenter::PragmaKind::Main,
@@ -225,6 +237,42 @@ pub fn compile_ast_based(
         {
             pending_main_attr_span = Some(crate::frame_c::compiler::frame_ast::Span::new(
                 span.start, span.end,
+            ));
+            continue;
+        }
+        if let Segment::Pragma {
+            kind: crate::frame_c::compiler::segmenter::PragmaKind::Create,
+            span,
+            value,
+        } = segment
+        {
+            pending_create_attr = Some((
+                strip_paren_arg(value),
+                crate::frame_c::compiler::frame_ast::Span::new(span.start, span.end),
+            ));
+            continue;
+        }
+        if let Segment::Pragma {
+            kind: crate::frame_c::compiler::segmenter::PragmaKind::Save,
+            span,
+            value,
+        } = segment
+        {
+            pending_save_attr = Some((
+                strip_paren_arg(value),
+                crate::frame_c::compiler::frame_ast::Span::new(span.start, span.end),
+            ));
+            continue;
+        }
+        if let Segment::Pragma {
+            kind: crate::frame_c::compiler::segmenter::PragmaKind::Load,
+            span,
+            value,
+        } = segment
+        {
+            pending_load_attr = Some((
+                strip_paren_arg(value),
+                crate::frame_c::compiler::frame_ast::Span::new(span.start, span.end),
             ));
             continue;
         }
@@ -345,6 +393,40 @@ pub fn compile_ast_based(
                         name: "main".to_string(),
                         args: None,
                         span: main_span,
+                    });
+            }
+
+            // RFC-0015: attach pending lifecycle attributes (`@@[create]`,
+            // `@@[save]`, `@@[load]`) to this system. Each holds the
+            // user-supplied factory/save/load name (or None for
+            // per-backend default). Currently parsed-only — downstream
+            // consumers (validator, codegen) land in subsequent
+            // commits.
+            if let Some((arg, span)) = pending_create_attr.take() {
+                system_ast
+                    .attributes
+                    .push(crate::frame_c::compiler::frame_ast::Attribute {
+                        name: "create".to_string(),
+                        args: arg,
+                        span,
+                    });
+            }
+            if let Some((arg, span)) = pending_save_attr.take() {
+                system_ast
+                    .attributes
+                    .push(crate::frame_c::compiler::frame_ast::Attribute {
+                        name: "save".to_string(),
+                        args: arg,
+                        span,
+                    });
+            }
+            if let Some((arg, span)) = pending_load_attr.take() {
+                system_ast
+                    .attributes
+                    .push(crate::frame_c::compiler::frame_ast::Attribute {
+                        name: "load".to_string(),
+                        args: arg,
+                        span,
                     });
             }
 

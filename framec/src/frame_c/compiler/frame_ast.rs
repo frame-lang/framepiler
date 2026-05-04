@@ -710,6 +710,46 @@ impl SystemAst {
         self.attributes.iter().any(|a| a.name == "main")
     }
 
+    /// RFC-0015: the user-supplied factory name from `@@[create(name)]`,
+    /// or `None` if the attribute is absent or supplied without args.
+    /// `None` means the codegen falls back to its per-backend default
+    /// (locked in RFC-0015 § "D2").
+    pub fn create_op_name(&self) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|a| a.name == "create")
+            .and_then(|a| a.args.as_deref())
+    }
+
+    /// RFC-0015: the user-supplied save op name from `@@[save(name)]`,
+    /// or `None` for the per-backend default. Signature is dictated
+    /// by `@@[persist(<Format>)]` regardless.
+    pub fn save_op_name_rfc0015(&self) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|a| a.name == "save")
+            .and_then(|a| a.args.as_deref())
+    }
+
+    /// RFC-0015: the user-supplied load op name from `@@[load(name)]`,
+    /// or `None` for the per-backend default. Signature is dictated
+    /// by `@@[persist(<Format>)]` regardless.
+    pub fn load_op_name_rfc0015(&self) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|a| a.name == "load")
+            .and_then(|a| a.args.as_deref())
+    }
+
+    /// True iff this system carries any RFC-0015 lifecycle attribute.
+    /// Used by codegen during the rollout to detect the new contract
+    /// without scanning the full attributes list each time.
+    pub fn has_rfc0015_lifecycle(&self) -> bool {
+        self.attributes
+            .iter()
+            .any(|a| matches!(a.name.as_str(), "create" | "save" | "load"))
+    }
+
     /// Get the start state of the machine (first state defined)
     pub fn start_state(&self) -> Option<&StateAst> {
         self.machine.as_ref()?.states.first()
@@ -921,6 +961,58 @@ mod tests {
         assert_eq!(system.name, "TrafficLight");
         assert!(system.find_state("Red").is_some());
         assert!(system.find_state("Green").is_none());
+    }
+
+    #[test]
+    fn test_rfc0015_lifecycle_helpers_absent() {
+        // System with no RFC-0015 attributes — all helpers return None
+        // and has_rfc0015_lifecycle() is false.
+        let system = SystemAst::new("Foo".to_string(), Span::new(0, 10));
+        assert_eq!(system.create_op_name(), None);
+        assert_eq!(system.save_op_name_rfc0015(), None);
+        assert_eq!(system.load_op_name_rfc0015(), None);
+        assert!(!system.has_rfc0015_lifecycle());
+    }
+
+    #[test]
+    fn test_rfc0015_lifecycle_helpers_present() {
+        // System with all three RFC-0015 attributes — each helper
+        // surfaces the user-supplied name.
+        let mut system = SystemAst::new("Inner".to_string(), Span::new(0, 10));
+        system.attributes.push(Attribute {
+            name: "create".to_string(),
+            args: Some("make".to_string()),
+            span: Span::new(0, 0),
+        });
+        system.attributes.push(Attribute {
+            name: "save".to_string(),
+            args: Some("pickle".to_string()),
+            span: Span::new(0, 0),
+        });
+        system.attributes.push(Attribute {
+            name: "load".to_string(),
+            args: Some("unpickle".to_string()),
+            span: Span::new(0, 0),
+        });
+        assert_eq!(system.create_op_name(), Some("make"));
+        assert_eq!(system.save_op_name_rfc0015(), Some("pickle"));
+        assert_eq!(system.load_op_name_rfc0015(), Some("unpickle"));
+        assert!(system.has_rfc0015_lifecycle());
+    }
+
+    #[test]
+    fn test_rfc0015_lifecycle_no_arg_form() {
+        // Bare `@@[create]` with no argument — args is None even
+        // though has_rfc0015_lifecycle() reports true. Codegen falls
+        // back to the per-backend default name (RFC-0015 § "D2").
+        let mut system = SystemAst::new("Trivial".to_string(), Span::new(0, 10));
+        system.attributes.push(Attribute {
+            name: "create".to_string(),
+            args: None,
+            span: Span::new(0, 0),
+        });
+        assert_eq!(system.create_op_name(), None);
+        assert!(system.has_rfc0015_lifecycle());
     }
 
     #[test]
