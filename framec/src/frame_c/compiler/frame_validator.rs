@@ -990,18 +990,30 @@ impl FrameValidator {
         for op in &system.operations {
             for a in &op.attributes {
                 if a.name == "save" || a.name == "load" {
-                    if system.persist_attr.is_none() {
-                        errs.push(
-                            ValidationError::new(
-                                "E801",
-                                format!(
-                                    "@@[{}] on operation '{}' requires the system to have @@[persist].",
-                                    a.name, op.name
-                                ),
-                            )
-                            .with_span(a.span.clone()),
-                        );
-                    }
+                    // E819: RFC-0015 hard-cut. The operation-attribute
+                    // form is replaced by system-level
+                    // `@@[save(<name>)]` / `@@[load(<name>)]`. The
+                    // codemod at scripts/migrate_rfc0015.py converts
+                    // the old shape mechanically.
+                    errs.push(
+                        ValidationError::new(
+                            "E819",
+                            format!(
+                                "@@[{0}] on operation '{1}' is no longer accepted (RFC-0015 \
+                                 hard-cut). Use the system-level form instead:\n\
+                                 \x20   @@[persist(<type>)]\n\
+                                 \x20   @@[save(<name>)]\n\
+                                 \x20   @@[load(<name>)]\n\
+                                 \x20   @@system {2} {{ … }}\n\
+                                 The codemod at scripts/migrate_rfc0015.py rewrites old \
+                                 fixtures automatically.",
+                                a.name, op.name, system.name
+                            ),
+                        )
+                        .with_span(a.span.clone()),
+                    );
+                    // Continue counting for E810 so multiple-decl
+                    // diagnostics still surface alongside E819.
                     if a.name == "save" {
                         save_count += 1;
                         if first_save_span.is_none() {
