@@ -58,7 +58,13 @@ RE_PERSIST_BARE = re.compile(r"@@\[persist\](?!\s*\()")
 RE_PERSIST_WITH_ARG = re.compile(r"@@\[persist\(([^)]+)\)\]")
 RE_SAVE_AT_SYSTEM = re.compile(r"@@\[save\s*\(\s*\w+\s*\)\]")
 RE_LOAD_AT_SYSTEM = re.compile(r"@@\[load\s*\(\s*\w+\s*\)\]")
-RE_SYSTEM_HEADER = re.compile(r"^(\s*)(@@system\s+\w+\s*\{)", re.MULTILINE)
+# Allow an optional visibility modifier (`private`, `public`,
+# `internal`) between `@@system` and the system name — Java fixtures
+# use `@@system private L5 {` to keep nested classes file-local.
+RE_SYSTEM_HEADER = re.compile(
+    r"^(\s*)(@@system\s+(?:private\s+|public\s+|internal\s+)?\w+\s*\{)",
+    re.MULTILINE,
+)
 
 
 def find_block(text, start_idx):
@@ -219,13 +225,13 @@ def migrate(text):
 
         system_body = text[brace_idx + 1:body_close]
 
-        # Decide whether this system needs migration.
-        has_persist = bool(RE_PERSIST_BARE.search(attr_block) or RE_PERSIST_WITH_ARG.search(attr_block))
-        if not has_persist:
-            out_parts.append(text[cursor:body_close + 1])
-            cursor = body_close + 1
-            continue
-
+        # A system needs migration if it has `@@[persist]` (with or
+        # without type arg), OR if it has `@@[save]` / `@@[load]` ops
+        # in its operations block. The latter case covers nested
+        # systems used inside a parent's domain — codegen treats those
+        # ops as lifecycle methods even without an explicit
+        # `@@[persist]` attribute. RFC-0015 promotes them to
+        # system-level attributes which need to be added.
         ops_loc = find_operations_block(system_body)
         if ops_loc is None:
             out_parts.append(text[cursor:body_close + 1])
@@ -236,6 +242,7 @@ def migrate(text):
 
         save_match = extract_op_attribute(ops_body, "save")
         load_match = extract_op_attribute(ops_body, "load")
+        has_persist = bool(RE_PERSIST_BARE.search(attr_block) or RE_PERSIST_WITH_ARG.search(attr_block))
         if save_match is None and load_match is None:
             # Nothing to lift.
             out_parts.append(text[cursor:body_close + 1])
@@ -257,6 +264,19 @@ def migrate(text):
         # Lift persist arg if persist is bare and we have a type.
         if RE_PERSIST_BARE.search(new_attr_block) and type_str:
             new_attr_block = RE_PERSIST_BARE.sub(f"@@[persist({type_str})]", new_attr_block, count=1)
+
+        # If `@@[persist]` is absent but the system has lifecycle ops
+        # (nested-system case), synthesise a `@@[persist(T)]` line at
+        # the top of the attr block. This matches the RFC-0015
+        # contract: every system whose codegen generates save/load
+        # methods declares `@@[persist]` explicitly.
+        if not has_persist and type_str:
+            # Match the indentation of the first existing attribute,
+            # or default to no leading whitespace (most attribute
+            # preludes are flush-left).
+            first_attr = re.search(r"^([ \t]*)@@\[", new_attr_block, re.MULTILINE)
+            indent = first_attr.group(1) if first_attr else ""
+            new_attr_block = f"{indent}@@[persist({type_str})]\n" + new_attr_block
 
         # Insert @@[save(<name>)] and @@[load(<name>)] lines if not
         # already present.
