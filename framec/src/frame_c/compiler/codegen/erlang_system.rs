@@ -3078,6 +3078,15 @@ pub(crate) fn generate_erlang_system(
     // Exports — API functions
     let mut api_exports = Vec::new();
     api_exports.push(format!("start_link/{}", sys_param_arity));
+    // RFC-0015 phase 1.9: `@@[create(<name>)]` adds a renamed
+    // factory that delegates to `start_link/N` with the same arity.
+    if let Some(factory_name) = system.create_op_name() {
+        api_exports.push(format!(
+            "{}/{}",
+            to_snake_case(factory_name),
+            sys_param_arity
+        ));
+    }
     for method in &system.interface {
         let arity = method.params.len() + 1; // +1 for Pid
         api_exports.push(format!("{}/{}", to_snake_case(&method.name), arity));
@@ -3201,6 +3210,20 @@ pub(crate) fn generate_erlang_system(
         "start_link({}) ->\n    gen_statem:start_link(?MODULE, {}, []).\n\n",
         start_link_args, start_link_list
     ));
+
+    // RFC-0015 phase 1.9: factory rename — emit `<name>(Args) ->
+    // start_link(Args).` if `@@[create(<name>)]` is set. The
+    // delegation preserves the conventional `{ok, Pid}` return
+    // shape; cross-system call sites that unwrap via `element(2,
+    // ...)` continue to work transparently.
+    if let Some(factory_name) = system.create_op_name() {
+        code.push_str(&format!(
+            "{}({}) ->\n    start_link({}).\n\n",
+            to_snake_case(factory_name),
+            start_link_args,
+            sys_param_vars.join(", ")
+        ));
+    }
 
     // Interface functions — public API
     for method in &system.interface {
