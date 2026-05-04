@@ -189,13 +189,20 @@ pub fn generate_system_shared(
     methods.push(generate_constructor(system, &syntax));
 
     // RFC-0015 phase 1.1d: `@@[create(<name>)]` factory rename.
-    // For Python (canary), emit a `@classmethod` alias that
-    // delegates to `__init__`. Other backends will follow with
-    // their idiomatic factory shape (static method, free function,
-    // factory ctor, etc.) in subsequent phases.
+    // Each backend renders the factory in its idiomatic shape:
+    // Python uses a `@classmethod`; JS/TS use `static` methods;
+    // other backends will follow in subsequent phases.
     if let Some(factory_name) = system.create_op_name() {
-        if matches!(lang, TargetLanguage::Python3) {
-            methods.push(generate_python_factory_alias(system, factory_name));
+        match lang {
+            TargetLanguage::Python3 => {
+                methods.push(generate_python_factory_alias(system, factory_name));
+            }
+            TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
+                methods.push(generate_js_static_factory_alias(system, factory_name));
+            }
+            _ => {
+                // Other backends: follow in subsequent phases.
+            }
         }
     }
 
@@ -2307,6 +2314,47 @@ fn generate_python_factory_alias(system: &SystemAst, factory_name: &str) -> Code
         is_static: false,
         visibility: Visibility::Public,
         decorators: vec!["classmethod".to_string()],
+    }
+}
+
+/// RFC-0015 phase 1.1d: factory alias for JS / TS.
+///
+/// When `@@[create(<name>)]` is set on a system, emit a `static`
+/// method named `<name>` that delegates to the constructor via
+/// `new ClassName(...)`. The signature mirrors the constructor.
+/// The existing `new ClassName(seed)` call site is unaffected;
+/// the rename is additive.
+fn generate_js_static_factory_alias(system: &SystemAst, factory_name: &str) -> CodegenNode {
+    let params: Vec<Param> = system
+        .params
+        .iter()
+        .map(|p| {
+            let type_str = type_to_string(&p.param_type);
+            Param::new(&p.name).with_type(&type_str)
+        })
+        .collect();
+
+    let arg_list = system
+        .params
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let body = vec![CodegenNode::NativeBlock {
+        code: format!("return new {}({});", system.name, arg_list),
+        span: None,
+    }];
+
+    CodegenNode::Method {
+        name: factory_name.to_string(),
+        params,
+        return_type: Some(system.name.clone()),
+        body,
+        is_async: false,
+        is_static: true,
+        visibility: Visibility::Public,
+        decorators: vec![],
     }
 }
 
