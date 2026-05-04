@@ -47,6 +47,14 @@ pub fn generate_rust_system(system: &SystemAst, arcanum: &Arcanum, source: &[u8]
     // Constructor (Rust-specific)
     methods.push(generate_rust_constructor(system));
 
+    // RFC-0015 phase 1.5: `@@[create(<name>)]` factory rename for Rust.
+    // Emits a public associated function that delegates to `Self::new`.
+    // Rendered as `pub fn make(seed: i32) -> Self { Self::new(seed) }`
+    // — call site `Counter::make(seed)`.
+    if let Some(factory_name) = system.create_op_name() {
+        methods.push(generate_rust_factory_alias(system, factory_name));
+    }
+
     // Frame machinery (kernel, router, transition — owned here)
     methods.extend(super::system_codegen::generate_frame_machinery(
         system, &syntax, lang,
@@ -354,6 +362,50 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
         params,
         body,
         super_call: None,
+    }
+}
+
+/// RFC-0015 phase 1.5: factory alias for Rust.
+///
+/// When `@@[create(<name>)]` is set, emit a public associated
+/// function that delegates to `Self::new`:
+///
+///     pub fn <name>(seed: i32) -> Self { Self::new(seed) }
+///
+/// The call site `Counter::<name>(seed)` resolves naturally;
+/// the existing `Counter::new(seed)` call site is unaffected.
+pub(crate) fn generate_rust_factory_alias(
+    system: &SystemAst,
+    factory_name: &str,
+) -> CodegenNode {
+    let params: Vec<Param> = system
+        .params
+        .iter()
+        .map(|p| {
+            let ts = type_to_string(&p.param_type);
+            Param::new(&p.name).with_type(&ts)
+        })
+        .collect();
+
+    let arg_list = system
+        .params
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    CodegenNode::Method {
+        name: factory_name.to_string(),
+        params,
+        return_type: Some("Self".to_string()),
+        body: vec![CodegenNode::NativeBlock {
+            code: format!("Self::new({})", arg_list),
+            span: None,
+        }],
+        is_async: false,
+        is_static: true,
+        visibility: Visibility::Public,
+        decorators: vec![],
     }
 }
 
