@@ -1865,11 +1865,16 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     let (load_return, load_static, load_param_type) = if uses_new_contract {
         // Instance method: takes &mut self implicitly via Method node
         // (is_static=false), no return. Honor the user-declared param
-        // type (e.g. `String`); fall back to `&str` if not declared.
+        // type (e.g. `String`); default to `String` when the user hasn't
+        // declared one (RFC-0015 system-level `@@[save(name)]/@@[load(name)]`
+        // has no operation declaration to read a type from). `String`
+        // matches the symmetric save_state's return type, so user code
+        // can pass the save() result back into load() without
+        // adding `.as_str()` at every call site.
         let t = user_load_type
             .as_deref()
             .map(str::to_string)
-            .unwrap_or_else(|| "&str".to_string());
+            .unwrap_or_else(|| "String".to_string());
         (None, false, t)
     } else {
         // Static factory: takes only the json param, returns Self.
