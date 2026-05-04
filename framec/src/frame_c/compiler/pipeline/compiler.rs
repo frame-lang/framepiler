@@ -595,6 +595,36 @@ pub fn compile_ast_based(
         crate::frame_c::compiler::codegen::interface_gen::set_new_contract_systems(new_contract);
     }
 
+    // FRAMEC_BUGS.md Issue #2 hot-fix (pre-RFC-0015): register each
+    // system's Domain-kind params (bare `@@system Inner(seed: int)`
+    // params) so nested-system restore can extract their values from
+    // the child's saved JSON and pass them to the constructor instead
+    // of `Inner.new()` with zero args. RFC-0015 supersedes this with
+    // a uniform factory-only model.
+    {
+        use crate::frame_c::compiler::frame_ast::ParamKind;
+        let mut map: std::collections::HashMap<String, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+        for s in &system_asts {
+            let domain_params: Vec<(String, String)> = s
+                .params
+                .iter()
+                .filter(|p| p.kind == ParamKind::Domain)
+                .map(|p| {
+                    let type_str = match &p.param_type {
+                        crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
+                        _ => String::new(),
+                    };
+                    (p.name.clone(), type_str)
+                })
+                .collect();
+            if !domain_params.is_empty() {
+                map.insert(s.name.clone(), domain_params);
+            }
+        }
+        crate::frame_c::compiler::codegen::interface_gen::set_nested_system_domain_params(map);
+    }
+
     for system_ast in &mut system_asts {
         // Validate with shared arcanum (all sibling systems visible).
         // Validation runs on the *unfiltered* AST so attribute-shape

@@ -1864,10 +1864,17 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
         }
 
         FrameSegmentKind::ReturnCall => {
-            // @@:return(expr) → extract expr
+            // @@:return(expr) → extract expr.
+            //
+            // Strip exactly ONE trailing `)` — the closing paren of
+            // `@@:return(...)`. trim_end_matches(')') is greedy and
+            // would also strip closing parens from a nested call
+            // expression like `@@:return(self.f(1, 2))`, producing
+            // `self.f(1, 2` and breaking codegen.
             let trimmed = text.trim();
             if let Some(rest) = trimmed.strip_prefix("@@:return(") {
-                let expr = rest.trim_end_matches(')').to_string();
+                let inner = rest.trim_end();
+                let expr = inner.strip_suffix(')').unwrap_or(inner).to_string();
                 SegmentMetadata::ReturnCall { expr }
             } else {
                 SegmentMetadata::None

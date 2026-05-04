@@ -7,7 +7,7 @@
 //! - Persistence serialization/deserialization methods
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 thread_local! {
     /// Set of system names that use the RFC-0012 amendment new
@@ -18,6 +18,17 @@ thread_local! {
     /// instance-method load, not the legacy static factory.
     static NEW_CONTRACT_SYSTEMS: RefCell<HashSet<String>> =
         RefCell::new(HashSet::new());
+
+    /// Map of system name → its declared Domain-kind params (the
+    /// bare-form `@@system Inner(seed: int)` params, not state-args
+    /// or enter-args). Each entry is (param_name, type_string).
+    /// Populated alongside NEW_CONTRACT_SYSTEMS so nested-system
+    /// restore emission can extract the saved values from the
+    /// child's saved JSON and pass them to the constructor — fixes
+    /// FRAMEC_BUGS.md Issue #2 (parameterized sub-system zero-arg
+    /// restore crash).
+    static NESTED_SYSTEM_DOMAIN_PARAMS: RefCell<HashMap<String, Vec<(String, String)>>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Set the names of systems using the new persist contract. Called
@@ -26,10 +37,25 @@ pub fn set_new_contract_systems(names: HashSet<String>) {
     NEW_CONTRACT_SYSTEMS.with(|s| *s.borrow_mut() = names);
 }
 
+/// Set the per-system Domain-kind param signatures. Called once per
+/// compilation, before per-system codegen runs. Each (param_name,
+/// type) pair is in declaration order.
+pub fn set_nested_system_domain_params(map: HashMap<String, Vec<(String, String)>>) {
+    NESTED_SYSTEM_DOMAIN_PARAMS.with(|s| *s.borrow_mut() = map);
+}
+
 /// True if a system uses the new persist contract. Used by nested-
 /// system restore emission to pick the right call shape.
 pub fn nested_uses_new_contract(name: &str) -> bool {
     NEW_CONTRACT_SYSTEMS.with(|s| s.borrow().contains(name))
+}
+
+/// Get the Domain-kind params of a nested system by name. Returns an
+/// empty Vec if the system isn't registered or has no Domain params.
+pub fn get_nested_system_domain_params(name: &str) -> Vec<(String, String)> {
+    NESTED_SYSTEM_DOMAIN_PARAMS.with(|s| {
+        s.borrow().get(name).cloned().unwrap_or_default()
+    })
 }
 
 use super::ast::{CodegenNode, Param, Visibility};
@@ -5375,9 +5401,28 @@ pub(crate) fn generate_persistence_methods(
                         var.name
                     ));
                     if nested_uses_new_contract(child_sys) {
+                        // FRAMEC_BUGS.md Issue #2: if Inner has Domain
+                        // params (bare `@@system Inner(seed: int)`),
+                        // extract their saved values from __raw_inner
+                        // and pass to .new(...) so the user's required
+                        // constructor params are satisfied. Without
+                        // this, Inner.new() crashes with
+                        // "Too few arguments for new() call".
+                        let child_params = get_nested_system_domain_params(child_sys);
+                        let new_args = if child_params.is_empty() {
+                            String::new()
+                        } else {
+                            child_params
+                                .iter()
+                                .map(|(pname, _)| {
+                                    format!("__raw_{}.get(\"{}\")", var.name, pname)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        };
                         restore_body.push_str(&format!(
-                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new()\n    {0}.{1}.restore_state(var_to_bytes(__raw_{1}))\nelse:\n    {0}.{1} = null\n",
-                            target, var.name, child_sys
+                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new({3})\n    {0}.{1}.restore_state(var_to_bytes(__raw_{1}))\nelse:\n    {0}.{1} = null\n",
+                            target, var.name, child_sys, new_args
                         ));
                     } else {
                         restore_body.push_str(&format!(
