@@ -264,6 +264,17 @@ pub fn generate_system_shared(
                     ),
                 ));
             }
+            TargetLanguage::Cpp => {
+                methods.push(generate_static_factory_alias(
+                    system,
+                    factory_name,
+                    &format!(
+                        "return {}({});",
+                        system.name,
+                        params_arg_list(system)
+                    ),
+                ));
+            }
             TargetLanguage::Kotlin | TargetLanguage::Swift => {
                 methods.push(generate_static_factory_alias(
                     system,
@@ -276,8 +287,9 @@ pub fn generate_system_shared(
                 ));
             }
             _ => {
-                // Other backends (Rust, C, C++, Go, Erlang):
-                // follow in subsequent phases.
+                // Other backends (C, Go, Erlang): follow in
+                // subsequent phases. Rust uses its own codegen
+                // path in `rust_system.rs` (covered in Phase 1.5).
             }
         }
     }
