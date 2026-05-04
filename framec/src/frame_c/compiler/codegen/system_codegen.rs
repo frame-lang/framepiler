@@ -188,6 +188,17 @@ pub fn generate_system_shared(
     // Constructor (for async systems, skips $> kernel call)
     methods.push(generate_constructor(system, &syntax));
 
+    // RFC-0015 phase 1.1d: `@@[create(<name>)]` factory rename.
+    // For Python (canary), emit a `@classmethod` alias that
+    // delegates to `__init__`. Other backends will follow with
+    // their idiomatic factory shape (static method, free function,
+    // factory ctor, etc.) in subsequent phases.
+    if let Some(factory_name) = system.create_op_name() {
+        if matches!(lang, TargetLanguage::Python3) {
+            methods.push(generate_python_factory_alias(system, factory_name));
+        }
+    }
+
     // Frame machinery (transition, state management)
     methods.extend(generate_frame_machinery(system, &syntax, lang));
 
@@ -2252,6 +2263,50 @@ self._context_stack.pop();"#,
         params,
         body,
         super_call,
+    }
+}
+
+/// RFC-0015 phase 1.1d: factory alias for Python.
+///
+/// When `@@[create(<name>)]` is set on a system, emit a
+/// `@classmethod` named `<name>` that delegates to `__init__` via
+/// `cls(...)`. The signature mirrors the constructor exactly. The
+/// existing `__init__` continues to work for callers who still
+/// write `Inner(seed)`; the rename is additive.
+fn generate_python_factory_alias(system: &SystemAst, factory_name: &str) -> CodegenNode {
+    let params: Vec<Param> = system
+        .params
+        .iter()
+        .map(|p| {
+            let type_str = type_to_string(&p.param_type);
+            Param::new(&p.name).with_type(&type_str)
+        })
+        .collect();
+
+    let arg_list = system
+        .params
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let body = vec![CodegenNode::NativeBlock {
+        code: format!("return cls({})", arg_list),
+        span: None,
+    }];
+
+    // Quote the return type as a string-form forward reference so
+    // the annotation is evaluated lazily — at class-definition time
+    // the class name itself is not yet bound.
+    CodegenNode::Method {
+        name: factory_name.to_string(),
+        params,
+        return_type: Some(format!("'{}'", system.name)),
+        body,
+        is_async: false,
+        is_static: false,
+        visibility: Visibility::Public,
+        decorators: vec!["classmethod".to_string()],
     }
 }
 

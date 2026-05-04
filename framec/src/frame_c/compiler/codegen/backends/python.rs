@@ -139,8 +139,23 @@ impl LanguageBackend for PythonBackend {
                     result.push_str(&format!("{}@staticmethod\n", ctx.get_indent()));
                 }
 
-                // Method signature
-                let params_str = self.emit_params(params, !*is_static);
+                // Method signature.
+                // RFC-0015: `@@[create(name)]` factories render as
+                // `@classmethod` — the decorator string `"classmethod"`
+                // is in `decorators` (emitted above), and the first
+                // parameter is `cls`, not `self`.
+                let is_classmethod = decorators.iter().any(|d| d == "classmethod");
+                let params_str = if is_classmethod {
+                    let mut s = String::from("cls");
+                    let rest = self.emit_params(params, false);
+                    if !rest.is_empty() {
+                        s.push_str(", ");
+                        s.push_str(&rest);
+                    }
+                    s
+                } else {
+                    self.emit_params(params, !*is_static)
+                };
                 let async_prefix = if *is_async { "async " } else { "" };
                 // Convert return type: void -> None, others as-is
                 let return_str = if let Some(rt) = return_type {
