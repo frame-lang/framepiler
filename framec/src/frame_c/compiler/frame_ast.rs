@@ -787,28 +787,51 @@ impl SystemAst {
     // declared via `@@[save]` / `@@[load]` operation attributes.
     // ----------------------------------------------------------------
 
-    /// Name of the user's operation marked `@@[save]`, if any. Returns
-    /// `None` when no operation carries the attribute (legacy contract).
+    /// Name of the save operation, sourced from either:
+    /// - RFC-0012: an operation marked `@@[save]` (op-attribute form), or
+    /// - RFC-0015: the system-level `@@[save(<name>)]` attribute.
+    ///
+    /// Codegen reads through this single accessor to pick up either
+    /// surface form — backends don't need per-form branching.
+    /// Returns `None` when neither form is present (system uses
+    /// per-backend default name).
     pub fn save_op_name(&self) -> Option<&str> {
-        self.operations
+        // RFC-0012 op-attribute form (legacy)
+        if let Some(op) = self
+            .operations
             .iter()
             .find(|op| op.attributes.iter().any(|a| a.name == "save"))
-            .map(|op| op.name.as_str())
+        {
+            return Some(op.name.as_str());
+        }
+        // RFC-0015 system-level form
+        self.save_op_name_rfc0015()
     }
 
-    /// Name of the user's operation marked `@@[load]`, if any. Returns
-    /// `None` when no operation carries the attribute (legacy contract).
+    /// Name of the load operation, sourced from either:
+    /// - RFC-0012: an operation marked `@@[load]` (op-attribute form), or
+    /// - RFC-0015: the system-level `@@[load(<name>)]` attribute.
+    ///
+    /// Codegen reads through this single accessor to pick up either
+    /// surface form — backends don't need per-form branching.
     pub fn load_op_name(&self) -> Option<&str> {
-        self.operations
+        // RFC-0012 op-attribute form (legacy)
+        if let Some(op) = self
+            .operations
             .iter()
             .find(|op| op.attributes.iter().any(|a| a.name == "load"))
-            .map(|op| op.name.as_str())
+        {
+            return Some(op.name.as_str());
+        }
+        // RFC-0015 system-level form
+        self.load_op_name_rfc0015()
     }
 
-    /// True iff the system has `@@[persist]` AND declares at least one
-    /// of `@@[save]` / `@@[load]` operation. Codegen uses this as the
-    /// switch between the legacy static-method persist shape and the
-    /// new instance-method shape per the RFC-0012 amendment.
+    /// True iff the system uses the new persist contract — either via
+    /// RFC-0012 op-attribute form (`@@[save]` / `@@[load]` operations)
+    /// or RFC-0015 system-level form (`@@[save(name)]` / `@@[load(name)]`).
+    /// Codegen uses this to switch between the legacy static-method
+    /// persist shape and the new instance-method shape.
     pub fn uses_new_persist_contract(&self) -> bool {
         self.persist_attr.is_some()
             && (self.save_op_name().is_some() || self.load_op_name().is_some())

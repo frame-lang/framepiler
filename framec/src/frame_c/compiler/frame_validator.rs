@@ -968,7 +968,18 @@ impl FrameValidator {
         // `operations:` section, one tagged `@@[save]` (returns a
         // serialized blob), one tagged `@@[load]` (instance method
         // taking the blob). See docs/rfcs/rfc-0012.md.
-        if system.persist_attr.is_some() && save_count == 0 && load_count == 0 {
+        // RFC-0015: also accept the system-level form
+        // (`@@[save(name)]` / `@@[load(name)]` at module level).
+        let has_rfc0015_save = system.save_op_name_rfc0015().is_some()
+            || system.attributes.iter().any(|a| a.name == "save");
+        let has_rfc0015_load = system.load_op_name_rfc0015().is_some()
+            || system.attributes.iter().any(|a| a.name == "load");
+        if system.persist_attr.is_some()
+            && save_count == 0
+            && load_count == 0
+            && !has_rfc0015_save
+            && !has_rfc0015_load
+        {
             errs.push(
                 ValidationError::new(
                     "E814",
@@ -982,7 +993,8 @@ impl FrameValidator {
                          \x20   restore_state(data: <blob_type>) {{}}\n\
                          The save op returns a serialized blob; the load op is an instance method \
                          that mutates self. See docs/rfcs/rfc-0012.md \"Naming the save/load \
-                         methods\".",
+                         methods\". RFC-0015 also accepts the equivalent system-level form: \
+                         `@@[save(name)]` / `@@[load(name)]` above the `@@system` declaration.",
                         system.name
                     ),
                 )
