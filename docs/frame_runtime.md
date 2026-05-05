@@ -3936,25 +3936,21 @@ existing data structures and serialize them: `save_state()`
 returns a blob, and `restore_state(blob)` rebuilds the system
 from one.
 
-### Naming the save/load methods (RFC-0012 amendment)
+### Naming the save/load methods (RFC-0015)
 
-A `@@[persist]` system must declare two operations under the
-`operations:` section: one tagged `@@[save]` (returns the
-serialized blob) and one tagged `@@[load]` (instance method that
-populates self from a blob). The op names are yours to pick —
-`save_state` / `restore_state`, `pickle` / `unpickle`, `snapshot`
-/ `restore`, whatever fits.
+A persisted system declares three system-level attributes:
+`@@[persist(<blob_type>)]` (the blob type), `@@[save(<name>)]`
+(the save method name), and `@@[load(<name>)]` (the load method
+name). Framec generates the save/load pair on the system class
+— save returns the blob; load is an instance method that mutates
+self. The names are yours to pick — `save_state` / `restore_state`,
+`pickle` / `unpickle`, `snapshot` / `restore`, whatever fits.
 
 ```frame
-@@[persist]
+@@[persist(str)]
+@@[save(snapshot)]
+@@[load(restore)]
 @@system Counter {
-    operations:
-        @@[save]
-        snapshot(): str {}     // body framework-emitted
-
-        @@[load]
-        restore(data: str) {}  // body framework-emitted
-
     interface:
         bump()
 
@@ -3975,12 +3971,15 @@ c2 = Counter()
 c2.restore(data)
 ```
 
-The bare `@@[persist]` form (no `@@[save]` / `@@[load]` ops) is
-rejected with **E814**. The instance-method shape is uniform
-across all 17 backends — the legacy static-factory form had
-target-specific scoping limitations (notably GDScript's
-`class_name` resolution). See RFC-0012 amendment for the full
-rationale.
+Bare `@@[persist]` (no save/load names) is rejected with
+**E814**. The legacy operation-attribute form
+(`operations: @@[save] foo()`) is rejected with **E819** at
+framec 4.1.0+; the codemod at `scripts/migrate_rfc0015.py`
+rewrites old fixtures mechanically. The instance-method shape is
+uniform across all 17 backends — the legacy static-factory form
+had target-specific scoping limitations (notably GDScript's
+`class_name` resolution). See [RFC-0015](rfcs/rfc-0015.md) for
+the full rationale.
 
 ### What gets saved
 

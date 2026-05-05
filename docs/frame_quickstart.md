@@ -210,18 +210,13 @@ Within one call: **don't mix positional and named**. Defaults are substituted at
 
 ## Persistence
 
-A `@@[persist]` system **must** declare two operations under
-`operations:`:
+A persisted system declares three system-level attributes:
 
 ```frame
-@@[persist]
+@@[persist(str)]              # blob type
+@@[save(save_state)]          # save method name
+@@[load(restore_state)]       # load method name
 @@system Foo {
-    operations:
-        @@[save]
-        save_state(): str {}        // returns serialized blob
-
-        @@[load]
-        restore_state(data: str) {} // instance method, mutates self
     ...
 }
 ```
@@ -231,10 +226,12 @@ A `@@[persist]` system **must** declare two operations under
 | `save_state()` | instance | returns the serialized blob |
 | `restore_state(data)` | instance | mutates self from blob |
 
-Bare `@@[persist]` (no `@@[save]` / `@@[load]` ops) is rejected
-with **E814**.
+Bare `@@[persist]` (no save/load names) is rejected with
+**E814**. The legacy `operations: @@[save] foo()` form is
+rejected with **E819** at framec 4.1.0+; the codemod at
+`scripts/migrate_rfc0015.py` rewrites old fixtures.
 
-The op names are yours to pick (`pickle` / `unpickle`, `snapshot`
+The names are yours to pick (`pickle` / `unpickle`, `snapshot`
 / `restore`, etc.). Load is two-step: `s = @@Foo()` then
 `s.restore_state(data)`.
 
