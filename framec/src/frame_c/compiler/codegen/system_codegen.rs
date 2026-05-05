@@ -204,22 +204,14 @@ pub fn generate_system_shared(
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!(
-                        "return {}.new({})",
-                        system.name,
-                        params_arg_list(system)
-                    ),
+                    &format!("return {}.new({})", system.name, params_arg_list(system)),
                 ));
             }
             TargetLanguage::Lua => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!(
-                        "return {}:new({})",
-                        system.name,
-                        params_arg_list(system)
-                    ),
+                    &format!("return {}:new({})", system.name, params_arg_list(system)),
                 ));
             }
             TargetLanguage::Ruby => {
@@ -246,44 +238,28 @@ pub fn generate_system_shared(
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!(
-                        "return {}({});",
-                        system.name,
-                        params_arg_list(system)
-                    ),
+                    &format!("return {}({});", system.name, params_arg_list(system)),
                 ));
             }
             TargetLanguage::Java | TargetLanguage::CSharp => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!(
-                        "return new {}({});",
-                        system.name,
-                        params_arg_list(system)
-                    ),
+                    &format!("return new {}({});", system.name, params_arg_list(system)),
                 ));
             }
             TargetLanguage::Cpp => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!(
-                        "return {}({});",
-                        system.name,
-                        params_arg_list(system)
-                    ),
+                    &format!("return {}({});", system.name, params_arg_list(system)),
                 ));
             }
             TargetLanguage::Kotlin | TargetLanguage::Swift => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!(
-                        "return {}({})",
-                        system.name,
-                        params_arg_list(system)
-                    ),
+                    &format!("return {}({})", system.name, params_arg_list(system)),
                 ));
             }
             TargetLanguage::C => {
@@ -296,11 +272,7 @@ pub fn generate_system_shared(
                 let mut method = generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!(
-                        "return {}_new({});",
-                        system.name,
-                        params_arg_list(system)
-                    ),
+                    &format!("return {}_new({});", system.name, params_arg_list(system)),
                 );
                 if let CodegenNode::Method {
                     ref mut return_type,
@@ -320,11 +292,7 @@ pub fn generate_system_shared(
                 let mut method = generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!(
-                        "return New{}({})",
-                        system.name,
-                        params_arg_list(system)
-                    ),
+                    &format!("return New{}({})", system.name, params_arg_list(system)),
                 );
                 if let CodegenNode::Method {
                     ref mut return_type,

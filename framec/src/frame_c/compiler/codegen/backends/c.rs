@@ -949,10 +949,7 @@ fn rewrite_c_cross_system_calls(code: &str, field_name: &str, sys_name: &str) ->
         {
             method_end += 1;
         }
-        if method_end == method_start
-            || method_end >= bytes.len()
-            || bytes[method_end] != b'('
-        {
+        if method_end == method_start || method_end >= bytes.len() || bytes[method_end] != b'(' {
             out.push_str(&code[cursor..after_self]);
             cursor = after_self;
             continue;

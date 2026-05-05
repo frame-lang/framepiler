@@ -2178,8 +2178,8 @@ fn ends_with_binary_op(line: &str) -> bool {
     // Word operators: must be preceded by whitespace (or start-of-line)
     // to avoid matching identifier suffixes like `foo_andalso`.
     for op in &[
-        "andalso", "orelse", "and", "or", "xor", "not", "div", "rem", "band",
-        "bor", "bxor", "bnot", "bsl", "bsr",
+        "andalso", "orelse", "and", "or", "xor", "not", "div", "rem", "band", "bor", "bxor",
+        "bnot", "bsl", "bsr",
     ] {
         if t.ends_with(op) {
             // Confirm the preceding char is whitespace or the line is
@@ -2197,8 +2197,8 @@ fn ends_with_binary_op(line: &str) -> bool {
     }
     // Symbolic operators: end-of-line tokens.
     for op in &[
-        "+", "-", "*", "/", "++", "--", "=:=", "=/=", "==", "/=", "<", ">",
-        "=<", ">=", "->", "=>", "|", "||", "::",
+        "+", "-", "*", "/", "++", "--", "=:=", "=/=", "==", "/=", "<", ">", "=<", ">=", "->", "=>",
+        "|", "||", "::",
     ] {
         if t.ends_with(op) {
             // Avoid false positive: a `>` that closes a binary
@@ -2323,8 +2323,7 @@ fn erlang_smart_join(lines: &[String], code: &mut String) {
             // when we can prove the expression is unfinished. If the
             // detection misses a case, we fall back to inserting `,`
             // (preserving the existing behavior).
-            let prev_in_mid_expression =
-                paren_balance_unclosed(pt) || ends_with_binary_op(pt);
+            let prev_in_mid_expression = paren_balance_unclosed(pt) || ends_with_binary_op(pt);
 
             if prev_ends_punctuated
                 || prev_is_structural_case
@@ -5013,36 +5012,34 @@ pub(crate) fn generate_erlang_system(
                 // value. Without this, an action whose body is a
                 // multi-line case-as-value lowers to `{Data, ok}`,
                 // dropping the user's intended return.
-                let trailing_block_start: Option<usize> = if matches!(
-                    last_line.as_str(),
-                    "end" | "end," | "end."
-                ) {
-                    let mut depth = 1i32;
-                    let mut start: Option<usize> = None;
-                    for i in (0..processed.len() - 1).rev() {
-                        let lt = processed[i].trim();
-                        if lt == "end" || lt == "end," || lt == "end." {
-                            depth += 1;
-                        } else if (lt.starts_with("case ") || lt.starts_with("case("))
-                            && (lt.ends_with(" of") || lt.ends_with(" of,"))
-                        {
-                            depth -= 1;
-                            if depth == 0 {
-                                start = Some(i);
-                                break;
-                            }
-                        } else if lt.starts_with("if ") && lt.ends_with(" ->") {
-                            depth -= 1;
-                            if depth == 0 {
-                                start = Some(i);
-                                break;
+                let trailing_block_start: Option<usize> =
+                    if matches!(last_line.as_str(), "end" | "end," | "end.") {
+                        let mut depth = 1i32;
+                        let mut start: Option<usize> = None;
+                        for i in (0..processed.len() - 1).rev() {
+                            let lt = processed[i].trim();
+                            if lt == "end" || lt == "end," || lt == "end." {
+                                depth += 1;
+                            } else if (lt.starts_with("case ") || lt.starts_with("case("))
+                                && (lt.ends_with(" of") || lt.ends_with(" of,"))
+                            {
+                                depth -= 1;
+                                if depth == 0 {
+                                    start = Some(i);
+                                    break;
+                                }
+                            } else if lt.starts_with("if ") && lt.ends_with(" ->") {
+                                depth -= 1;
+                                if depth == 0 {
+                                    start = Some(i);
+                                    break;
+                                }
                             }
                         }
-                    }
-                    start
-                } else {
-                    None
-                };
+                        start
+                    } else {
+                        None
+                    };
 
                 if let Some(block_start) = trailing_block_start {
                     // Emit pre-block lines (if any), bind the block to
@@ -5063,10 +5060,7 @@ pub(crate) fn generate_erlang_system(
                     let block_buf = block_buf.trim_start_matches(' ').to_string();
                     code.push_str(&block_buf);
                     code.push_str(",\n");
-                    code.push_str(&format!(
-                        "    {{{}, __ActionRetVal__}}",
-                        final_data
-                    ));
+                    code.push_str(&format!("    {{{}, __ActionRetVal__}}", final_data));
                 } else if last_is_value && processed.len() > 0 {
                     // Last expression is the return value — emit body up to last line,
                     // then return {FinalData, LastExpr}

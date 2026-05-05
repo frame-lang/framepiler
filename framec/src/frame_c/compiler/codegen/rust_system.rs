@@ -374,10 +374,7 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
 ///
 /// The call site `Counter::make(seed)` resolves naturally;
 /// the existing `Counter::new(seed)` call site is unaffected.
-pub(crate) fn generate_rust_factory_alias(
-    system: &SystemAst,
-    factory_name: &str,
-) -> CodegenNode {
+pub(crate) fn generate_rust_factory_alias(system: &SystemAst, factory_name: &str) -> CodegenNode {
     let params: Vec<Param> = system
         .params
         .iter()

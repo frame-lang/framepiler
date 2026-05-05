@@ -53,9 +53,7 @@ pub fn nested_uses_new_contract(name: &str) -> bool {
 /// Get the Domain-kind params of a nested system by name. Returns an
 /// empty Vec if the system isn't registered or has no Domain params.
 pub fn get_nested_system_domain_params(name: &str) -> Vec<(String, String)> {
-    NESTED_SYSTEM_DOMAIN_PARAMS.with(|s| {
-        s.borrow().get(name).cloned().unwrap_or_default()
-    })
+    NESTED_SYSTEM_DOMAIN_PARAMS.with(|s| s.borrow().get(name).cloned().unwrap_or_default())
 }
 
 use super::ast::{CodegenNode, Param, Visibility};
@@ -5333,9 +5331,7 @@ pub(crate) fn generate_persistence_methods(
                         } else {
                             child_params
                                 .iter()
-                                .map(|(pname, _)| {
-                                    format!("__raw_{}.get(\"{}\")", var.name, pname)
-                                })
+                                .map(|(pname, _)| format!("__raw_{}.get(\"{}\")", var.name, pname))
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         };

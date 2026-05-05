@@ -494,8 +494,9 @@ impl FrameValidator {
                         });
                         // Check 2: same-indent @@:(value) immediately following
                         // (codegen's same-scope hoist applies).
-                        let immediately_followed =
-                            frame_regs.get(i + 1).map(|r2| {
+                        let immediately_followed = frame_regs
+                            .get(i + 1)
+                            .map(|r2| {
                                 if let Region::FrameSegment {
                                     kind: k,
                                     indent: i2,
@@ -510,7 +511,8 @@ impl FrameValidator {
                                 } else {
                                     false
                                 }
-                            }).unwrap_or(false);
+                            })
+                            .unwrap_or(false);
                         if !preceded && !immediately_followed {
                             self.warnings.push(ValidationError::new(
                                 "W705",

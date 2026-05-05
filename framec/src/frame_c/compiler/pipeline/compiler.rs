@@ -221,16 +221,23 @@ pub fn compile_ast_based(
     // pragma — `@@[create(a)]` followed by `@@[create(b)]` — all
     // arrive at the validator and trigger E818 (at most one per
     // system). Option-based capture would silently coalesce.
-    let mut pending_create_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = Vec::new();
-    let mut pending_save_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = Vec::new();
-    let mut pending_load_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> = Vec::new();
+    let mut pending_create_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> =
+        Vec::new();
+    let mut pending_save_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> =
+        Vec::new();
+    let mut pending_load_attrs: Vec<(Option<String>, crate::frame_c::compiler::frame_ast::Span)> =
+        Vec::new();
     // Strip `(arg)` wrapper from the captured pragma value.
     // Returns None for absent / empty / whitespace-only args.
     fn strip_paren_arg(value: &Option<String>) -> Option<String> {
         let raw = value.as_deref()?;
         let trimmed = raw.trim();
         let inner = trimmed.strip_prefix('(')?.strip_suffix(')')?.trim();
-        if inner.is_empty() { None } else { Some(inner.to_string()) }
+        if inner.is_empty() {
+            None
+        } else {
+            Some(inner.to_string())
+        }
     }
     for segment in &source_map.segments {
         if let Segment::Pragma {

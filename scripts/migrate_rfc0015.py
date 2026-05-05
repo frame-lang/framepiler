@@ -58,11 +58,15 @@ RE_PERSIST_BARE = re.compile(r"@@\[persist\](?!\s*\()")
 RE_PERSIST_WITH_ARG = re.compile(r"@@\[persist\(([^)]+)\)\]")
 RE_SAVE_AT_SYSTEM = re.compile(r"@@\[save\s*\(\s*\w+\s*\)\]")
 RE_LOAD_AT_SYSTEM = re.compile(r"@@\[load\s*\(\s*\w+\s*\)\]")
-# Allow an optional visibility modifier (`private`, `public`,
-# `internal`) between `@@system` and the system name — Java fixtures
-# use `@@system private L5 {` to keep nested classes file-local.
+# Match `@@system <Name> { … }`, optionally with:
+#   - visibility modifier (`private`, `public`, `internal`) — Java
+#     fixtures use `@@system private L5 {` to keep nested classes
+#     file-local.
+#   - parameter list (`@@system Inner(seed: int) {`) — RFC-0014.
+#   - host-language superclass (`: RefCounted`) — GDScript / Java.
+# The system body content is captured separately by find_block.
 RE_SYSTEM_HEADER = re.compile(
-    r"^(\s*)(@@system\s+(?:private\s+|public\s+|internal\s+)?\w+\s*\{)",
+    r"^(\s*)(@@system\s+(?:private\s+|public\s+|internal\s+)?\w+[^{}\n]*\{)",
     re.MULTILINE,
 )
 
