@@ -89,26 +89,32 @@ The framepiler auto-enables `frame_event` when features that require it are used
 ### `@@[persist]`
 
 ```frame
-@@[persist]
-@@[persist(domain=[field1, field2])]
-@@[persist(exclude=[field3])]
+@@[persist(<blob_type>)]
+@@[save(<save_method_name>)]
+@@[load(<load_method_name>)]
 ```
 
-Marks a system as serializable. The system **must** declare two
-operations under `operations:` — one tagged `@@[save]` (returns
-the serialized blob) and one tagged `@@[load]` (instance method
-populating self). Bare `@@[persist]` without ops is rejected with
-**E814**.
+Marks a system as serializable. A persisted system declares three
+system-level attributes: `@@[persist(<blob_type>)]` (the blob type),
+`@@[save(<name>)]` (the save method name), and `@@[load(<name>)]`
+(the load method name). Framec generates the save/load pair on the
+system class — save returns the blob, load is an instance method
+that mutates self.
 
-Optional companions on operations / domain fields:
+Bare `@@[persist]` (no save/load names) is rejected with **E814**.
+The legacy operation-attribute form (`operations: @@[save] foo()`)
+is rejected with **E819** at framec 4.1.0+; the codemod at
+`scripts/migrate_rfc0015.py` rewrites old fixtures.
 
-| Attribute      | Position    | Purpose                                                 |
-|----------------|-------------|---------------------------------------------------------|
-| `@@[save]`     | operation   | Marks the framework-managed save method                 |
-| `@@[load]`     | operation   | Marks the framework-managed load method                 |
-| `@@[no_persist]` | domain field | Excludes this field from the serialized blob          |
+Optional companion on domain fields:
 
-See [Persistence](#persistence) and [RFC-0012](rfcs/rfc-0012.md).
+| Attribute        | Position     | Purpose                                       |
+|------------------|--------------|-----------------------------------------------|
+| `@@[no_persist]` | domain field | Excludes this field from the serialized blob |
+
+See [Persistence](#persistence), [RFC-0015](rfcs/rfc-0015.md),
+and [RFC-0016](rfcs/rfc-0016.md) (deferred selective-domain-persist
+form).
 
 ---
 

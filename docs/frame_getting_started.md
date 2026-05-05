@@ -1775,22 +1775,17 @@ Use operations for utility methods, version info, debug introspection — anythi
 
 ### Persistence
 
-Add `@@[persist]` before a system and declare two operations — one
-tagged `@@[save]` (returns the serialized blob), one tagged
-`@@[load]` (instance method populating self). The framepiler emits
-the bodies; you pick the names.
+Declare three system-level attributes — `@@[persist(<blob_type>)]`
+sets the blob type, `@@[save(<name>)]` and `@@[load(<name>)]`
+choose the method names. Framec emits the save/load pair on the
+system class; you pick the names.
 
 ```frame
 @@[target("python_3")]
-@@[persist]
+@@[persist(str)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Session {
-    operations:
-        @@[save]
-        save_state(): str {}
-
-        @@[load]
-        restore_state(data: str) {}
-
     interface:
         login(user)
         logout()
