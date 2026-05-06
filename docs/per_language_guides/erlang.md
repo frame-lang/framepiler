@@ -15,7 +15,7 @@ familiar with Frame's core syntax (`@@system`, `interface:`,
 For the canonical capability table, see
 `framepiler_test_env/docs/runtime-capability-matrix.md`. For the
 self-call guard divergence specifically, see
-`docs/erlang_alignment_requirements.md`.
+`erlang_alignment_requirements.md`.
 
 ---
 
@@ -421,7 +421,7 @@ both more idiomatic and structurally simpler in OTP.
 The contract is functional, not structural. The transition-guard
 test (test 53) passes on all 17 backends, including Erlang — only
 the mechanism differs. If you are writing Frame source, you do not
-notice the divergence. See `docs/erlang_alignment_requirements.md`
+notice the divergence. See `erlang_alignment_requirements.md`
 for the catalogue of trade-offs and the deferred path to
 structural alignment (parked because the current divergence is
 recommended on idiomaticity grounds).
@@ -698,7 +698,7 @@ Erlang persist generator. See
 
 - `docs/runtime-capability-matrix.md` — per-backend capability
   table; Erlang-specific footnotes `[a]`–`[m]`.
-- `docs/erlang_alignment_requirements.md` — catalogue of the
+- `erlang_alignment_requirements.md` — catalogue of the
   self-call guard divergence and the deferred structural
   alignment path. Recommended reading if you are debugging
   unexpected post-self-call behavior.
