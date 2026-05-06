@@ -21,3 +21,6 @@ _scratch/
 
 # Claude Code local settings
 .claude/
+
+# Project-internal AI agent context (kept local, not published)
+CLAUDE.md
