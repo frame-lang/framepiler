@@ -4,9 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased] - 2026-05-02
+## [Unreleased]
+
+## [4.1.0] - 2026-05-08
+
+Headline of 4.1.0: **RFC-0015 — factory-only construction with system-level lifecycle attributes**, the new persist contract that supersedes RFC-0012's operation-attribute form. Hard-cut at this release; legacy form rejected by **E819**. Backed by three-attribute lifecycle (`@@[create]` / `@@[save]` / `@@[load]`), the `scripts/migrate_rfc0015.py` codemod (multi-system + visibility-aware), and end-to-end coverage on all 17 backends.
+
+This release also closes the last gaps from the RFC-0014 `@@[main]` wave 1, the RFC-0013 annotation syntax, and the persist wave 8 closure (nested `@@SystemName` on every backend; E700 quiescent contract).
+
+### Added — RFC-0015 factory-only construction (system-level lifecycle attributes)
+
+- **Three-attribute lifecycle contract** at the system level: `@@[create(<name>)]`, `@@[save(<name>)]`, `@@[load(<name>)]`. Names default to `create_<system>` / `save_<system>` / `load_<system>` when unspecified. Generated factory and persist methods adopt the user-named identifiers across all 17 backends.
+- **E815** — lifecycle attribute attached to a non-system attachment position (must be system-level, not operation-level).
+- **E817** — invalid lifecycle attribute name (non-identifier).
+- **E818** — duplicate `@@[save]` or `@@[load]` on the same system (only one of each per system).
+- **E819 — hard-cut.** RFC-0012's op-attribute persist form (`save: () { @@[save] ... }`) is rejected at validation time with a one-line migration message pointing at the RFC-0015 system-level form.
+- **`scripts/migrate_rfc0015.py` codemod** — multi-system aware (handles `@@system Inner(seed: int) { … }` headers with parameter lists and superclasses) and visibility-modifier aware (`@@system private`, `public`, `internal`). Migrates RFC-0012 op-attribute fixtures to the new contract; full corpus pass touched 4,734 fixtures.
+- **D3 — C cross-system method call rewrite.** Post-pass in the C backend rewrites `self.field.method(args)` to `<Sys>_method(self->field[, args])` for domain fields whose `type_annotation` matches a defined system. Closes the long-standing C cross-system call gap (analogous to the existing Erlang post-pass).
+- **D4 — leading-`_` C action symbols** preserved verbatim in `func_name` and given a matching `static` keyword in the forward declaration.
+- **D5 — Erlang `@@:(<expr>)` in action bodies** now lowered via `expand_system_state_in_code`. Multi-line case/if-block trailing expressions bind to `__ActionRetVal__` and return `{Data, __ActionRetVal__}`. Leading-`_` user names quoted as `'_name'` atoms across action and operation call sites.
+- **Rust default load param type** for the new persist contract is `String` (not `&str`), so `save_<sys>() -> String` and `load_<sys>(s: String)` round-trip cleanly through the common case.
+- **Phase 5 fuzz coverage** — `gen_persist_multisys.py` (P1 simple_nested, P2 parameterized_inner — Issue #2 reproducer at scale, P3 chained 3-level) across 16 backends; `gen_async_persist.py` Python canary; negative-case fixtures for E815/E817/E818/E819.
+- **Cookbook + per-language guides + spec** all migrated to the system-level form. **Recipe 111 added**: "Init Logic in `$>` — Where Setup Code Lives" (clarifies the canonical home for one-time setup vs. recurring transitions).
+
+### Added — RFC-0016 selective domain persist (deferred design)
+
+- `@@[persist_fields([...])]` form documented for use cases that need a subset of domain fields persisted. Explicitly deferred from 4.0/4.1; tracked as RFC-0016 for a future release.
+
+### Added — W705 transition return-type default warning
+
+- Validator warns on `-> $State` transitions in event handlers whose declared return type's default value might silently leak. Strict `return -> $State` form remains the supported pattern; the warning helps catch the loose form during migration.
 
 ### Fixed — multi-line `@@:()` return expressions on indent-sensitive targets
+
+- Multi-line expressions inside `@@:(<expr>)`, `@@:return = <expr>`, and `@@:return(<expr>)` are now re-wrapped in `(...)` when the expanded RHS contains a newline. Without the wrap, GDScript and Python parsed the assignment up to the first newline and rejected the continuation as an `Indent` parse error. Curly-brace targets receive redundant-but-harmless parens. Matrix fixture `92_return_expr_multiline.{fpy,fgd}` covers the regression. Surfaced by `frame-arcade/ch05-pacman`.
+
+### Fixed — additional codegen + runtime fixes
+
+- **Erlang multi-line `@@:(value)`** no longer joins lines with stray commas in the emitted record-update.
+- **Rust `rewrite_arg_if_non_copy_field`** byte-slice OOB panic — defensive bounds check on the arg-rewrite walk.
+- **Two FRAMEC_BUGS hot-fixes** (Issues #1 and #2 from `frame-arcade/FRAMEC_BUGS.md`) closed end-to-end at the codegen layer, with verification trace in the bug report.
+
+### Added — RFC-0014 `@@[main]` (wave 1)
 
 - Multi-line expressions inside `@@:(<expr>)`, `@@:return = <expr>`, and `@@:return(<expr>)` are now re-wrapped in `(...)` when the expanded RHS contains a newline. Without the wrap, GDScript and Python parsed the assignment up to the first newline and rejected the continuation as an `Indent` parse error. Curly-brace targets receive redundant-but-harmless parens. Matrix fixture `92_return_expr_multiline.{fpy,fgd}` covers the regression. Surfaced by `frame-arcade/ch05-pacman`.
 
@@ -59,6 +98,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Integration matrix: **17 / 17 clean, 3,377 passed / 0 failed / 29 skipped** — all 29 skips are legitimate language-incompat with clear inline comments. Down from 71 skips at the start of the 2026-04-20 session (42 framec-gap tests burned down). Ten languages at zero skips.
 - Unit tests: 244 → 370.
+- Repo housekeeping: `CLAUDE.md` removed from version control (project-internal AI agent context, kept local-only via `.gitignore`).
+- Author / project email migrated to `mark@frame-lang.org`.
 
 ## [4.0.0] - 2026-04-05
 

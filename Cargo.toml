@@ -3,7 +3,7 @@ resolver = "2"
 members = ["framec"]
 
 [workspace.package]
-version = "4.0.0"
+version = "4.1.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/frame-lang/framepiler"
