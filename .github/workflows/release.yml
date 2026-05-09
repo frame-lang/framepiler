@@ -1,53 +1,139 @@
 name: Release
 
+# Triggered when a `v*` tag is pushed (e.g. `git tag v4.1.2 && git push origin v4.1.2`).
+#
+# Build phase: 6 platform matrix (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows
+# x86_64/aarch64). Each binary is wrapped in a platform-appropriate archive
+# (tar.gz / zip), checksummed (SHA-256), and attested for build provenance via SLSA.
+#
+# Release phase: aggregates all artifacts, generates a combined SHA256SUMS file, and
+# creates the GitHub Release with auto-generated release notes.
+#
+# Manual `cargo publish` to crates.io is intentionally NOT in this workflow — it stays
+# under direct human control until Phase 2 when CARGO_REGISTRY_TOKEN is provisioned.
+
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: write       # create the GitHub Release + attach artifacts
+  id-token: write       # required for SLSA build provenance
+  attestations: write   # required for SLSA build provenance
 
 jobs:
   build:
+    name: Build ${{ matrix.target }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: framec-linux-x86_64
+            binary: framec
+            archive: tar.gz
+
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: framec
+            archive: tar.gz
+
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: framec-macos-x86_64
+            binary: framec
+            archive: tar.gz
+
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: framec-macos-aarch64
+            binary: framec
+            archive: tar.gz
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: framec.exe
+            archive: zip
+
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            binary: framec.exe
+            archive: zip
+
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
-      - name: Build release
-        run: cargo build --release --target ${{ matrix.target }}
-      - name: Package
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin framec
+
+      - name: Package artifact (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/framec dist/${{ matrix.artifact }}
-      - uses: actions/upload-artifact@v4
+          ARCHIVE="framec-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -C "target/${{ matrix.target }}/release" -czf "dist/$ARCHIVE" "${{ matrix.binary }}"
+          (cd dist && shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256")
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package artifact (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $Archive = "framec-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target\${{ matrix.target }}\release\${{ matrix.binary }}" -DestinationPath "dist\$Archive"
+          $Hash = (Get-FileHash "dist\$Archive" -Algorithm SHA256).Hash.ToLower()
+          "$Hash  $Archive" | Out-File -FilePath "dist\$Archive.sha256" -Encoding ASCII
+          "ARCHIVE=$Archive" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}
+          subject-path: dist/${{ env.ARCHIVE }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: framec-${{ matrix.target }}
+          path: |
+            dist/${{ env.ARCHIVE }}
+            dist/${{ env.ARCHIVE }}.sha256
+          if-no-files-found: error
 
   release:
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Create release
+          merge-multiple: true
+
+      - name: Generate combined SHA256SUMS
+        run: |
+          cd artifacts
+          cat *.sha256 > ../SHA256SUMS
+          rm *.sha256
+          echo "--- SHA256SUMS ---"
+          cat ../SHA256SUMS
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/*
+            SHA256SUMS
           generate_release_notes: true
+          fail_on_unmatched_files: true
