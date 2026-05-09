@@ -183,9 +183,9 @@ substantial work; codegen is a small frame_expansion edit.
 - `framec/src/frame_c/compiler/codegen/frame_expansion.rs:4692-4754`
   — `generate_self_call_guard`. Per-target emission table; line
   4752 is the Erlang empty-string branch.
-- `framepiler_test_env/docs/runtime-capability-matrix.md` — row
+- `framec-test-env/docs/runtime-capability-matrix.md` — row
   "Self-call transition guard"; footnote `[i]` is the canonical
   divergence note.
-- `framepiler_test_env/tests/common/positive/primary/53_transition_guard.ferl`
+- `framec-test-env/tests/common/positive/primary/53_transition_guard.ferl`
   — the Erlang variant of the transition-guard regression test
   (after Phase 5.4 lands).

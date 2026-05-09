@@ -13,7 +13,7 @@ already familiar with Frame's core syntax and Dart basics (`class`,
 `var` / `final` / `const`, `Future<T>`, `async` / `await`).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. Dart is
+`framec-test-env/docs/runtime-capability-matrix.md`. Dart is
 fully spec-conformant on every row.
 
 ---
@@ -331,5 +331,5 @@ snapshot. See
   canonical interface-method shape with `${...}` interpolation.
 - `framec/src/frame_c/compiler/codegen/backends/dart.rs` —
   Dart backend codegen.
-- `framepiler_test_env/docker/runners/dart_runner.sh` — matrix
+- `framec-test-env/docker/runners/dart_runner.sh` — matrix
   runner; uses the Dart SDK.

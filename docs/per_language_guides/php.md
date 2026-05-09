@@ -12,7 +12,7 @@ already familiar with Frame's core syntax and PHP basics
 (`<?php`, `$variables`, `$this`, classes, namespaces).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. PHP is
+`framec-test-env/docs/runtime-capability-matrix.md`. PHP is
 fully spec-conformant; `async` is the only language-natural skip
 (no native async/await).
 

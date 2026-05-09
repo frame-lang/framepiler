@@ -15,7 +15,7 @@ already familiar with Frame's core syntax and Go basics (struct
 methods, pointer receivers, capitalization-as-export, packages).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. Go is fully
+`framec-test-env/docs/runtime-capability-matrix.md`. Go is fully
 spec-conformant on the runtime; `async` is the only language-natural
 skip (`[g]`).
 

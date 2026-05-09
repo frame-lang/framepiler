@@ -10,7 +10,7 @@ output.
 This guide documents the JavaScript-specific patterns.
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. JavaScript
+`framec-test-env/docs/runtime-capability-matrix.md`. JavaScript
 is fully spec-conformant on every row.
 
 ---

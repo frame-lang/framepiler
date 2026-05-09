@@ -12,7 +12,7 @@ already familiar with Frame's core syntax and C# basics (`class`,
 `Task<T>`, `async`/`await`, `using` directives).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. C# is
+`framec-test-env/docs/runtime-capability-matrix.md`. C# is
 fully spec-conformant on every row.
 
 ---
@@ -356,5 +356,5 @@ instance and restore from a prior snapshot. See
   interface-method shape with `+`-string concat.
 - `framec/src/frame_c/compiler/codegen/backends/csharp.rs` —
   C# backend codegen.
-- `framepiler_test_env/docker/runners/csharp_runner.sh` —
+- `framec-test-env/docker/runners/csharp_runner.sh` —
   matrix runner; uses the .NET SDK.

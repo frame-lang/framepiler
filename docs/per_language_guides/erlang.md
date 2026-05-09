@@ -13,7 +13,7 @@ familiar with Frame's core syntax (`@@system`, `interface:`,
 `machine:`, `domain:`, transitions, handlers).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. For the
+`framec-test-env/docs/runtime-capability-matrix.md`. For the
 self-call guard divergence specifically, see
 `erlang_alignment_requirements.md`.
 
@@ -156,7 +156,7 @@ tests/erlang/multi/ai_agent/                  # ToolRunner + Agent
 tests/erlang/multi/state_var_parser/          # ExprScannerFsm + StateVarParserFsm
 ```
 
-See `framepiler_test_env/docker/runners/erlang_batch.sh` for the
+See `framec-test-env/docker/runners/erlang_batch.sh` for the
 runner side.
 
 **OTP module-name collisions.** Frame `@@system` names lower to
@@ -577,7 +577,7 @@ matrix, you do not need the escript harness — you can use any
 Erlang test runner (`eunit`, `common_test`, `proper`) on the
 generated `.erl` modules directly.
 
-See `framepiler_test_env/docker/runners/erlang_batch.sh` for the
+See `framec-test-env/docker/runners/erlang_batch.sh` for the
 matrix-side mechanism.
 
 ---
@@ -721,6 +721,6 @@ Erlang persist generator. See
   the prolog from char-literal-induced corruption.
 - `framec/src/frame_c/compiler/assembler/mod.rs` — Erlang
   attribute hoist post-pass at the end of `assemble`.
-- `framepiler_test_env/docker/runners/erlang_batch.sh` — the
+- `framec-test-env/docker/runners/erlang_batch.sh` — the
   matrix-side multi-source test discovery + escript driver
   generation.

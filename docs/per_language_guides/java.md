@@ -14,7 +14,7 @@ already familiar with Frame's core syntax and Java basics
 (`public class`, `static`, `String`, `CompletableFuture`).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. Java is
+`framec-test-env/docs/runtime-capability-matrix.md`. Java is
 fully spec-conformant on the runtime; multi-system per file is the
 only language-shape skip (`[j]`).
 

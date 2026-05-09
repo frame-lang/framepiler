@@ -25,7 +25,7 @@ cargo test
 
 # Integration tests (17 languages, in separate repo)
 # See docs/contributing/testing.md for full guide
-cd /path/to/framepiler_test_env/docker
+cd /path/to/framec-test-env/docker
 make test              # All languages
 make test-python       # Single language
 ```

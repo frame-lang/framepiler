@@ -12,7 +12,7 @@ are already familiar with Frame's core syntax and Ruby basics
 (`class`, `def`, `self`, blocks, dynamic typing).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. Ruby is
+`framec-test-env/docs/runtime-capability-matrix.md`. Ruby is
 fully spec-conformant; `async` is the only language-natural skip.
 
 ---

@@ -13,7 +13,7 @@ you are already familiar with Frame's core syntax and TypeScript
 basics (`class`, `interface`, generics, `async`/`await`).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. TypeScript
+`framec-test-env/docs/runtime-capability-matrix.md`. TypeScript
 is fully spec-conformant on every row.
 
 ---

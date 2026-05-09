@@ -14,7 +14,7 @@ already familiar with Frame's core syntax and modern C++ (`auto`,
 `std::string`, `shared_ptr`, `unique_ptr`, `co_await`).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. C++ is
+`framec-test-env/docs/runtime-capability-matrix.md`. C++ is
 fully spec-conformant on every row.
 
 ---
@@ -400,7 +400,7 @@ restore from a prior snapshot. See
   trailing-comment newline fix).
 - `framec/src/frame_c/compiler/codegen/backends/cpp.rs` — C++
   backend codegen.
-- `framepiler_test_env/docker/runners/cpp_runner.sh` — matrix
+- `framec-test-env/docker/runners/cpp_runner.sh` — matrix
   runner; uses `g++` or `clang++` with C++17 default and C++20
   for async tests.
 - `memory/section_comments_complete_2026_04_27.md` — context on

@@ -10,7 +10,7 @@ common gotchas, and the framec / harness behaviour you need to know.
 They complement (rather than replace):
 
 - `docs/frame_runtime.md` — the canonical v4 runtime spec.
-- `framepiler_test_env/docs/runtime-capability-matrix.md` — the
+- `framec-test-env/docs/runtime-capability-matrix.md` — the
   per-backend capability table.
 
 > **Persist contract**: a persisted system declares three system-level

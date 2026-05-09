@@ -18,7 +18,7 @@ internals. Run these before every commit.
 The full 17-language integration test suite lives in a separate repository:
 
 ```
-https://github.com/frame-lang/framepiler_test_env
+https://github.com/frame-lang/framec-test-env
 ```
 
 Clone it alongside the framepiler repo:
@@ -26,13 +26,13 @@ Clone it alongside the framepiler repo:
 ```
 projects/
 ├── framepiler/              # this repo
-└── framepiler_test_env/     # integration tests
+└── framec-test-env/     # integration tests
 ```
 
 ## Running Integration Tests
 
 ```bash
-cd framepiler_test_env/docker
+cd framec-test-env/docker
 
 # First time: build containers (~5 min one-time setup)
 make build
@@ -139,7 +139,7 @@ requires one module per file; multi-system tested via other targets").
 - **Core pipeline changes** (scanner, parser, validator, codegen
   framework): Run all — `make test`.
 - **New tests**: Add test files to
-  `framepiler_test_env/tests/common/positive/<category>/`.
+  `framec-test-env/tests/common/positive/<category>/`.
 
 ## Interpreting Failures
 

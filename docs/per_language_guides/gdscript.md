@@ -15,7 +15,7 @@ syntax and basic Godot scripting concepts (`extends`, `func _init()`,
 `SceneTree`).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. GDScript is
+`framec-test-env/docs/runtime-capability-matrix.md`. GDScript is
 fully spec-conformant on the runtime — the only language-specific
 hazards are E501 (reserved methods) and Godot's dynamic dispatch
 model.
@@ -380,7 +380,7 @@ the same script attached to a scene's root node would work via
 convention — both compile from the same `.fgd` source if the
 prolog declares the appropriate `extends`.
 
-See `framepiler_test_env/docker/runners/gdscript_runner.sh` for
+See `framec-test-env/docker/runners/gdscript_runner.sh` for
 the matrix-side mechanism.
 
 ---
@@ -487,7 +487,7 @@ instance and restore from a prior snapshot. See
 - `framec/src/frame_c/compiler/frame_validator.rs` —
   `gdscript_reserved_method_rename` carries the curated list of
   E501-flagged names with suggested renames.
-- `framepiler_test_env/docker/runners/gdscript_runner.sh` — the
+- `framec-test-env/docker/runners/gdscript_runner.sh` — the
   headless Godot batch runner used by the test matrix.
-- `framepiler_test_env/fuzz/cases_negative/e501_gdscript_reserved_method.fpy`
+- `framec-test-env/fuzz/cases_negative/e501_gdscript_reserved_method.fpy`
   — negative fixture exercising the E501 path.

@@ -14,7 +14,7 @@ are already familiar with Frame's core syntax and Swift basics
 optionals).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. Swift is
+`framec-test-env/docs/runtime-capability-matrix.md`. Swift is
 fully spec-conformant on every row.
 
 ---
@@ -379,7 +379,7 @@ fix the code so save_state isn't called from inside a handler. See
   `\(...)` interpolation.
 - `framec/src/frame_c/compiler/codegen/backends/swift.rs` —
   Swift backend codegen.
-- `framepiler_test_env/docker/runners/swift_runner.sh` — matrix
+- `framec-test-env/docker/runners/swift_runner.sh` — matrix
   runner; uses Swift 5.5+ and the Swift Package Manager.
 - `memory/phase6_async_2026_04_27.md` — context on Swift async
   wiring (Stage 5 of Phase 6).

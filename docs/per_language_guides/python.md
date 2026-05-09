@@ -11,7 +11,7 @@ This guide documents the Python-specific patterns. Most are
 unsurprising to anyone familiar with modern Python (3.7+).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. Python is
+`framec-test-env/docs/runtime-capability-matrix.md`. Python is
 fully spec-conformant on every row.
 
 ---

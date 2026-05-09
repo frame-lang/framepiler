@@ -16,7 +16,7 @@ already familiar with Frame's core syntax and basic Lua (tables,
 metatables, `function`, `local`).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. Lua is fully
+`framec-test-env/docs/runtime-capability-matrix.md`. Lua is fully
 spec-conformant on the runtime; the only language-natural skip is
 `async` (no language-level async/await).
 
@@ -431,7 +431,7 @@ snapshot. See
   interface-method shape with `..` string concat.
 - `tests/common/positive/primary/10_state_var_basic.flua` —
   state-var read/write pattern.
-- `framepiler_test_env/docker/runners/TestRunner.lua` — single-
+- `framec-test-env/docker/runners/TestRunner.lua` — single-
   process Lua test dispatcher used by the matrix harness;
   captures `print()` output for assertion checking.
 - `framec/src/frame_c/compiler/codegen/backends/lua.rs` — Lua

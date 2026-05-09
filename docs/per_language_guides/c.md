@@ -13,7 +13,7 @@ already familiar with Frame's core syntax and basic C (pointers,
 `typedef`, `#include`, `printf`/`sprintf`).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. C is fully
+`framec-test-env/docs/runtime-capability-matrix.md`. C is fully
 spec-conformant on the runtime; the only language-natural skips are
 `async` (no language-level async/await) and a handful of footnoted
 type-system workarounds.

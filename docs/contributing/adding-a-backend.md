@@ -181,7 +181,7 @@ for sp in state_params {
 
 This makes `state.params` (declared on the state header like `$Start(x: int)`) readable as bare locals inside handler bodies. Enter params are read by the existing enter-handler binding code; no new dispatch work needed.
 
-#### 5. Test runner harness (`framepiler_test_env/docker/runners/runner.sh`)
+#### 5. Test runner harness (`framec-test-env/docker/runners/runner.sh`)
 
 Each language has its own `case` arm that constructs the system. Update yours to:
 
@@ -193,7 +193,7 @@ Pattern your changes after the existing Erlang case in `runner.sh`.
 
 #### 6. Specialty tests
 
-Port the 9 `.fpy` files in `framepiler_test_env/tests/common/positive/system_params/` to your backend's extension. Each test exercises one permutation:
+Port the 9 `.fpy` files in `framec-test-env/tests/common/positive/system_params/` to your backend's extension. Each test exercises one permutation:
 
 | Test | Permutation |
 |---|---|
@@ -211,7 +211,7 @@ Port the 9 `.fpy` files in `framepiler_test_env/tests/common/positive/system_par
 
 ```sh
 cd /path/to/framepiler && cargo build --release
-cd /path/to/framepiler_test_env/docker
+cd /path/to/framec-test-env/docker
 rm -f framec-native .stamps/framec-native && make framec
 make test-<your-lang>     # expect 9 new specialty tests passing
 make test                 # full 16-language regression — expect 0 failures
@@ -309,7 +309,7 @@ Q9 (default value handling) was decided during Phase 4.0: defaults are substitut
 
 ### The 9 specialty tests and what they cover
 
-A new backend MUST pass all 9 of these. They live in `framepiler_test_env/tests/common/positive/system_params/`:
+A new backend MUST pass all 9 of these. They live in `framec-test-env/tests/common/positive/system_params/`:
 
 | Test | Permutation |
 |---|---|

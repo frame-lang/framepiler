@@ -15,7 +15,7 @@ are already familiar with Frame's core syntax and Kotlin basics
 (`class`, `val`/`var`, `fun`, `suspend fun`, companion objects).
 
 For the canonical capability table, see
-`framepiler_test_env/docs/runtime-capability-matrix.md`. Kotlin is
+`framec-test-env/docs/runtime-capability-matrix.md`. Kotlin is
 fully spec-conformant on every row.
 
 ---
@@ -404,7 +404,7 @@ a prior snapshot. See
   canonical interface-method shape.
 - `framec/src/frame_c/compiler/codegen/backends/kotlin.rs` —
   Kotlin backend codegen.
-- `framepiler_test_env/docker/runners/kotlin_runner.sh` —
+- `framec-test-env/docker/runners/kotlin_runner.sh` —
   matrix runner; classpath includes `kotlinx-coroutines-core`.
 - `memory/phase6_async_2026_04_27.md` — context on Kotlin
   async wiring (Stage 5 of Phase 6).
