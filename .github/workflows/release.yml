@@ -137,3 +137,6 @@ jobs:
             SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # Auto-flag tags containing a hyphen (v4.1.2-rc1, v5.0.0-beta1, etc.)
+          # as pre-release so they don't get the "Latest" badge.
+          prerelease: ${{ contains(github.ref_name, '-') }}
