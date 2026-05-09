@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Version](https://img.shields.io/badge/version-4.1.1-green)
 
-framec (aka the **framepiler**) — is the Frame languages transpiler to 17 target languges + Graphviz. Frame is a domain-specific language for specifying state machines that transpiles to production code in multiple target languages. You write `@@system` blocks inside your native source files, and the framepiler expands them into full state machine implementations. All native code passes through unchanged — your native compiler handles everything outside the `@@system` blocks.
+framec (aka the **framepiler**) — is the transpiler for the Frame language. Currently framec supports output to 17 target languges + Graphviz. Frame is a domain-specific language for specifying state machines that transpiles to production code in multiple target languages. You write `@@system` blocks inside your native source files, and the framepiler expands them into full state machine implementations. All native code passes through unchanged — your native compiler handles everything outside the `@@system` blocks.
 
 ## Quick Start
 
@@ -93,7 +93,7 @@ framec --help
 
 - [Getting Started](docs/frame_getting_started.md) — learn Frame from scratch
 - [Language Reference](docs/frame_language.md) — complete Frame language reference
-- [Cookbook](docs/frame_cookbook.md) — 54 recipes from traffic lights through EIP patterns, protocol/systems stress tests, deferred event processing, and a scanner/parser pair
+- [Cookbook](docs/frame_cookbook.md) — 111 recipes from traffic lights through EIP patterns, protocol/systems stress tests, deferred event processing, and a scanner/parser pair
 - [Runtime Architecture](docs/frame_runtime.md) — how generated code works
 - [Framepiler Design](docs/framepiler_design.md) — transpiler internals
 - [Contributing](CONTRIBUTING.md) — build from source, run tests, submit PRs
