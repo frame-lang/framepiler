@@ -228,7 +228,7 @@ A new backend MUST pass all 9 specialty tests with zero regressions in any other
 
 ## Questions?
 
-Open an issue with the [backend request template](https://github.com/frame-lang/framepiler/issues/new?template=backend_request.yml) to discuss your planned backend before starting.
+Open an issue with the [backend request template](https://github.com/frame-lang/framec/issues/new?template=backend_request.yml) to discuss your planned backend before starting.
 
 ---
 

@@ -1903,4 +1903,4 @@ You now know the full Frame language. Here are some directions to explore:
 - Browse the [Cookbook](frame_cookbook.md) for 110 complete, runnable examples
 - Browse the [supported languages](../README.md#supported-languages) and try a different target
 - Read the [CONTRIBUTING guide](../CONTRIBUTING.md) if you want to help improve the framepiler
-- Check the [GitHub issues](https://github.com/frame-lang/framepiler/issues) for feature requests and discussions
+- Check the [GitHub issues](https://github.com/frame-lang/framec/issues) for feature requests and discussions

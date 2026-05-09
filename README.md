@@ -1,6 +1,6 @@
 # Framepiler
 
-![CI](https://github.com/frame-lang/framepiler/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/frame-lang/framec/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Version](https://img.shields.io/badge/version-4.1.0-green)
 

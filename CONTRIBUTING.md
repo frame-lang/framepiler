@@ -11,8 +11,8 @@ Thank you for your interest in contributing to the Frame language transpiler! Th
 ### Building from Source
 
 ```bash
-git clone https://github.com/frame-lang/framepiler.git
-cd framepiler
+git clone https://github.com/frame-lang/framec.git
+cd framec
 cargo build
 ./scripts/install-hooks.sh   # enables pre-commit doc-sample validation
 ```
@@ -45,8 +45,8 @@ The doc validator extracts runnable Frame blocks from `docs/*.md`, compiles them
 ## Project Structure
 
 ```
-framepiler/
-├── framec/                    # The framepiler
+framec/
+├── framec/                    # The framepiler crate (workspace member)
 │   ├── src/
 │   │   ├── main.rs           # CLI entry point
 │   │   ├── lib.rs            # Library + WASM entry point
@@ -96,7 +96,7 @@ Native code (outside `@@system` blocks) passes through unchanged.
 
 ### What to Work On
 
-- Check [open issues](https://github.com/frame-lang/framepiler/issues) for bugs and feature requests
+- Check [open issues](https://github.com/frame-lang/framec/issues) for bugs and feature requests
 - Issues labeled `good first issue` are great starting points
 - Use the issue templates when filing new bugs or feature requests
 
