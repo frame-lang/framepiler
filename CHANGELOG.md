@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-05-09
+
+### Changed
+
+- **Repository moved to `frame-lang/framec`** (new GitHub org + rename). The previous canonical location, `frame-lang-old/framepiler`, was renamed to `frame-lang-old/framec` then transferred to `frame-lang/framec` in the new org. GitHub serves auto-redirects from both prior URLs.
+- Cargo.toml `repository`, `homepage`, and `documentation` URLs updated to the new location. (Crate metadata for `4.1.0` retains the old `frame-lang/framepiler` URLs — fixed forward in this patch release.)
+- README CI badge URL updated to the new repository.
+- `.github/CODEOWNERS` owner handle migrated to `@cogiton`.
+- Doc + contribution-guide URLs swept to the new repository (CONTRIBUTING, SECURITY, getting-started, adding-a-backend).
+
+No code changes. Pure metadata + URL hygiene release.
+
 ## [4.1.0] - 2026-05-08
 
 Headline of 4.1.0: **RFC-0015 — factory-only construction with system-level lifecycle attributes**, the new persist contract that supersedes RFC-0012's operation-attribute form. Hard-cut at this release; legacy form rejected by **E819**. Backed by three-attribute lifecycle (`@@[create]` / `@@[save]` / `@@[load]`), the `scripts/migrate_rfc0015.py` codemod (multi-system + visibility-aware), and end-to-end coverage on all 17 backends.
