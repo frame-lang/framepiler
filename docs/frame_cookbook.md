@@ -1171,7 +1171,7 @@ if __name__ == '__main__':
     data = s.save_state()
 
     # Restore into a new instance (two-step: alloc + populate)
-    s2 = Session()
+    s2 = @@Session()
     s2.restore_state(data)
     print(s2.who())              # alice (state preserved)
 ```
@@ -3047,7 +3047,7 @@ if __name__ == '__main__':
     p.process_tick()        # retrying
 
     snapshot = p.save_state()
-    p2 = DeadLetterProcessor()
+    p2 = @@DeadLetterProcessor()
     p2.restore_state(snapshot)
     p2.process_tick()        # dead_lettered
 ```
@@ -3427,7 +3427,7 @@ if __name__ == '__main__':
     s.record("refunds", "R-1")
 
     snap = s.save_state()
-    s2 = MessageStore()
+    s2 = @@MessageStore()
     s2.restore_state(snap)
     print(s2.total())             # 3
     print(s2.count_for("orders")) # 2
@@ -3543,7 +3543,7 @@ import json
 
 
 def handle_on_server(blob: bytes) -> bytes:
-    m = WizardMachine()
+    m = @@WizardMachine()
     m.restore_state(blob)
     while m.where_next() == "server":
         evt = m.next_event()
@@ -3562,14 +3562,14 @@ if __name__ == '__main__':
     m.client_collect("alice@example.com")
 
     blob = handle_on_server(m.save_state())
-    m = WizardMachine()
+    m = @@WizardMachine()
     m.restore_state(blob)
     print(m.where_next())           # client
 
     m.client_confirm(True)
 
     blob = handle_on_server(m.save_state())
-    m = WizardMachine()
+    m = @@WizardMachine()
     m.restore_state(blob)
 
     print(m.where_next())           # done
@@ -7833,7 +7833,7 @@ if __name__ == '__main__':
 
     # Persist across daemon restart
     snap = bgp.save_state()
-    bgp = BgpSession()
+    bgp = @@BgpSession()
     bgp.restore_state(snap)
     print(bgp.status())               # established — session preserved
 
@@ -13927,7 +13927,7 @@ if __name__ == '__main__':
     # Simulate power loss mid-mission: snapshot, destroy, restore
     snapshot = m.save_state()
     print("--- simulated reboot ---")
-    m2 = MissionController()
+    m2 = @@MissionController()
     m2.restore_state(snapshot)
     print(m2.progress())
 
