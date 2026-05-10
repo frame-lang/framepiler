@@ -185,6 +185,59 @@ impl LanguageBackend for JavaBackend {
                 }
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // RFC-0015 D7: emit a parallel `__no_init()` static factory
+                // that gates the existing `__skipInitialEnter` flag around a
+                // regular constructor call with type-default args. The
+                // constructor's struct-setup code still runs (so all the
+                // `late`-style fields end up initialized) but the
+                // `__fire_enter_cascade()` + `__process_transition_loop()`
+                // calls are skipped because of the flag, so the user's
+                // `$>` handler never executes. Used by `@@!Foo()` to pair
+                // no-initialization allocation with `restore_state(...)`.
+                //
+                // The flag is restored in a finally block to keep
+                // subsequent `new Counter(...)` calls behaving normally.
+                result.push('\n');
+                result.push_str(&format!(
+                    "{}public static {} __no_init() {{\n",
+                    ctx.get_indent(),
+                    class_name
+                ));
+                ctx.push_indent();
+                result.push_str(&format!("{}__skipInitialEnter = true;\n", ctx.get_indent()));
+                result.push_str(&format!("{}try {{\n", ctx.get_indent()));
+                ctx.push_indent();
+                let default_args: Vec<String> = params
+                    .iter()
+                    .map(|p| {
+                        let ty = self.map_type(p.type_annotation.as_deref().unwrap_or("Object"));
+                        match ty.as_str() {
+                            "int" | "long" | "short" | "byte" => "0".to_string(),
+                            "double" | "float" => "0.0".to_string(),
+                            "boolean" => "false".to_string(),
+                            "char" => "'\\0'".to_string(),
+                            _ => "null".to_string(),
+                        }
+                    })
+                    .collect();
+                result.push_str(&format!(
+                    "{}return new {}({});\n",
+                    ctx.get_indent(),
+                    class_name,
+                    default_args.join(", ")
+                ));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}} finally {{\n", ctx.get_indent()));
+                ctx.push_indent();
+                result.push_str(&format!(
+                    "{}__skipInitialEnter = false;\n",
+                    ctx.get_indent()
+                ));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
                 result
             }
 

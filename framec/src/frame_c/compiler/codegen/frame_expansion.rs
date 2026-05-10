@@ -614,11 +614,26 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             // enter cascade + transition loop.
             format!("{}._no_init()", name)
         }
+        TargetLanguage::Java => {
+            // Java: `Foo.__no_init()` is a synthesized public static
+            // factory emitted alongside the regular ctor in
+            // backends/java.rs. It toggles the existing
+            // `__skipInitialEnter` flag and calls the constructor with
+            // type-default args, suppressing the `$>` cascade.
+            format!("{}.__no_init()", name)
+        }
+        TargetLanguage::Kotlin => {
+            // Kotlin: `Foo.__no_init()` is a synthesized companion-object
+            // factory emitted by `generate_kotlin_machinery` in
+            // system_codegen.rs. Same JVM pattern as Java — toggles
+            // `__skipInitialEnter` and calls the primary ctor with
+            // type-default args.
+            format!("{}.__no_init()", name)
+        }
 
         // ---- Backends still needing synthesized helpers ----
-        // Java / Kotlin: would need `Unsafe.allocateInstance(Foo.class)` wrapped
-        // in a synthesized static. Swift / Erlang need an explicit
-        // synthesized method emitted in the system class definition.
+        // Swift / Erlang need explicit synthesized methods emitted in
+        // the system class definition.
         _ => format!(
             "/* @@! no-initialization allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
             lang, name
