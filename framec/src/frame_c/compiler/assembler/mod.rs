@@ -516,9 +516,10 @@ fn expand_system_instantiations(
 
                         if defined_systems.contains(name) {
                             if is_blank {
-                                // E820 (already enforced earlier by validator,
-                                // but cheap to double-check here): zero-arg only.
-                                let blank = generate_blank_constructor(name, lang);
+                                // E820 already enforced by the validator phase.
+                                // Reuse the per-backend rendering from frame_expansion
+                                // so handler-body and native-code paths stay in sync.
+                                let blank = crate::frame_c::compiler::codegen::frame_expansion::generate_blank_allocation(name, lang);
                                 result.push_str(&blank);
                                 i = close;
                                 continue;
@@ -680,25 +681,6 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
         TargetLanguage::Graphviz => {
             unreachable!("Assembler called for non-V4 target {:?}", lang)
         }
-    }
-}
-
-/// RFC-0015 D7: per-language blank-allocation rendering for `@@!SystemName()`
-/// in native code regions (the `if __name__ == "__main__":` block, etc.).
-/// Phase A spike implements Python only; remaining backends in Phase B per
-/// `_scratch/at_bang_implementation_plan.md`.
-///
-/// (This duplicates `frame_expansion::generate_blank_allocation` in spirit;
-/// Phase 5 of the plan removes this entire post-pass and unifies blank-alloc
-/// rendering at one site in the AST-driven codegen.)
-fn generate_blank_constructor(name: &str, lang: TargetLanguage) -> String {
-    match lang {
-        TargetLanguage::Python3 => format!("{}.__new__({})", name, name),
-        _ => format!(
-            "/* @@! blank allocation not yet wired for {:?} ({}); \
-             see _scratch/at_bang_implementation_plan.md Phase B */",
-            lang, name
-        ),
     }
 }
 

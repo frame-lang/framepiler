@@ -559,20 +559,48 @@ pub(crate) fn normalize_indentation(text: &str) -> String {
 /// `$>` handler are skipped. The user typically pairs this with
 /// `inst.restore_state(data)` to populate the instance from saved bytes.
 ///
-/// Phase A spike implements Python only; remaining 16 backends roll out in
-/// Phase B per `_scratch/at_bang_implementation_plan.md`.
-fn generate_blank_allocation(name: &str, lang: TargetLanguage) -> String {
+/// `pub(crate)` because both the handler-body codegen path (this file) and
+/// the assembler post-pass (`assembler/mod.rs`, used for `@@!` in native code
+/// regions like the `if __name__ == "__main__":` block) need to render to
+/// the same per-language primitive. Phase 5 of the D7 plan removes the
+/// duplicate post-pass entry point and consolidates here.
+pub(crate) fn generate_blank_allocation(name: &str, lang: TargetLanguage) -> String {
     match lang {
-        // Python: `__new__` bypasses `__init__`. Standard idiom for
-        // obtaining a zero-init instance from outside the class.
+        // ---- Built-in primitives (no backend codegen changes needed) ----
         TargetLanguage::Python3 => format!("{}.__new__({})", name, name),
+        TargetLanguage::Ruby => format!("{}.allocate", name),
+        TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
+            format!("Object.create({}.prototype)", name)
+        }
+        TargetLanguage::Lua => format!("setmetatable({{}}, {})", name),
+        TargetLanguage::Go => format!("&{}{{}}", name),
+        TargetLanguage::GDScript => {
+            // GDScript: `_init` is empty by Frame's factory-only design,
+            // so `Foo.new()` is itself a blank allocation.
+            format!("{}.new()", name)
+        }
+        TargetLanguage::Php => format!(
+            "(new \\ReflectionClass({}::class))->newInstanceWithoutConstructor()",
+            name
+        ),
+        TargetLanguage::CSharp => format!(
+            "(({}) System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof({})))",
+            name, name
+        ),
+        TargetLanguage::Cpp => {
+            // C++: `Foo()` is the default constructor. Frame's factory-only
+            // design ensures the system class has a usable empty default ctor.
+            format!("{}()", name)
+        }
 
-        // Other backends roll out in Phase B. Until then, emit a clear
-        // marker so the user sees what's missing rather than a panic or
-        // silent miscompile.
+        // ---- Backends needing synthesized helpers (deferred to a follow-up phase) ----
+        // Java / Kotlin: would need `Unsafe.allocateInstance(Foo.class)` wrapped
+        // in a synthesized static. Swift / Rust / Dart / Erlang need an explicit
+        // synthesized method emitted in the system class definition.
+        // C: needs Foo_alloc() emitted by the C system codegen.
+        // For now, emit a clear marker until those Phase 6 follow-ups land.
         _ => format!(
-            "/* @@! blank allocation not yet wired for {:?} ({}); \
-             see _scratch/at_bang_implementation_plan.md Phase B */",
+            "/* @@! blank allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
             lang, name
         ),
     }
