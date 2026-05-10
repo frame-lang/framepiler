@@ -588,10 +588,12 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             "(new \\ReflectionClass({}::class))->newInstanceWithoutConstructor()",
             name
         ),
-        TargetLanguage::CSharp => format!(
-            "(({}) System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof({})))",
-            name, name
-        ),
+        TargetLanguage::CSharp => {
+            // RFC-0017 Phase A2: `@@!Counter()` lowers to bare
+            // `new Counter()` which runs only framework setup.
+            // Replaces the obsolete D7 `FormatterServices.GetUninitializedObject`.
+            format!("new {}()", name)
+        }
         TargetLanguage::Cpp => {
             // C++: `Foo()` is the default constructor. Frame's factory-only
             // design ensures the system class has a usable empty default ctor.

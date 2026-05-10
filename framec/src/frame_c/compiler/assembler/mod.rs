@@ -616,7 +616,12 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             // Bare `new Counter()` is reserved for `@@!Counter()`.
             format!("{}.__create({})", name, args)
         }
-        TargetLanguage::CSharp | TargetLanguage::Php => {
+        TargetLanguage::CSharp => {
+            // RFC-0017 Phase A2: C# factory expansion uses `__create()`.
+            // Bare `new Counter()` is reserved for `@@!Counter()`.
+            format!("{}.__create({})", name, args)
+        }
+        TargetLanguage::Php => {
             format!("new {}({})", name, args)
         }
         TargetLanguage::Kotlin => {

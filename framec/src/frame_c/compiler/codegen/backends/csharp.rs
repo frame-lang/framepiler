@@ -7,6 +7,53 @@ use crate::frame_c::visitors::TargetLanguage;
 /// C# backend for code generation
 pub struct CSharpBackend;
 
+/// RFC-0017 Phase A2 helper: replace `new List<object> { <param>(, <param>)* }`
+/// with `new List<object>()` if every comma-separated entry is a known
+/// constructor param name. Used by the C# Constructor arm to strip
+/// user-arg-bound enter_args / state_args from the bare ctor body —
+/// those are re-supplied by `__frame_init`.
+fn csharp_strip_param_lists(text: &str, param_names: &[&str]) -> String {
+    let needle = "new List<object> {";
+    let mut result = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(needle_bytes) {
+            let args_start = i + needle_bytes.len();
+            let mut depth = 1;
+            let mut j = args_start;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                let inner = &text[args_start..j];
+                let parts: Vec<&str> = inner
+                    .split(',')
+                    .map(|p| p.trim())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                if !parts.is_empty() && parts.iter().all(|p| param_names.contains(p)) {
+                    result.push_str("new List<object>()");
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
 impl LanguageBackend for CSharpBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
@@ -72,12 +119,19 @@ impl LanguageBackend for CSharpBackend {
                     result.push('\n');
                 }
 
+                // RFC-0017 Phase A2: expose this class's name so the
+                // Constructor arm can distinguish system vs framework
+                // helper classes and apply the init-decouple split only
+                // to the system class.
+                let prev_system = ctx.system_name.clone();
+                ctx.system_name = Some(name.clone());
                 for (i, method) in methods.iter().enumerate() {
                     if i > 0 {
                         result.push('\n');
                     }
                     result.push_str(&self.emit(method, ctx));
                 }
+                ctx.system_name = prev_system;
 
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
@@ -152,28 +206,125 @@ impl LanguageBackend for CSharpBackend {
                 body,
                 super_call,
             } => {
-                let params_str = self.emit_params(params);
+                // RFC-0017 Phase A2: split into bare ctor + __frame_init
+                // + __create factory. Framework helpers keep original
+                // single-ctor emission.
                 let class_name = ctx.system_name.clone().unwrap_or("Class".to_string());
-                let base_call = super_call.as_ref().map(|_| " : base()").unwrap_or("");
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
 
-                let mut result = format!(
-                    "{}public {}({}){} {{\n",
-                    ctx.get_indent(),
-                    class_name,
-                    params_str,
-                    base_call
-                );
+                if is_frame_helper {
+                    let params_str = self.emit_params(params);
+                    let base_call = super_call.as_ref().map(|_| " : base()").unwrap_or("");
+                    let mut result = format!(
+                        "{}public {}({}){} {{\n",
+                        ctx.get_indent(),
+                        class_name,
+                        params_str,
+                        base_call
+                    );
+                    ctx.push_indent();
+                    for stmt in body {
+                        result.push_str(&self.emit(stmt, ctx));
+                        if self.needs_semicolon(stmt) {
+                            result.push_str(";\n");
+                        } else {
+                            result.push('\n');
+                        }
+                    }
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                    return result;
+                }
+
+                // System class: classify body.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
                 ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
                 for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    if self.needs_semicolon(stmt) {
-                        result.push_str(";\n");
+                    let mut rendered = self.emit(stmt, ctx);
+                    if self.needs_semicolon(stmt) && !rendered.ends_with(";\n") {
+                        if !rendered.ends_with('\n') {
+                            rendered.push_str(";\n");
+                        } else {
+                            let trimmed = rendered.trim_end_matches('\n').to_string();
+                            rendered = format!("{};\n", trimmed);
+                        }
+                    } else if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered.clone());
+                        framework_lines.push(csharp_strip_param_lists(&rendered, &param_names));
                     } else {
-                        result.push('\n');
+                        framework_lines.push(rendered);
                     }
                 }
                 ctx.pop_indent();
+
+                // Emit `public Counter()` — bare framework
+                let mut result = format!("{}public {}() {{\n", ctx.get_indent(), class_name);
+                ctx.push_indent();
+                for line in &framework_lines {
+                    result.push_str(line);
+                }
+                ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `public void __frame_init(<params>)`
+                result.push('\n');
+                let frame_init_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}public void __frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                ctx.push_indent();
+                for line in &frame_init_lines {
+                    result.push_str(line);
+                }
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `public static Counter __create(<params>)` — factory
+                result.push('\n');
+                let create_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}public static {} __create({}) {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    create_params
+                ));
+                ctx.push_indent();
+                result.push_str(&format!(
+                    "{}{} c = new {}();\n",
+                    ctx.get_indent(),
+                    class_name,
+                    class_name
+                ));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c.__frame_init({});\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c;\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 
