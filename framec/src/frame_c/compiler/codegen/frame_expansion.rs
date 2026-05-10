@@ -592,13 +592,17 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             // design ensures the system class has a usable empty default ctor.
             format!("{}()", name)
         }
+        TargetLanguage::C => {
+            // C: `Foo_alloc()` is a synthesized zero-arg function emitted
+            // by the C system codegen alongside `Foo_new()`. It calloc's
+            // a struct without running any init body — see backends/c.rs.
+            format!("{}_alloc()", name)
+        }
 
-        // ---- Backends needing synthesized helpers (deferred to a follow-up phase) ----
+        // ---- Backends still needing synthesized helpers ----
         // Java / Kotlin: would need `Unsafe.allocateInstance(Foo.class)` wrapped
         // in a synthesized static. Swift / Rust / Dart / Erlang need an explicit
         // synthesized method emitted in the system class definition.
-        // C: needs Foo_alloc() emitted by the C system codegen.
-        // For now, emit a clear marker until those Phase 6 follow-ups land.
         _ => format!(
             "/* @@! no-initialization allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
             lang, name

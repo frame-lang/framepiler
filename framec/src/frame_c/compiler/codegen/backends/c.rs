@@ -374,6 +374,33 @@ impl LanguageBackend for CBackend {
                 result.push_str(&format!("{}return self;\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // RFC-0015 D7: emit a parallel `_alloc()` zero-arg function
+                // that allocates a calloc'd struct WITHOUT running the
+                // init body. Used by `@@!Foo()` (the no-initialization
+                // sigil) so Frame source can produce a blank instance
+                // ready for `restore_state(...)` without re-firing $> or
+                // any other init code. The body-less form is uniform
+                // across systems — no parameters, no init logic, just
+                // zero-initialized memory.
+                result.push_str("\n");
+                result.push_str(&format!(
+                    "{}{}* {}_alloc(void) {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    class_name
+                ));
+                ctx.push_indent();
+                result.push_str(&format!(
+                    "{}{}* self = calloc(1, sizeof({}));\n",
+                    ctx.get_indent(),
+                    class_name,
+                    class_name
+                ));
+                result.push_str(&format!("{}return self;\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 
