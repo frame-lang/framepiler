@@ -1,7 +1,7 @@
-//! Call-site argument parser for `@@SystemName(args)` tagged instantiations.
+//! Call-site argument parser for `@@SystemName(args)` system instantiations.
 //!
 //! When the user writes `@@Robot($(10), $>(80), "R2D2")` in native code,
-//! Frame's assembler intercepts the tagged instantiation, parses the
+//! Frame's assembler intercepts the system instantiation, parses the
 //! args via this module, validates them against the system's declared
 //! params, substitutes any omitted defaults, and emits a canonical
 //! positional argument list to the target language.
@@ -889,7 +889,7 @@ mod tests {
     #[test]
     fn frame_default_substitution_at_call_site() {
         // Q9: Frame substitutes the declared default at the
-        // tagged-instantiation expansion site. The user calls
+        // system-instantiation expansion site. The user calls
         // @@Counter() and Frame supplies the default `5`.
         let parsed = parse_call_args("").unwrap();
         let sys = vec![make_param("initial", ParamKind::Domain, Some("5"))];

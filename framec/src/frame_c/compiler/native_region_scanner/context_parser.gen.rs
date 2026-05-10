@@ -6,7 +6,7 @@
 //   @@:event           â ContextEvent (kind=3)
 //   @@:data.key [= e]  â ContextData (kind=4) or ContextDataAssign (kind=5)
 //   @@:params.key      â ContextParams (kind=6)
-//   @@SystemName()     â TaggedInstantiation (kind=7)
+//   @@SystemName()     â SystemInstantiation (kind=7)
 //   @@:(expr)          â ContextReturnExpr (kind=8)
 //   @@:return(expr)    â ReturnCall (kind=9)
 //   @@:self.method()   â ContextSelfCall (kind=10)
@@ -141,6 +141,9 @@ pub struct ContextParserFsm {
     pub result_kind: usize,
     pub has_result: bool,
     pub paren_end: usize,
+    /// RFC-0015 D7: set when `@@!` was seen at dispatch time. Caller uses
+    /// this to populate `InstantiationKind::NoInitialization` in metadata.
+    pub result_no_init: bool,
 }
 
 #[allow(non_snake_case)]
@@ -156,6 +159,7 @@ impl ContextParserFsm {
             result_kind: 0,
             has_result: false,
             paren_end: 0,
+            result_no_init: false,
             __compartment: ContextParserFsmCompartment::new("Init"),
             __next_compartment: None,
         };
@@ -404,7 +408,7 @@ impl ContextParserFsm {
             if self.paren_end > 0 {
                 i = self.paren_end;
                 self.result_end = i;
-                self.result_kind = 7; // TaggedInstantiation
+                self.result_kind = 7; // SystemInstantiation
                 self.has_result = true;
             } else {
                 // No paren_end provided — caller must handle
@@ -596,6 +600,25 @@ impl ContextParserFsm {
             __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
             self.__transition(__compartment);
             return;
+        } else if b == b'!' {
+            // @@! — RFC-0015 D7 blank-allocation sigil. Must be followed
+            // immediately by an uppercase identifier (the system name).
+            let j = i + 1;
+            if j < end && bytes[j].is_ascii_uppercase() {
+                self.pos = j;
+                self.result_no_init = true;
+                let mut __compartment = ContextParserFsmCompartment::new("ParseInstantiation");
+                __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+                self.__transition(__compartment);
+                return;
+            } else {
+                self.result_end = i;
+                self.has_result = false;
+                let mut __compartment = ContextParserFsmCompartment::new("Done");
+                __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+                self.__transition(__compartment);
+                return;
+            }
         } else if b.is_ascii_uppercase() {
             // @@SystemName — pos stays at start of name
             let mut __compartment = ContextParserFsmCompartment::new("ParseInstantiation");
@@ -603,7 +626,7 @@ impl ContextParserFsm {
             self.__transition(__compartment);
             return;
         } else {
-            // Just @@ without . or : or uppercase
+            // Just @@ without . or : or uppercase or !
             self.result_end = i;
             self.has_result = false;
             let mut __compartment = ContextParserFsmCompartment::new("Done");

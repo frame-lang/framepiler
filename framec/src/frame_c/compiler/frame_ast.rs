@@ -379,12 +379,30 @@ pub enum Statement {
     ContextSelf { span: Span },
     /// System state: @@:system.state — current state name
     ContextSystemState { span: Span },
-    /// Tagged instantiation: @@SystemName(args)
-    TaggedInstantiation {
+    /// System instantiation:
+    ///   - `@@SystemName(args)` — factory call, runs init code
+    ///   - `@@!SystemName()` — RFC-0015 D7, allocates without calling init
+    ///
+    /// `kind` distinguishes the two; `args` is empty for `NoInitialization`.
+    SystemInstantiation {
         system_name: String,
         args: String,
+        kind: InstantiationKind,
         span: Span,
     },
+}
+
+/// Distinguishes the two flavors of `@@SystemName` call sites.
+///
+/// - `Factory` — the standard factory call (`@@Foo(args)`). Allocates, routes
+///   args, fires `$Start` body + `$>` handler. This is what runs init code.
+/// - `NoInitialization` — RFC-0015 D7 blank allocation (`@@!Foo()`). Allocates
+///   without calling init. Always zero-arg by definition. The user typically
+///   pairs this with `inst.restore_state(data)` to load from saved bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstantiationKind {
+    Factory,
+    NoInitialization,
 }
 
 /// Transition statement (-> $State)

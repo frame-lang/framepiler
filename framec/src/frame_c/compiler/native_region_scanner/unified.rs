@@ -511,12 +511,19 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                 // trailing whitespace, inline ones (indent = 0) don't.
                 let ctx_start = i;
 
-                // For @@SystemName(), pre-compute balanced_paren_end via the
-                // language-specific SyntaxSkipper (the FSM can't call traits).
+                // For @@SystemName() and @@!SystemName(), pre-compute the
+                // balanced_paren_end via the language-specific SyntaxSkipper
+                // (the FSM can't call traits). For the `@@!` case, the system
+                // name starts one byte further in.
                 let after_at = i + 2;
+                let name_start = if after_at < end && bytes[after_at] == b'!' {
+                    after_at + 1
+                } else {
+                    after_at
+                };
                 let mut precomputed_paren_end: usize = 0;
-                if after_at < end && bytes[after_at].is_ascii_uppercase() {
-                    let mut name_end = after_at;
+                if name_start < end && bytes[name_start].is_ascii_uppercase() {
+                    let mut name_end = name_start;
                     while name_end < end
                         && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'_')
                     {
@@ -543,7 +550,7 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
                         4 => FrameSegmentKind::ContextData,
                         5 => FrameSegmentKind::ContextDataAssign,
                         6 => FrameSegmentKind::ContextParams,
-                        7 => FrameSegmentKind::TaggedInstantiation,
+                        7 => FrameSegmentKind::SystemInstantiation,
                         8 => FrameSegmentKind::ContextReturnExpr,
                         9 => FrameSegmentKind::ReturnCall,
                         10 => FrameSegmentKind::ContextSelfCall,
@@ -2063,14 +2070,24 @@ fn extract_segment_metadata(kind: FrameSegmentKind, text: &str) -> SegmentMetada
             }
         }
 
-        // --- Tagged instantiation ---
-        FrameSegmentKind::TaggedInstantiation => {
-            // @@SystemName(args)
+        // --- System instantiation ---
+        FrameSegmentKind::SystemInstantiation => {
+            // @@SystemName(args) → Factory
+            // @@!SystemName()    → NoInitialization (RFC-0015 D7)
+            use crate::frame_c::compiler::frame_ast::InstantiationKind;
             if let Some(rest) = text.strip_prefix("@@") {
+                let (rest, kind) = match rest.strip_prefix('!') {
+                    Some(stripped) => (stripped, InstantiationKind::NoInitialization),
+                    None => (rest, InstantiationKind::Factory),
+                };
                 if let Some(paren) = rest.find('(') {
                     let system_name = rest[..paren].to_string();
                     let args = rest[paren..].to_string();
-                    SegmentMetadata::TaggedInstantiation { system_name, args }
+                    SegmentMetadata::SystemInstantiation {
+                        system_name,
+                        args,
+                        kind,
+                    }
                 } else {
                     SegmentMetadata::None
                 }
@@ -2434,15 +2451,41 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_tagged_instantiation() {
+    fn test_metadata_system_instantiation() {
+        use crate::frame_c::compiler::frame_ast::InstantiationKind;
         let metas = scan_for_metadata("{ let x = @@Counter(10); }");
         assert_eq!(metas.len(), 1);
         match &metas[0].1 {
-            SegmentMetadata::TaggedInstantiation { system_name, args } => {
+            SegmentMetadata::SystemInstantiation {
+                system_name,
+                args,
+                kind,
+            } => {
                 assert_eq!(system_name, "Counter");
                 assert_eq!(args, "(10)");
+                assert_eq!(*kind, InstantiationKind::Factory);
             }
-            other => panic!("Expected TaggedInstantiation, got {:?}", other),
+            other => panic!("Expected SystemInstantiation, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_system_instantiation_no_init() {
+        // RFC-0015 D7: `@@!Foo()` is a NoInitialization variant
+        use crate::frame_c::compiler::frame_ast::InstantiationKind;
+        let metas = scan_for_metadata("{ let x = @@!Counter(); }");
+        assert_eq!(metas.len(), 1);
+        match &metas[0].1 {
+            SegmentMetadata::SystemInstantiation {
+                system_name,
+                args,
+                kind,
+            } => {
+                assert_eq!(system_name, "Counter");
+                assert_eq!(args, "()");
+                assert_eq!(*kind, InstantiationKind::NoInitialization);
+            }
+            other => panic!("Expected SystemInstantiation, got {:?}", other),
         }
     }
 }

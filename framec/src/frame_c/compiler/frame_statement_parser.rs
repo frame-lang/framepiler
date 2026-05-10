@@ -58,7 +58,7 @@ impl FrameStatementParser {
             | FrameSegmentKind::ContextData
             | FrameSegmentKind::ContextDataAssign
             | FrameSegmentKind::ContextParams
-            | FrameSegmentKind::TaggedInstantiation
+            | FrameSegmentKind::SystemInstantiation
             | FrameSegmentKind::ReturnCall
             | FrameSegmentKind::ContextSelfCall
             | FrameSegmentKind::ContextSelf

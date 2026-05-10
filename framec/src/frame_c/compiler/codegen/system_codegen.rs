@@ -1058,7 +1058,7 @@ pub(crate) fn generate_fields(
         // but ONLY when the init wasn't stripped from the field declaration.
         // If the init references a system param, the assignment belongs in
         // the constructor body, not the field declaration.
-        // Apply expand_tagged_in_domain so backends consuming this slot get
+        // Apply expand_system_instantiation_in_domain so backends consuming this slot get
         // the fully-expanded init text (@@SystemName → native constructor).
         let init_text_str = domain_var.initializer_text.as_deref().unwrap_or("");
         let strip_unconditionally =
@@ -1075,7 +1075,8 @@ pub(crate) fn generate_fields(
             matches!(syntax.language, TargetLanguage::Php) && init_text_str.contains("@@");
         if !(strip_unconditionally || strip_collision || strip_php_non_const) {
             if let Some(ref init_text) = &domain_var.initializer_text {
-                let expanded_init = expand_tagged_in_domain(init_text, syntax.language);
+                let expanded_init =
+                    expand_system_instantiation_in_domain(init_text, syntax.language);
                 field = field.with_initializer(CodegenNode::Ident(expanded_init));
             }
         }
@@ -1407,7 +1408,7 @@ pub(crate) fn generate_constructor(
             continue;
         }
 
-        let init_expanded = expand_tagged_in_domain(init_text, syntax.language);
+        let init_expanded = expand_system_instantiation_in_domain(init_text, syntax.language);
 
         // C++ const fields whose init references a constructor param
         // must use the member initializer list — `const T x;` cannot
@@ -6212,9 +6213,12 @@ fn generate_c_route_to_state_dispatch(system: &SystemAst) -> String {
 }
 
 /// Expand `@@SystemName(args)` in domain variable initializers to native constructors.
-/// This handles the same pattern as the assembler's tagged instantiation expansion,
+/// This handles the same pattern as the assembler's system instantiation expansion,
 /// but for domain code that is emitted during codegen (before the assembler runs).
-pub(crate) fn expand_tagged_in_domain(raw_code: &str, lang: TargetLanguage) -> String {
+pub(crate) fn expand_system_instantiation_in_domain(
+    raw_code: &str,
+    lang: TargetLanguage,
+) -> String {
     // Delegate string/comment skipping at the outer level to the target
     // language's skipper so `@@Foo(...)` appearing inside a string or
     // comment isn't mistakenly rewritten into a constructor call.

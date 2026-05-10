@@ -554,6 +554,30 @@ pub(crate) fn normalize_indentation(text: &str) -> String {
         .join("\n")
 }
 
+/// RFC-0015 D7: render `@@!SystemName()` to the per-language blank-allocation
+/// primitive. The blank instance has no init code run — `$Start` body and
+/// `$>` handler are skipped. The user typically pairs this with
+/// `inst.restore_state(data)` to populate the instance from saved bytes.
+///
+/// Phase A spike implements Python only; remaining 16 backends roll out in
+/// Phase B per `_scratch/at_bang_implementation_plan.md`.
+fn generate_blank_allocation(name: &str, lang: TargetLanguage) -> String {
+    match lang {
+        // Python: `__new__` bypasses `__init__`. Standard idiom for
+        // obtaining a zero-init instance from outside the class.
+        TargetLanguage::Python3 => format!("{}.__new__({})", name, name),
+
+        // Other backends roll out in Phase B. Until then, emit a clear
+        // marker so the user sees what's missing rather than a panic or
+        // silent miscompile.
+        _ => format!(
+            "/* @@! blank allocation not yet wired for {:?} ({}); \
+             see _scratch/at_bang_implementation_plan.md Phase B */",
+            lang, name
+        ),
+    }
+}
+
 /// Generate code expansion for a Frame segment
 ///
 /// NOTE: The scanner leaves a gap between NativeText and FrameSegment where leading
@@ -3573,27 +3597,29 @@ pub(crate) fn generate_frame_expansion(
                 _ => key,
             }
         }
-        FrameSegmentKind::TaggedInstantiation => {
-            // `@@SystemName(args)` is emitted VERBATIM here so the
-            // assembler's `expand_tagged_instantiations` pass handles
-            // it uniformly alongside top-level native segments. The
-            // assembler:
-            //   - Validates the system name against defined systems
-            //     (replacing the error-gen this arm used to do).
-            //   - Calls `parse_call_args` / `resolve_call`, which
-            //     expand the `$(arg)` sigil form into positional
-            //     values (handler-body codegen used to strip `@@` and
-            //     wrap per-language but skipped that expansion,
-            //     producing `Worker($(name))` — a Python syntax error
-            //     — when a handler body created a parameterized child
-            //     system).
-            //   - Applies the per-language constructor wrap
-            //     (`new Foo(…)`, `Foo::new(…)`, `NewFoo(…)`, etc.)
-            //     via `generate_constructor`.
-            // Consolidating all of that in the assembler removes the
-            // duplicate per-language logic this arm carried and fixes
-            // the sigil-not-expanded bug.
-            segment_text.to_string()
+        FrameSegmentKind::SystemInstantiation => {
+            // `@@SystemName(args)` (Factory): emitted VERBATIM here so the
+            // assembler's `expand_system_instantiations` post-pass rewrites
+            // to the per-language constructor call. (Phase 5 of RFC-0015 D7
+            // will migrate Factory rewriting into this arm and remove the
+            // post-pass; for now we keep the existing behavior.)
+            //
+            // `@@!SystemName()` (NoInitialization, RFC-0015 D7): emitted
+            // here directly as the per-language blank allocation. The
+            // assembler's post-pass doesn't recognize `@@!` (the trailing
+            // `!` after `@@` short-circuits its uppercase check), so we
+            // MUST emit the final form here.
+            use crate::frame_c::compiler::frame_ast::InstantiationKind;
+            if let SegmentMetadata::SystemInstantiation {
+                system_name,
+                kind: InstantiationKind::NoInitialization,
+                ..
+            } = metadata
+            {
+                generate_blank_allocation(system_name, lang)
+            } else {
+                segment_text.to_string()
+            }
         }
         FrameSegmentKind::ReturnCall => {
             // @@:return(expr) — set context return value AND exit handler.

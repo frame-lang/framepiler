@@ -8,7 +8,7 @@
 //!    - `Segment::Native` → extract text from source bytes at span, append to output
 //!    - `Segment::Pragma` → skip (consumed by earlier stages)
 //!    - `Segment::System` → look up system name in generated_systems, append generated code
-//! 2. Post-process: expand `@@SystemName()` tagged instantiations in native regions
+//! 2. Post-process: expand `@@SystemName()` system instantiations in native regions
 //! 3. Return final assembled output
 
 use crate::frame_c::compiler::frame_ast::SystemParam;
@@ -50,7 +50,7 @@ impl std::error::Error for AssemblyError {}
 /// `system_params` — Vec of (system_name, declared params) so the assembler
 ///   can resolve `@@SystemName(args)` call sites against the declared shape
 ///   (sigil checks, named lookup, default substitution).
-/// `lang` — target language for tagged instantiation expansion
+/// `lang` — target language for system instantiation expansion
 /// `runtime_imports` — imports required by generated code (emitted before any native code)
 /// `main_system` — RFC-0014 primary system. For multi-system GDScript files this
 ///   is the system whose code emits at script-module scope; every other system
@@ -131,8 +131,8 @@ pub fn assemble(
             Segment::Native { span } => {
                 // Extract native text from source bytes
                 let text = extract_text(source, span.start, span.end);
-                // Expand tagged instantiations (@@SystemName(args)) in native code
-                let expanded = expand_tagged_instantiations(
+                // Expand system instantiations (@@SystemName(args)) in native code
+                let expanded = expand_system_instantiations(
                     &text,
                     &defined_system_names,
                     &params_by_name,
@@ -154,12 +154,12 @@ pub fn assemble(
                     // `@@OtherSystem($(arg))` that sigil form isn't
                     // expanded by codegen — the handler-body path only
                     // sees the surrounding text as a NativeBlock and
-                    // doesn't run the tagged-instantiation expansion.
+                    // doesn't run the system-instantiation expansion.
                     // Re-running the same expansion over the emitted
                     // system code catches those leaks. Idempotent: if
                     // codegen already stripped every `@@Name(...)`, this
                     // pass finds nothing to rewrite.
-                    let expanded = expand_tagged_instantiations(
+                    let expanded = expand_system_instantiations(
                         code,
                         &defined_system_names,
                         &params_by_name,
@@ -446,10 +446,10 @@ fn format_call_args_error(err: &CallArgsError) -> String {
 }
 
 // ============================================================================
-// Internal: Tagged Instantiation Expansion
+// Internal: System Instantiation Expansion
 // ============================================================================
 
-/// Expand `@@SystemName(args)` tagged instantiations in native code.
+/// Expand `@@SystemName(args)` system instantiations in native code.
 ///
 /// In native code regions, users write `@@SystemName(args)` which gets expanded
 /// to the appropriate constructor syntax for the target language:
@@ -458,7 +458,7 @@ fn format_call_args_error(err: &CallArgsError) -> String {
 /// - Rust: `SystemName::new(args)`
 /// - C: `SystemName_new(args)`
 /// - C++/Java/C#: `new SystemName(args)`
-fn expand_tagged_instantiations(
+fn expand_system_instantiations(
     text: &str,
     defined_systems: &HashSet<String>,
     params_by_name: &HashMap<&str, &[SystemParam]>,
@@ -493,6 +493,14 @@ fn expand_tagged_instantiations(
             let start = i;
             i += 2;
 
+            // RFC-0015 D7: `@@!SystemName()` — blank allocation in native code.
+            // (Phase 5 will migrate this entire post-pass into AST-driven
+            // codegen; for now, recognize and rewrite.)
+            let is_blank = i < end && bytes[i] == b'!';
+            if is_blank {
+                i += 1;
+            }
+
             // Check for uppercase letter (system name start)
             if i < end && bytes[i].is_ascii_uppercase() {
                 let name_start = i;
@@ -507,6 +515,14 @@ fn expand_tagged_instantiations(
                         let args_text = std::str::from_utf8(&bytes[i + 1..close - 1]).unwrap_or("");
 
                         if defined_systems.contains(name) {
+                            if is_blank {
+                                // E820 (already enforced earlier by validator,
+                                // but cheap to double-check here): zero-arg only.
+                                let blank = generate_blank_constructor(name, lang);
+                                result.push_str(&blank);
+                                i = close;
+                                continue;
+                            }
                             let resolved_args = match params_by_name.get(name) {
                                 Some(params) if !params.is_empty() => {
                                     let parsed =
@@ -537,10 +553,11 @@ fn expand_tagged_instantiations(
                             i = close;
                             continue;
                         } else {
+                            let prefix = if is_blank { "@@!" } else { "@@" };
                             return Err(AssemblyError {
                                 message: format!(
-                                    "Undefined system '{}' in tagged instantiation. Available: {:?}",
-                                    name, defined_systems
+                                    "Undefined system '{}' in `{}{}` instantiation. Available: {:?}",
+                                    name, prefix, name, defined_systems
                                 ),
                             });
                         }
@@ -548,7 +565,7 @@ fn expand_tagged_instantiations(
                 }
             }
 
-            // Not a valid tagged instantiation — copy original @@ chars
+            // Not a valid system instantiation — copy original @@ (and ! if present) chars
             for b in &bytes[start..i] {
                 result.push(*b as char);
             }
@@ -666,6 +683,25 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
     }
 }
 
+/// RFC-0015 D7: per-language blank-allocation rendering for `@@!SystemName()`
+/// in native code regions (the `if __name__ == "__main__":` block, etc.).
+/// Phase A spike implements Python only; remaining backends in Phase B per
+/// `_scratch/at_bang_implementation_plan.md`.
+///
+/// (This duplicates `frame_expansion::generate_blank_allocation` in spirit;
+/// Phase 5 of the plan removes this entire post-pass and unifies blank-alloc
+/// rendering at one site in the AST-driven codegen.)
+fn generate_blank_constructor(name: &str, lang: TargetLanguage) -> String {
+    match lang {
+        TargetLanguage::Python3 => format!("{}.__new__({})", name, name),
+        _ => format!(
+            "/* @@! blank allocation not yet wired for {:?} ({}); \
+             see _scratch/at_bang_implementation_plan.md Phase B */",
+            lang, name
+        ),
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -775,73 +811,73 @@ mod tests {
     }
 
     #[test]
-    fn test_tagged_instantiation_python() {
+    fn test_system_instantiation_python() {
         let src = "s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
-            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
+            expand_system_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = Foo()\n");
     }
 
     #[test]
-    fn test_tagged_instantiation_typescript() {
+    fn test_system_instantiation_typescript() {
         let src = "let s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
-            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::TypeScript)
+            expand_system_instantiations(src, &systems, &params, TargetLanguage::TypeScript)
                 .unwrap();
         assert_eq!(result, "let s = new Foo()\n");
     }
 
     #[test]
-    fn test_tagged_instantiation_rust() {
+    fn test_system_instantiation_rust() {
         let src = "let s = @@Foo();\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
-            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Rust).unwrap();
+            expand_system_instantiations(src, &systems, &params, TargetLanguage::Rust).unwrap();
         assert_eq!(result, "let s = Foo::new();\n");
     }
 
     #[test]
-    fn test_tagged_instantiation_c() {
+    fn test_system_instantiation_c() {
         let src = "struct Foo* s = @@Foo();\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
-            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::C).unwrap();
+            expand_system_instantiations(src, &systems, &params, TargetLanguage::C).unwrap();
         assert_eq!(result, "struct Foo* s = Foo_new();\n");
     }
 
     #[test]
-    fn test_tagged_instantiation_with_args() {
+    fn test_system_instantiation_with_args() {
         let src = "s = @@Foo(1, \"hello\")\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
-            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
+            expand_system_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = Foo(1, \"hello\")\n");
     }
 
     #[test]
-    fn test_tagged_instantiation_in_comment_not_expanded() {
+    fn test_system_instantiation_in_comment_not_expanded() {
         let src = "# s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
-            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
+            expand_system_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "# s = @@Foo()\n");
     }
 
     #[test]
-    fn test_tagged_instantiation_in_string_not_expanded() {
+    fn test_system_instantiation_in_string_not_expanded() {
         let src = "s = \"@@Foo()\"\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
-            expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
+            expand_system_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
         assert_eq!(result, "s = \"@@Foo()\"\n");
     }
 
@@ -944,17 +980,17 @@ mod tests {
     }
 
     #[test]
-    fn test_undefined_tagged_instantiation_errors() {
+    fn test_undefined_system_instantiation_errors() {
         let src = "s = @@Unknown()\n";
         let systems: HashSet<String> = HashSet::new();
         let params: HashMap<&str, &[SystemParam]> = HashMap::new();
-        let result = expand_tagged_instantiations(src, &systems, &params, TargetLanguage::Python3);
+        let result = expand_system_instantiations(src, &systems, &params, TargetLanguage::Python3);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_full_assembly_with_tagged_instantiation() {
-        // prolog creates an instance using tagged instantiation
+    fn test_full_assembly_with_system_instantiation() {
+        // prolog creates an instance using system instantiation
         let src_native = "s = @@MySystem()\n";
         let src_system = "@@system MySystem { machine: $A { } }";
         let full_src = format!("{}{}", src_native, src_system);

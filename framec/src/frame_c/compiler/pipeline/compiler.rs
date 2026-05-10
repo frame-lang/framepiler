@@ -60,7 +60,7 @@ impl CompileError {
 }
 
 // Helper functions extract_native_code, skip_pragmas_simple, skip_pragmas_keep_native,
-// and expand_tagged_instantiations have been removed — their responsibilities are now
+// and expand_system_instantiations have been removed — their responsibilities are now
 // handled by the Segmenter (Stage 0) and Assembler (Stage 7).
 
 /// Compile a Frame module from source bytes
@@ -111,7 +111,7 @@ fn validate_only(source: &[u8], config: &PipelineConfig) -> Result<CompileResult
 ///
 /// 1. Segment source into Native/Pragma/System regions (Segmenter)
 /// 2. For each System segment: parse → build Arcanum → validate → generate code
-/// 3. Assemble final output: native pass-through + generated systems + tagged instantiations
+/// 3. Assemble final output: native pass-through + generated systems + system instantiations
 pub fn compile_ast_based(
     source: &[u8],
     config: &PipelineConfig,
@@ -615,6 +615,22 @@ pub fn compile_ast_based(
                     source_map: None,
                 });
             }
+            // RFC-0015 D7: validate `@@SystemName(args)` and `@@!SystemName()`
+            // call sites (E820 zero-arg blank, E821 undefined system).
+            if let Err(errs) =
+                validator.validate_system_instantiations(&frame_ast, source, config.target)
+            {
+                let errors = errs
+                    .iter()
+                    .map(|e| CompileError::new(&e.code, &e.message))
+                    .collect();
+                return Ok(CompileResult {
+                    code: String::new(),
+                    errors,
+                    warnings: vec![],
+                    source_map: None,
+                });
+            }
             // Target-specific checks
             if let Err(errs) = validator.validate_target_specific(&frame_ast, config.target) {
                 let errors = errs
@@ -859,7 +875,7 @@ pub fn compile_ast_based(
         generated_systems.push((system_ast.name.clone(), system_code));
     }
 
-    // Stage 7: Assemble final output (native pass-through + system substitution + tagged instantiations)
+    // Stage 7: Assemble final output (native pass-through + system substitution + system instantiations)
     // Runtime imports are emitted first (before any native prolog) to fix import ordering.
     // Pass each system's declared params so the assembler can resolve sigil-tagged
     // call sites (`@@Robot($(10), $>(80), "R2D2")`) and substitute Frame defaults.

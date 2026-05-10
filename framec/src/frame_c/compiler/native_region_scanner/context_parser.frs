@@ -7,13 +7,19 @@
 //   @@:event           → ContextEvent (kind=3)
 //   @@:data.key [= e]  → ContextData (kind=4) or ContextDataAssign (kind=5)
 //   @@:params.key      → ContextParams (kind=6)
-//   @@SystemName()     → TaggedInstantiation (kind=7)
+//   @@SystemName()     → SystemInstantiation (kind=7), Factory call
+//   @@!SystemName()    → SystemInstantiation (kind=7), NoInitialization (RFC-0015 D7)
 //   @@:(expr)          → ContextReturnExpr (kind=8)
 //   @@:return(expr)    → ReturnCall (kind=9)
 //   @@:self.method()   → ContextSelfCall (kind=10)
 //   @@:self            → ContextSelf (kind=11)
 //   @@:system.state    → ContextSystemState (kind=12)
 //   other              → no match (has_result=false)
+//
+// For SystemInstantiation, the FSM sets `result_no_init = true` if the source
+// had `@@!SystemName(...)` (the user's blank-allocation sigil). The caller
+// reads that flag to populate `InstantiationKind::{Factory, NoInitialization}`
+// in the segment metadata.
 //
 // Demonstrates hierarchical composition: $ParseReturn and $ParseData
 // create ExprScannerFsm sub-machines when they detect assignment `=`.
@@ -45,11 +51,26 @@ include!("expr_scanner.gen.rs");
                 if b == b':' {
                     self.pos = i + 1;
                     -> $DispatchColon
+                } else if b == b'!' {
+                    // @@! — RFC-0015 D7 blank-allocation sigil. Must be
+                    // followed immediately by an uppercase identifier
+                    // (the system name). If not, no match — the user
+                    // wrote something like `@@! foo` which is meaningless.
+                    let j = i + 1;
+                    if j < end && bytes[j].is_ascii_uppercase() {
+                        self.pos = j;
+                        self.result_no_init = true;
+                        -> $ParseInstantiation
+                    } else {
+                        self.result_end = i;
+                        self.has_result = false;
+                        -> $Done
+                    }
                 } else if b.is_ascii_uppercase() {
                     // @@SystemName — pos stays at start of name
                     -> $ParseInstantiation
                 } else {
-                    // Just @@ without . or : or uppercase
+                    // Just @@ without . or : or uppercase or !
                     self.result_end = i;
                     self.has_result = false;
                     -> $Done
@@ -350,7 +371,7 @@ include!("expr_scanner.gen.rs");
                     if self.paren_end > 0 {
                         i = self.paren_end;
                         self.result_end = i;
-                        self.result_kind = 7; // TaggedInstantiation
+                        self.result_kind = 7; // SystemInstantiation
                         self.has_result = true;
                     } else {
                         // No paren_end provided — caller must handle
@@ -381,4 +402,8 @@ include!("expr_scanner.gen.rs");
         result_kind: usize = 0
         has_result: bool = false
         paren_end: usize = 0
+        // RFC-0015 D7: set true when $Dispatching saw `@@!` and routed to
+        // $ParseInstantiation. Caller uses this to map result_kind=7
+        // to InstantiationKind::NoInitialization (else Factory).
+        result_no_init: bool = false
 }

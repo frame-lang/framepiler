@@ -1315,7 +1315,7 @@ pub(crate) fn extract_body_content(
 /// Extract the child @@System() name from a domain field's initializer text.
 /// Returns Some("Counter") for `@@Counter()`, `@@Counter(args)`, etc.
 /// Returns None for any non-tagged-system initializer (primitives, native
-/// constructors like `new Counter()` after expand_tagged_in_domain has
+/// constructors like `new Counter()` after expand_system_instantiation_in_domain has
 /// already run, etc.).
 ///
 /// Used by persist codegen to detect domain fields holding nested system

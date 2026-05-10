@@ -13,7 +13,7 @@ pub enum FrameSegmentKind {
     ContextDataAssign,   // @@:data[key] = expr - call-scoped data (assignment)
     ContextParams,       // @@:params[key] - explicit parameter access
     ContextReturnExpr,   // @@:(expr) - set context return value (concise form)
-    TaggedInstantiation, // @@SystemName() - validated system instantiation
+    SystemInstantiation, // @@SystemName() - validated system instantiation
     ReturnCall,          // @@:return(expr) - set return value AND exit handler
     ContextSelfCall,     // @@:self.method(args) - reentrant interface call
     ContextSelf,         // @@:self - bare system instance reference
@@ -53,8 +53,13 @@ pub enum SegmentMetadata {
     },
     /// `@@:self.method(args)`
     SelfCall { method: String, args: String },
-    /// `@@SystemName(args)`
-    TaggedInstantiation { system_name: String, args: String },
+    /// `@@SystemName(args)` (Factory) or `@@!SystemName()` (NoInitialization,
+    /// per RFC-0015 D7). `args` is empty for the NoInitialization variant.
+    SystemInstantiation {
+        system_name: String,
+        args: String,
+        kind: crate::frame_c::compiler::frame_ast::InstantiationKind,
+    },
     /// `@@:(expr)` — may contain nested Frame segments
     ReturnExpr { expr: String },
     /// `@@:return(expr)` — set return + exit
@@ -318,12 +323,17 @@ pub fn regions_to_statements(
                             stmts.push(Statement::NativeCode(raw()));
                         }
                     }
-                    FrameSegmentKind::TaggedInstantiation => {
-                        if let SegmentMetadata::TaggedInstantiation { system_name, args } = metadata
+                    FrameSegmentKind::SystemInstantiation => {
+                        if let SegmentMetadata::SystemInstantiation {
+                            system_name,
+                            args,
+                            kind,
+                        } = metadata
                         {
-                            stmts.push(Statement::TaggedInstantiation {
+                            stmts.push(Statement::SystemInstantiation {
                                 system_name: system_name.clone(),
                                 args: args.clone(),
+                                kind: *kind,
                                 span: seg_span,
                             });
                         } else {

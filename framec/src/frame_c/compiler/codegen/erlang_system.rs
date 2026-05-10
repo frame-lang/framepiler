@@ -2687,10 +2687,10 @@ fn erlang_nest_early_exits(lines: &[&str]) -> String {
 /// `gen_statem:start_link/3` shape returns `{ok, Pid}`; for a domain
 /// field that holds a Pid (so subsequent `name:method(Pid, …)`
 /// calls work), we unwrap with `element(2, …)`. The user-facing
-/// `start_link/N` API still returns the tuple — `expand_tagged_in_domain_erlang`
+/// `start_link/N` API still returns the tuple — `expand_system_instantiation_in_domain_erlang`
 /// is only invoked on init expressions whose target field type is a
 /// bare Pid.
-fn expand_tagged_in_domain_erlang(text: &str) -> String {
+fn expand_system_instantiation_in_domain_erlang(text: &str) -> String {
     // Simple pattern: @@Name(args) → element(2, name:start_link(args))
     let mut result = text.to_string();
     while let Some(pos) = result.find("@@") {
@@ -3279,7 +3279,7 @@ pub(crate) fn generate_erlang_system(
     for var in &system.domain {
         let init_for_record = match &var.initializer_text {
             Some(init) if raw_references_param(init) => "undefined".to_string(),
-            Some(init) => expand_tagged_in_domain_erlang(init),
+            Some(init) => expand_system_instantiation_in_domain_erlang(init),
             None => "undefined".to_string(),
         };
         all_fields.push(format!("    {} = {}", var.name, init_for_record));
@@ -3321,7 +3321,7 @@ pub(crate) fn generate_erlang_system(
     // get the conventional shape. Cross-system domain-field defaults
     // (`inner = @@Counter()` lowered to `counter:start_link()`)
     // unwrap the tuple at their own emission site so the field holds
-    // a bare Pid; see `lower_erlang_tagged_instantiation` and the
+    // a bare Pid; see `lower_erlang_system_instantiation` and the
     // post-pass cross-system call rewriter at the bottom of
     // `generate_erlang_system`.
     let start_link_args = sys_param_vars.join(", ");

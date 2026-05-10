@@ -11,7 +11,7 @@
 use super::ast::{CodegenNode, Field, Param, Visibility};
 use super::codegen_utils::type_to_string;
 use super::state_dispatch::{generate_handler_from_arcanum, handler_method_name};
-use super::system_codegen::{expand_tagged_in_domain, init_references_param};
+use super::system_codegen::{expand_system_instantiation_in_domain, init_references_param};
 use crate::frame_c::compiler::arcanum::{Arcanum, HandlerEntry};
 use crate::frame_c::compiler::frame_ast::{
     InterfaceMethod, MachineAst, ParamKind, StateVarAst, SystemAst, Type,
@@ -192,7 +192,8 @@ fn generate_rust_fields(system: &SystemAst) -> Vec<Field> {
         let strip_collision = init_references_param(init_text_str, &sys_param_names);
         if !strip_collision {
             if let Some(ref init_text) = &domain_var.initializer_text {
-                let expanded_init = expand_tagged_in_domain(init_text, TargetLanguage::Rust);
+                let expanded_init =
+                    expand_system_instantiation_in_domain(init_text, TargetLanguage::Rust);
                 field = field.with_initializer(CodegenNode::Ident(expanded_init));
             }
         }
@@ -255,7 +256,8 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
                 if is_domain_param {
                     domain_var.name.clone()
                 } else {
-                    let expanded = expand_tagged_in_domain(init_text, TargetLanguage::Rust);
+                    let expanded =
+                        expand_system_instantiation_in_domain(init_text, TargetLanguage::Rust);
                     // Wrap string-literal defaults in `String::from(...)`
                     // when the field type maps to Rust's `String` — without
                     // this, `s: str = ""` in Frame produces `s: ""` in the
@@ -1470,10 +1472,10 @@ pub(crate) fn rust_system_state() -> String {
     "self.__compartment.state.clone()".to_string()
 }
 
-/// Tagged instantiation compile error (undefined system)
-pub(crate) fn rust_tagged_instantiation_error(system_name: &str) -> String {
+/// System instantiation compile error (undefined system)
+pub(crate) fn rust_system_instantiation_error(system_name: &str) -> String {
     format!(
-        "compile_error!(\"Frame Error E421: Undefined system '{}' in tagged instantiation @@{}\");",
+        "compile_error!(\"Frame Error E421: Undefined system '{}' in system instantiation @@{}\");",
         system_name, system_name
     )
 }

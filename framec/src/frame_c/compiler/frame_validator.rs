@@ -340,6 +340,149 @@ impl FrameValidator {
         }
     }
 
+    /// RFC-0015 D7: validate `@@SystemName(args)` and `@@!SystemName()` call
+    /// sites against the set of declared systems and the kind-specific rules.
+    ///
+    /// - **E820**: `@@!Foo(args)` with non-empty args is rejected. Blank
+    ///   allocation is zero-arg by definition.
+    /// - **E821**: `@@SystemName(...)` (or `@@!SystemName()`) referencing a
+    ///   system not declared in the module is rejected.
+    pub fn validate_system_instantiations(
+        &mut self,
+        ast: &FrameAst,
+        source: &[u8],
+        target: crate::frame_c::visitors::TargetLanguage,
+    ) -> Result<(), Vec<ValidationError>> {
+        let defined_systems: std::collections::HashSet<String> = match ast {
+            FrameAst::System(s) => std::iter::once(s.name.clone()).collect(),
+            FrameAst::Module(m) => m.systems.iter().map(|s| s.name.clone()).collect(),
+        };
+
+        match ast {
+            FrameAst::System(system) => {
+                self.validate_system_instantiations_in_system(
+                    system,
+                    source,
+                    target,
+                    &defined_systems,
+                );
+            }
+            FrameAst::Module(module) => {
+                for system in &module.systems {
+                    self.validate_system_instantiations_in_system(
+                        system,
+                        source,
+                        target,
+                        &defined_systems,
+                    );
+                }
+            }
+        }
+
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors.clone())
+        }
+    }
+
+    fn validate_system_instantiations_in_system(
+        &mut self,
+        system: &SystemAst,
+        source: &[u8],
+        target: crate::frame_c::visitors::TargetLanguage,
+        defined_systems: &std::collections::HashSet<String>,
+    ) {
+        if let Some(machine) = &system.machine {
+            for state in &machine.states {
+                for handler in &state.handlers {
+                    let span = &handler.span;
+                    if span.start >= source.len() || span.end > source.len() {
+                        continue;
+                    }
+                    let body = &source[span.start..span.end];
+                    self.validate_system_instantiations_in_body(body, target, defined_systems);
+                }
+            }
+        }
+        for action in &system.actions {
+            let span = &action.span;
+            if span.start >= source.len() || span.end > source.len() {
+                continue;
+            }
+            let body = &source[span.start..span.end];
+            self.validate_system_instantiations_in_body(body, target, defined_systems);
+        }
+    }
+
+    fn validate_system_instantiations_in_body(
+        &mut self,
+        body: &[u8],
+        target: crate::frame_c::visitors::TargetLanguage,
+        defined_systems: &std::collections::HashSet<String>,
+    ) {
+        use crate::frame_c::compiler::frame_ast::InstantiationKind;
+        use crate::frame_c::compiler::native_region_scanner::{
+            FrameSegmentKind, Region, SegmentMetadata,
+        };
+
+        let open_brace = match body.iter().position(|&b| b == b'{') {
+            Some(pos) => pos,
+            None => return,
+        };
+        let mut scanner = get_native_scanner(target);
+        let scan_result = match scanner.scan(body, open_brace) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+
+        for region in &scan_result.regions {
+            if let Region::FrameSegment {
+                kind: FrameSegmentKind::SystemInstantiation,
+                metadata:
+                    SegmentMetadata::SystemInstantiation {
+                        system_name,
+                        args,
+                        kind: inst_kind,
+                    },
+                ..
+            } = region
+            {
+                // E820: blank allocation must be zero-arg.
+                if *inst_kind == InstantiationKind::NoInitialization {
+                    let inner = args.trim_start_matches('(').trim_end_matches(')').trim();
+                    if !inner.is_empty() {
+                        self.errors.push(ValidationError::new(
+                            "E820",
+                            format!(
+                                "blank allocation `@@!{}({})` must be zero-arg; received: `{}`",
+                                system_name, inner, inner
+                            ),
+                        ));
+                    }
+                }
+
+                // E821: referenced system must be declared in the module.
+                if !defined_systems.contains(system_name) {
+                    let prefix = if *inst_kind == InstantiationKind::NoInitialization {
+                        "@@!"
+                    } else {
+                        "@@"
+                    };
+                    let mut known: Vec<&String> = defined_systems.iter().collect();
+                    known.sort();
+                    self.errors.push(ValidationError::new(
+                        "E821",
+                        format!(
+                            "undefined system '{}' in `{}{}{}` — known systems: {:?}",
+                            system_name, prefix, system_name, args, known
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
     /// Validate Frame segments in a handler/action body using the scanner.
     /// Runs the language-specific scanner on the body text, then walks the
     /// identified segments. No byte-level scanning — the scanner handles
