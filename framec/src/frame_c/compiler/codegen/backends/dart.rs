@@ -231,6 +231,53 @@ impl LanguageBackend for DartBackend {
                 ctx.pop_indent();
 
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // RFC-0015 D7: emit a parallel `_no_init()` named
+                // constructor for the system class only. Initializes
+                // Dart's `late` framework fields without running any
+                // init code (no `__fire_enter_cascade`, no transition
+                // loop, no `$>` handler). Used by `@@!Foo()` so user
+                // code can pair no-initialization allocation with
+                // `restore_state(...)` for clean save/load round-trips.
+                //
+                // Skip Frame's framework helper classes — their ctors
+                // reference scope-bound params and are part of internal
+                // plumbing, not user-facing types reachable via `@@!`.
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
+                if !is_frame_helper {
+                    // Hardcode the four late fields every Frame system
+                    // class declares. They're framework-controlled and
+                    // identical across every Frame system, so we don't
+                    // walk the constructor body — that body emits some
+                    // assignments via NativeBlock and other IR variants
+                    // that don't surface cleanly as `Assignment` nodes.
+                    // The placeholder values here satisfy Dart's `late`
+                    // requirement; `restore_state` will overwrite them
+                    // with the saved compartment/state-stack contents.
+                    // Domain fields keep their declaration-site defaults.
+                    result.push('\n');
+                    result.push_str(&format!(
+                        "{}{}._no_init() {{\n",
+                        ctx.get_indent(),
+                        class_name
+                    ));
+                    ctx.push_indent();
+                    result.push_str(&format!("{}this._state_stack = [];\n", ctx.get_indent()));
+                    result.push_str(&format!("{}this._context_stack = [];\n", ctx.get_indent()));
+                    result.push_str(&format!(
+                        "{}this.__compartment = {}Compartment(\"\");\n",
+                        ctx.get_indent(),
+                        class_name
+                    ));
+                    result.push_str(&format!(
+                        "{}this.__next_compartment = null;\n",
+                        ctx.get_indent()
+                    ));
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                }
                 result
             }
 

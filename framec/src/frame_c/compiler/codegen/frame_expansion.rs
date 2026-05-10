@@ -599,17 +599,25 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("{}_alloc()", name)
         }
         TargetLanguage::Rust => {
-            // Rust: `Foo::__blank()` is a synthesized zero-arg associated
+            // Rust: `Foo::__no_init()` is a synthesized zero-arg associated
             // function emitted alongside `Foo::new()` in the Constructor
             // arm of backends/rust.rs. It returns Self with the same
             // struct literal as new() but with constructor params replaced
             // by `Default::default()` and the post-init cascade skipped.
-            format!("{}::__blank()", name)
+            format!("{}::__no_init()", name)
+        }
+        TargetLanguage::Dart => {
+            // Dart: `Foo._no_init()` is a synthesized private named
+            // constructor emitted alongside the regular ctor in the
+            // Constructor arm of backends/dart.rs. It assigns Dart's
+            // `late` fields with empty/placeholder values and skips the
+            // enter cascade + transition loop.
+            format!("{}._no_init()", name)
         }
 
         // ---- Backends still needing synthesized helpers ----
         // Java / Kotlin: would need `Unsafe.allocateInstance(Foo.class)` wrapped
-        // in a synthesized static. Swift / Dart / Erlang need an explicit
+        // in a synthesized static. Swift / Erlang need an explicit
         // synthesized method emitted in the system class definition.
         _ => format!(
             "/* @@! no-initialization allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
