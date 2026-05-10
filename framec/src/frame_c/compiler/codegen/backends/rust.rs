@@ -205,29 +205,36 @@ impl LanguageBackend for RustBackend {
                 body,
                 super_call: _,
             } => {
-                let params_str = self.emit_params(params, false);
-                let mut result = format!(
-                    "{}pub fn new({}) -> Self {{\n",
-                    ctx.get_indent(),
-                    params_str
-                );
-                ctx.push_indent();
-
-                // Rust needs struct initialization. Separate field assignments from other statements.
-                let mut field_inits: Vec<(String, String)> = Vec::new();
-                let mut post_init_stmts: Vec<&CodegenNode> = Vec::new();
+                // RFC-0017 (Arc A Phase A1): split the constructor into:
+                //   pub fn new() -> Self                    — bare framework
+                //   pub fn __frame_init(&mut self, <params>) — user $> + cascade
+                //   pub fn __create(<params>) -> Self        — factory (two-step)
+                //
+                // Call-site lowering:
+                //   - `@@Counter(7)` → `Counter::__create(7)`
+                //   - `@@!Counter()` → `Counter::new()` (replaces the
+                //                    obsolete `__no_init`).
+                //
+                // Body classification:
+                //   - Field assignments whose value references a ctor
+                //     param → placed in `__frame_init` (`self.f = expr`);
+                //     in `new()` the field is initialised with
+                //     `<Type as Default>::default()`.
+                //   - All other field assignments → `new()` only.
+                //   - Non-assignment statements (cascade triggers,
+                //     state setup) → `__frame_init` only, with `self.`
+                //     references kept (no replacement to `this.`).
+                let mut framework_fields: Vec<(String, String)> = Vec::new();
+                let mut param_bound_fields: Vec<(String, String, String)> = Vec::new(); // (field, value, default)
+                let mut cascade_stmts: Vec<&CodegenNode> = Vec::new();
 
                 for stmt in body {
-                    // Check if this is a field assignment: self.field = value
                     if let CodegenNode::Assignment { target, value } = stmt {
                         if let CodegenNode::FieldAccess { object, field } = target.as_ref() {
                             if matches!(object.as_ref(), CodegenNode::SelfRef) {
-                                // This is self.field = value - collect for struct init
-                                // For Rust: wrap string literals in String::from() for String fields
                                 let value_str = if let CodegenNode::Literal(Literal::String(s)) =
                                     value.as_ref()
                                 {
-                                    // String literal needs conversion for String fields
                                     format!(
                                         "String::from(\"{}\")",
                                         s.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -235,101 +242,108 @@ impl LanguageBackend for RustBackend {
                                 } else {
                                     self.emit(value, ctx)
                                 };
-                                field_inits.push((field.clone(), value_str));
+                                let mentions_param = params.iter().any(|p| {
+                                    value_str
+                                        .split(|c: char| !c.is_alphanumeric() && c != '_')
+                                        .any(|w| w == p.name)
+                                });
+                                if mentions_param {
+                                    // Find the param this field most directly
+                                    // references and use its type for the
+                                    // `Default::default()` placeholder. If the
+                                    // value is a direct param ident, easy;
+                                    // otherwise fall back to a generic Default.
+                                    let direct = params.iter().find(|p| p.name == value_str.trim());
+                                    let default_expr = if let Some(p) = direct {
+                                        let ty = p
+                                            .type_annotation
+                                            .as_ref()
+                                            .map(|t| self.convert_type(t))
+                                            .unwrap_or_else(|| "()".to_string());
+                                        format!("<{} as Default>::default()", ty)
+                                    } else {
+                                        "Default::default()".to_string()
+                                    };
+                                    param_bound_fields.push((
+                                        field.clone(),
+                                        value_str,
+                                        default_expr,
+                                    ));
+                                } else {
+                                    framework_fields.push((field.clone(), value_str));
+                                }
                                 continue;
                             }
                         }
                     }
-                    // Everything else is a post-init statement
-                    post_init_stmts.push(stmt);
+                    cascade_stmts.push(stmt);
                 }
 
-                if post_init_stmts.is_empty() {
-                    // Simple case: just struct initialization
-                    result.push_str(&format!("{}Self {{\n", ctx.get_indent()));
-                    ctx.push_indent();
-                    for (field, value) in &field_inits {
-                        result.push_str(&format!("{}{}: {},\n", ctx.get_indent(), field, value));
-                    }
-                    ctx.pop_indent();
-                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
-                } else {
-                    // Complex case: need mutable binding for post-init calls
-                    result.push_str(&format!("{}let mut this = Self {{\n", ctx.get_indent()));
-                    ctx.push_indent();
-                    for (field, value) in &field_inits {
-                        result.push_str(&format!("{}{}: {},\n", ctx.get_indent(), field, value));
-                    }
-                    ctx.pop_indent();
-                    result.push_str(&format!("{}}};\n", ctx.get_indent()));
-
-                    // Emit post-init statements, replacing self with this
-                    for stmt in post_init_stmts {
-                        let stmt_str = self.emit(stmt, ctx);
-                        // Replace "self." with "this." for post-init code
-                        let stmt_str = stmt_str.replace("self.", "this.");
-                        result.push_str(&stmt_str);
-                        if self.needs_semicolon(stmt) {
-                            result.push_str(";\n");
-                        } else {
-                            result.push('\n');
-                        }
-                    }
-                    result.push_str(&format!("{}this\n", ctx.get_indent()));
-                }
-
-                ctx.pop_indent();
-                result.push_str(&format!("{}}}\n", ctx.get_indent()));
-
-                // RFC-0015 D7: emit a parallel `__no_init()` that allocates
-                // the struct without running any init code (no `$>` cascade,
-                // no transition loop). Used by `@@!Foo()` so user code can
-                // pair no-initialization allocation with `restore_state(...)`
-                // for clean save/load round-trips.
-                //
-                // The struct literal mirrors `new()`'s, but any field whose
-                // value is a direct reference to a constructor param is
-                // replaced with that type's `Default::default()`. Other
-                // values (domain field defaults, `Vec::new()`,
-                // `Compartment::new("...")`, `None`) are preserved verbatim
-                // because they are already type-default placeholders that
-                // `restore_state` will subsequently overwrite.
-                result.push('\n');
-                result.push_str(&format!("{}#[allow(dead_code)]\n", ctx.get_indent()));
-                result.push_str(&format!(
-                    "{}pub fn __no_init() -> Self {{\n",
-                    ctx.get_indent()
-                ));
+                // Emit `pub fn new() -> Self` — bare framework
+                let mut result = format!("{}pub fn new() -> Self {{\n", ctx.get_indent());
                 ctx.push_indent();
                 result.push_str(&format!("{}Self {{\n", ctx.get_indent()));
                 ctx.push_indent();
-                for (field, value) in &field_inits {
-                    let no_init_value = if let Some(p) = params.iter().find(|p| p.name == *value) {
-                        // Param refs become typed type-defaults. Run the
-                        // Frame portable type (`int`/`str`/`bool`/...)
-                        // through the same Rust mapping used by emit_params
-                        // so the generated `__no_init()` references concrete
-                        // Rust types like `i64`, not Frame portable names.
-                        let ty = p
-                            .type_annotation
-                            .as_ref()
-                            .map(|t| self.convert_type(t))
-                            .unwrap_or_else(|| "()".to_string());
-                        format!("<{} as Default>::default()", ty)
-                    } else {
-                        value.clone()
-                    };
-                    result.push_str(&format!(
-                        "{}{}: {},\n",
-                        ctx.get_indent(),
-                        field,
-                        no_init_value
-                    ));
+                for (field, value) in &framework_fields {
+                    result.push_str(&format!("{}{}: {},\n", ctx.get_indent(), field, value));
+                }
+                for (field, _value, default) in &param_bound_fields {
+                    result.push_str(&format!("{}{}: {},\n", ctx.get_indent(), field, default));
                 }
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `pub fn __frame_init(&mut self, <params>)`
+                result.push('\n');
+                let frame_init_params = self.emit_params(params, true);
+                result.push_str(&format!(
+                    "{}pub fn __frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                ctx.push_indent();
+                for (field, value, _default) in &param_bound_fields {
+                    result.push_str(&format!(
+                        "{}self.{} = {};\n",
+                        ctx.get_indent(),
+                        field,
+                        value
+                    ));
+                }
+                for stmt in &cascade_stmts {
+                    let stmt_str = self.emit(stmt, ctx);
+                    result.push_str(&stmt_str);
+                    if self.needs_semicolon(stmt) {
+                        result.push_str(";\n");
+                    } else {
+                        result.push('\n');
+                    }
+                }
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `pub fn __create(<params>) -> Self` — factory
+                result.push('\n');
+                let create_params = self.emit_params(params, false);
+                result.push_str(&format!(
+                    "{}pub fn __create({}) -> Self {{\n",
+                    ctx.get_indent(),
+                    create_params
+                ));
+                ctx.push_indent();
+                result.push_str(&format!("{}let mut c = Self::new();\n", ctx.get_indent()));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c.__frame_init({});\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}c\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 

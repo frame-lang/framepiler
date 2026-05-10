@@ -595,10 +595,13 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             format!("new {}({})", name, args)
         }
         TargetLanguage::Rust => {
+            // RFC-0017 Phase A1: factory call uses `__create` which does
+            // the two-step (bare `new()` + `__frame_init(args)`).
+            // Bare `Counter::new()` is reserved for `@@!Counter()`.
             if args.trim().is_empty() {
-                format!("{}::new()", name)
+                format!("{}::__create()", name)
             } else {
-                format!("{}::new({})", name, args)
+                format!("{}::__create({})", name, args)
             }
         }
         TargetLanguage::C => {
@@ -822,12 +825,14 @@ mod tests {
 
     #[test]
     fn test_system_instantiation_rust() {
+        // RFC-0017 Phase A1: Rust factory expansion uses `__create()`.
+        // Bare `Foo::new()` is reserved for `@@!Foo()`.
         let src = "let s = @@Foo();\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
             expand_system_instantiations(src, &systems, &params, TargetLanguage::Rust).unwrap();
-        assert_eq!(result, "let s = Foo::new();\n");
+        assert_eq!(result, "let s = Foo::__create();\n");
     }
 
     #[test]

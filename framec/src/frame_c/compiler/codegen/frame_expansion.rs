@@ -604,12 +604,11 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("{}_alloc()", name)
         }
         TargetLanguage::Rust => {
-            // Rust: `Foo::__no_init()` is a synthesized zero-arg associated
-            // function emitted alongside `Foo::new()` in the Constructor
-            // arm of backends/rust.rs. It returns Self with the same
-            // struct literal as new() but with constructor params replaced
-            // by `Default::default()` and the post-init cascade skipped.
-            format!("{}::__no_init()", name)
+            // RFC-0017 Phase A1: `@@!Counter()` lowers to bare
+            // `Counter::new()`, which is now the framework-only
+            // constructor (does NOT run user `$>`). The `__create`
+            // factory is the @@Counter(args) path.
+            format!("{}::new()", name)
         }
         TargetLanguage::Dart => {
             // Dart: `Foo._no_init()` is a synthesized private named
