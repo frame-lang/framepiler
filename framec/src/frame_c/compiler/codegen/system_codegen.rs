@@ -2323,10 +2323,14 @@ self._context_stack.pop();"#,
                     let _ = (event_class, &system.name);
                     "__fire_enter_cascade()\n__process_transition_loop()".to_string()
                 }
-                TargetLanguage::Swift => format!(
-                    "if !{}.__skipInitialEnter {{\n    __fire_enter_cascade()\n    __process_transition_loop()\n}}",
-                    system.name
-                ),
+                TargetLanguage::Swift => {
+                    // RFC-0017 Phase A2: cascade runs unconditionally
+                    // inside `__frame_init`. The `__skipInitialEnter`
+                    // gate is gone — `@@!Counter()` lowers to bare
+                    // `Counter()` which never invokes `__frame_init`.
+                    let _ = &system.name;
+                    "__fire_enter_cascade()\n__process_transition_loop()".to_string()
+                }
                 TargetLanguage::Php => {
                     let _ = (event_class, &system.name);
                     "$this->__fire_enter_cascade();\n$this->__process_transition_loop();".to_string()
@@ -4774,17 +4778,10 @@ for (i in chain.size - 1 downTo 0) {{
 /// the user must satisfy by ensuring their type has a usable default
 /// constructor — the resulting instance is overwritten by
 /// `restore_state` immediately after `__no_init()` anyway.
-fn swift_type_default_expr(ty: &str) -> String {
-    match ty {
-        "int" | "i32" | "i64" | "number" => "0".to_string(),
-        "float" | "f32" | "f64" => "0.0".to_string(),
-        "bool" | "boolean" => "false".to_string(),
-        "str" | "string" | "String" => "\"\"".to_string(),
-        "List" | "list" => "[]".to_string(),
-        "Dict" | "dict" | "Map" | "map" => "[:]".to_string(),
-        other => format!("(0 as Any) as! {}", other),
-    }
-}
+// RFC-0015 D7's `swift_type_default_expr` was removed in RFC-0017
+// Phase A2 init-decouple. Its only consumer (`__no_init` factory) is
+// gone — the new `__create` factory invokes user params via
+// `__frame_init` directly, so no synthesized type-defaults needed.
 
 fn generate_swift_machinery(
     system: &SystemAst,
@@ -4794,35 +4791,12 @@ fn generate_swift_machinery(
     let mut methods = Vec::new();
     let chains = compute_hsm_chains(system);
 
-    // Class-level static flag.
-    methods.push(CodegenNode::NativeBlock {
-        code: "static var __skipInitialEnter: Bool = false".to_string(),
-        span: None,
-    });
-
-    // RFC-0015 D7: class-level factory for `@@!Foo()`. Toggles
-    // __skipInitialEnter around a regular init call, then restores the
-    // flag in `defer`. The init body still executes (so framework
-    // properties end up assigned), but the user-visible `$>` cascade is
-    // suppressed. `restore_state` will overwrite framework properties
-    // and domain values from JSON.
-    let no_init_args: Vec<String> = system
-        .params
-        .iter()
-        .map(|p| {
-            let ty = type_to_string(&p.param_type);
-            swift_type_default_expr(&ty)
-        })
-        .collect();
-    let no_init_body = format!(
-        "static func __no_init() -> {sys} {{\n    {sys}.__skipInitialEnter = true\n    defer {{ {sys}.__skipInitialEnter = false }}\n    return {sys}({args})\n}}",
-        sys = system.name,
-        args = no_init_args.join(", "),
-    );
-    methods.push(CodegenNode::NativeBlock {
-        code: no_init_body,
-        span: None,
-    });
+    // RFC-0017 Phase A2: Swift's `__skipInitialEnter` static flag and
+    // `__no_init` factory are gone. Bare `init()` is framework-only;
+    // `__frame_init(args)` runs the user `$>` + cascade; `__create(args)`
+    // is the factory. The static `__create` is emitted by the
+    // Constructor arm in backends/swift.rs alongside `init()` and
+    // `__frame_init`.
 
     // hsm_chain — class method (so it's callable from init before all
     // stored properties are initialized; Swift forbids instance-method

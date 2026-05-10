@@ -646,8 +646,9 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             }
         }
         TargetLanguage::Swift => {
-            // Swift: no new keyword
-            format!("{}({})", name, args)
+            // RFC-0017 Phase A2: Swift factory expansion uses `__create()`.
+            // Bare `Counter()` is reserved for `@@!Counter()`.
+            format!("{}.__create({})", name, args)
         }
         TargetLanguage::Erlang => {
             // Erlang: module:start_link()

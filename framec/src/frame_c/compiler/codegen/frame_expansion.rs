@@ -634,12 +634,10 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("{}()", name)
         }
         TargetLanguage::Swift => {
-            // Swift: `Foo.__no_init()` is a synthesized class-level
-            // factory emitted by `generate_swift_machinery` in
-            // system_codegen.rs. Toggles `__skipInitialEnter` around a
-            // regular `init` call with type-default args; restored via
-            // `defer`.
-            format!("{}.__no_init()", name)
+            // RFC-0017 Phase A2: `@@!Counter()` lowers to bare
+            // `Counter()` which runs only framework setup. Replaces
+            // the obsolete D7 `Counter.__no_init()` factory.
+            format!("{}()", name)
         }
         TargetLanguage::Erlang => {
             // Erlang: `foo:'__no_init'()` returns a bare Pid pointing

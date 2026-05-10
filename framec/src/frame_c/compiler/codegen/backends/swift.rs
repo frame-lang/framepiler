@@ -7,6 +7,50 @@ use crate::frame_c::visitors::TargetLanguage;
 /// Swift backend for code generation
 pub struct SwiftBackend;
 
+/// RFC-0017 Phase A2 helper: replace `[<param>(, <param>)*]` substrings
+/// with `[]` if every comma-separated entry is a known constructor
+/// param name. Used by the Swift Constructor arm to strip user-arg-bound
+/// enter_args / state_args from the bare `init()` body — those are
+/// re-supplied by `__frame_init`.
+fn swift_strip_param_lists(text: &str, param_names: &[&str]) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            let mut depth = 1;
+            let mut j = i + 1;
+            while j < chars.len() && depth > 0 {
+                match chars[j] {
+                    '[' => depth += 1,
+                    ']' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                let inner: String = chars[i + 1..j].iter().collect();
+                let parts: Vec<&str> = inner
+                    .split(',')
+                    .map(|p| p.trim())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                if !parts.is_empty() && parts.iter().all(|p| param_names.contains(p)) {
+                    result.push_str("[]");
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
+}
+
 impl LanguageBackend for SwiftBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
@@ -75,12 +119,20 @@ impl LanguageBackend for SwiftBackend {
                     result.push('\n');
                 }
 
+                // Temporarily expose this class's name as `system_name` so
+                // the Constructor arm can distinguish system vs framework
+                // helper classes (FrameEvent / FrameContext / Compartment)
+                // and apply the RFC-0017 init-decouple split only to the
+                // system class.
+                let prev_system = ctx.system_name.clone();
+                ctx.system_name = Some(name.clone());
                 for (i, method) in methods.iter().enumerate() {
                     if i > 0 {
                         result.push('\n');
                     }
                     result.push_str(&self.emit(method, ctx));
                 }
+                ctx.system_name = prev_system;
 
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
@@ -154,22 +206,118 @@ impl LanguageBackend for SwiftBackend {
                 body,
                 super_call,
             } => {
-                // Swift: init() for constructor
-                let params_str = self.emit_params(params);
-                let mut result = format!("{}init({}) {{\n", ctx.get_indent(), params_str);
-                ctx.push_indent();
+                // RFC-0017 Phase A2: split the system constructor into:
+                //   init()                              — bare framework
+                //   func __frame_init(<params>)         — user $> + cascade
+                //   static func __create(<params>) -> Self — factory
+                //
+                // Framework helper classes (FrameEvent / FrameContext /
+                // Compartment) keep the original single-`init` emission.
+                let class_name = ctx.system_name.clone().unwrap_or_default();
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
 
-                if let Some(sc) = super_call {
-                    result.push_str(&format!("{}{}\n", ctx.get_indent(), self.emit(sc, ctx)));
+                if is_frame_helper {
+                    let params_str = self.emit_params(params);
+                    let mut result = format!("{}init({}) {{\n", ctx.get_indent(), params_str);
+                    ctx.push_indent();
+                    if let Some(sc) = super_call {
+                        result.push_str(&format!("{}{}\n", ctx.get_indent(), self.emit(sc, ctx)));
+                    }
+                    for stmt in body {
+                        result.push_str(&self.emit(stmt, ctx));
+                        result.push('\n');
+                    }
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                    return result;
                 }
 
+                // System class: classify body items.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                if let Some(sc) = super_call {
+                    framework_lines.push(format!("{}{}", ctx.get_indent(), self.emit(sc, ctx)));
+                }
                 for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    // Swift: no semicolons
-                    result.push('\n');
+                    let rendered = self.emit(stmt, ctx);
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered.clone());
+                        framework_lines.push(swift_strip_param_lists(&rendered, &param_names));
+                    } else {
+                        framework_lines.push(rendered);
+                    }
+                }
+                ctx.pop_indent();
+
+                // Emit `init()` — bare framework
+                let mut result = format!("{}init() {{\n", ctx.get_indent());
+                ctx.push_indent();
+                for line in &framework_lines {
+                    result.push_str(line);
+                    if !line.ends_with('\n') {
+                        result.push('\n');
+                    }
                 }
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `func __frame_init(<params>)`
+                result.push('\n');
+                let frame_init_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}func __frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                ctx.push_indent();
+                for line in &frame_init_lines {
+                    result.push_str(line);
+                    if !line.ends_with('\n') {
+                        result.push('\n');
+                    }
+                }
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `static func __create(<params>) -> Counter` — factory
+                result.push('\n');
+                let create_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}static func __create({}) -> {} {{\n",
+                    ctx.get_indent(),
+                    create_params,
+                    class_name
+                ));
+                ctx.push_indent();
+                result.push_str(&format!("{}let c = {}()\n", ctx.get_indent(), class_name));
+                // Swift: emit_params prefixes the first param with `_`
+                // to disable the call-site label. Match that — call
+                // positionally (no `label:` prefix).
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c.__frame_init({})\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 
