@@ -601,7 +601,7 @@ impl ContextParserFsm {
             self.__transition(__compartment);
             return;
         } else if b == b'!' {
-            // @@! — RFC-0015 D7 blank-allocation sigil. Must be followed
+            // @@! — RFC-0015 D7 no-initialization sigil. Must be followed
             // immediately by an uppercase identifier (the system name).
             let j = i + 1;
             if j < end && bytes[j].is_ascii_uppercase() {

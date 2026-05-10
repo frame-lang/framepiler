@@ -554,8 +554,8 @@ pub(crate) fn normalize_indentation(text: &str) -> String {
         .join("\n")
 }
 
-/// RFC-0015 D7: render `@@!SystemName()` to the per-language blank-allocation
-/// primitive. The blank instance has no init code run — `$Start` body and
+/// RFC-0015 D7: render `@@!SystemName()` to the per-language no-initialization
+/// primitive. The uninitialized instance has no init code run — `$Start` body and
 /// `$>` handler are skipped. The user typically pairs this with
 /// `inst.restore_state(data)` to populate the instance from saved bytes.
 ///
@@ -564,7 +564,7 @@ pub(crate) fn normalize_indentation(text: &str) -> String {
 /// regions like the `if __name__ == "__main__":` block) need to render to
 /// the same per-language primitive. Phase 5 of the D7 plan removes the
 /// duplicate post-pass entry point and consolidates here.
-pub(crate) fn generate_blank_allocation(name: &str, lang: TargetLanguage) -> String {
+pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> String {
     match lang {
         // ---- Built-in primitives (no backend codegen changes needed) ----
         TargetLanguage::Python3 => format!("{}.__new__({})", name, name),
@@ -576,7 +576,7 @@ pub(crate) fn generate_blank_allocation(name: &str, lang: TargetLanguage) -> Str
         TargetLanguage::Go => format!("&{}{{}}", name),
         TargetLanguage::GDScript => {
             // GDScript: `_init` is empty by Frame's factory-only design,
-            // so `Foo.new()` is itself a blank allocation.
+            // so `Foo.new()` is itself a no-initialization allocation.
             format!("{}.new()", name)
         }
         TargetLanguage::Php => format!(
@@ -600,7 +600,7 @@ pub(crate) fn generate_blank_allocation(name: &str, lang: TargetLanguage) -> Str
         // C: needs Foo_alloc() emitted by the C system codegen.
         // For now, emit a clear marker until those Phase 6 follow-ups land.
         _ => format!(
-            "/* @@! blank allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
+            "/* @@! no-initialization allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
             lang, name
         ),
     }
@@ -3633,7 +3633,7 @@ pub(crate) fn generate_frame_expansion(
             // post-pass; for now we keep the existing behavior.)
             //
             // `@@!SystemName()` (NoInitialization, RFC-0015 D7): emitted
-            // here directly as the per-language blank allocation. The
+            // here directly as the per-language no-initialization allocation. The
             // assembler's post-pass doesn't recognize `@@!` (the trailing
             // `!` after `@@` short-circuits its uppercase check), so we
             // MUST emit the final form here.
@@ -3644,7 +3644,7 @@ pub(crate) fn generate_frame_expansion(
                 ..
             } = metadata
             {
-                generate_blank_allocation(system_name, lang)
+                generate_no_initialization(system_name, lang)
             } else {
                 segment_text.to_string()
             }

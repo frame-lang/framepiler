@@ -493,11 +493,11 @@ fn expand_system_instantiations(
             let start = i;
             i += 2;
 
-            // RFC-0015 D7: `@@!SystemName()` — blank allocation in native code.
+            // RFC-0015 D7: `@@!SystemName()` — no-initialization allocation in native code.
             // (Phase 5 will migrate this entire post-pass into AST-driven
             // codegen; for now, recognize and rewrite.)
-            let is_blank = i < end && bytes[i] == b'!';
-            if is_blank {
+            let is_no_init = i < end && bytes[i] == b'!';
+            if is_no_init {
                 i += 1;
             }
 
@@ -515,12 +515,12 @@ fn expand_system_instantiations(
                         let args_text = std::str::from_utf8(&bytes[i + 1..close - 1]).unwrap_or("");
 
                         if defined_systems.contains(name) {
-                            if is_blank {
+                            if is_no_init {
                                 // E820 already enforced by the validator phase.
                                 // Reuse the per-backend rendering from frame_expansion
                                 // so handler-body and native-code paths stay in sync.
-                                let blank = crate::frame_c::compiler::codegen::frame_expansion::generate_blank_allocation(name, lang);
-                                result.push_str(&blank);
+                                let no_init = crate::frame_c::compiler::codegen::frame_expansion::generate_no_initialization(name, lang);
+                                result.push_str(&no_init);
                                 i = close;
                                 continue;
                             }
@@ -554,7 +554,7 @@ fn expand_system_instantiations(
                             i = close;
                             continue;
                         } else {
-                            let prefix = if is_blank { "@@!" } else { "@@" };
+                            let prefix = if is_no_init { "@@!" } else { "@@" };
                             return Err(AssemblyError {
                                 message: format!(
                                     "Undefined system '{}' in `{}{}` instantiation. Available: {:?}",

@@ -343,8 +343,8 @@ impl FrameValidator {
     /// RFC-0015 D7: validate `@@SystemName(args)` and `@@!SystemName()` call
     /// sites against the set of declared systems and the kind-specific rules.
     ///
-    /// - **E820**: `@@!Foo(args)` with non-empty args is rejected. Blank
-    ///   allocation is zero-arg by definition.
+    /// - **E820**: `@@!Foo(args)` with non-empty args is rejected. The
+    ///   no-initialization form is zero-arg by definition.
     /// - **E821**: `@@SystemName(...)` (or `@@!SystemName()`) referencing a
     ///   system not declared in the module is rejected.
     pub fn validate_system_instantiations(
@@ -448,14 +448,14 @@ impl FrameValidator {
                 ..
             } = region
             {
-                // E820: blank allocation must be zero-arg.
+                // E820: no-initialization allocation must be zero-arg.
                 if *inst_kind == InstantiationKind::NoInitialization {
                     let inner = args.trim_start_matches('(').trim_end_matches(')').trim();
                     if !inner.is_empty() {
                         self.errors.push(ValidationError::new(
                             "E820",
                             format!(
-                                "blank allocation `@@!{}({})` must be zero-arg; received: `{}`",
+                                "no-initialization allocation `@@!{}({})` must be zero-arg; received: `{}`",
                                 system_name, inner, inner
                             ),
                         ));

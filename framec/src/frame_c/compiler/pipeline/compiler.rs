@@ -616,7 +616,7 @@ pub fn compile_ast_based(
                 });
             }
             // RFC-0015 D7: validate `@@SystemName(args)` and `@@!SystemName()`
-            // call sites (E820 zero-arg blank, E821 undefined system).
+            // call sites (E820 zero-arg no-initialization, E821 undefined system).
             if let Err(errs) =
                 validator.validate_system_instantiations(&frame_ast, source, config.target)
             {

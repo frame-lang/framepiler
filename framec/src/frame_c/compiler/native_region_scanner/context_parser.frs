@@ -17,7 +17,7 @@
 //   other              → no match (has_result=false)
 //
 // For SystemInstantiation, the FSM sets `result_no_init = true` if the source
-// had `@@!SystemName(...)` (the user's blank-allocation sigil). The caller
+// had `@@!SystemName(...)` (the user's no-initialization sigil). The caller
 // reads that flag to populate `InstantiationKind::{Factory, NoInitialization}`
 // in the segment metadata.
 //
@@ -52,7 +52,7 @@ include!("expr_scanner.gen.rs");
                     self.pos = i + 1;
                     -> $DispatchColon
                 } else if b == b'!' {
-                    // @@! — RFC-0015 D7 blank-allocation sigil. Must be
+                    // @@! — RFC-0015 D7 no-initialization sigil. Must be
                     // followed immediately by an uppercase identifier
                     // (the system name). If not, no match — the user
                     // wrote something like `@@! foo` which is meaningless.

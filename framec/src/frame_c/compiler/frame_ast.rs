@@ -396,7 +396,7 @@ pub enum Statement {
 ///
 /// - `Factory` — the standard factory call (`@@Foo(args)`). Allocates, routes
 ///   args, fires `$Start` body + `$>` handler. This is what runs init code.
-/// - `NoInitialization` — RFC-0015 D7 blank allocation (`@@!Foo()`). Allocates
+/// - `NoInitialization` — RFC-0015 D7 no-initialization allocation (`@@!Foo()`). Allocates
 ///   without calling init. Always zero-arg by definition. The user typically
 ///   pairs this with `inst.restore_state(data)` to load from saved bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
