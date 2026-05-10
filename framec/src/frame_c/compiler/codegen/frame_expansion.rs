@@ -630,10 +630,18 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             // type-default args.
             format!("{}.__no_init()", name)
         }
+        TargetLanguage::Swift => {
+            // Swift: `Foo.__no_init()` is a synthesized class-level
+            // factory emitted by `generate_swift_machinery` in
+            // system_codegen.rs. Toggles `__skipInitialEnter` around a
+            // regular `init` call with type-default args; restored via
+            // `defer`.
+            format!("{}.__no_init()", name)
+        }
 
         // ---- Backends still needing synthesized helpers ----
-        // Swift / Erlang need explicit synthesized methods emitted in
-        // the system class definition.
+        // Erlang needs an explicit synthesized clause in the gen_statem
+        // module.
         _ => format!(
             "/* @@! no-initialization allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
             lang, name

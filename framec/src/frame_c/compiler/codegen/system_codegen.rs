@@ -4777,6 +4777,24 @@ for (i in chain.size - 1 downTo 0) {{
     methods
 }
 
+/// RFC-0015 D7: zero-value Swift literal for a Frame portable type.
+/// Used by `__no_init()` to call the real init without meaningful args.
+/// Custom user types fall through to a force-unwrapped `as!` cast that
+/// the user must satisfy by ensuring their type has a usable default
+/// constructor — the resulting instance is overwritten by
+/// `restore_state` immediately after `__no_init()` anyway.
+fn swift_type_default_expr(ty: &str) -> String {
+    match ty {
+        "int" | "i32" | "i64" | "number" => "0".to_string(),
+        "float" | "f32" | "f64" => "0.0".to_string(),
+        "bool" | "boolean" => "false".to_string(),
+        "str" | "string" | "String" => "\"\"".to_string(),
+        "List" | "list" => "[]".to_string(),
+        "Dict" | "dict" | "Map" | "map" => "[:]".to_string(),
+        other => format!("(0 as Any) as! {}", other),
+    }
+}
+
 fn generate_swift_machinery(
     system: &SystemAst,
     event_class: &str,
@@ -4788,6 +4806,30 @@ fn generate_swift_machinery(
     // Class-level static flag.
     methods.push(CodegenNode::NativeBlock {
         code: "static var __skipInitialEnter: Bool = false".to_string(),
+        span: None,
+    });
+
+    // RFC-0015 D7: class-level factory for `@@!Foo()`. Toggles
+    // __skipInitialEnter around a regular init call, then restores the
+    // flag in `defer`. The init body still executes (so framework
+    // properties end up assigned), but the user-visible `$>` cascade is
+    // suppressed. `restore_state` will overwrite framework properties
+    // and domain values from JSON.
+    let no_init_args: Vec<String> = system
+        .params
+        .iter()
+        .map(|p| {
+            let ty = type_to_string(&p.param_type);
+            swift_type_default_expr(&ty)
+        })
+        .collect();
+    let no_init_body = format!(
+        "static func __no_init() -> {sys} {{\n    {sys}.__skipInitialEnter = true\n    defer {{ {sys}.__skipInitialEnter = false }}\n    return {sys}({args})\n}}",
+        sys = system.name,
+        args = no_init_args.join(", "),
+    );
+    methods.push(CodegenNode::NativeBlock {
+        code: no_init_body,
         span: None,
     });
 
