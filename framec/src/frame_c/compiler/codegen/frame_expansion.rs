@@ -627,12 +627,12 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("{}.__no_init()", name)
         }
         TargetLanguage::Kotlin => {
-            // Kotlin: `Foo.__no_init()` is a synthesized companion-object
-            // factory emitted by `generate_kotlin_machinery` in
-            // system_codegen.rs. Same JVM pattern as Java — toggles
-            // `__skipInitialEnter` and calls the primary ctor with
-            // type-default args.
-            format!("{}.__no_init()", name)
+            // RFC-0017 Phase A1: `@@!Counter()` lowers to the bare
+            // primary constructor `Counter()` which runs the
+            // framework-only `init {}` block without invoking
+            // `__frame_init` (the user `$>` cascade entry point).
+            // Replaces the obsolete D7 `Counter.__no_init()` factory.
+            format!("{}()", name)
         }
         TargetLanguage::Swift => {
             // Swift: `Foo.__no_init()` is a synthesized class-level

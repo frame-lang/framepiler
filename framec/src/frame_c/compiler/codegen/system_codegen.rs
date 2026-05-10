@@ -2312,8 +2312,12 @@ self._context_stack.pop();"#,
                     "s.__fire_enter_cascade()\ns.__process_transition_loop()".to_string()
                 }
                 TargetLanguage::Kotlin => {
+                    // RFC-0017 Phase A1: cascade runs unconditionally
+                    // inside `__frame_init`. The old `__skipInitialEnter`
+                    // gate is gone — `@@!Counter()` lowers to the bare
+                    // primary ctor which never invokes `__frame_init`.
                     let _ = (event_class, &system.name);
-                    "if (!__skipInitialEnter) {\n    __fire_enter_cascade()\n    __process_transition_loop()\n}".to_string()
+                    "__fire_enter_cascade()\n__process_transition_loop()".to_string()
                 }
                 TargetLanguage::Swift => format!(
                     "if !{}.__skipInitialEnter {{\n    __fire_enter_cascade()\n    __process_transition_loop()\n}}",
@@ -4485,23 +4489,10 @@ for (int i = chain.size() - 1; i >= 0; i--) {{
     methods
 }
 
-/// RFC-0015 D7: zero-value Kotlin literal for a Frame portable type,
-/// used to fill in constructor params when `__no_init()` calls the real
-/// ctor. Non-nullable Kotlin types reject `null`, so primitives map to
-/// their canonical defaults; collections to empty mutable instances; the
-/// fallback uses an unchecked cast that compiles even for user types
-/// (the resulting instance will be overwritten by `restore_state`).
-fn kotlin_type_default_expr(ty: &str) -> String {
-    match ty {
-        "int" | "i32" | "i64" | "number" => "0".to_string(),
-        "float" | "f32" | "f64" => "0.0".to_string(),
-        "bool" | "boolean" => "false".to_string(),
-        "str" | "string" | "String" => "\"\"".to_string(),
-        "List" | "list" => "mutableListOf<Any?>()".to_string(),
-        "Dict" | "dict" | "Map" | "map" => "mutableMapOf<String, Any?>()".to_string(),
-        _ => "null as Any? as Nothing".to_string(),
-    }
-}
+// RFC-0015 D7's `kotlin_type_default_expr` was removed in RFC-0017
+// Phase A1 init-decouple. Its only consumer (`__no_init` factory) is
+// gone — the new `__create` factory invokes the user's params via
+// `__frame_init` directly, so we never need synthesized type-defaults.
 
 fn generate_kotlin_machinery(
     system: &SystemAst,
@@ -4511,33 +4502,28 @@ fn generate_kotlin_machinery(
     let mut methods = Vec::new();
     let chains = compute_hsm_chains(system);
 
-    // Companion-object flag gating the ctor's ENTER dispatch.
-    methods.push(CodegenNode::NativeBlock {
-        code: "@JvmStatic var __skipInitialEnter: Boolean = false".to_string(),
-        span: None,
-    });
-
-    // RFC-0015 D7: companion-object factory for `@@!Foo()`. Toggles
-    // __skipInitialEnter around a regular constructor call, then
-    // restores the flag in `finally`. The constructor's body still
-    // executes (so framework fields end up assigned), but the
-    // user-visible `$>` cascade is suppressed. `restore_state` will
-    // overwrite the framework fields and domain values from JSON.
-    let no_init_args: Vec<String> = system
+    // RFC-0017 Phase A1: companion-object factory for `@@Counter(args)`.
+    // Constructs a bare instance via the primary ctor (framework only)
+    // then invokes `__frame_init(args)` to run the user `$>` + cascade.
+    // Two-step decoupling replaces the old `__skipInitialEnter` flag +
+    // `__no_init` factory + `kotlin_type_default_expr` dance from D7.
+    let create_params: Vec<String> = system
         .params
         .iter()
         .map(|p| {
             let ty = type_to_string(&p.param_type);
-            kotlin_type_default_expr(&ty)
+            format!("{}: {}", p.name, kotlin_map_type(&ty))
         })
         .collect();
-    let no_init_body = format!(
-        "@JvmStatic fun __no_init(): {sys} {{\n    __skipInitialEnter = true\n    try {{\n        return {sys}({args})\n    }} finally {{\n        __skipInitialEnter = false\n    }}\n}}",
+    let arg_pass: Vec<String> = system.params.iter().map(|p| p.name.clone()).collect();
+    let create_body = format!(
+        "@JvmStatic fun __create({params}): {sys} {{\n    val c = {sys}()\n    c.__frame_init({args})\n    return c\n}}",
         sys = system.name,
-        args = no_init_args.join(", "),
+        params = create_params.join(", "),
+        args = arg_pass.join(", "),
     );
     methods.push(CodegenNode::NativeBlock {
-        code: no_init_body,
+        code: create_body,
         span: None,
     });
 

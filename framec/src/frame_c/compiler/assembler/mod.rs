@@ -615,8 +615,10 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             format!("new {}({})", name, args)
         }
         TargetLanguage::Kotlin => {
-            // Kotlin: no new keyword
-            format!("{}({})", name, args)
+            // RFC-0017 Phase A1: Kotlin factory expansion uses `__create()`
+            // companion-object method. Bare `Counter()` is reserved for
+            // `@@!Counter()` (no init).
+            format!("{}.__create({})", name, args)
         }
         TargetLanguage::Cpp => {
             // C++: stack allocation (classes use unique_ptr internally)

@@ -7,6 +7,55 @@ use crate::frame_c::visitors::TargetLanguage;
 /// Kotlin backend for code generation
 pub struct KotlinBackend;
 
+/// RFC-0017 Phase A1 helper: replace `mutableListOf<Any?>(<param>(, <param>)*)`
+/// or `[<param>(, <param>)*]` substrings with empty-list literals if every
+/// element is a known constructor param name. Used by the Kotlin
+/// Constructor arm to strip user-arg-bound enter_args / state_args from
+/// the bare `init {}` body — those are re-supplied by `__frame_init`.
+fn strip_kotlin_param_lists(text: &str, param_names: &[&str]) -> String {
+    // The pattern emitted by system_codegen.rs for Kotlin is
+    // `mutableListOf<Any?>(seed)` or `mutableListOf<Any?>()`. We match the
+    // call-args parens between `mutableListOf<Any?>` and the closing `)`.
+    let mut result = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let needle = b"mutableListOf<Any?>(";
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(needle) {
+            let args_start = i + needle.len();
+            let mut depth = 1;
+            let mut j = args_start;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                let inner = &text[args_start..j];
+                let parts: Vec<&str> = inner
+                    .split(',')
+                    .map(|p| p.trim())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                if !parts.is_empty() && parts.iter().all(|p| param_names.contains(p)) {
+                    result.push_str("mutableListOf<Any?>()");
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
 impl LanguageBackend for KotlinBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
@@ -59,19 +108,30 @@ impl LanguageBackend for KotlinBackend {
                 // Kotlin uses a primary constructor declared on the class
                 // header. We extract the parameter list from the first
                 // Constructor codegen node in `methods` and emit them as
-                // `class Robot(val x: Int, val name: String)`. The system
-                // params are then in scope inside the `init {}` block that
-                // the Constructor case will emit. Without this, system
-                // params declared in the AST would be invisible to the
-                // init body and the call site `Robot(42)` would fail to
-                // compile (no matching constructor).
-                let primary_params = methods
-                    .iter()
-                    .find_map(|m| match m {
-                        CodegenNode::Constructor { params, .. } => Some(params.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
+                // `class Robot(val x: Int, val name: String)`.
+                //
+                // RFC-0017 Phase A1: for SYSTEM classes (not Frame's
+                // framework helpers), the primary ctor is BARE — params
+                // live on the synthesized `__frame_init` member function
+                // and `__create` factory, not on the class header. This
+                // decouples Frame init from the language constructor.
+                // The Constructor arm reads `ctx.system_name` (set just
+                // below) to know whether this Class is the system or a
+                // helper, and renders accordingly.
+                let is_frame_helper = name.ends_with("FrameEvent")
+                    || name.ends_with("FrameContext")
+                    || name.ends_with("Compartment");
+                let primary_params: Vec<Param> = if is_frame_helper {
+                    methods
+                        .iter()
+                        .find_map(|m| match m {
+                            CodegenNode::Constructor { params, .. } => Some(params.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 let primary_ctor = if primary_params.is_empty() {
                     String::new()
                 } else {
@@ -169,6 +229,14 @@ impl LanguageBackend for KotlinBackend {
                         ) || is_companion_native(m)
                     });
 
+                // Temporarily expose this class's name as `system_name` so
+                // the Constructor arm can distinguish system vs framework
+                // helper classes (FrameEvent / FrameContext / Compartment)
+                // and apply the RFC-0017 init-decouple split only to the
+                // system class.
+                let prev_system = ctx.system_name.clone();
+                ctx.system_name = Some(name.clone());
+
                 for (i, (_, method)) in non_statics.iter().enumerate() {
                     if i > 0 {
                         result.push('\n');
@@ -191,6 +259,8 @@ impl LanguageBackend for KotlinBackend {
                     ctx.pop_indent();
                     result.push_str(&format!("{}}}\n", ctx.get_indent()));
                 }
+
+                ctx.system_name = prev_system;
 
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
@@ -265,23 +335,103 @@ impl LanguageBackend for KotlinBackend {
                 body,
                 super_call,
             } => {
-                // Kotlin: use init { } block for constructor body
-                let _params_str = self.emit_params(params);
+                // RFC-0017 Phase A1: for SYSTEM classes, split the
+                // constructor into:
+                //   init { framework_only }
+                //   fun __frame_init(<params>): Unit { user $> + cascade }
+                //
+                // For framework helper classes (FrameEvent / FrameContext
+                // / Compartment), keep the original simple `init { body }`
+                // emission — they're not user-facing systems.
+                //
+                // Helper-class detection uses `ctx.system_name`, which the
+                // Class arm temporarily sets to the class being emitted.
+                let class_name = ctx
+                    .system_name
+                    .clone()
+                    .unwrap_or_else(|| "Class".to_string());
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
 
-                let mut result = format!("{}init {{\n", ctx.get_indent());
-                ctx.push_indent();
-
-                if let Some(sc) = super_call {
-                    result.push_str(&format!("{}{}\n", ctx.get_indent(), self.emit(sc, ctx)));
+                if is_frame_helper {
+                    let mut result = format!("{}init {{\n", ctx.get_indent());
+                    ctx.push_indent();
+                    if let Some(sc) = super_call {
+                        result.push_str(&format!("{}{}\n", ctx.get_indent(), self.emit(sc, ctx)));
+                    }
+                    for stmt in body {
+                        result.push_str(&self.emit(stmt, ctx));
+                        result.push('\n');
+                    }
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                    return result;
                 }
 
+                // System-class path: classify body items.
+                //
+                // Render once at the body-indent level so the lines can be
+                // reused across both `init {}` and `fun __frame_init`.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                if let Some(sc) = super_call {
+                    framework_lines.push(format!("{}{}", ctx.get_indent(), self.emit(sc, ctx)));
+                }
                 for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    // Kotlin: no semicolons
-                    result.push('\n');
+                    let rendered = self.emit(stmt, ctx);
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered.clone());
+                        framework_lines.push(strip_kotlin_param_lists(&rendered, &param_names));
+                    } else {
+                        framework_lines.push(rendered);
+                    }
+                }
+                ctx.pop_indent();
+
+                // Emit `init { framework_lines }`
+                let mut result = format!("{}init {{\n", ctx.get_indent());
+                ctx.push_indent();
+                for line in &framework_lines {
+                    result.push_str(line);
+                    if !line.ends_with('\n') {
+                        result.push('\n');
+                    }
                 }
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `fun __frame_init(<params>)` member function
+                result.push('\n');
+                let frame_init_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}fun __frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                ctx.push_indent();
+                for line in &frame_init_lines {
+                    result.push_str(line);
+                    if !line.ends_with('\n') {
+                        result.push('\n');
+                    }
+                }
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 
