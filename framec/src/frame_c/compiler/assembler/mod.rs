@@ -611,7 +611,12 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
                 format!("{}_new({})", name, args)
             }
         }
-        TargetLanguage::Java | TargetLanguage::CSharp | TargetLanguage::Php => {
+        TargetLanguage::Java => {
+            // RFC-0017 Phase A1: Java factory expansion uses `__create()`.
+            // Bare `new Counter()` is reserved for `@@!Counter()`.
+            format!("{}.__create({})", name, args)
+        }
+        TargetLanguage::CSharp | TargetLanguage::Php => {
             format!("new {}({})", name, args)
         }
         TargetLanguage::Kotlin => {

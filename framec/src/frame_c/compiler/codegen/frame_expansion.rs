@@ -619,12 +619,11 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("{}._no_init()", name)
         }
         TargetLanguage::Java => {
-            // Java: `Foo.__no_init()` is a synthesized public static
-            // factory emitted alongside the regular ctor in
-            // backends/java.rs. It toggles the existing
-            // `__skipInitialEnter` flag and calls the constructor with
-            // type-default args, suppressing the `$>` cascade.
-            format!("{}.__no_init()", name)
+            // RFC-0017 Phase A1: `@@!Counter()` lowers to the bare
+            // constructor `new Counter()` which runs only framework
+            // setup (no `$>` cascade). Replaces the obsolete D7
+            // `Counter.__no_init()` static factory.
+            format!("new {}()", name)
         }
         TargetLanguage::Kotlin => {
             // RFC-0017 Phase A1: `@@!Counter()` lowers to the bare

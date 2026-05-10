@@ -2300,8 +2300,12 @@ self._context_stack.pop();"#,
                     "if (!__skipInitialEnter) {{\n    __fire_enter_cascade();\n    __process_transition_loop();\n}}"
                 ),
                 TargetLanguage::Java => {
+                    // RFC-0017 Phase A1: cascade runs unconditionally
+                    // inside `__frame_init`. The old `__skipInitialEnter`
+                    // gate is gone — `@@!Counter()` lowers to bare
+                    // `new Counter()` which never invokes `__frame_init`.
                     let _ = (event_class, &system.name);
-                    "if (!__skipInitialEnter) {\n    __fire_enter_cascade();\n    __process_transition_loop();\n}".to_string()
+                    "__fire_enter_cascade();\n__process_transition_loop();".to_string()
                 }
                 TargetLanguage::CSharp => {
                     let _ = (event_class, &system.name);
@@ -4238,11 +4242,12 @@ fn generate_java_machinery(
     let mut methods = Vec::new();
     let chains = compute_hsm_chains(system);
 
-    // Class-static flag gating the ctor's ENTER dispatch.
-    methods.push(CodegenNode::NativeBlock {
-        code: "private static boolean __skipInitialEnter = false;".to_string(),
-        span: None,
-    });
+    // RFC-0017 Phase A1: Java's `__skipInitialEnter` flag is gone.
+    // The framework constructor is bare; `__frame_init(args)` runs
+    // the user `$>` + cascade. `__create(args)` is the factory.
+    //
+    // The `__create` static method is emitted by the Constructor arm
+    // alongside the bare ctor — see backends/java.rs.
 
     // hsm_chain — instance method returning the topology table.
     let mut chain_method = String::from(

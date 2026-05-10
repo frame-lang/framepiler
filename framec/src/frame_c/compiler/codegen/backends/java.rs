@@ -7,6 +7,56 @@ use crate::frame_c::visitors::TargetLanguage;
 /// Java backend for code generation
 pub struct JavaBackend;
 
+/// RFC-0017 Phase A1 helper: replace `new ArrayList<>(java.util.Arrays.asList(<param>...))`
+/// with `new ArrayList<>()` if every comma-separated entry in the inner
+/// `asList(...)` is a known constructor param name. Used by the Java
+/// Constructor arm to strip user-arg-bound enter_args / state_args from
+/// the bare `Counter()` body — those are re-supplied by `__frame_init`.
+fn java_strip_param_lists(text: &str, param_names: &[&str]) -> String {
+    let needle = "new ArrayList<>(java.util.Arrays.asList(";
+    let mut result = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(needle_bytes) {
+            // Find the matching `)` for the asList call.
+            let args_start = i + needle_bytes.len();
+            let mut depth = 1;
+            let mut j = args_start;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            // Now bytes[j] is the closing `)` of asList. The outer
+            // ArrayList<>(...) closes at j+1.
+            if depth == 0 && j + 1 < bytes.len() && bytes[j + 1] == b')' {
+                let inner = &text[args_start..j];
+                let parts: Vec<&str> = inner
+                    .split(',')
+                    .map(|p| p.trim())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                if !parts.is_empty() && parts.iter().all(|p| param_names.contains(p)) {
+                    result.push_str("new ArrayList<>()");
+                    i = j + 2; // skip past both closing parens
+                    continue;
+                }
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
 impl LanguageBackend for JavaBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         match node {
@@ -78,12 +128,20 @@ impl LanguageBackend for JavaBackend {
                     result.push('\n');
                 }
 
+                // Temporarily expose this class's name as `system_name` so
+                // the Constructor arm can distinguish system vs framework
+                // helper classes (FrameEvent / FrameContext / Compartment)
+                // and apply the RFC-0017 init-decouple split only to the
+                // system class.
+                let prev_system = ctx.system_name.clone();
+                ctx.system_name = Some(name.clone());
                 for (i, method) in methods.iter().enumerate() {
                     if i > 0 {
                         result.push('\n');
                     }
                     result.push_str(&self.emit(method, ctx));
                 }
+                ctx.system_name = prev_system;
 
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
@@ -160,84 +218,138 @@ impl LanguageBackend for JavaBackend {
                 body,
                 super_call,
             } => {
+                // RFC-0017 Phase A1: split the system constructor into:
+                //   public Counter()                       — bare framework
+                //   public void __frame_init(<params>)     — user $> + cascade
+                //   public static Counter __create(<params>) — factory
+                //
+                // For framework helper classes (FrameEvent / FrameContext
+                // / Compartment), keep the original single-ctor emission —
+                // they're not user-facing systems.
                 let class_name = ctx.system_name.clone().unwrap_or("Class".to_string());
-                let params_str = self.emit_params(params);
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
 
-                let mut result = format!(
-                    "{}public {}({}) {{\n",
-                    ctx.get_indent(),
-                    class_name,
-                    params_str
-                );
-                ctx.push_indent();
-
-                if let Some(sc) = super_call {
-                    result.push_str(&format!("{}{};\n", ctx.get_indent(), self.emit(sc, ctx)));
+                if is_frame_helper {
+                    let params_str = self.emit_params(params);
+                    let mut result = format!(
+                        "{}public {}({}) {{\n",
+                        ctx.get_indent(),
+                        class_name,
+                        params_str
+                    );
+                    ctx.push_indent();
+                    if let Some(sc) = super_call {
+                        result.push_str(&format!("{}{};\n", ctx.get_indent(), self.emit(sc, ctx)));
+                    }
+                    for stmt in body {
+                        result.push_str(&self.emit(stmt, ctx));
+                        if self.needs_semicolon(stmt) {
+                            result.push_str(";\n");
+                        } else {
+                            result.push('\n');
+                        }
+                    }
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                    return result;
                 }
 
+                // System class: classify body items.
+                //
+                // Render each stmt once at body-indent so lines can be
+                // reused across both `Counter()` ctor body and the
+                // `__frame_init` method body.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                if let Some(sc) = super_call {
+                    framework_lines.push(format!("{}{};", ctx.get_indent(), self.emit(sc, ctx)));
+                }
                 for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    if self.needs_semicolon(stmt) {
-                        result.push_str(";\n");
+                    let mut rendered = self.emit(stmt, ctx);
+                    if self.needs_semicolon(stmt) && !rendered.ends_with(";\n") {
+                        if !rendered.ends_with('\n') {
+                            rendered.push_str(";\n");
+                        } else {
+                            let trimmed = rendered.trim_end_matches('\n').to_string();
+                            rendered = format!("{};\n", trimmed);
+                        }
+                    } else if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered.clone());
+                        framework_lines.push(java_strip_param_lists(&rendered, &param_names));
                     } else {
-                        result.push('\n');
+                        framework_lines.push(rendered);
                     }
                 }
                 ctx.pop_indent();
+
+                // Emit `public Counter()` — bare framework
+                let mut result = format!("{}public {}() {{\n", ctx.get_indent(), class_name);
+                ctx.push_indent();
+                for line in &framework_lines {
+                    result.push_str(line);
+                }
+                ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
 
-                // RFC-0015 D7: emit a parallel `__no_init()` static factory
-                // that gates the existing `__skipInitialEnter` flag around a
-                // regular constructor call with type-default args. The
-                // constructor's struct-setup code still runs (so all the
-                // `late`-style fields end up initialized) but the
-                // `__fire_enter_cascade()` + `__process_transition_loop()`
-                // calls are skipped because of the flag, so the user's
-                // `$>` handler never executes. Used by `@@!Foo()` to pair
-                // no-initialization allocation with `restore_state(...)`.
-                //
-                // The flag is restored in a finally block to keep
-                // subsequent `new Counter(...)` calls behaving normally.
+                // Emit `public void __frame_init(<params>)`
                 result.push('\n');
+                let frame_init_params = self.emit_params(params);
                 result.push_str(&format!(
-                    "{}public static {} __no_init() {{\n",
+                    "{}public void __frame_init({}) {{\n",
                     ctx.get_indent(),
-                    class_name
+                    frame_init_params
                 ));
                 ctx.push_indent();
-                result.push_str(&format!("{}__skipInitialEnter = true;\n", ctx.get_indent()));
-                result.push_str(&format!("{}try {{\n", ctx.get_indent()));
-                ctx.push_indent();
-                let default_args: Vec<String> = params
-                    .iter()
-                    .map(|p| {
-                        let ty = self.map_type(p.type_annotation.as_deref().unwrap_or("Object"));
-                        match ty.as_str() {
-                            "int" | "long" | "short" | "byte" => "0".to_string(),
-                            "double" | "float" => "0.0".to_string(),
-                            "boolean" => "false".to_string(),
-                            "char" => "'\\0'".to_string(),
-                            _ => "null".to_string(),
-                        }
-                    })
-                    .collect();
+                for line in &frame_init_lines {
+                    result.push_str(line);
+                }
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `public static Counter __create(<params>)` — factory
+                result.push('\n');
+                let create_params = self.emit_params(params);
                 result.push_str(&format!(
-                    "{}return new {}({});\n",
+                    "{}public static {} __create({}) {{\n",
                     ctx.get_indent(),
                     class_name,
-                    default_args.join(", ")
+                    create_params
                 ));
-                ctx.pop_indent();
-                result.push_str(&format!("{}}} finally {{\n", ctx.get_indent()));
                 ctx.push_indent();
                 result.push_str(&format!(
-                    "{}__skipInitialEnter = false;\n",
-                    ctx.get_indent()
+                    "{}{} c = new {}();\n",
+                    ctx.get_indent(),
+                    class_name,
+                    class_name
                 ));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c.__frame_init({});\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c;\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
-                ctx.pop_indent();
-                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 
