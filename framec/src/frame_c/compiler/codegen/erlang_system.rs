@@ -3202,6 +3202,10 @@ pub(crate) fn generate_erlang_system(
     // Exports — API functions
     let mut api_exports = Vec::new();
     api_exports.push(format!("start_link/{}", sys_param_arity));
+    // RFC-0015 D7: `@@!Foo()` lowers to `Foo:'__no_init'()` — a
+    // zero-arg helper that spawns the gen_statem with a sentinel that
+    // skips the user's `$>` cascade on first state entry.
+    api_exports.push("'__no_init'/0".to_string());
     // RFC-0015 phase 1.9: `@@[create(<name>)]` adds a renamed
     // factory that delegates to `start_link/N` with the same arity.
     if let Some(factory_name) = system.create_op_name() {
@@ -3309,6 +3313,12 @@ pub(crate) fn generate_erlang_system(
     all_fields.push("    frame_state_args = []".to_string());
     all_fields.push("    frame_context_stack = []".to_string());
     all_fields.push("    frame_return_val = undefined".to_string());
+    // RFC-0015 D7: gates the `(enter, _OldState, Data)` user body for
+    // `@@!Foo()` no-initialization allocation. The first enter clause
+    // for every state checks this flag and clears it without running
+    // the user's $> body. `init([no_init])` sets it to true; any
+    // subsequent transition fires the cascade normally.
+    all_fields.push("    frame_skip_enter__ = false".to_string());
 
     code.push_str(&all_fields.join(",\n"));
     code.push('\n');
@@ -3334,6 +3344,17 @@ pub(crate) fn generate_erlang_system(
         "start_link({}) ->\n    gen_statem:start_link(?MODULE, {}, []).\n\n",
         start_link_args, start_link_list
     ));
+
+    // RFC-0015 D7: `'__no_init'/0` spawns a fresh gen_statem with the
+    // [no_init] sentinel, which `init/1` recognizes by setting the
+    // `frame_skip_enter__` flag in the data record. The first
+    // `(enter, _OldState, Data)` clause for every state then bails
+    // out without running the user's `$>` body. Returns a bare Pid
+    // (matching the `@@!Foo()` call site shape: callers chain
+    // `restore_state` immediately after).
+    code.push_str(
+        "'__no_init'() ->\n    element(2, gen_statem:start_link(?MODULE, [no_init], [])).\n\n",
+    );
 
     // RFC-0015 phase 1.9: factory rename — emit `<name>(Args) ->
     // start_link(Args).` if `@@[create(<name>)]` is set. The
@@ -3462,6 +3483,17 @@ pub(crate) fn generate_erlang_system(
     } else {
         format!("#data{{{}}}", record_overrides.join(", "))
     };
+    // RFC-0015 D7: `init([no_init])` clause for `@@!Foo()`. Must be
+    // emitted FIRST because Erlang tries clauses in source order — the
+    // generic `init([Seed])` pattern would otherwise bind `Seed =
+    // no_init` and run the user's `$>`. Sets `frame_skip_enter__` so
+    // the first state-enter callback bails out without running user
+    // code; `restore_state` overwrites everything from saved JSON.
+    code.push_str(&format!(
+        "init([no_init]) ->\n    {{ok, {}, #data{{frame_skip_enter__ = true}}}};\n",
+        first_state
+    ));
+
     code.push_str(&format!(
         "init({}) ->\n    {{ok, {}, {}}}.\n\n",
         init_pattern, first_state, record_literal
@@ -3508,6 +3540,18 @@ pub(crate) fn generate_erlang_system(
 
         for state in &machine.states {
             let state_name = state_atom(&state.name);
+
+            // RFC-0015 D7: skip-flag guard for `@@!Foo()`. When
+            // `init([no_init])` set `frame_skip_enter__ = true`, the
+            // first state's enter callback bails out without firing
+            // the user's `$>` body. Clearing the flag in this clause
+            // keeps subsequent transitions firing the cascade
+            // normally. This clause must precede the unguarded enter
+            // clause so Erlang's pattern matching tries it first.
+            code.push_str(&format!(
+                "{}(enter, _OldState, #data{{frame_skip_enter__ = true}} = Data) ->\n    {{keep_state, Data#data{{frame_skip_enter__ = false}}}};\n",
+                state_name
+            ));
 
             // Enter handler. For HSM, walk the parent chain top-down
             // and call each ancestor's `frame_enter__<state>` helper
