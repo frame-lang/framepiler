@@ -12,6 +12,7 @@ A living document of what's shipping, what's next, and what's deferred. Updated 
 - **17 target languages**: Python, TypeScript, JavaScript, Rust, C, C++, Java, C#, Go, PHP, Kotlin, Swift, Ruby, Erlang, Lua, Dart, GDScript.
 - **Graphviz output** for state-diagram visualization.
 - **`cargo install framec`** — Rust developers can install the transpiler from crates.io. Source-distribution: users compile locally.
+- **Prebuilt binaries on GitHub Releases** — first 6-platform release shipping as `v4.1.2-rc1` (May 2026). Covers macOS x86_64/aarch64, Linux x86_64/aarch64, Windows x86_64/aarch64. Each platform's tarball/zip is checksummed (SHA-256) and attested for build provenance via SLSA.
 - **111 cookbook recipes** demonstrating Frame patterns from basic state machines through enterprise integration patterns.
 - **Per-language guides** for every backend with target-specific notes, gotchas, and idiom catalogs.
 - **17-language differential test harness** (`framec-test-env`) with 396 unit tests + 321 common positive fixtures × 17 backends + 33,000+ fuzz cases across 21 generators covering correctness axes.
@@ -20,15 +21,14 @@ A living document of what's shipping, what's next, and what's deferred. Updated 
 
 ## Near-term (next 1–3 months)
 
-### Distribution — making framec installable without a Rust toolchain
+### Distribution — making framec installable from any package manager
 
-Today the only install path is `cargo install framec`, which requires Rust. The next priority is broadening to mainstream package managers so non-Rust developers can use Frame:
+The 6-platform prebuilt binaries are shipping as of `v4.1.2-rc1`. The remaining work is wrapping those binaries with the package managers most developers actually reach for:
 
-- [ ] **Prebuilt binaries on GitHub Releases** for all 6 supported platforms: macOS (x86_64, aarch64), Linux (x86_64, aarch64), Windows (x86_64, aarch64). Today's `release.yml` workflow ships only 3 of 6.
+- [ ] **Promote `v4.1.2` from release candidate to stable** once rc1 has soaked.
 - [ ] **`brew install frame-lang/tap/framec`** — Homebrew tap for macOS and Linux.
 - [ ] **`winget install framec`** and **`scoop install framec`** — Windows package managers.
 - [ ] **`install.sh`** — Linux convenience installer (curl-piped-to-shell pattern).
-- [ ] **SHA-256 checksums + SLSA build provenance** for all release artifacts — supply-chain integrity for a code generator.
 
 ### Hardening
 
