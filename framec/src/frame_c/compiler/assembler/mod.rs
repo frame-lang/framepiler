@@ -585,7 +585,11 @@ fn expand_system_instantiations(
 fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String {
     match lang {
         TargetLanguage::Python3 => {
-            format!("{}({})", name, args)
+            // RFC-0017 Phase A0: factory call uses `_create` classmethod
+            // which does the two-step (bare ctor + `_frame_init`).
+            // Single-underscore avoids Python name-mangling.
+            // Bare `Counter()` is reserved for `@@!Counter()` (no init).
+            format!("{}._create({})", name, args)
         }
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
             format!("new {}({})", name, args)
@@ -794,12 +798,15 @@ mod tests {
 
     #[test]
     fn test_system_instantiation_python() {
+        // RFC-0017 Phase A0: Python factory expansion uses `_create`
+        // classmethod (init-decoupled). Bare `Foo()` is reserved for
+        // `@@!Foo()` (no-init).
         let src = "s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
             expand_system_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
-        assert_eq!(result, "s = Foo()\n");
+        assert_eq!(result, "s = Foo._create()\n");
     }
 
     #[test]
@@ -835,12 +842,13 @@ mod tests {
 
     #[test]
     fn test_system_instantiation_with_args() {
+        // RFC-0017 Phase A0: Python factory expansion uses `_create`.
         let src = "s = @@Foo(1, \"hello\")\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
             expand_system_instantiations(src, &systems, &params, TargetLanguage::Python3).unwrap();
-        assert_eq!(result, "s = Foo(1, \"hello\")\n");
+        assert_eq!(result, "s = Foo._create(1, \"hello\")\n");
     }
 
     #[test]
@@ -1009,7 +1017,8 @@ mod tests {
             "class MySystem:\n  pass\n".to_string(),
         )];
         let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], None).unwrap();
-        assert_eq!(result, "s = MySystem()\nclass MySystem:\n  pass\n");
+        // RFC-0017 Phase A0: Python factory expansion uses `_create`.
+        assert_eq!(result, "s = MySystem._create()\nclass MySystem:\n  pass\n");
     }
 
     #[test]

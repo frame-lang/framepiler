@@ -567,7 +567,12 @@ pub(crate) fn normalize_indentation(text: &str) -> String {
 pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> String {
     match lang {
         // ---- Built-in primitives (no backend codegen changes needed) ----
-        TargetLanguage::Python3 => format!("{}.__new__({})", name, name),
+        // Python: RFC-0017 Phase A0 — `@@!Counter()` lowers to bare
+        // `Counter()` which calls the framework-only `__init__` without
+        // running the user `$>`. The factory `Counter.__create(args)` is
+        // the @@Counter(args) path. Replaces the prior `__new__` form
+        // which bypassed framework setup entirely.
+        TargetLanguage::Python3 => format!("{}()", name),
         TargetLanguage::Ruby => format!("{}.allocate", name),
         TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
             format!("Object.create({}.prototype)", name)

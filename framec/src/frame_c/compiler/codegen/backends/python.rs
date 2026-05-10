@@ -6,6 +6,56 @@ use crate::frame_c::compiler::codegen::ast::*;
 use crate::frame_c::compiler::codegen::backend::*;
 use crate::frame_c::visitors::TargetLanguage;
 
+/// RFC-0017 Phase A0 helper: word-boundary check for a Python identifier.
+fn python_identifier_present(text: &str, ident: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|w| w == ident)
+}
+
+/// RFC-0017 Phase A0 helper: replace `[<param>(, <param>)*]` substrings
+/// with `[]` if every comma-separated entry is a known param name. Used
+/// by the Python Constructor arm to strip user-arg-bound enter_args /
+/// state_args from the bare `__init__` body — those are re-supplied by
+/// `__frame_init` in the proper init path.
+fn python_strip_param_lists(text: &str, param_names: &[&str]) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            let mut depth = 1;
+            let mut j = i + 1;
+            while j < chars.len() && depth > 0 {
+                match chars[j] {
+                    '[' => depth += 1,
+                    ']' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                let inner: String = chars[i + 1..j].iter().collect();
+                let parts: Vec<&str> = inner
+                    .split(',')
+                    .map(|p| p.trim())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                if !parts.is_empty() && parts.iter().all(|p| param_names.contains(p)) {
+                    result.push_str("[]");
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
+}
+
 /// Python backend for code generation
 pub struct PythonBackend;
 
@@ -78,13 +128,19 @@ impl LanguageBackend for PythonBackend {
                 if methods.is_empty() && fields.is_empty() {
                     result.push_str(&format!("{}pass\n", ctx.get_indent()));
                 } else {
-                    // Emit methods
+                    // Temporarily expose this class's name as `system_name`
+                    // so the Constructor arm can identify framework helper
+                    // classes (FrameEvent / FrameContext / Compartment) and
+                    // skip the RFC-0017 init decouple split for them.
+                    let prev_system = ctx.system_name.clone();
+                    ctx.system_name = Some(name.clone());
                     for (i, method) in methods.iter().enumerate() {
                         if i > 0 {
                             result.push('\n');
                         }
                         result.push_str(&self.emit(method, ctx));
                     }
+                    ctx.system_name = prev_system;
                 }
 
                 ctx.pop_indent();
@@ -231,44 +287,171 @@ impl LanguageBackend for PythonBackend {
                 body,
                 super_call,
             } => {
+                // RFC-0017 (Arc A Phase A0): split the constructor into:
+                //   __init__(self)             — bare framework setup
+                //   _frame_init(self, <params>) — user-arg-bound + cascade
+                //   _create(cls, <params>)     — static factory (two-step)
+                //
+                // Single-underscore on `_create` / `_frame_init` avoids
+                // Python's double-underscore name-mangling so external
+                // callers (factory call sites) can reach `Counter._create`
+                // without the mangled `_Counter__create` form.
+                //
+                // Classification of body items:
+                //   - Statements containing `__fire_enter_cascade` or
+                //     `__process_transition_loop` → `_frame_init` only.
+                //   - Statements that mention any constructor param by
+                //     name (typically the `__prepareEnter` call binding
+                //     enter/state args) → `_frame_init` (with full
+                //     args) + `__init__` (with the param-list arg
+                //     stripped to `[]` so the compartment is created
+                //     with empty enter_args until `_frame_init` runs).
+                //   - All other body items → `__init__` only.
+                //
+                // Call-site lowering:
+                //   - `@@Counter(7)` → `Counter._create(7)`
+                //   - `@@!Counter()` → `Counter()`
+                //
+                // The factory pattern unifies parameterized and zero-arg
+                // systems: `Counter._create()` always means "construct
+                // and run init". Bare `Counter()` always means "no init".
                 let mut result = String::new();
+                let class_name = ctx
+                    .system_name
+                    .clone()
+                    .unwrap_or_else(|| "Class".to_string());
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
 
-                let params_str = self.emit_params(params, true);
-                result.push_str(&format!(
-                    "{}def __init__({}):\n",
-                    ctx.get_indent(),
-                    params_str
-                ));
-
-                ctx.push_indent();
-
-                // Super call if present
-                if let Some(super_call) = super_call {
-                    result.push_str(&self.emit(super_call, ctx));
-                    result.push('\n');
+                // Skip the decouple split for framework helper classes
+                // (FrameEvent / FrameContext / Compartment). They aren't
+                // user-facing systems and don't need `__frame_init` /
+                // `__create`. Fall back to the original single-method shape.
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
+                if is_frame_helper {
+                    let params_str = self.emit_params(params, true);
+                    result.push_str(&format!(
+                        "{}def __init__({}):\n",
+                        ctx.get_indent(),
+                        params_str
+                    ));
+                    ctx.push_indent();
+                    if let Some(sc) = super_call {
+                        result.push_str(&self.emit(sc, ctx));
+                        result.push('\n');
+                    }
+                    if body.is_empty() {
+                        result.push_str(&format!("{}pass\n", ctx.get_indent()));
+                    } else {
+                        for stmt in body {
+                            result.push_str(&self.emit(stmt, ctx));
+                            if !matches!(
+                                stmt,
+                                CodegenNode::Comment { .. }
+                                    | CodegenNode::Empty
+                                    | CodegenNode::If { .. }
+                                    | CodegenNode::While { .. }
+                                    | CodegenNode::For { .. }
+                                    | CodegenNode::Match { .. }
+                            ) {
+                                result.push('\n');
+                            }
+                        }
+                    }
+                    ctx.pop_indent();
+                    return result;
                 }
 
-                // Body
-                if body.is_empty() {
+                // Render body once at the body-indent level so the lines
+                // can be reused across both `__init__` and `__frame_init`.
+                ctx.push_indent();
+                let mut init_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                if let Some(sc) = super_call {
+                    let s = self.emit(sc, ctx);
+                    init_lines.push(s);
+                }
+                for stmt in body {
+                    let rendered = self.emit(stmt, ctx);
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names
+                        .iter()
+                        .any(|p| python_identifier_present(&rendered, p));
+                    if mentions_param {
+                        frame_init_lines.push(rendered.clone());
+                        init_lines.push(python_strip_param_lists(&rendered, &param_names));
+                    } else {
+                        init_lines.push(rendered);
+                    }
+                }
+                ctx.pop_indent();
+
+                // Emit `def __init__(self):` — bare framework
+                result.push_str(&format!("{}def __init__(self):\n", ctx.get_indent()));
+                ctx.push_indent();
+                if init_lines.is_empty() {
                     result.push_str(&format!("{}pass\n", ctx.get_indent()));
                 } else {
-                    for stmt in body {
-                        result.push_str(&self.emit(stmt, ctx));
-                        if !matches!(
-                            stmt,
-                            CodegenNode::Comment { .. }
-                                | CodegenNode::Empty
-                                | CodegenNode::If { .. }
-                                | CodegenNode::While { .. }
-                                | CodegenNode::For { .. }
-                                | CodegenNode::Match { .. }
-                        ) {
+                    for line in &init_lines {
+                        result.push_str(line);
+                        if !line.ends_with('\n') {
                             result.push('\n');
                         }
                     }
                 }
-
                 ctx.pop_indent();
+
+                // Emit `def _frame_init(self, <params>):` — user-arg-bound
+                result.push('\n');
+                let frame_init_params = self.emit_params(params, true);
+                result.push_str(&format!(
+                    "{}def _frame_init({}):\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                ctx.push_indent();
+                if frame_init_lines.is_empty() {
+                    result.push_str(&format!("{}pass\n", ctx.get_indent()));
+                } else {
+                    for line in &frame_init_lines {
+                        result.push_str(line);
+                        if !line.ends_with('\n') {
+                            result.push('\n');
+                        }
+                    }
+                }
+                ctx.pop_indent();
+
+                // Emit `@classmethod def _create(cls, <params>):` — factory
+                result.push('\n');
+                result.push_str(&format!("{}@classmethod\n", ctx.get_indent()));
+                let create_params = if params.is_empty() {
+                    "cls".to_string()
+                } else {
+                    format!("cls, {}", self.emit_params(params, false))
+                };
+                result.push_str(&format!(
+                    "{}def _create({}):\n",
+                    ctx.get_indent(),
+                    create_params
+                ));
+                ctx.push_indent();
+                result.push_str(&format!("{}c = cls()\n", ctx.get_indent()));
+                let arg_pass = param_names.join(", ");
+                result.push_str(&format!(
+                    "{}c._frame_init({})\n",
+                    ctx.get_indent(),
+                    arg_pass
+                ));
+                result.push_str(&format!("{}return c\n", ctx.get_indent()));
+                ctx.pop_indent();
+
                 result
             }
 
