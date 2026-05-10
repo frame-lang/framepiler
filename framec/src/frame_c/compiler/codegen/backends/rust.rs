@@ -280,6 +280,56 @@ impl LanguageBackend for RustBackend {
 
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // RFC-0015 D7: emit a parallel `__blank()` that allocates the
+                // struct without running any init code (no `$>` cascade,
+                // no transition loop). Used by `@@!Foo()` so user code can
+                // pair blank allocation with `restore_state(...)` for clean
+                // save/load round-trips.
+                //
+                // The struct literal mirrors `new()`'s, but any field whose
+                // value is a direct reference to a constructor param is
+                // replaced with that type's `Default::default()`. Other
+                // values (domain field defaults, `Vec::new()`,
+                // `Compartment::new("...")`, `None`) are preserved verbatim
+                // because they are already type-default placeholders that
+                // `restore_state` will subsequently overwrite.
+                result.push('\n');
+                result.push_str(&format!("{}#[allow(dead_code)]\n", ctx.get_indent()));
+                result.push_str(&format!(
+                    "{}pub fn __blank() -> Self {{\n",
+                    ctx.get_indent()
+                ));
+                ctx.push_indent();
+                result.push_str(&format!("{}Self {{\n", ctx.get_indent()));
+                ctx.push_indent();
+                for (field, value) in &field_inits {
+                    let blank_value = if let Some(p) = params.iter().find(|p| p.name == *value) {
+                        // Param refs become typed type-defaults. Run the
+                        // Frame portable type (`int`/`str`/`bool`/...)
+                        // through the same Rust mapping used by emit_params
+                        // so the generated `__blank()` references concrete
+                        // Rust types like `i64`, not Frame portable names.
+                        let ty = p
+                            .type_annotation
+                            .as_ref()
+                            .map(|t| self.convert_type(t))
+                            .unwrap_or_else(|| "()".to_string());
+                        format!("<{} as Default>::default()", ty)
+                    } else {
+                        value.clone()
+                    };
+                    result.push_str(&format!(
+                        "{}{}: {},\n",
+                        ctx.get_indent(),
+                        field,
+                        blank_value
+                    ));
+                }
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
                 result
             }
 

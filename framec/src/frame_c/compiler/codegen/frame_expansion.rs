@@ -598,10 +598,18 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             // a struct without running any init body — see backends/c.rs.
             format!("{}_alloc()", name)
         }
+        TargetLanguage::Rust => {
+            // Rust: `Foo::__blank()` is a synthesized zero-arg associated
+            // function emitted alongside `Foo::new()` in the Constructor
+            // arm of backends/rust.rs. It returns Self with the same
+            // struct literal as new() but with constructor params replaced
+            // by `Default::default()` and the post-init cascade skipped.
+            format!("{}::__blank()", name)
+        }
 
         // ---- Backends still needing synthesized helpers ----
         // Java / Kotlin: would need `Unsafe.allocateInstance(Foo.class)` wrapped
-        // in a synthesized static. Swift / Rust / Dart / Erlang need an explicit
+        // in a synthesized static. Swift / Dart / Erlang need an explicit
         // synthesized method emitted in the system class definition.
         _ => format!(
             "/* @@! no-initialization allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
