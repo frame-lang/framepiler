@@ -588,8 +588,9 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("New{}()", name)
         }
         TargetLanguage::GDScript => {
-            // GDScript: `_init` is empty by Frame's factory-only design,
-            // so `Foo.new()` is itself a no-initialization allocation.
+            // RFC-0017 Phase A4: `@@!Counter()` lowers to bare
+            // `Counter.new()` which calls the framework-only `_init()`
+            // without invoking `_frame_init` (the user `$>` cascade).
             format!("{}.new()", name)
         }
         TargetLanguage::Php => format!(
@@ -623,12 +624,11 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("{}::new()", name)
         }
         TargetLanguage::Dart => {
-            // Dart: `Foo._no_init()` is a synthesized private named
-            // constructor emitted alongside the regular ctor in the
-            // Constructor arm of backends/dart.rs. It assigns Dart's
-            // `late` fields with empty/placeholder values and skips the
-            // enter cascade + transition loop.
-            format!("{}._no_init()", name)
+            // RFC-0017 Phase A4: `@@!Counter()` lowers to bare
+            // `Counter()` which runs framework setup only (no user
+            // `$>` cascade). Replaces the obsolete D7 `Counter._no_init()`
+            // named constructor.
+            format!("{}()", name)
         }
         TargetLanguage::Java => {
             // RFC-0017 Phase A1: `@@!Counter()` lowers to the bare

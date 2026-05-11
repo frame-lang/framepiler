@@ -2353,8 +2353,12 @@ self._context_stack.pop();"#,
                     "__fire_enter_cascade();\n__process_transition_loop();".to_string()
                 }
                 TargetLanguage::GDScript => {
+                    // RFC-0017 Phase A4: cascade runs unconditionally
+                    // inside `_frame_init`. The `__skipInitialEnter`
+                    // gate is gone — bare `_init()` skips `_frame_init`
+                    // entirely.
                     let _ = (event_class, &system.name);
-                    "if not __skipInitialEnter:\n    self.__fire_enter_cascade()\n    self.__process_transition_loop()".to_string()
+                    "self.__fire_enter_cascade()\nself.__process_transition_loop()".to_string()
                 }
                 TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
                 TargetLanguage::Graphviz => unreachable!(),
@@ -6016,11 +6020,10 @@ fn generate_gdscript_machinery(
     let mut methods = Vec::new();
     let chains = compute_hsm_chains(system);
 
-    // Class-static flag gating the ctor's ENTER dispatch.
-    methods.push(CodegenNode::NativeBlock {
-        code: "static var __skipInitialEnter: bool = false".to_string(),
-        span: None,
-    });
+    // RFC-0017 Phase A4: GDScript's `__skipInitialEnter` static var is
+    // gone. Bare `_init()` is framework-only; `_frame_init(args)` runs
+    // user `$>` + cascade; `_create(args)` is the static factory.
+    // The `_create` method is emitted by the Constructor arm directly.
 
     // hsm_chain — class method returning the topology table.
     let mut chain_method = String::from("func hsm_chain() -> Dictionary:\n    return {\n");

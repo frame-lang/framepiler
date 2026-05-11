@@ -199,85 +199,127 @@ impl LanguageBackend for DartBackend {
                 body,
                 super_call,
             } => {
-                let mut result = String::new();
+                // RFC-0017 Phase A4: split into bare ctor +
+                // `_frame_init` member + static `_create` factory.
+                // Replaces the prior D7 `_no_init` named ctor.
+                //
+                // Framework helper classes keep the original single-ctor
+                // emission — they aren't user-facing systems.
                 let class_name = ctx
                     .system_name
                     .clone()
                     .unwrap_or_else(|| "Unknown".to_string());
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
 
-                let params_str = self.emit_params(params);
-                result.push_str(&format!(
-                    "{}{}({}) {{\n",
-                    ctx.get_indent(),
-                    class_name,
-                    params_str
-                ));
-
-                ctx.push_indent();
-
-                if let Some(super_call) = super_call {
-                    result.push_str(&self.emit(super_call, ctx));
-                    result.push_str(";\n");
+                if is_frame_helper {
+                    let params_str = self.emit_params(params);
+                    let mut result =
+                        format!("{}{}({}) {{\n", ctx.get_indent(), class_name, params_str);
+                    ctx.push_indent();
+                    if let Some(sc) = super_call {
+                        result.push_str(&self.emit(sc, ctx));
+                        result.push_str(";\n");
+                    }
+                    for stmt in body {
+                        result.push_str(&self.emit(stmt, ctx));
+                        if self.needs_semicolon(stmt) {
+                            result.push_str(";\n");
+                        } else {
+                            result.push('\n');
+                        }
+                    }
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                    return result;
                 }
 
+                // System class: classify body lines.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                if let Some(sc) = super_call {
+                    let s = self.emit(sc, ctx);
+                    framework_lines.push(format!("{}{};\n", ctx.get_indent(), s));
+                }
                 for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    if self.needs_semicolon(stmt) {
-                        result.push_str(";\n");
+                    let mut rendered = self.emit(stmt, ctx);
+                    if self.needs_semicolon(stmt) && !rendered.ends_with(";\n") {
+                        if !rendered.ends_with('\n') {
+                            rendered.push_str(";\n");
+                        } else {
+                            let trimmed = rendered.trim_end_matches('\n').to_string();
+                            rendered = format!("{};\n", trimmed);
+                        }
+                    } else if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered);
                     } else {
-                        result.push('\n');
+                        framework_lines.push(rendered);
                     }
                 }
                 ctx.pop_indent();
 
+                // Emit `Counter()` — bare framework
+                let mut result = format!("{}{}() {{\n", ctx.get_indent(), class_name);
+                for line in &framework_lines {
+                    result.push_str(line);
+                }
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
 
-                // RFC-0015 D7: emit a parallel `_no_init()` named
-                // constructor for the system class only. Initializes
-                // Dart's `late` framework fields without running any
-                // init code (no `__fire_enter_cascade`, no transition
-                // loop, no `$>` handler). Used by `@@!Foo()` so user
-                // code can pair no-initialization allocation with
-                // `restore_state(...)` for clean save/load round-trips.
-                //
-                // Skip Frame's framework helper classes — their ctors
-                // reference scope-bound params and are part of internal
-                // plumbing, not user-facing types reachable via `@@!`.
-                let is_frame_helper = class_name.ends_with("FrameEvent")
-                    || class_name.ends_with("FrameContext")
-                    || class_name.ends_with("Compartment");
-                if !is_frame_helper {
-                    // Hardcode the four late fields every Frame system
-                    // class declares. They're framework-controlled and
-                    // identical across every Frame system, so we don't
-                    // walk the constructor body — that body emits some
-                    // assignments via NativeBlock and other IR variants
-                    // that don't surface cleanly as `Assignment` nodes.
-                    // The placeholder values here satisfy Dart's `late`
-                    // requirement; `restore_state` will overwrite them
-                    // with the saved compartment/state-stack contents.
-                    // Domain fields keep their declaration-site defaults.
-                    result.push('\n');
-                    result.push_str(&format!(
-                        "{}{}._no_init() {{\n",
-                        ctx.get_indent(),
-                        class_name
-                    ));
-                    ctx.push_indent();
-                    result.push_str(&format!("{}this._state_stack = [];\n", ctx.get_indent()));
-                    result.push_str(&format!("{}this._context_stack = [];\n", ctx.get_indent()));
-                    result.push_str(&format!(
-                        "{}this.__compartment = {}Compartment(\"\");\n",
-                        ctx.get_indent(),
-                        class_name
-                    ));
-                    result.push_str(&format!(
-                        "{}this.__next_compartment = null;\n",
-                        ctx.get_indent()
-                    ));
-                    ctx.pop_indent();
-                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                // Emit `void _frame_init(<params>)`
+                result.push('\n');
+                let frame_init_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}void _frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                for line in &frame_init_lines {
+                    result.push_str(line);
                 }
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `static Counter _create(<params>)` — factory
+                result.push('\n');
+                let create_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}static {} _create({}) {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    create_params
+                ));
+                ctx.push_indent();
+                result.push_str(&format!(
+                    "{}final c = {}();\n",
+                    ctx.get_indent(),
+                    class_name
+                ));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c._frame_init({});\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c;\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 

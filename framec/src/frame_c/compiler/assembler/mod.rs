@@ -689,15 +689,18 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             }
         }
         TargetLanguage::Dart => {
-            // Dart: no new keyword
-            format!("{}({})", name, args)
+            // RFC-0017 Phase A4: Dart factory expansion uses `Counter._create(args)`.
+            // Bare `Counter()` is reserved for `@@!Counter()`.
+            format!("{}._create({})", name, args)
         }
         TargetLanguage::GDScript => {
-            // GDScript: ClassName.new()
+            // RFC-0017 Phase A4: GDScript factory expansion uses
+            // `ClassName._create(args)`. Bare `ClassName.new()` is
+            // reserved for `@@!ClassName()`.
             if args.trim().is_empty() {
-                format!("{}.new()", name)
+                format!("{}._create()", name)
             } else {
-                format!("{}.new({})", name, args)
+                format!("{}._create({})", name, args)
             }
         }
         // Non-V4 targets should never reach the assembler.

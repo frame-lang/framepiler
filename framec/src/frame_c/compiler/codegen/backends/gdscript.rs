@@ -144,13 +144,19 @@ impl LanguageBackend for GDScriptBackend {
                     if !fields.is_empty() && !methods.is_empty() {
                         result.push('\n');
                     }
-                    // Emit methods at module scope
+                    // RFC-0017 Phase A4: expose this class's name as
+                    // `system_name` so the Constructor arm can detect
+                    // framework helpers and apply the split only to the
+                    // system class.
+                    let prev_system = ctx.system_name.clone();
+                    ctx.system_name = Some(name.clone());
                     for (i, method) in methods.iter().enumerate() {
                         if i > 0 {
                             result.push('\n');
                         }
                         result.push_str(&self.emit(method, ctx));
                     }
+                    ctx.system_name = prev_system;
                 } else {
                     // Inner class or no-base class: emit with class wrapper
                     let bases = if base_classes.is_empty() {
@@ -182,12 +188,16 @@ impl LanguageBackend for GDScriptBackend {
                         if !fields.is_empty() && !methods.is_empty() {
                             result.push('\n');
                         }
+                        // Same system_name push as the module-scope path.
+                        let prev_system = ctx.system_name.clone();
+                        ctx.system_name = Some(name.clone());
                         for (i, method) in methods.iter().enumerate() {
                             if i > 0 {
                                 result.push('\n');
                             }
                             result.push_str(&self.emit(method, ctx));
                         }
+                        ctx.system_name = prev_system;
                     }
 
                     ctx.pop_indent();
@@ -305,45 +315,133 @@ impl LanguageBackend for GDScriptBackend {
                 body,
                 super_call,
             } => {
-                let mut result = String::new();
+                // RFC-0017 Phase A4: split into bare `_init()` + `_frame_init`
+                // + static `_create` factory. Framework helpers keep the
+                // original single-`_init` emission.
+                let class_name = ctx
+                    .system_name
+                    .clone()
+                    .unwrap_or_else(|| "Class".to_string());
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
 
-                // GDScript uses _init instead of __init__
-                let params_str = self.emit_params(params, false);
-                result.push_str(&format!(
-                    "{}func _init({}):\n",
-                    ctx.get_indent(),
-                    params_str
-                ));
-
-                ctx.push_indent();
-
-                // Super call if present
-                if let Some(super_call) = super_call {
-                    result.push_str(&self.emit(super_call, ctx));
-                    result.push('\n');
-                }
-
-                // Body
-                if body.is_empty() {
-                    result.push_str(&format!("{}pass\n", ctx.get_indent()));
-                } else {
-                    for stmt in body {
-                        result.push_str(&self.emit(stmt, ctx));
-                        if !matches!(
-                            stmt,
-                            CodegenNode::Comment { .. }
-                                | CodegenNode::Empty
-                                | CodegenNode::If { .. }
-                                | CodegenNode::While { .. }
-                                | CodegenNode::For { .. }
-                                | CodegenNode::Match { .. }
-                        ) {
-                            result.push('\n');
+                if is_frame_helper {
+                    let params_str = self.emit_params(params, false);
+                    let mut result = format!("{}func _init({}):\n", ctx.get_indent(), params_str);
+                    ctx.push_indent();
+                    if let Some(sc) = super_call {
+                        result.push_str(&self.emit(sc, ctx));
+                        result.push('\n');
+                    }
+                    if body.is_empty() {
+                        result.push_str(&format!("{}pass\n", ctx.get_indent()));
+                    } else {
+                        for stmt in body {
+                            result.push_str(&self.emit(stmt, ctx));
+                            if !matches!(
+                                stmt,
+                                CodegenNode::Comment { .. }
+                                    | CodegenNode::Empty
+                                    | CodegenNode::If { .. }
+                                    | CodegenNode::While { .. }
+                                    | CodegenNode::For { .. }
+                                    | CodegenNode::Match { .. }
+                            ) {
+                                result.push('\n');
+                            }
                         }
                     }
+                    ctx.pop_indent();
+                    return result;
                 }
 
+                // System class: classify body lines.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                if let Some(sc) = super_call {
+                    let s = self.emit(sc, ctx);
+                    framework_lines.push(format!("{}\n", s));
+                }
+                for stmt in body {
+                    let mut rendered = self.emit(stmt, ctx);
+                    if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered);
+                    } else {
+                        framework_lines.push(rendered);
+                    }
+                }
                 ctx.pop_indent();
+
+                // Emit `func _init():` — bare framework
+                let mut result = format!("{}func _init():\n", ctx.get_indent());
+                ctx.push_indent();
+                if framework_lines.is_empty() {
+                    result.push_str(&format!("{}pass\n", ctx.get_indent()));
+                } else {
+                    for line in &framework_lines {
+                        result.push_str(line);
+                    }
+                }
+                ctx.pop_indent();
+
+                // Emit `func _frame_init(<params>):`
+                result.push('\n');
+                let frame_init_params = self.emit_params(params, false);
+                result.push_str(&format!(
+                    "{}func _frame_init({}):\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                ctx.push_indent();
+                if frame_init_lines.is_empty() {
+                    result.push_str(&format!("{}pass\n", ctx.get_indent()));
+                } else {
+                    for line in &frame_init_lines {
+                        result.push_str(line);
+                    }
+                }
+                ctx.pop_indent();
+
+                // Emit `static func _create(<params>)` — factory
+                result.push('\n');
+                let create_params = self.emit_params(params, false);
+                result.push_str(&format!(
+                    "{}static func _create({}):\n",
+                    ctx.get_indent(),
+                    create_params
+                ));
+                ctx.push_indent();
+                result.push_str(&format!(
+                    "{}var c = {}.new()\n",
+                    ctx.get_indent(),
+                    class_name
+                ));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c._frame_init({})\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c\n", ctx.get_indent()));
+                ctx.pop_indent();
+
                 result
             }
 
