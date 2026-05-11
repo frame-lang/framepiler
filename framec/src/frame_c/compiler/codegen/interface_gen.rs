@@ -2695,15 +2695,10 @@ pub(crate) fn generate_persistence_methods(
                 "auto __j = nlohmann::json::parse({});\n",
                 load_param_name
             ));
-            // Legacy only: suppress the initial-state $>() dispatch
-            // on the restored instance via __skipInitialEnter toggled
-            // around value-init `T __instance;`. New contract mutates
-            // `*this` in place — the ctor already ran on construction.
-            if !uses_new_contract {
-                restore_body.push_str(&format!("{}::__skipInitialEnter = true;\n", sys));
-                restore_body.push_str(&format!("{} __instance;\n", sys));
-                restore_body.push_str(&format!("{}::__skipInitialEnter = false;\n", sys));
-            }
+            // RFC-0017 Phase A7: legacy `__skipInitialEnter`-based
+            // restore path removed. The new persist contract (RFC-0012
+            // amendment; E814 hard-cut) mutates `*this` in place.
+            let _ = uses_new_contract;
             restore_body.push_str(&format!(
                 "{}.__compartment = __deser(__j[\"_compartment\"]);\n",
                 target
@@ -3006,11 +3001,9 @@ pub(crate) fn generate_persistence_methods(
                 "try {{ __j = mapper.readTree({}); }} catch (Exception e) {{ throw new RuntimeException(e); }}\n",
                 load_param_name
             ));
-            if !uses_new_contract {
-                restore_body.push_str("__skipInitialEnter = true;\n");
-                restore_body.push_str(&format!("var __instance = new {}();\n", sys));
-                restore_body.push_str("__skipInitialEnter = false;\n");
-            }
+            // RFC-0017 Phase A7: legacy `__skipInitialEnter` restore
+            // path removed (E814 hard-cut).
+            let _ = (uses_new_contract, sys);
             restore_body.push_str(&format!(
                 "{}.__compartment = __deserComp(__j.get(\"_compartment\"), mapper);\n",
                 target
@@ -3887,11 +3880,9 @@ pub(crate) fn generate_persistence_methods(
                 "val _parsed = mapper.readTree({})\n",
                 load_param_name
             ));
-            if !uses_new_contract {
-                restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
-                restore_body.push_str(&format!("val instance = {}()\n", sys));
-                restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
-            }
+            // RFC-0017 Phase A7: legacy `__skipInitialEnter` restore
+            // path removed (E814 hard-cut).
+            let _ = uses_new_contract;
             restore_body.push_str(&format!(
                 "{}.__compartment = __deserComp(_parsed.get(\"_compartment\"), mapper)!!\n",
                 target
@@ -4098,11 +4089,9 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str(
                 "let _parsed = try! JSONSerialization.jsonObject(with: data) as! [String: Any]\n",
             );
-            if !uses_new_contract {
-                restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", sys));
-                restore_body.push_str(&format!("let instance = {}()\n", sys));
-                restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", sys));
-            }
+            // RFC-0017 Phase A7: legacy `__skipInitialEnter` restore
+            // path removed (E814 hard-cut).
+            let _ = (uses_new_contract, sys);
             restore_body.push_str(&format!(
                 "{}.__compartment = {}.__deserComp(_parsed[\"_compartment\"] as? [String: Any])!\n",
                 target, target
@@ -5292,11 +5281,9 @@ pub(crate) fn generate_persistence_methods(
             // state enter has already fired (once, on `Foo.new()`).
             // See the RFC-0012 amendment "$S0 enter on restore"
             // section for the contract decision.
-            if !uses_new_contract {
-                restore_body.push_str(&format!("{}.__skipInitialEnter = true\n", system.name));
-                restore_body.push_str(&format!("var instance = {}.new()\n", system.name));
-                restore_body.push_str(&format!("{}.__skipInitialEnter = false\n", system.name));
-            }
+            // RFC-0017 Phase A7: legacy `__skipInitialEnter` restore
+            // path removed (E814 hard-cut).
+            let _ = uses_new_contract;
             restore_body.push_str(&format!(
                 "{}.__compartment = _deser_chain.call(state_data[\"_compartment\"])\n",
                 target
