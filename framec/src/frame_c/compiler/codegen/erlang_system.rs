@@ -2720,13 +2720,10 @@ fn expand_system_instantiation_in_domain_erlang(text: &str) -> String {
                 }
                 let args = &result[name_end + 1..p.saturating_sub(1)];
                 let tail = &result[p..];
-                result = format!(
-                    "{}element(2, {}:start_link({})){}",
-                    &result[..pos],
-                    snake,
-                    args,
-                    tail
-                );
+                // RFC-0017 Phase A6: factory call lowers to `name:create(args)`
+                // which returns a bare Pid directly (no need for
+                // `element(2, ...)` unwrap).
+                result = format!("{}{}:create({}){}", &result[..pos], snake, args, tail);
             } else {
                 result = format!("{}{}{}", &result[..pos], snake, &result[name_end..]);
             }
@@ -3199,15 +3196,22 @@ pub(crate) fn generate_erlang_system(
         .map(|p| erlang_safe_capitalize(&p.name))
         .collect();
 
-    // Exports — API functions
+    // Exports — API functions.
+    //
+    // RFC-0017 Phase A6: init-decouple replaces D7's:
+    //   start_link/N  (full ctor, fired user $>)
+    //   '__no_init'/0 (D7 no-init helper)
+    // with the uniform three-method shape:
+    //   start_link/0   — bare (framework only, no user $>)
+    //   frame_init/(N+1) — synchronous cast that delivers user args + fires
+    //                       cascade by transitioning to self
+    //   create/N        — factory: start_link/0 + frame_init/N, returns Pid
     let mut api_exports = Vec::new();
-    api_exports.push(format!("start_link/{}", sys_param_arity));
-    // RFC-0015 D7: `@@!Foo()` lowers to `Foo:'__no_init'()` — a
-    // zero-arg helper that spawns the gen_statem with a sentinel that
-    // skips the user's `$>` cascade on first state entry.
-    api_exports.push("'__no_init'/0".to_string());
+    api_exports.push("start_link/0".to_string());
+    api_exports.push(format!("frame_init/{}", sys_param_arity + 1));
+    api_exports.push(format!("create/{}", sys_param_arity));
     // RFC-0015 phase 1.9: `@@[create(<name>)]` adds a renamed
-    // factory that delegates to `start_link/N` with the same arity.
+    // factory that delegates to `create/N` with the same arity.
     if let Some(factory_name) = system.create_op_name() {
         api_exports.push(format!(
             "{}/{}",
@@ -3324,48 +3328,49 @@ pub(crate) fn generate_erlang_system(
     code.push('\n');
     code.push_str("}).\n\n");
 
-    // start_link/N — system params become positional args, threaded
-    // through to init/1 as a list. Returns `{ok, Pid}` (the standard
-    // OTP shape from `gen_statem:start_link/3`) — consumers that
-    // pattern-match `{ok, Pid}` (drivers, supervisors, smoke tests)
-    // get the conventional shape. Cross-system domain-field defaults
-    // (`inner = @@Counter()` lowered to `counter:start_link()`)
-    // unwrap the tuple at their own emission site so the field holds
-    // a bare Pid; see `lower_erlang_system_instantiation` and the
-    // post-pass cross-system call rewriter at the bottom of
-    // `generate_erlang_system`.
-    let start_link_args = sys_param_vars.join(", ");
-    let start_link_list = if sys_param_vars.is_empty() {
+    // RFC-0017 Phase A6: bare `start_link/0` returns `{ok, Pid}` from
+    // a process initialized with the `frame_skip_enter__` flag set —
+    // user `$>` does NOT fire. This is the `@@!Counter()` form.
+    code.push_str("start_link() ->\n    gen_statem:start_link(?MODULE, [], []).\n\n");
+
+    // frame_init/(N+1) — synchronous call that delivers the user's
+    // ctor args and triggers the `$>` cascade by transitioning the
+    // gen_statem to itself with the skip flag cleared. The transition
+    // re-fires `state_enter`; since the flag is now false, the
+    // unguarded enter clause (user `$>` body) runs.
+    let frame_init_args = sys_param_vars.join(", ");
+    let frame_init_list = if sys_param_vars.is_empty() {
         "[]".to_string()
     } else {
         format!("[{}]", sys_param_vars.join(", "))
     };
+    let frame_init_params = if sys_param_vars.is_empty() {
+        "Pid".to_string()
+    } else {
+        format!("Pid, {}", sys_param_vars.join(", "))
+    };
     code.push_str(&format!(
-        "start_link({}) ->\n    gen_statem:start_link(?MODULE, {}, []).\n\n",
-        start_link_args, start_link_list
+        "frame_init({}) ->\n    gen_statem:call(Pid, {{frame_init, {}}}).\n\n",
+        frame_init_params, frame_init_list
     ));
 
-    // RFC-0015 D7: `'__no_init'/0` spawns a fresh gen_statem with the
-    // [no_init] sentinel, which `init/1` recognizes by setting the
-    // `frame_skip_enter__` flag in the data record. The first
-    // `(enter, _OldState, Data)` clause for every state then bails
-    // out without running the user's `$>` body. Returns a bare Pid
-    // (matching the `@@!Foo()` call site shape: callers chain
-    // `restore_state` immediately after).
-    code.push_str(
-        "'__no_init'() ->\n    element(2, gen_statem:start_link(?MODULE, [no_init], [])).\n\n",
-    );
+    // create/N — public factory: bare start_link + frame_init. Returns
+    // a bare Pid (matches the previous `@@Counter(args)` lowering
+    // shape: `element(2, counter:start_link(args))` is now
+    // `counter:create(args)` which already returns a Pid).
+    let create_args = sys_param_vars.join(", ");
+    code.push_str(&format!(
+        "create({}) ->\n    {{ok, Pid}} = start_link(),\n    frame_init({}),\n    Pid.\n\n",
+        create_args, frame_init_params
+    ));
 
     // RFC-0015 phase 1.9: factory rename — emit `<name>(Args) ->
-    // start_link(Args).` if `@@[create(<name>)]` is set. The
-    // delegation preserves the conventional `{ok, Pid}` return
-    // shape; cross-system call sites that unwrap via `element(2,
-    // ...)` continue to work transparently.
+    // create(Args).` if `@@[create(<name>)]` is set.
     if let Some(factory_name) = system.create_op_name() {
         code.push_str(&format!(
-            "{}({}) ->\n    start_link({}).\n\n",
+            "{}({}) ->\n    create({}).\n\n",
             to_snake_case(factory_name),
-            start_link_args,
+            create_args,
             sys_param_vars.join(", ")
         ));
     }
@@ -3483,21 +3488,21 @@ pub(crate) fn generate_erlang_system(
     } else {
         format!("#data{{{}}}", record_overrides.join(", "))
     };
-    // RFC-0015 D7: `init([no_init])` clause for `@@!Foo()`. Must be
-    // emitted FIRST because Erlang tries clauses in source order — the
-    // generic `init([Seed])` pattern would otherwise bind `Seed =
-    // no_init` and run the user's `$>`. Sets `frame_skip_enter__` so
-    // the first state-enter callback bails out without running user
-    // code; `restore_state` overwrites everything from saved JSON.
+    // RFC-0017 Phase A6: bare `init/1` always sets `frame_skip_enter__
+    // = true`. The user's `$>` body NEVER fires from init — it only
+    // fires when `frame_init/(N+1)` is called explicitly. The D7
+    // `init([no_init])` and the parameterized `init([Seed])` clauses
+    // are both gone; `init([])` is the only path.
+    let _ = (init_pattern, &record_literal);
     code.push_str(&format!(
-        "init([no_init]) ->\n    {{ok, {}, #data{{frame_skip_enter__ = true}}}};\n",
+        "init([]) ->\n    {{ok, {}, #data{{frame_skip_enter__ = true}}}}.\n\n",
         first_state
     ));
 
-    code.push_str(&format!(
-        "init({}) ->\n    {{ok, {}, {}}}.\n\n",
-        init_pattern, first_state, record_literal
-    ));
+    // Stash the `record_overrides` so the start state's `frame_init`
+    // handler can apply them at runtime. The frame_init handler is
+    // emitted alongside the state functions below.
+    let frame_init_record_overrides = record_overrides.clone();
 
     // State functions — one per state.
     // Build helpers for HSM cascade emission:
@@ -3538,20 +3543,49 @@ pub(crate) fn generate_erlang_system(
             state.enter.is_some() || !state.state_vars.is_empty()
         };
 
-        for state in &machine.states {
+        for (state_idx, state) in machine.states.iter().enumerate() {
             let state_name = state_atom(&state.name);
+            let is_start_state = state_idx == 0;
 
-            // RFC-0015 D7: skip-flag guard for `@@!Foo()`. When
-            // `init([no_init])` set `frame_skip_enter__ = true`, the
-            // first state's enter callback bails out without firing
-            // the user's `$>` body. Clearing the flag in this clause
-            // keeps subsequent transitions firing the cascade
-            // normally. This clause must precede the unguarded enter
-            // clause so Erlang's pattern matching tries it first.
+            // RFC-0017 Phase A6: skip-flag guard for `start_link/0`.
+            // Bare init sets `frame_skip_enter__ = true` so the first
+            // state's enter callback bails without firing the user's
+            // `$>` body. Clearing the flag in this clause keeps
+            // subsequent transitions firing the cascade normally.
+            // This clause must precede the unguarded enter clause so
+            // Erlang's pattern matching tries it first.
             code.push_str(&format!(
                 "{}(enter, _OldState, #data{{frame_skip_enter__ = true}} = Data) ->\n    {{keep_state, Data#data{{frame_skip_enter__ = false}}}};\n",
                 state_name
             ));
+
+            // RFC-0017 Phase A6: `frame_init/(N+1)` cast handler on
+            // the START state. Receives the user's ctor args, applies
+            // domain/state/enter overrides to the Data record, clears
+            // the skip flag, and transitions to self. The transition
+            // re-fires `state_enter` — now the unguarded clause
+            // matches (skip flag is false), so the user `$>` body
+            // runs with the proper enter_args.
+            if is_start_state {
+                let arg_pattern = if sys_param_vars.is_empty() {
+                    "[]".to_string()
+                } else {
+                    format!("[{}]", sys_param_vars.join(", "))
+                };
+                let mut overrides = frame_init_record_overrides.clone();
+                overrides.push("frame_skip_enter__ = false".to_string());
+                // `repeat_state` re-fires state_enter for the current
+                // state (gen_statem's `{next_state, SameState, Data}`
+                // does NOT trigger state_enter on self-transition, but
+                // `repeat_state` does). With the skip flag cleared,
+                // the unguarded enter clause matches and runs user $>.
+                code.push_str(&format!(
+                    "{}({{call, From}}, {{frame_init, {}}}, Data) ->\n    Data1 = Data#data{{{}}},\n    {{repeat_state, Data1, [{{reply, From, ok}}]}};\n",
+                    state_name,
+                    arg_pattern,
+                    overrides.join(", ")
+                ));
+            }
 
             // Enter handler. For HSM, walk the parent chain top-down
             // and call each ancestor's `frame_enter__<state>` helper

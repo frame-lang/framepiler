@@ -667,8 +667,10 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             format!("{}.__create({})", name, args)
         }
         TargetLanguage::Erlang => {
-            // Erlang: module:start_link()
-            // Use snake_case for Erlang module names (CamelCase -> snake_case)
+            // RFC-0017 Phase A6: Erlang factory expansion uses
+            // `module:create(args)` which returns a bare Pid (no
+            // `element(2, ...)` unwrap needed). Bare `module:start_link()`
+            // is reserved for `@@!Counter()`.
             let module_name = {
                 let mut result = String::new();
                 for (i, c) in name.chars().enumerate() {
@@ -682,9 +684,9 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
                 result
             };
             if args.trim().is_empty() {
-                format!("{}:start_link()", module_name)
+                format!("{}:create()", module_name)
             } else {
-                format!("{}:start_link({})", module_name, args)
+                format!("{}:create({})", module_name, args)
             }
         }
         TargetLanguage::Lua => {

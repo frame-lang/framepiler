@@ -665,13 +665,12 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("{}()", name)
         }
         TargetLanguage::Erlang => {
-            // Erlang: `foo:'__no_init'()` returns a bare Pid pointing
-            // at a fresh gen_statem spawned via `init([no_init])`,
-            // which sets `frame_skip_enter__ = true` so the first
-            // state-enter callback bails before firing the user's
-            // `$>` body. Subsequent transitions clear the flag and
-            // fire the cascade normally. See `erlang_system.rs`.
-            format!("{}:'__no_init'()", to_snake_case(name))
+            // RFC-0017 Phase A6: `@@!Counter()` lowers to bare
+            // `module:start_link()` unwrapped. The bare init sets
+            // `frame_skip_enter__ = true` so the user `$>` body never
+            // fires until `frame_init/(N+1)` is called explicitly.
+            // Returns a Pid (matches the @@! call site shape).
+            format!("element(2, {}:start_link())", to_snake_case(name))
         }
         _ => format!(
             "/* @@! no-initialization allocation not yet wired for {:?} ({}); see RFC-0015 D7 */",
