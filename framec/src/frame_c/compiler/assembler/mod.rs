@@ -605,10 +605,12 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             }
         }
         TargetLanguage::C => {
+            // RFC-0017 Phase A3: C factory expansion uses `Foo_create()`.
+            // Bare `Foo_new()` is reserved for `@@!Foo()` (framework only).
             if args.trim().is_empty() {
-                format!("{}_new()", name)
+                format!("{}_create()", name)
             } else {
-                format!("{}_new({})", name, args)
+                format!("{}_create({})", name, args)
             }
         }
         TargetLanguage::Java => {
@@ -851,12 +853,14 @@ mod tests {
 
     #[test]
     fn test_system_instantiation_c() {
+        // RFC-0017 Phase A3: C factory expansion uses `Foo_create()`.
+        // Bare `Foo_new()` is reserved for `@@!Foo()`.
         let src = "struct Foo* s = @@Foo();\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
             expand_system_instantiations(src, &systems, &params, TargetLanguage::C).unwrap();
-        assert_eq!(result, "struct Foo* s = Foo_new();\n");
+        assert_eq!(result, "struct Foo* s = Foo_create();\n");
     }
 
     #[test]

@@ -314,12 +314,109 @@ impl LanguageBackend for CBackend {
             }
 
             CodegenNode::Constructor { params, body, .. } => {
+                // RFC-0017 Phase A3: split the system constructor into:
+                //   Counter* Counter_new(void)                  — bare framework
+                //   void Counter_frame_init(Counter* self, ...) — user $> + cascade
+                //   Counter* Counter_create(...)                — factory
+                //
+                // Call-site lowering:
+                //   - `@@Counter(7)` → `Counter_create(7)`
+                //   - `@@!Counter()` → `Counter_new()`
+                //
+                // Body classification by LINE (rendered text), since C's
+                // compartment setup is a multi-line NativeBlock:
+                //   - Lines containing cascade triggers → `__frame_init`
+                //     only (skipped in bare).
+                //   - Lines mentioning any ctor param name → `__frame_init`
+                //     only (skipped in bare).
+                //   - Other lines → BOTH (bare gets framework setup;
+                //     `__frame_init` re-runs them with full args so it can
+                //     rebuild the compartment with the user's enter_args).
+                // The double-set of state_stack / compartment etc. is
+                // harmless — the second assignment replaces the first.
                 let class_name = system_name.clone();
-                // Use the C type converter so Frame types like `str` become
-                // `char*`, `bool` becomes `bool`, etc. — `emit_params` would
-                // pass the raw Frame type through unchanged and break the
-                // generated function signature.
-                let params_str = if params.is_empty() {
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+
+                // Render body to text WITH function-body indent + semicolons
+                // applied (matching the original Constructor arm's logic).
+                ctx.push_indent();
+                let body_indent = ctx.get_indent();
+                let mut body_text = String::new();
+                for stmt in body {
+                    let s = self.emit(stmt, ctx);
+                    let trimmed = s.trim();
+                    body_text.push_str(&s);
+                    if !trimmed.is_empty()
+                        && !trimmed.ends_with('}')
+                        && !trimmed.ends_with(';')
+                        && !matches!(
+                            stmt,
+                            CodegenNode::If { .. }
+                                | CodegenNode::While { .. }
+                                | CodegenNode::Comment { .. }
+                                | CodegenNode::Empty
+                        )
+                    {
+                        body_text.push_str(";\n");
+                    } else if !trimmed.is_empty() && !s.ends_with('\n') {
+                        body_text.push('\n');
+                    }
+                }
+                ctx.pop_indent();
+
+                let is_cascade_line = |line: &str| {
+                    line.contains("_fire_enter_cascade")
+                        || line.contains("_process_transition_loop")
+                };
+                let mentions_param = |line: &str| {
+                    param_names.iter().any(|p| {
+                        line.split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    })
+                };
+
+                let bare_body: String = body_text
+                    .lines()
+                    .filter(|l| !is_cascade_line(l) && !mentions_param(l))
+                    .map(|l| format!("{}\n", l))
+                    .collect();
+
+                // Emit `Counter* Counter_new(void)` — bare framework
+                let mut result = format!(
+                    "{}{}* {}_new(void) {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    class_name
+                );
+                result.push_str(&format!(
+                    "{}{}* self = calloc(1, sizeof({}));\n",
+                    body_indent, class_name, class_name
+                ));
+                result.push_str(&bare_body);
+                result.push_str(&format!("{}return self;\n", body_indent));
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `void Counter_frame_init(Counter* self, <params>)`
+                let frame_init_params = {
+                    let mut s = format!("{}* self", class_name);
+                    for p in params {
+                        let type_str = self.convert_type_to_c(&p.type_annotation, &class_name);
+                        s.push_str(&format!(", {} {}", type_str, p.name));
+                    }
+                    s
+                };
+                result.push('\n');
+                result.push_str(&format!(
+                    "{}void {}_frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    frame_init_params
+                ));
+                result.push_str(&body_text);
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `Counter* Counter_create(<params>)` — factory
+                let create_params = if params.is_empty() {
                     "void".to_string()
                 } else {
                     params
@@ -331,71 +428,29 @@ impl LanguageBackend for CBackend {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
-
-                let mut result = format!(
-                    "{}{}* {}_new({}) {{\n",
+                result.push('\n');
+                result.push_str(&format!(
+                    "{}{}* {}_create({}) {{\n",
                     ctx.get_indent(),
                     class_name,
                     class_name,
-                    params_str
-                );
+                    create_params
+                ));
                 ctx.push_indent();
-                // calloc, not malloc: zero-initializes every field so
-                // domain/state primitives without an explicit default
-                // start at 0/false/NULL instead of holding uninitialized
-                // memory. Frame's author-visible contract is "a declared
-                // var is usable after construction"; malloc breaks it.
                 result.push_str(&format!(
-                    "{}{}* self = calloc(1, sizeof({}));\n",
+                    "{}{}* self = {}_new();\n",
                     ctx.get_indent(),
                     class_name,
                     class_name
                 ));
-
-                for stmt in body {
-                    let stmt_str = self.emit(stmt, ctx);
-                    result.push_str(&stmt_str);
-                    if !stmt_str.trim().is_empty()
-                        && !stmt_str.trim().ends_with('}')
-                        && !stmt_str.trim().ends_with(';')
-                        && !matches!(
-                            stmt,
-                            CodegenNode::If { .. }
-                                | CodegenNode::While { .. }
-                                | CodegenNode::Comment { .. }
-                                | CodegenNode::Empty
-                        )
-                    {
-                        result.push_str(";\n");
-                    } else if !stmt_str.trim().is_empty() {
-                        result.push('\n');
-                    }
-                }
-                result.push_str(&format!("{}return self;\n", ctx.get_indent()));
-                ctx.pop_indent();
-                result.push_str(&format!("{}}}\n", ctx.get_indent()));
-
-                // RFC-0015 D7: emit a parallel `_alloc()` zero-arg function
-                // that allocates a calloc'd struct WITHOUT running the
-                // init body. Used by `@@!Foo()` (the no-initialization
-                // sigil) so Frame source can produce a blank instance
-                // ready for `restore_state(...)` without re-firing $> or
-                // any other init code. The body-less form is uniform
-                // across systems — no parameters, no init logic, just
-                // zero-initialized memory.
-                result.push_str("\n");
+                let arg_pass: Vec<String> = std::iter::once("self".to_string())
+                    .chain(params.iter().map(|p| p.name.clone()))
+                    .collect();
                 result.push_str(&format!(
-                    "{}{}* {}_alloc(void) {{\n",
+                    "{}{}_frame_init({});\n",
                     ctx.get_indent(),
                     class_name,
-                    class_name
-                ));
-                ctx.push_indent();
-                result.push_str(&format!(
-                    "{}{}* self = calloc(1, sizeof({}));\n",
-                    ctx.get_indent(),
-                    class_name,
-                    class_name
+                    arg_pass.join(", ")
                 ));
                 result.push_str(&format!("{}return self;\n", ctx.get_indent()));
                 ctx.pop_indent();

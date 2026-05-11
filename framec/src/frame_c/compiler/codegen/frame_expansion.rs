@@ -608,10 +608,12 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("{}()", name)
         }
         TargetLanguage::C => {
-            // C: `Foo_alloc()` is a synthesized zero-arg function emitted
-            // by the C system codegen alongside `Foo_new()`. It calloc's
-            // a struct without running any init body — see backends/c.rs.
-            format!("{}_alloc()", name)
+            // RFC-0017 Phase A3: `@@!Foo()` lowers to bare `Foo_new()`
+            // which calloc's the struct and runs framework setup
+            // (empty compartment, state stack init) without firing the
+            // user `$>` cascade. Replaces the obsolete D7 `Foo_alloc()`
+            // (which skipped framework setup entirely).
+            format!("{}_new()", name)
         }
         TargetLanguage::Rust => {
             // RFC-0017 Phase A1: `@@!Counter()` lowers to bare
