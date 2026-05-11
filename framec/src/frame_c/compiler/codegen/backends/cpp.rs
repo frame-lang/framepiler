@@ -417,20 +417,33 @@ impl LanguageBackend for CppBackend {
                 }
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
 
-                // Emit `static Counter __create(<params>)` — factory
+                // Emit `static std::shared_ptr<Counter> __create(...)`
+                // — factory. Frame emits system-typed domain fields as
+                // `std::shared_ptr<T>` and copy-initializes them from
+                // the factory result (`shared_ptr<Counter> c =
+                // Counter::__create(7)`), so the factory must return a
+                // shared_ptr directly: `Counter` by value can't
+                // convert to `shared_ptr<Counter>`, and `Counter*`
+                // can't either (the `shared_ptr(T*)` ctor is
+                // explicit). The pre-RFC-0017 path emitted `new
+                // Counter(args)` straight into the field — superseded.
                 result.push('\n');
                 let create_params = self.emit_params(params);
                 result.push_str(&format!(
-                    "{}static {} __create({}) {{\n",
+                    "{}static std::shared_ptr<{}> __create({}) {{\n",
                     ctx.get_indent(),
                     class_name,
                     create_params
                 ));
                 ctx.push_indent();
-                result.push_str(&format!("{}{} c;\n", ctx.get_indent(), class_name));
+                result.push_str(&format!(
+                    "{}auto c = std::make_shared<{}>();\n",
+                    ctx.get_indent(),
+                    class_name
+                ));
                 let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
                 result.push_str(&format!(
-                    "{}c.__frame_init({});\n",
+                    "{}c->__frame_init({});\n",
                     ctx.get_indent(),
                     arg_pass.join(", ")
                 ));

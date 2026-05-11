@@ -257,7 +257,20 @@ impl LanguageBackend for SwiftBackend {
                     });
                     if mentions_param {
                         frame_init_lines.push(rendered.clone());
-                        framework_lines.push(swift_strip_param_lists(&rendered, &param_names));
+                        // RFC-0017: strip handles `[seed]` → `[]` in
+                        // prepareEnter args. For plain `self.field =
+                        // seed` strip is a no-op; emitting it into
+                        // the no-arg bare ctor would refuse to
+                        // compile. Skip when a param ref survives.
+                        let stripped = swift_strip_param_lists(&rendered, &param_names);
+                        let still_refs_param = param_names.iter().any(|p| {
+                            stripped
+                                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                                .any(|w| w == *p)
+                        });
+                        if !still_refs_param {
+                            framework_lines.push(stripped);
+                        }
                     } else {
                         framework_lines.push(rendered);
                     }

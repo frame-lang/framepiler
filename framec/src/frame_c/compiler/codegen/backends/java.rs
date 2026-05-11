@@ -293,7 +293,21 @@ impl LanguageBackend for JavaBackend {
                     });
                     if mentions_param {
                         frame_init_lines.push(rendered.clone());
-                        framework_lines.push(java_strip_param_lists(&rendered, &param_names));
+                        // RFC-0017: strip handles `Arrays.asList(seed)`
+                        // → empty in prepareEnter args. For plain
+                        // `this.field = seed` (Domain-kind param)
+                        // strip is a no-op; emitting into the no-arg
+                        // bare ctor would leave `seed` undefined.
+                        // Skip when a param ref survives the strip.
+                        let stripped = java_strip_param_lists(&rendered, &param_names);
+                        let still_refs_param = param_names.iter().any(|p| {
+                            stripped
+                                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                                .any(|w| w == *p)
+                        });
+                        if !still_refs_param {
+                            framework_lines.push(stripped);
+                        }
                     } else {
                         framework_lines.push(rendered);
                     }

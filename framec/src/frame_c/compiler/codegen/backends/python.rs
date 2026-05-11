@@ -385,7 +385,20 @@ impl LanguageBackend for PythonBackend {
                         .any(|p| python_identifier_present(&rendered, p));
                     if mentions_param {
                         frame_init_lines.push(rendered.clone());
-                        init_lines.push(python_strip_param_lists(&rendered, &param_names));
+                        // Strip handles `[seed]` → `[]` in prepareEnter
+                        // args (StateArg/EnterArg kind params). For
+                        // Domain-kind params the line is a plain
+                        // `self.field = seed` and strip is a no-op —
+                        // emitting the stripped form into the no-arg
+                        // bare ctor would leave `seed` undefined.
+                        // Skip those; `_frame_init` owns them.
+                        let stripped = python_strip_param_lists(&rendered, &param_names);
+                        let still_refs_param = param_names
+                            .iter()
+                            .any(|p| python_identifier_present(&stripped, p));
+                        if !still_refs_param {
+                            init_lines.push(stripped);
+                        }
                     } else {
                         init_lines.push(rendered);
                     }

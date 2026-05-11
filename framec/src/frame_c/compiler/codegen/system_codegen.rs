@@ -6328,40 +6328,15 @@ pub(crate) fn expand_system_instantiation_in_domain(
                 let close_paren = after_close - 1;
                 let args = std::str::from_utf8(&bytes[args_start..close_paren]).unwrap_or("");
                 i = after_close;
-                // Generate native constructor per target language.
-                let constructor = match lang {
-                    TargetLanguage::Python3 => {
-                        format!("{}({})", name, args)
-                    }
-                    // GDScript instantiation is `Class.new(...)`; bare
-                    // `Class(...)` parses as a function call at runtime
-                    // and fails with "Cannot call non-static function
-                    // 'Logger()' on a null instance."
-                    TargetLanguage::GDScript => {
-                        format!("{}.new({})", name, args)
-                    }
-                    TargetLanguage::TypeScript
-                    | TargetLanguage::JavaScript
-                    | TargetLanguage::Cpp
-                    | TargetLanguage::Java
-                    | TargetLanguage::CSharp
-                    | TargetLanguage::Dart
-                    | TargetLanguage::Php => format!("new {}({})", name, args),
-                    // Kotlin: no `new` keyword — `Counter()` is the
-                    // constructor call. Matches assembler's
-                    // `generate_constructor` Kotlin arm
-                    // (assembler/mod.rs:331).
-                    TargetLanguage::Kotlin => format!("{}({})", name, args),
-                    TargetLanguage::Rust => format!("{}::new({})", name, args),
-                    TargetLanguage::C => format!("{}_new({})", name, args),
-                    TargetLanguage::Go => format!("New{}({})", name, args),
-                    TargetLanguage::Swift => format!("{}({})", name, args),
-                    TargetLanguage::Ruby => format!("{}.new({})", name, args),
-                    TargetLanguage::Lua => format!("{}.new({})", name, args),
-                    TargetLanguage::Erlang => {
-                        format!("{}:start_link({})", to_snake_case_simple(name), args)
-                    }
-                    TargetLanguage::Graphviz => name.to_string(),
+                // RFC-0017: domain-initializer `@@Name(args)` must
+                // lower to the same factory call the assembler emits
+                // for source-level `@@Name(args)`. Delegating keeps
+                // the two paths in sync so a future per-backend
+                // spelling change only updates one site.
+                let constructor = if matches!(lang, TargetLanguage::Graphviz) {
+                    name.to_string()
+                } else {
+                    crate::frame_c::compiler::assembler::generate_constructor(name, args, lang)
                 };
                 result.push_str(&constructor);
                 continue;
@@ -6379,21 +6354,6 @@ pub(crate) fn expand_system_instantiation_in_domain(
     result
 }
 
-/// Simple snake_case conversion for Erlang module names
-fn to_snake_case_simple(name: &str) -> String {
-    let mut result = String::new();
-    for (i, c) in name.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                result.push('_');
-            }
-            result.push(c.to_lowercase().next().unwrap_or(c));
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
 
 #[cfg(test)]
 mod tests {
@@ -6511,5 +6471,41 @@ mod tests {
     fn test_init_references_param_empty() {
         assert!(!init_references_param("", &["balance".into()]));
         assert!(!init_references_param("balance", &[]));
+    }
+
+    // RFC-0017 regression: `@@SystemName(args)` inside a domain
+    // initializer must lower to the factory call the assembler emits
+    // for source-level `@@SystemName(args)`. Before the fix, this
+    // expander emitted the bare-ctor spelling, which broke Godot
+    // ("Too many arguments for new()") and silently passed extra
+    // args to the no-arg framework constructor on typed backends.
+    #[test]
+    fn test_domain_init_uses_rfc0017_factory() {
+        let cases = &[
+            (TargetLanguage::Python3, "Counter._create(7)"),
+            (TargetLanguage::GDScript, "Counter._create(7)"),
+            (TargetLanguage::Java, "Counter.__create(7)"),
+            (TargetLanguage::Kotlin, "Counter.__create(7)"),
+            (TargetLanguage::Swift, "Counter.__create(7)"),
+            (TargetLanguage::CSharp, "Counter.__create(7)"),
+            (TargetLanguage::Cpp, "Counter::__create(7)"),
+            (TargetLanguage::Rust, "Counter::__create(7)"),
+            (TargetLanguage::C, "Counter_create(7)"),
+            (TargetLanguage::Go, "CreateCounter(7)"),
+            (TargetLanguage::Dart, "Counter._create(7)"),
+            (TargetLanguage::JavaScript, "Counter._create(7)"),
+            (TargetLanguage::TypeScript, "Counter._create(7)"),
+            (TargetLanguage::Ruby, "Counter._create(7)"),
+            (TargetLanguage::Lua, "Counter._create(7)"),
+            (TargetLanguage::Php, "Counter::_create(7)"),
+        ];
+        for (lang, expected) in cases {
+            let actual = expand_system_instantiation_in_domain("@@Counter(7)", *lang);
+            assert_eq!(
+                actual, *expected,
+                "{:?} domain-init expansion mismatch",
+                lang
+            );
+        }
     }
 }

@@ -5305,26 +5305,18 @@ pub(crate) fn generate_persistence_methods(
                         var.name
                     ));
                     if nested_uses_new_contract(child_sys) {
-                        // FRAMEC_BUGS.md Issue #2: if Inner has Domain
-                        // params (bare `@@system Inner(seed: int)`),
-                        // extract their saved values from __raw_inner
-                        // and pass to .new(...) so the user's required
-                        // constructor params are satisfied. Without
-                        // this, Inner.new() crashes with
-                        // "Too few arguments for new() call".
-                        let child_params = get_nested_system_domain_params(child_sys);
-                        let new_args = if child_params.is_empty() {
-                            String::new()
-                        } else {
-                            child_params
-                                .iter()
-                                .map(|(pname, _)| format!("__raw_{}.get(\"{}\")", var.name, pname))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        };
+                        // RFC-0017: the bare `_init()` takes no args
+                        // post-decouple. The subsequent
+                        // `restore_state` call repopulates every
+                        // domain field, so passing the saved
+                        // constructor args here would (a) be wasted
+                        // work and (b) fail Godot's "Too many
+                        // arguments for new() call" parse check.
+                        // Construct the no-init shell and let
+                        // restore_state do the rehydration.
                         restore_body.push_str(&format!(
-                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new({3})\n    {0}.{1}.restore_state(var_to_bytes(__raw_{1}))\nelse:\n    {0}.{1} = null\n",
-                            target, var.name, child_sys, new_args
+                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new()\n    {0}.{1}.restore_state(var_to_bytes(__raw_{1}))\nelse:\n    {0}.{1} = null\n",
+                            target, var.name, child_sys
                         ));
                     } else {
                         restore_body.push_str(&format!(

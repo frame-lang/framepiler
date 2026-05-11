@@ -120,6 +120,18 @@ pub fn assemble(
     } else {
         None
     };
+    // When the main system emits at script-module scope (it has an
+    // explicit `extends Base` — codegen put it here, not in a `class`
+    // wrapper), the RFC-0017 `_create` factory body references the
+    // script by name (`Adventure.new()`). A module-scope GDScript
+    // script has no implicit self-identifier, so declare `class_name`
+    // (which must precede `extends`) to make the script resolvable as
+    // a global identifier.
+    if matches!(lang, TargetLanguage::GDScript) {
+        if let (Some(m), Some(_)) = (main_system, &main_extends_line) {
+            output.push_str(&format!("class_name {}\n", m));
+        }
+    }
     if let Some(ref ext_line) = main_extends_line {
         output.push_str(ext_line);
         output.push_str("\n\n");
@@ -582,7 +594,12 @@ fn expand_system_instantiations(
 }
 
 /// Generate the language-appropriate constructor call for a system.
-fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String {
+///
+/// Exposed `pub(crate)` so codegen-side expanders (notably
+/// `system_codegen::expand_system_instantiation_in_domain` for
+/// `@@SystemName(args)` in domain-field initializers) emit the same
+/// RFC-0017 factory spelling as the assembler text-rewrite pass.
+pub(crate) fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String {
     match lang {
         TargetLanguage::Python3 => {
             // RFC-0017 Phase A0: factory call uses `_create` classmethod
