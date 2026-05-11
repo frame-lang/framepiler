@@ -633,8 +633,9 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             format!("{}.__create({})", name, args)
         }
         TargetLanguage::Cpp => {
-            // C++: stack allocation (classes use unique_ptr internally)
-            format!("{}({})", name, args)
+            // RFC-0017 Phase A3: C++ factory expansion uses `Counter::__create(args)`.
+            // Bare `Counter()` is reserved for `@@!Counter()` (framework only).
+            format!("{}::__create({})", name, args)
         }
         TargetLanguage::Go => {
             // RFC-0017 Phase A2: Go factory expansion uses `CreateName()`.

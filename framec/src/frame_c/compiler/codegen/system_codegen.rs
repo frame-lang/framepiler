@@ -2295,10 +2295,14 @@ self._context_stack.pop();"#,
                         "{sys}_fire_enter_cascade(self);\n{sys}_process_transition_loop(self);",
                         sys = system.name
                     )
-                },
-                TargetLanguage::Cpp => format!(
-                    "if (!__skipInitialEnter) {{\n    __fire_enter_cascade();\n    __process_transition_loop();\n}}"
-                ),
+                }
+                TargetLanguage::Cpp => {
+                    // RFC-0017 Phase A3: cascade runs unconditionally
+                    // inside `__frame_init`. The `__skipInitialEnter`
+                    // gate is gone — bare `Counter()` skips
+                    // `__frame_init` entirely.
+                    "__fire_enter_cascade();\n__process_transition_loop();".to_string()
+                }
                 TargetLanguage::Java => {
                     // RFC-0017 Phase A1: cascade runs unconditionally
                     // inside `__frame_init`. The old `__skipInitialEnter`
@@ -2333,7 +2337,8 @@ self._context_stack.pop();"#,
                 }
                 TargetLanguage::Php => {
                     let _ = (event_class, &system.name);
-                    "$this->__fire_enter_cascade();\n$this->__process_transition_loop();".to_string()
+                    "$this->__fire_enter_cascade();\n$this->__process_transition_loop();"
+                        .to_string()
                 }
                 TargetLanguage::Ruby => {
                     let _ = (event_class, &system.name);
@@ -3994,11 +3999,10 @@ fn generate_cpp_machinery(
     let chains = compute_hsm_chains(system);
     let comp_ptr = format!("std::shared_ptr<{}>", compartment_class);
 
-    // Class-static flag.
-    methods.push(CodegenNode::NativeBlock {
-        code: "inline static bool __skipInitialEnter = false;".to_string(),
-        span: None,
-    });
+    // RFC-0017 Phase A3: C++'s `__skipInitialEnter` static flag is gone.
+    // Bare `Counter()` is framework-only; `__frame_init(args)` runs user
+    // `$>` + cascade; static `__create(args)` is the factory. The
+    // `__create` method is emitted by the Constructor arm directly.
 
     // hsm_chain — instance method returning the topology table.
     let mut chain_method = String::from(

@@ -321,31 +321,123 @@ impl LanguageBackend for CppBackend {
                 body,
                 super_call,
             } => {
+                // RFC-0017 Phase A3: split into bare ctor + __frame_init
+                // member + static __create factory. Framework helper
+                // classes keep the original single-ctor emission.
                 let class_name = ctx.system_name.clone().unwrap_or("Class".to_string());
-                let params_str = self.emit_params(params);
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
+
+                if is_frame_helper {
+                    let params_str = self.emit_params(params);
+                    let init_list = super_call
+                        .as_ref()
+                        .map(|sc| format!(" : {}", self.emit(sc, ctx)))
+                        .unwrap_or_default();
+                    let mut result = format!(
+                        "{}{}({}){} {{\n",
+                        ctx.get_indent(),
+                        class_name,
+                        params_str,
+                        init_list
+                    );
+                    ctx.push_indent();
+                    for stmt in body {
+                        result.push_str(&self.emit(stmt, ctx));
+                        if self.needs_semicolon(stmt) {
+                            result.push_str(";\n");
+                        } else {
+                            result.push('\n');
+                        }
+                    }
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                    return result;
+                }
+
+                // System class: classify body.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                for stmt in body {
+                    let mut rendered = self.emit(stmt, ctx);
+                    if self.needs_semicolon(stmt) && !rendered.ends_with(";\n") {
+                        if !rendered.ends_with('\n') {
+                            rendered.push_str(";\n");
+                        } else {
+                            let trimmed = rendered.trim_end_matches('\n').to_string();
+                            rendered = format!("{};\n", trimmed);
+                        }
+                    } else if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered);
+                    } else {
+                        framework_lines.push(rendered);
+                    }
+                }
+                ctx.pop_indent();
+
                 let init_list = super_call
                     .as_ref()
                     .map(|sc| format!(" : {}", self.emit(sc, ctx)))
                     .unwrap_or_default();
 
-                let mut result = format!(
-                    "{}{}({}){} {{\n",
+                // Emit `Counter()` — bare framework
+                let mut result = format!("{}{}(){} {{\n", ctx.get_indent(), class_name, init_list);
+                for line in &framework_lines {
+                    result.push_str(line);
+                }
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `void __frame_init(<params>)`
+                result.push('\n');
+                let frame_init_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}void __frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                for line in &frame_init_lines {
+                    result.push_str(line);
+                }
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `static Counter __create(<params>)` — factory
+                result.push('\n');
+                let create_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}static {} __create({}) {{\n",
                     ctx.get_indent(),
                     class_name,
-                    params_str,
-                    init_list
-                );
+                    create_params
+                ));
                 ctx.push_indent();
-                for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    if self.needs_semicolon(stmt) {
-                        result.push_str(";\n");
-                    } else {
-                        result.push('\n');
-                    }
-                }
+                result.push_str(&format!("{}{} c;\n", ctx.get_indent(), class_name));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c.__frame_init({});\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c;\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 

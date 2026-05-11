@@ -603,8 +603,8 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("new {}()", name)
         }
         TargetLanguage::Cpp => {
-            // C++: `Foo()` is the default constructor. Frame's factory-only
-            // design ensures the system class has a usable empty default ctor.
+            // RFC-0017 Phase A3: `@@!Counter()` lowers to bare `Counter()`
+            // which runs framework setup only (no user `$>` cascade).
             format!("{}()", name)
         }
         TargetLanguage::C => {
