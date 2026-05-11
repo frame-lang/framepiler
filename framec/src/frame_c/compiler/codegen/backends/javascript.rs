@@ -85,13 +85,18 @@ impl LanguageBackend for JavaScriptBackend {
                     result.push('\n');
                 }
 
-                // Methods
+                // RFC-0017 Phase A5: temporarily set system_name so the
+                // Constructor arm can identify framework helpers and
+                // skip the init-decouple split for them.
+                let prev_system = ctx.system_name.clone();
+                ctx.system_name = Some(name.clone());
                 for (i, method) in methods.iter().enumerate() {
                     if i > 0 {
                         result.push('\n');
                     }
                     result.push_str(&self.emit(method, ctx));
                 }
+                ctx.system_name = prev_system;
 
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
@@ -177,33 +182,121 @@ impl LanguageBackend for JavaScriptBackend {
                 body,
                 super_call,
             } => {
-                let mut result = String::new();
+                // RFC-0017 Phase A5: split system class into bare
+                // `constructor()` + `_frame_init(args)` + static
+                // `_create(args)` factory. Framework helper classes
+                // keep the single-ctor emission.
+                let class_name = ctx.system_name.clone().unwrap_or_default();
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
 
-                let params_str = self.emit_params(params);
-                result.push_str(&format!(
-                    "{}constructor({}) {{\n",
-                    ctx.get_indent(),
-                    params_str
-                ));
-
-                ctx.push_indent();
-
-                if let Some(super_call) = super_call {
-                    result.push_str(&self.emit(super_call, ctx));
-                    result.push_str(";\n");
+                if is_frame_helper {
+                    let params_str = self.emit_params(params);
+                    let mut result =
+                        format!("{}constructor({}) {{\n", ctx.get_indent(), params_str);
+                    ctx.push_indent();
+                    if let Some(sc) = super_call {
+                        result.push_str(&self.emit(sc, ctx));
+                        result.push_str(";\n");
+                    }
+                    for stmt in body {
+                        result.push_str(&self.emit(stmt, ctx));
+                        if self.needs_semicolon(stmt) {
+                            result.push_str(";\n");
+                        } else {
+                            result.push('\n');
+                        }
+                    }
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                    return result;
                 }
 
+                // System class: classify body lines.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                if let Some(sc) = super_call {
+                    let s = self.emit(sc, ctx);
+                    framework_lines.push(format!("{};\n", s));
+                }
                 for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    if self.needs_semicolon(stmt) {
-                        result.push_str(";\n");
+                    let mut rendered = self.emit(stmt, ctx);
+                    if self.needs_semicolon(stmt) && !rendered.ends_with(";\n") {
+                        if !rendered.ends_with('\n') {
+                            rendered.push_str(";\n");
+                        } else {
+                            let trimmed = rendered.trim_end_matches('\n').to_string();
+                            rendered = format!("{};\n", trimmed);
+                        }
+                    } else if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered);
                     } else {
-                        result.push('\n');
+                        framework_lines.push(rendered);
                     }
                 }
                 ctx.pop_indent();
 
+                // Emit bare `constructor()`
+                let mut result = format!("{}constructor() {{\n", ctx.get_indent());
+                for line in &framework_lines {
+                    result.push_str(line);
+                }
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `_frame_init(<params>)` method
+                result.push('\n');
+                let frame_init_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}_frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    frame_init_params
+                ));
+                for line in &frame_init_lines {
+                    result.push_str(line);
+                }
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `static _create(<params>)` factory
+                result.push('\n');
+                let create_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}static _create({}) {{\n",
+                    ctx.get_indent(),
+                    create_params
+                ));
+                ctx.push_indent();
+                result.push_str(&format!(
+                    "{}const c = new {}();\n",
+                    ctx.get_indent(),
+                    class_name
+                ));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c._frame_init({});\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c;\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 

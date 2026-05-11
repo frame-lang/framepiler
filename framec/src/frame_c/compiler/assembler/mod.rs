@@ -592,7 +592,9 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             format!("{}._create({})", name, args)
         }
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
-            format!("new {}({})", name, args)
+            // RFC-0017 Phase A5: factory expansion uses `Counter._create(args)`.
+            // Bare `new Counter()` reserved for `@@!Counter()`.
+            format!("{}._create({})", name, args)
         }
         TargetLanguage::Rust => {
             // RFC-0017 Phase A1: factory call uses `__create` which does
@@ -624,7 +626,10 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             format!("{}.__create({})", name, args)
         }
         TargetLanguage::Php => {
-            format!("new {}({})", name, args)
+            // RFC-0017 Phase A5: PHP factory expansion uses
+            // `Counter::_create(args)`. Bare `new Counter()` is
+            // reserved for `@@!Counter()`.
+            format!("{}::_create({})", name, args)
         }
         TargetLanguage::Kotlin => {
             // RFC-0017 Phase A1: Kotlin factory expansion uses `__create()`
@@ -647,11 +652,13 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             }
         }
         TargetLanguage::Ruby => {
-            // Ruby: @@System() becomes System.new()
+            // RFC-0017 Phase A5: Ruby factory expansion uses
+            // `Counter._create(args)`. Bare `Counter.new` reserved for
+            // `@@!Counter()`.
             if args.trim().is_empty() {
-                format!("{}.new", name)
+                format!("{}._create", name)
             } else {
-                format!("{}.new({})", name, args)
+                format!("{}._create({})", name, args)
             }
         }
         TargetLanguage::Swift => {
@@ -681,11 +688,13 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             }
         }
         TargetLanguage::Lua => {
-            // Lua: System.new()
+            // RFC-0017 Phase A5: Lua factory expansion uses
+            // `Counter._create(args)`. Bare `Counter.new()` is
+            // reserved for `@@!Counter()`.
             if args.trim().is_empty() {
-                format!("{}.new()", name)
+                format!("{}._create()", name)
             } else {
-                format!("{}.new({})", name, args)
+                format!("{}._create({})", name, args)
             }
         }
         TargetLanguage::Dart => {
@@ -834,13 +843,14 @@ mod tests {
 
     #[test]
     fn test_system_instantiation_typescript() {
+        // RFC-0017 Phase A5: TS factory expansion uses `Foo._create()`.
         let src = "let s = @@Foo()\n";
         let systems: HashSet<String> = vec!["Foo".to_string()].into_iter().collect();
         let params = empty_params();
         let result =
             expand_system_instantiations(src, &systems, &params, TargetLanguage::TypeScript)
                 .unwrap();
-        assert_eq!(result, "let s = new Foo()\n");
+        assert_eq!(result, "let s = Foo._create()\n");
     }
 
     #[test]

@@ -573,11 +573,22 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
         // the @@Counter(args) path. Replaces the prior `__new__` form
         // which bypassed framework setup entirely.
         TargetLanguage::Python3 => format!("{}()", name),
-        TargetLanguage::Ruby => format!("{}.allocate", name),
-        TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
-            format!("Object.create({}.prototype)", name)
+        TargetLanguage::Ruby => {
+            // RFC-0017 Phase A5: bare `Counter.new` runs the
+            // framework-only initialize; no user `$>` cascade.
+            // Replaces D7's `.allocate` form.
+            format!("{}.new", name)
         }
-        TargetLanguage::Lua => format!("setmetatable({{}}, {})", name),
+        TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
+            // RFC-0017 Phase A5: bare `new Counter()` runs framework
+            // only. Replaces D7's `Object.create(Foo.prototype)`.
+            format!("new {}()", name)
+        }
+        TargetLanguage::Lua => {
+            // RFC-0017 Phase A5: bare `Counter.new()` is the
+            // framework-only ctor. Replaces D7's bare metatable setup.
+            format!("{}.new()", name)
+        }
         TargetLanguage::Go => {
             // RFC-0017 Phase A2: `@@!Counter()` lowers to `NewCounter()`
             // which runs only framework setup (state stack, bare
@@ -593,10 +604,12 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             // without invoking `_frame_init` (the user `$>` cascade).
             format!("{}.new()", name)
         }
-        TargetLanguage::Php => format!(
-            "(new \\ReflectionClass({}::class))->newInstanceWithoutConstructor()",
-            name
-        ),
+        TargetLanguage::Php => {
+            // RFC-0017 Phase A5: bare `new Counter()` runs only the
+            // framework-only `__construct()`. Replaces D7's
+            // `ReflectionClass::newInstanceWithoutConstructor()`.
+            format!("new {}()", name)
+        }
         TargetLanguage::CSharp => {
             // RFC-0017 Phase A2: `@@!Counter()` lowers to bare
             // `new Counter()` which runs only framework setup.

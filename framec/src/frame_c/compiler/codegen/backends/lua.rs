@@ -165,48 +165,144 @@ impl LanguageBackend for LuaBackend {
                 body,
                 super_call,
             } => {
-                let mut result = String::new();
+                // RFC-0017 Phase A5: split into bare Counter.new()
+                // (framework) + Counter:_frame_init (user + cascade) +
+                // Counter._create (factory). Framework helpers keep
+                // single-ctor emission.
                 let class_name = ctx
                     .extra
                     .get("class_name")
                     .cloned()
                     .unwrap_or("M".to_string());
-                let params_str = self.emit_params(params);
+                let is_frame_helper = class_name.ends_with("FrameEvent")
+                    || class_name.ends_with("FrameContext")
+                    || class_name.ends_with("Compartment");
 
-                result.push_str(&format!(
-                    "{}function {}.new({})\n",
-                    ctx.get_indent(),
-                    class_name,
-                    params_str
-                ));
+                if is_frame_helper {
+                    let params_str = self.emit_params(params);
+                    let mut result = format!(
+                        "{}function {}.new({})\n",
+                        ctx.get_indent(),
+                        class_name,
+                        params_str
+                    );
+                    ctx.push_indent();
+                    result.push_str(&format!(
+                        "{}local self = setmetatable({{}}, {})\n",
+                        ctx.get_indent(),
+                        class_name
+                    ));
+                    if let Some(sc) = super_call {
+                        result.push_str(&self.emit(sc, ctx));
+                        result.push('\n');
+                    }
+                    for stmt in body {
+                        result.push_str(&self.emit(stmt, ctx));
+                        if !matches!(
+                            stmt,
+                            CodegenNode::Comment { .. }
+                                | CodegenNode::Empty
+                                | CodegenNode::If { .. }
+                                | CodegenNode::While { .. }
+                                | CodegenNode::For { .. }
+                                | CodegenNode::Match { .. }
+                        ) {
+                            result.push('\n');
+                        }
+                    }
+                    result.push_str(&format!("{}return self\n", ctx.get_indent()));
+                    ctx.pop_indent();
+                    result.push_str(&format!("{}end\n", ctx.get_indent()));
+                    return result;
+                }
+
+                // System class: classify body.
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                if let Some(sc) = super_call {
+                    let s = self.emit(sc, ctx);
+                    framework_lines.push(format!("{}\n", s));
+                }
+                for stmt in body {
+                    let mut rendered = self.emit(stmt, ctx);
+                    if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered);
+                    } else {
+                        framework_lines.push(rendered);
+                    }
+                }
+                ctx.pop_indent();
+
+                // Emit `function Counter.new()` — bare
+                let mut result = format!("{}function {}.new()\n", ctx.get_indent(), class_name);
                 ctx.push_indent();
                 result.push_str(&format!(
                     "{}local self = setmetatable({{}}, {})\n",
                     ctx.get_indent(),
                     class_name
                 ));
+                ctx.pop_indent();
+                for line in &framework_lines {
+                    result.push_str(line);
+                }
+                result.push_str(&format!("{}    return self\n", ctx.get_indent()));
+                result.push_str(&format!("{}end\n", ctx.get_indent()));
 
-                if let Some(sc) = super_call {
-                    result.push_str(&self.emit(sc, ctx));
-                    result.push('\n');
+                // Emit `function Counter:_frame_init(<params>)`
+                result.push('\n');
+                let frame_init_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}function {}:_frame_init({})\n",
+                    ctx.get_indent(),
+                    class_name,
+                    frame_init_params
+                ));
+                for line in &frame_init_lines {
+                    result.push_str(line);
                 }
-                for stmt in body {
-                    result.push_str(&self.emit(stmt, ctx));
-                    if !matches!(
-                        stmt,
-                        CodegenNode::Comment { .. }
-                            | CodegenNode::Empty
-                            | CodegenNode::If { .. }
-                            | CodegenNode::While { .. }
-                            | CodegenNode::For { .. }
-                            | CodegenNode::Match { .. }
-                    ) {
-                        result.push('\n');
-                    }
-                }
-                result.push_str(&format!("{}return self\n", ctx.get_indent()));
+                result.push_str(&format!("{}end\n", ctx.get_indent()));
+
+                // Emit `function Counter._create(<params>)` factory
+                result.push('\n');
+                let create_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}function {}._create({})\n",
+                    ctx.get_indent(),
+                    class_name,
+                    create_params
+                ));
+                ctx.push_indent();
+                result.push_str(&format!(
+                    "{}local c = {}.new()\n",
+                    ctx.get_indent(),
+                    class_name
+                ));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c:_frame_init({})\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}end\n", ctx.get_indent()));
+
                 result
             }
 
