@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed — RFC-0017 init decoupling (breaking)
+
+- Every system class is now emitted as three artifacts instead of one: a **bare constructor** (framework setup only — state stack, compartment placeholder, domain defaults, no user `$>`), a **`__frame_init(args)` method** (runs the user `$>` body, fires the enter cascade, drains the transition loop), and a **`__create(args)` factory** (bare ctor + `__frame_init` + return). Per-backend spellings: typed backends use `__create` / `__frame_init`; Python/Dart/JS/TS/Ruby/Lua/PHP/GDScript use `_create` / `_frame_init`; Go uses `CreateCounter` / `NewCounter`; C uses `Counter_create` / `Counter_new` / `Counter_frame_init`; Erlang uses `create/N` / `start_link/0` / `frame_init/(N+1)`.
+- `@@Counter(7)` now lowers to `Counter.__create(7)` (or per-backend equivalent — see RFC-0017 reference table). `@@!Counter()` lowers to the bare constructor in every backend. D4 invariant from RFC-0015 preserved: `$>` runs exactly once on the factory path, never on `@@!`.
+- **Removed:** `__skipInitialEnter` static flag (Java/Kotlin/Swift/Dart/GDScript/C++), `kotlin_type_default_expr` / `swift_type_default_expr` helpers, all `__no_init` / `_no_init` / `Foo_alloc` / `'__no_init'/0` D7 synthesized helpers (8 backends), and 5 legacy `__skipInitialEnter` branches in `interface_gen.rs` restore-state codegen (dead since E814 hard-cut).
+- **Erlang specifics:** `callback_mode/0` now returns `[state_functions, state_enter]`; `init([])` always sets `frame_skip_enter__ = true`; the `frame_init` `gen_statem:call` handler clears the flag and uses `{repeat_state, Data1, [{reply, From, ok}]}` (not `next_state`) so `state_enter` re-fires on the same state.
+- **Migration.** Frame source is unchanged. User code that called the generated constructor directly with args (`new Counter(7)`, `Counter(7)`, `Counter::new(7)`, `counter:start_link(7)`) must switch to the explicit factory (`Counter.__create(7)`, `Counter._create(7)`, `Counter::__create(7)`, `counter:create(7)`). Bare zero-arg constructor calls still work but now produce a no-init instance — equivalent to `@@!Counter()`.
+- See [RFC-0017](docs/rfcs/rfc-0017.md) for the full mapping table, rationale, and rejected alternatives.
+
 ## [4.1.1] - 2026-05-09
 
 ### Changed
