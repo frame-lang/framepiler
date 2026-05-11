@@ -1088,4 +1088,68 @@ mod tests {
             "Expected parse errors for invalid system content"
         );
     }
+
+    /// RFC-0017 regression: a parameterized `@@[persist]` child held by
+    /// an orchestrator must (a) be field-initialized via the factory
+    /// (`Counter._create(7)`) — never the bare-ctor spelling — and
+    /// (b) be rehydrated in the orchestrator's `restore_state` with the
+    /// bare no-arg ctor (`Counter.new()`), not `Counter.new(<saved
+    /// arg>)` which after init-decoupling overflows the parameterless
+    /// `_init()`. GDScript-specific: the other typed backends already
+    /// emitted the bare-`new` form in the restore path.
+    #[test]
+    fn test_gdscript_persist_param_child_call_sites() {
+        let source = br#"@@[target("gdscript")]
+@@[persist(PackedByteArray)]
+@@[save(save_state)]
+@@[load(restore_state)]
+@@system Counter(seed: int) {
+    interface:
+        bump()
+    machine:
+        $S { $> { self.n = self.seed } bump() { self.n = self.n + 1 } }
+    domain:
+        seed: int = seed
+        n: int = 0
+}
+@@[main]
+@@[persist(PackedByteArray)]
+@@[save(save_state)]
+@@[load(restore_state)]
+@@system World {
+    interface:
+        bump_c()
+    machine:
+        $S { bump_c() { self.c.bump() } }
+    domain:
+        c = @@Counter(7)
+}
+"#;
+        let config = PipelineConfig::production(TargetLanguage::GDScript);
+        let output = compile_module(source, &config).expect("pipeline error");
+        assert!(
+            output.errors.is_empty(),
+            "compile errors: {:?}",
+            output.errors
+        );
+        let code = &output.code;
+        // (a) field initializer uses the factory
+        assert!(
+            code.contains("Counter._create(7)"),
+            "domain-init should use the RFC-0017 factory; got:\n{}",
+            code
+        );
+        // (b) restore_state rehydrates via the bare no-arg ctor
+        assert!(
+            code.contains("self.c = Counter.new()"),
+            "restore_state should rehydrate via bare `Counter.new()`; got:\n{}",
+            code
+        );
+        // and never passes the saved ctor arg to the parameterless ctor
+        assert!(
+            !code.contains("Counter.new(__raw"),
+            "restore_state must not pass saved args to the no-arg bare ctor; got:\n{}",
+            code
+        );
+    }
 }
