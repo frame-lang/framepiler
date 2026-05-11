@@ -578,7 +578,15 @@ pub(crate) fn generate_no_initialization(name: &str, lang: TargetLanguage) -> St
             format!("Object.create({}.prototype)", name)
         }
         TargetLanguage::Lua => format!("setmetatable({{}}, {})", name),
-        TargetLanguage::Go => format!("&{}{{}}", name),
+        TargetLanguage::Go => {
+            // RFC-0017 Phase A2: `@@!Counter()` lowers to `NewCounter()`
+            // which runs only framework setup (state stack, bare
+            // compartment, etc.). Replaces the prior D7 `&Counter{}`
+            // bare struct literal — that form skipped framework setup
+            // too, leaving the instance in an invalid state for
+            // `restore_state` to populate.
+            format!("New{}()", name)
+        }
         TargetLanguage::GDScript => {
             // GDScript: `_init` is empty by Frame's factory-only design,
             // so `Foo.new()` is itself a no-initialization allocation.

@@ -16,6 +16,53 @@ use crate::frame_c::visitors::TargetLanguage;
 /// Go backend for code generation
 pub struct GoBackend;
 
+/// RFC-0017 Phase A2 helper: replace `[]any{<param>(, <param>)*}` with
+/// `[]any{}` if every comma-separated entry is a known constructor
+/// param name. Used by the Go Constructor arm to strip user-arg-bound
+/// enter_args / state_args from the bare `NewCounter()` body — those
+/// are re-supplied by `__frame_init`.
+fn go_strip_param_lists(text: &str, param_names: &[&str]) -> String {
+    let needle = "[]any{";
+    let mut result = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(needle_bytes) {
+            let args_start = i + needle_bytes.len();
+            let mut depth = 1;
+            let mut j = args_start;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                let inner = &text[args_start..j];
+                let parts: Vec<&str> = inner
+                    .split(',')
+                    .map(|p| p.trim())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                if !parts.is_empty() && parts.iter().all(|p| param_names.contains(p)) {
+                    result.push_str("[]any{}");
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
 impl LanguageBackend for GoBackend {
     fn emit(&self, node: &CodegenNode, ctx: &mut EmitContext) -> String {
         let system_name = ctx.system_name.clone().unwrap_or_default();
@@ -160,30 +207,106 @@ impl LanguageBackend for GoBackend {
             }
 
             CodegenNode::Constructor { params, body, .. } => {
-                // Go: factory function NewClassName() *ClassName
+                // RFC-0017 Phase A2: split into three exported functions:
+                //   func NewCounter() *Counter             — bare framework
+                //   func (s *Counter) __frame_init(seed)   — user $> + cascade
+                //   func CreateCounter(seed) *Counter      — factory (two-step)
+                //
+                // Call-site lowering:
+                //   - `@@Counter(7)` → `CreateCounter(7)`
+                //   - `@@!Counter()` → `NewCounter()`
+                //
+                // Body classification:
+                //   - Assignments mentioning a ctor param → `__frame_init`,
+                //     with a stripped version (param-list args replaced
+                //     with empty slice literal) emitted in `NewCounter()`.
+                //   - Method calls that fire the cascade → `__frame_init`.
+                //   - Other statements → `NewCounter()`.
                 let class_name = system_name.clone();
-                let params_str = self.emit_params(params);
+                let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
 
+                ctx.push_indent();
+                let mut framework_lines: Vec<String> = Vec::new();
+                let mut frame_init_lines: Vec<String> = Vec::new();
+                for stmt in body {
+                    let mut rendered = self.emit(stmt, ctx);
+                    if !rendered.ends_with('\n') && !rendered.is_empty() {
+                        rendered.push('\n');
+                    }
+                    let frame_init_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__process_transition_loop");
+                    if frame_init_only {
+                        frame_init_lines.push(rendered);
+                        continue;
+                    }
+                    let mentions_param = param_names.iter().any(|p| {
+                        rendered
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| w == *p)
+                    });
+                    if mentions_param {
+                        frame_init_lines.push(rendered.clone());
+                        framework_lines.push(go_strip_param_lists(&rendered, &param_names));
+                    } else {
+                        framework_lines.push(rendered);
+                    }
+                }
+                ctx.pop_indent();
+
+                // Emit `func NewCounter() *Counter` — bare framework
                 let mut result = format!(
-                    "{}func New{}({}) *{} {{\n",
+                    "{}func New{}() *{} {{\n",
                     ctx.get_indent(),
                     class_name,
-                    params_str,
                     class_name
                 );
                 ctx.push_indent();
                 result.push_str(&format!("{}s := &{}{{}}\n", ctx.get_indent(), class_name));
-
-                for stmt in body {
-                    let stmt_str = self.emit(stmt, ctx);
-                    result.push_str(&stmt_str);
-                    if !stmt_str.trim().is_empty() {
-                        result.push('\n');
-                    }
+                for line in &framework_lines {
+                    result.push_str(line);
                 }
                 result.push_str(&format!("{}return s\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `func (s *Counter) __frame_init(<params>)`
+                result.push('\n');
+                let frame_init_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}func (s *{}) __frame_init({}) {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    frame_init_params
+                ));
+                ctx.push_indent();
+                for line in &frame_init_lines {
+                    result.push_str(line);
+                }
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
+                // Emit `func CreateCounter(<params>) *Counter` — factory
+                result.push('\n');
+                let create_params = self.emit_params(params);
+                result.push_str(&format!(
+                    "{}func Create{}({}) *{} {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    create_params,
+                    class_name
+                ));
+                ctx.push_indent();
+                result.push_str(&format!("{}c := New{}()\n", ctx.get_indent(), class_name));
+                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                result.push_str(&format!(
+                    "{}c.__frame_init({})\n",
+                    ctx.get_indent(),
+                    arg_pass.join(", ")
+                ));
+                result.push_str(&format!("{}return c\n", ctx.get_indent()));
+                ctx.pop_indent();
+                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+
                 result
             }
 

@@ -635,11 +635,12 @@ fn generate_constructor(name: &str, args: &str, lang: TargetLanguage) -> String 
             format!("{}({})", name, args)
         }
         TargetLanguage::Go => {
-            // Go: @@System() becomes NewSystem()
+            // RFC-0017 Phase A2: Go factory expansion uses `CreateName()`.
+            // Bare `NewName()` is reserved for `@@!Name()` (framework only).
             if args.trim().is_empty() {
-                format!("New{}()", name)
+                format!("Create{}()", name)
             } else {
-                format!("New{}({})", name, args)
+                format!("Create{}({})", name, args)
             }
         }
         TargetLanguage::Ruby => {
