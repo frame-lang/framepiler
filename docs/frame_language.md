@@ -883,11 +883,19 @@ The **compartment** is Frame's central runtime data structure — a closure for 
 
 ### Field Filtering
 
-| Form | Behavior |
-|------|---------|
-| `@@[persist]` | All domain vars |
-| `@@[persist(domain=[a, b])]` | Only `a`, `b` |
-| `@@[persist(exclude=[c])]` | All except `c` |
+By default every domain variable round-trips through save/restore. To exclude
+one — a cache, a resource handle — tag it `@@[no_persist]` in the `domain:`
+block; after restore it holds its declared default value:
+
+```frame
+domain:
+    n: int = 0
+    @@[no_persist]
+    connection : Connection = null   // not in the blob; null after restore
+```
+
+A proposed system-level *inclusion* list — `@@[persist_fields([...])]` — is
+tracked in [RFC-0016](rfcs/rfc-0016.md) (deferred; not yet shipped).
 
 ---
 
