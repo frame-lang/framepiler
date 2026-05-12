@@ -329,18 +329,18 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
                 span: None,
             });
 
-            // Fire $> cascade. Push a frame context so handlers that
-            // read @@:return / @@:data have a stack entry, then drive
-            // the cascade through the same helpers a regular transition
-            // uses.
+            // RFC-0019: dispatch the start state's `$>` event to the
+            // leaf (like an interface call), inside a FrameContext (so
+            // @@:return / @@:data resolve). No enter cascade — an
+            // ancestor's `$>` runs only if the leaf forwards it (=> $^).
             let event_class = format!("{}FrameEvent", system.name);
             let context_class = format!("{}FrameContext", system.name);
             body.push(CodegenNode::NativeBlock {
                 code: format!(
-                    "let __frame_event = {}::new_with_params(\"$>\", &self.__compartment.enter_args);\n\
-                     let __ctx = {}::new(__frame_event, None);\n\
+                    "let __frame_event = {}::new_with_params(\"$>\", &self.__compartment.enter_args.clone());\n\
+                     let __ctx = {}::new(__frame_event.clone(), None);\n\
                      self._context_stack.push(__ctx);\n\
-                     self.__fire_enter_cascade();\n\
+                     self.__router(&__frame_event);\n\
                      self.__process_transition_loop();\n\
                      self._context_stack.pop();",
                     event_class, context_class
@@ -529,68 +529,13 @@ while let Some(c) = cursor {
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up. Walk chain from leaf to root,
-    // firing <$ on each. Rust's borrow checker requires us to collect
-    // (state_name, exit_args) pairs first, then route.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"let mut layers: Vec<(String, Vec<String>)> = Vec::new();
-{{
-    let mut cursor = Some(&self.__compartment);
-    while let Some(c) = cursor {{
-        layers.push((c.state.clone(), c.exit_args.clone()));
-        cursor = c.parent_compartment.as_deref();
-    }}
-}}
-for (state_name, args) in &layers {{
-    let exit_event = {}::new_with_params("<$", args);
-    self.__route_to_state(state_name, &exit_event);
-}}"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
+    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
+    // dispatched to the current (leaf) state via __route_to_state; an
+    // ancestor's `$>` / `<$` runs only if the leaf forwards (=> $^).
 
-    // __fire_enter_cascade — top-down. Walk chain to collect layers,
-    // iterate in reverse to fire $> root-first.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"let mut layers: Vec<(String, Vec<String>)> = Vec::new();
-{{
-    let mut cursor = Some(&self.__compartment);
-    while let Some(c) = cursor {{
-        layers.push((c.state.clone(), c.enter_args.clone()));
-        cursor = c.parent_compartment.as_deref();
-    }}
-}}
-for (state_name, args) in layers.iter().rev() {{
-    let enter_event = {}::new_with_params("$>", args);
-    self.__route_to_state(state_name, &enter_event);
-}}"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains queued transitions.
+    // __process_transition_loop — drains queued transitions. On each:
+    // dispatch `<$` to the current (leaf) state, switch compartments,
+    // dispatch `$>` to the new (leaf) state, then re-check.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
@@ -599,23 +544,34 @@ for (state_name, args) in layers.iter().rev() {{
             code: format!(
                 r#"while self.__next_compartment.is_some() {{
     let next_compartment = self.__next_compartment.take().unwrap();
-    self.__fire_exit_cascade();
+    // Exit the current (leaf) state
+    let exit_state = self.__compartment.state.clone();
+    let exit_args = self.__compartment.exit_args.clone();
+    let exit_event = {evt}::new_with_params("<$", &exit_args);
+    self.__route_to_state(&exit_state, &exit_event);
+    // Switch to the new compartment
     self.__compartment = next_compartment;
+    // Enter the new (leaf) state — or the forwarded event
     if self.__compartment.forward_event.is_none() {{
-        self.__fire_enter_cascade();
+        let enter_state = self.__compartment.state.clone();
+        let enter_args = self.__compartment.enter_args.clone();
+        let enter_event = {evt}::new_with_params("$>", &enter_args);
+        self.__route_to_state(&enter_state, &enter_event);
     }} else {{
         let forward_event = self.__compartment.forward_event.take().unwrap();
-        self.__fire_enter_cascade();
+        let enter_state = self.__compartment.state.clone();
+        let enter_args = self.__compartment.enter_args.clone();
+        let enter_event = {evt}::new_with_params("$>", &enter_args);
+        self.__route_to_state(&enter_state, &enter_event);
         if forward_event.message != "$>" {{
             self.__router(&forward_event);
         }}
     }}
-    let _ = {}::new("$>");  // satisfy unused-import / type checks
     for ctx in self._context_stack.iter_mut() {{
         ctx._transitioned = true;
     }}
 }}"#,
-                event_class
+                evt = event_class
             ),
             span: None,
         }],
