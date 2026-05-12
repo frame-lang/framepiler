@@ -7,9 +7,8 @@
 
 use super::ast::CodegenNode;
 use super::codegen_utils::{
-    convert_expression, convert_literal, expression_to_string, is_bool_type, is_float_type,
-    is_int_type, is_string_type, replace_outside_strings_and_comments, to_snake_case,
-    type_to_string, HandlerContext,
+    convert_expression, convert_literal, expression_to_string,
+    replace_outside_strings_and_comments, to_snake_case, type_to_string, HandlerContext,
 };
 use super::frame_expansion::emit_handler_body_via_statements;
 use crate::frame_c::compiler::arcanum::Arcanum;

@@ -2083,6 +2083,59 @@ fn generate_c_runtime_types(system: &SystemAst) -> String {
          \x20   return d;\n\
          }}\n\n"
         ));
+
+        // Domain-field variants — take `(void*)&self->x` (a pointer to
+        // the statically-typed field) and blind-cast it to the right
+        // pointer type inside, so the codegen never has to branch on
+        // int-vs-str-vs-… and never has to cast the field at the call
+        // site. framec emits
+        // `<sys>_persist_pack_field_<mangled>((void*)&self->x)` /
+        // `<sys>_persist_unpack_field_<mangled>(json, (void*)&self->x)`;
+        // it mangles the declared type to a symbol suffix (see
+        // `c_mangle_type` in interface_gen.rs and
+        // docs/contributing/type-ignorant-codegen.md). The `void*`
+        // (rather than a typed `int*` / `char**` / …) keeps the
+        // signature uniform regardless of whether the field is `char*`
+        // or `const char*`. Blessed types: int / double / str / bool /
+        // list / dict; a domain field of a user-defined type extends the
+        // set the same way as the value-form helpers above — define
+        // `<sys>_persist_pack_field_<that_type>` / `_unpack_field_<…>`.
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_field_int(void* p) {{ return cJSON_CreateNumber((double)*(int*)p); }}\n"
+        ));
+        code.push_str(&format!(
+            "static void {sys}_persist_unpack_field_int(cJSON* j, void* p) {{ *(int*)p = (int)(j ? j->valuedouble : 0); }}\n"
+        ));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_field_double(void* p) {{ return cJSON_CreateNumber(*(double*)p); }}\n"
+        ));
+        code.push_str(&format!(
+            "static void {sys}_persist_unpack_field_double(cJSON* j, void* p) {{ *(double*)p = j ? j->valuedouble : 0.0; }}\n"
+        ));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_field_bool(void* p) {{ return cJSON_CreateBool(*(bool*)p); }}\n"
+        ));
+        code.push_str(&format!(
+            "static void {sys}_persist_unpack_field_bool(cJSON* j, void* p) {{ *(bool*)p = (bool)(j && cJSON_IsTrue(j)); }}\n"
+        ));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_field_str(void* p) {{ const char* s = *(const char**)p; return cJSON_CreateString(s ? s : \"\"); }}\n"
+        ));
+        code.push_str(&format!(
+            "static void {sys}_persist_unpack_field_str(cJSON* j, void* p) {{ const char* s = (j && j->valuestring) ? j->valuestring : \"\"; *(char**)p = strdup(s); }}\n"
+        ));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_field_list(void* p) {{ return {sys}_persist_pack_list(*({sys}_FrameVec**)p); }}\n"
+        ));
+        code.push_str(&format!(
+            "static void {sys}_persist_unpack_field_list(cJSON* j, void* p) {{ *({sys}_FrameVec**)p = ({sys}_FrameVec*){sys}_persist_unpack_list(j); }}\n"
+        ));
+        code.push_str(&format!(
+            "static cJSON* {sys}_persist_pack_field_dict(void* p) {{ return {sys}_persist_pack_dict(*({sys}_FrameDict**)p); }}\n"
+        ));
+        code.push_str(&format!(
+            "static void {sys}_persist_unpack_field_dict(cJSON* j, void* p) {{ *({sys}_FrameDict**)p = ({sys}_FrameDict*){sys}_persist_unpack_dict(j); }}\n\n"
+        ));
     } // end persist_attr guard
 
     // ============================================================================

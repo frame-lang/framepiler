@@ -59,8 +59,8 @@ pub fn get_nested_system_domain_params(name: &str) -> Vec<(String, String)> {
 use super::ast::{CodegenNode, Param, Visibility};
 use super::codegen_utils::{
     cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string, go_map_type,
-    is_bool_type, is_float_type, is_int_type, is_string_type, java_map_type, kotlin_map_type,
-    swift_map_type, to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
+    java_map_type, kotlin_map_type, swift_map_type, to_snake_case, type_to_cpp_string,
+    type_to_string, HandlerContext,
 };
 use crate::frame_c::compiler::frame_ast::{
     ActionAst, InterfaceMethod, MethodParam, OperationAst, Span, SystemAst, Type,
@@ -2108,35 +2108,20 @@ pub(crate) fn generate_persistence_methods(
                     ));
                     continue;
                 }
+                // Type-ignorant: framec mangles the declared type to a
+                // symbol suffix and dispatches to the runtime's
+                // `<sys>_persist_pack_field_<m>(&self->x)` helper — no
+                // int-vs-str-vs-… branch here (see
+                // docs/contributing/type-ignorant-codegen.md). The
+                // field-form helpers take `&self->x` (a pointer to the
+                // statically-typed field), so nothing has to cast.
                 let type_str = type_to_string(&var.var_type);
-
-                let json_add = if is_int_type(&type_str) {
-                    format!(
-                        "cJSON_AddNumberToObject(root, \"{}\", (double)self->{});\n",
-                        var.name, var.name
-                    )
-                } else if is_float_type(&type_str) {
-                    format!(
-                        "cJSON_AddNumberToObject(root, \"{}\", self->{});\n",
-                        var.name, var.name
-                    )
-                } else if is_bool_type(&type_str) {
-                    format!(
-                        "cJSON_AddBoolToObject(root, \"{}\", self->{});\n",
-                        var.name, var.name
-                    )
-                } else if is_string_type(&type_str) {
-                    format!(
-                        "cJSON_AddStringToObject(root, \"{}\", self->{});\n",
-                        var.name, var.name
-                    )
-                } else {
-                    format!(
-                        "cJSON_AddNumberToObject(root, \"{}\", (double)(intptr_t)self->{});\n",
-                        var.name, var.name
-                    )
-                };
-                save_body.push_str(&json_add);
+                save_body.push_str(&format!(
+                    "cJSON_AddItemToObject(root, \"{name}\", {sys}_persist_pack_field_{m}((void*)&self->{name}));\n",
+                    name = var.name,
+                    sys = system.name,
+                    m = c_mangle_type(&type_str)
+                ));
             }
 
             save_body.push_str("char* json = cJSON_PrintUnformatted(root);\n");
@@ -2268,35 +2253,17 @@ pub(crate) fn generate_persistence_methods(
                     restore_body.push_str(&body);
                     continue;
                 }
+                // Type-ignorant: mirror of the pack side — dispatch to
+                // `<sys>_persist_unpack_field_<m>(json, &self->x)`,
+                // which writes through the typed pointer.
                 let type_str = type_to_string(&var.var_type);
-
-                let json_get = if is_int_type(&type_str) {
-                    format!(
-                        "{}->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
-                        target, var.name, var.name
-                    )
-                } else if is_float_type(&type_str) {
-                    format!(
-                        "{}->{} = cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
-                        target, var.name, var.name
-                    )
-                } else if is_bool_type(&type_str) {
-                    format!(
-                        "{}->{} = cJSON_IsTrue(cJSON_GetObjectItem(root, \"{}\"));\n",
-                        target, var.name, var.name
-                    )
-                } else if is_string_type(&type_str) {
-                    format!(
-                        "{}->{} = strdup(cJSON_GetObjectItem(root, \"{}\")->valuestring);\n",
-                        target, var.name, var.name
-                    )
-                } else {
-                    format!(
-                        "{}->{} = (int)cJSON_GetObjectItem(root, \"{}\")->valuedouble;\n",
-                        target, var.name, var.name
-                    )
-                };
-                restore_body.push_str(&json_get);
+                restore_body.push_str(&format!(
+                    "{sys}_persist_unpack_field_{m}(cJSON_GetObjectItem(root, \"{name}\"), (void*)&{tgt}->{name});\n",
+                    sys = system.name,
+                    m = c_mangle_type(&type_str),
+                    name = var.name,
+                    tgt = target
+                ));
             }
 
             restore_body.push_str("\ncJSON_Delete(root);\n");

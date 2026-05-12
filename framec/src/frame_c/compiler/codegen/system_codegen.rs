@@ -10,9 +10,8 @@ use super::ast::*;
 use super::backend::get_backend;
 use super::codegen_utils::{
     convert_expression, convert_literal, cpp_map_type, cpp_wrap_any_arg, csharp_map_type,
-    expression_to_string, go_map_type, is_bool_type, is_float_type, is_int_type, is_string_type,
-    java_map_type, kotlin_map_type, state_var_init_value, swift_map_type, to_snake_case,
-    type_to_cpp_string, type_to_string, HandlerContext,
+    expression_to_string, go_map_type, java_map_type, kotlin_map_type, state_var_init_value,
+    swift_map_type, to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
 };
 use super::frame_expansion::{generate_frame_expansion, get_native_scanner, normalize_indentation};
 use super::interface_gen::{
@@ -6418,9 +6417,8 @@ mod tests {
     use super::*;
     use crate::frame_c::compiler::codegen::codegen_utils::{
         convert_expression, convert_literal, cpp_map_type, cpp_wrap_any_arg, csharp_map_type,
-        expression_to_string, go_map_type, is_bool_type, is_float_type, is_int_type,
-        is_string_type, java_map_type, kotlin_map_type, state_var_init_value, swift_map_type,
-        to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
+        expression_to_string, go_map_type, java_map_type, kotlin_map_type, state_var_init_value,
+        swift_map_type, to_snake_case, type_to_cpp_string, type_to_string, HandlerContext,
     };
     use crate::frame_c::compiler::frame_ast::{
         DomainVar, Expression, Literal, Span, SystemAst, Type,

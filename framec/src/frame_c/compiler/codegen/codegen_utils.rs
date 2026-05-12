@@ -423,48 +423,6 @@ pub(crate) fn convert_literal(lit: &Literal) -> CodegenNode {
     }
 }
 
-/// Check if type string represents an integer type
-pub(crate) fn is_int_type(type_str: &str) -> bool {
-    matches!(
-        type_str,
-        "int"
-            | "i32"
-            | "i64"
-            | "i8"
-            | "i16"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "int8_t"
-            | "int16_t"
-            | "int32_t"
-            | "int64_t"
-            | "uint8_t"
-            | "uint16_t"
-            | "uint32_t"
-            | "uint64_t"
-    )
-}
-
-/// Check if type string represents a float type
-pub(crate) fn is_float_type(type_str: &str) -> bool {
-    matches!(type_str, "float" | "double" | "f32" | "f64")
-}
-
-/// Check if type string represents a boolean type
-pub(crate) fn is_bool_type(type_str: &str) -> bool {
-    matches!(type_str, "bool" | "boolean" | "_Bool")
-}
-
-/// Check if type string represents a string type
-pub(crate) fn is_string_type(type_str: &str) -> bool {
-    matches!(
-        type_str,
-        "str" | "string" | "String" | "char*" | "const char*" | "&str"
-    )
-}
-
 /// Map a Frame type string to C# type for (Type) cast
 pub(crate) fn csharp_map_type(t: &str) -> String {
     match t {
