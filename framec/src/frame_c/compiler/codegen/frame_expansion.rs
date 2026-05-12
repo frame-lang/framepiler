@@ -123,10 +123,14 @@ fn paren_wrap_if_multiline(expr: &str) -> String {
 /// typed target (`Object`/`Any`/`void*`/`std::any`/…). A bare read
 /// fails the first time the result hits an arithmetic op, a typed
 /// self-call arg, or a return-type-checked `return`. This helper
-/// emits the target's native downcast keyed on the handler's declared
-/// Frame return type (`int`/`bool`/`str`/float-ish). Unknown types
-/// fall back to the raw slot access, matching each target's natural
-/// default (Java returns `Object`, C returns `void*`, etc.).
+/// emits the target's native downcast to the handler's *declared*
+/// return type, spelled the target way — type-ignorant, so it works
+/// for any type the user wrote (see
+/// docs/contributing/type-ignorant-codegen.md). Two targets keep a
+/// per-category branch because the target language forces it: C
+/// (`void*` ABI — `double` rides via the bit-pun, primitives via
+/// `(intptr_t)`, pointers as-is) and Java (no `(int) Object` —
+/// primitives must box-then-unbox).
 ///
 /// Dynamic-typed targets (Python, JavaScript, Ruby, Lua, PHP, Dart,
 /// GDScript) don't need a cast — they get the bare access.
@@ -143,67 +147,66 @@ pub(crate) fn context_return_read_typed(
             "this._context_stack[this._context_stack.length - 1]._return".to_string()
         }
         TargetLanguage::C => {
+            // C's `_return` slot is a `void*` — a per-category cast back
+            // is forced by the ABI: `double` rides via the memcpy
+            // bit-pun, a string is already a pointer, everything else
+            // fits in the integer width. (See type-ignorant-codegen.md
+            // category 3.)
             let raw = format!("{}_RETURN(self)", system_name);
             match frame_type {
+                "float" | "double" | "f32" | "f64" => {
+                    format!("{}_unpack_double({})", system_name, raw)
+                }
+                "str" | "string" | "String" | "char*" | "const char*" => {
+                    format!("((const char*){})", raw)
+                }
                 "int" | "bool" => format!("((int)(intptr_t){})", raw),
-                "str" => format!("((const char*){})", raw),
                 _ => raw,
             }
         }
         TargetLanguage::Rust => super::rust_system::rust_context_return_read_typed(frame_type),
         TargetLanguage::Cpp => {
-            let cpp_type = match frame_type {
-                "int" => "int",
-                "bool" => "bool",
-                "str" => "std::string",
-                _ => "std::string", // legacy default
-            };
-            format!("std::any_cast<{}>(_context_stack.back()._return)", cpp_type)
+            format!(
+                "std::any_cast<{}>(_context_stack.back()._return)",
+                cpp_map_type(frame_type)
+            )
         }
         TargetLanguage::Java => {
             let raw = "_context_stack.get(_context_stack.size() - 1)._return";
-            match frame_type {
-                "int" => format!("((Integer) {}).intValue()", raw),
-                "bool" => format!("((Boolean) {}).booleanValue()", raw),
-                "str" => format!("((String) {})", raw),
-                _ => raw.to_string(),
+            // The JVM forbids `(int) Object`; a primitive receiver has to
+            // box-then-unbox. Reference types take a plain cast.
+            let mapped = java_map_type(frame_type);
+            let (boxed, prim): (&str, Option<&str>) = match mapped.as_str() {
+                "int" => ("Integer", Some("intValue")),
+                "long" => ("Long", Some("longValue")),
+                "double" => ("Double", Some("doubleValue")),
+                "float" => ("Float", Some("floatValue")),
+                "boolean" => ("Boolean", Some("booleanValue")),
+                "char" => ("Character", Some("charValue")),
+                "byte" => ("Byte", Some("byteValue")),
+                "short" => ("Short", Some("shortValue")),
+                other => (other, None),
+            };
+            match prim {
+                Some(m) => format!("(({}) {}).{}()", boxed, raw, m),
+                None => format!("(({}) {})", boxed, raw),
             }
         }
         TargetLanguage::Kotlin => {
             let raw = "_context_stack[_context_stack.size - 1]._return";
-            match frame_type {
-                "int" => format!("({} as Int)", raw),
-                "bool" => format!("({} as Boolean)", raw),
-                "str" => format!("({} as String)", raw),
-                _ => raw.to_string(),
-            }
+            format!("({} as {})", raw, kotlin_map_type(frame_type))
         }
         TargetLanguage::Swift => {
             let raw = "_context_stack[_context_stack.count - 1]._return";
-            match frame_type {
-                "int" => format!("({} as! Int)", raw),
-                "bool" => format!("({} as! Bool)", raw),
-                "str" => format!("({} as! String)", raw),
-                _ => raw.to_string(),
-            }
+            format!("({} as! {})", raw, swift_map_type(frame_type))
         }
         TargetLanguage::CSharp => {
             let raw = "_context_stack[_context_stack.Count - 1]._return";
-            match frame_type {
-                "int" => format!("((int) {})", raw),
-                "bool" => format!("((bool) {})", raw),
-                "str" => format!("((string) {})", raw),
-                _ => raw.to_string(),
-            }
+            format!("(({}) {})", csharp_map_type(frame_type), raw)
         }
         TargetLanguage::Go => {
             let raw = "s._context_stack[len(s._context_stack)-1]._return";
-            match frame_type {
-                "int" => format!("{}.(int)", raw),
-                "bool" => format!("{}.(bool)", raw),
-                "str" => format!("{}.(string)", raw),
-                _ => raw.to_string(),
-            }
+            format!("{}.({})", raw, go_map_type(frame_type))
         }
         TargetLanguage::Php => {
             "$this->_context_stack[count($this->_context_stack) - 1]->_return".to_string()

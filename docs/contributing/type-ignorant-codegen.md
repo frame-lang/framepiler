@@ -189,7 +189,7 @@ type-ignorant already** — the historical accumulation point, the persist
 | Go | `json.Marshal`/`Unmarshal` into `var __t USER_TYPE` | ✅ |
 | Swift | dict pass-through (`as? [Any]`) | ✅ |
 | Dart | comprehension codegen over `parse_dart_type` (a structural `List<…>`/`Map<…>` tree, not a type enumeration) | ✅ (leaf casts `int`/`double`/`String`/`bool` are category 3) |
-| C | symbol-mangled dispatcher: framec emits `<sys>_persist_pack_<mangled>(value)`; the runtime owns the type knowledge | ✅ for state/enter args; **the *domain-var* sub-path still uses the `is_*_type` → `cJSON_Add{Number,Bool,String}ToObject` ladder** — see follow-ups |
+| C | symbol-mangled dispatcher: framec emits `<sys>_persist_pack_<mangled>(value)` for state/enter args and `<sys>_persist_pack_field_<mangled>((void*)&self->x)` for domain fields; the runtime owns the type knowledge | ✅ |
 | Python / JS / TS / Ruby / Lua / PHP / GDScript | native dynamic round-trip | ✅ (Lua's domain-var restore re-integerises `: int` via `math.floor` — see follow-ups) |
 
 Everything else that branches on a type name is category 1, 2, or 3.
@@ -198,43 +198,34 @@ Everything else that branches on a type name is category 1, 2, or 3.
 
 Not blockers; documented so a future pass can mop them up.
 
-1. **C persist *domain-var* (de)serialization** (`interface_gen.rs`, the
-   `is_int_type`/`is_float_type`/`is_bool_type`/`is_string_type` ladder
-   around `cJSON_Add{Number,Bool,String}ToObject` on save and
-   `->valuedouble` / `cJSON_IsTrue` / `strdup` on restore). The C
-   *state/enter-arg* path 200 lines above already went type-ignorant via
-   `c_mangle_type` + `<sys>_persist_pack_<mangled>(void* v)`. The
-   domain-var path is harder because a domain field is *statically typed*
-   (`int n;`), not a `void*`, so the existing `void*`-passing dispatcher
-   doesn't fit directly. The clean fix is a *pointer-passing* variant:
-   `<sys>_persist_pack_field_<mangled>(&self->n)` /
-   `<sys>_persist_unpack_field_<mangled>(json, &self->n)`, with the runtime
-   defining `_persist_pack_field_int(int* p)` etc. (a fixed set of blessed
-   types, same extension model). Until then, this is the one place framec
-   still calls `is_*_type` outside the `typed_init_expr` parser-fallback.
-
-2. **`context_return_read_typed` / `rust_context_return_read_typed`**
-   (`frame_expansion.rs` / `rust_system.rs`) — the typed `@@:return` read
-   hard-codes `int` / `bool` / `str` and falls back to a raw access (C++
-   even falls back to `std::string`, latently wrong for a `: float`
-   return). For C++ and Go this can be made fully type-ignorant
-   (`std::any_cast<cpp_map_type(T)>` / `x.(go_map_type(T))`); the JVM arms
-   should reuse the `Number`-ladder from `state_dispatch.rs`. Only bites a
+1. **`rust_context_return_read_typed`** (`rust_system.rs`) — the typed
+   `@@:return` read still hard-codes `int` / `bool` / `str` and falls
+   back to the raw `Option<&Box<dyn Any>>` for anything else. Widening it
+   means downcasting to `frame_type_to_rust_type(T)` with a `Copy`-aware
+   `.copied()` / `.cloned()`, and for an unrecognized `T` you can only
+   safely emit a `downcast_ref::<T>()` if `T: Clone + Default` — so it'd
+   want a fallback. The other 16 backends' `context_return_read_typed`
+   arms are type-ignorant (C++/Go/Swift/Kotlin/C# downcast to
+   `*_map_type(T)` uniformly; Java box-then-unboxes any primitive,
+   reference cast otherwise; C dispatches by `void*`-ABI category —
+   `double` bit-pun, string pointer, integer width). Only bites a
    typed-return handler that reads its *own* `@@:return` for an unusual
    type — no test in the corpus hits it.
 
-3. **Rust `.clone()` elision** — `rust_system.rs::rust_expand_state_var_read`'s
+2. **Rust `.clone()` elision** — `rust_system.rs::rust_expand_state_var_read`'s
    `is_copy` check and `rust_type_is_copy` decide whether to *skip* a
    `.clone()` for `Copy` types. Cloning unconditionally is valid Rust;
    these are a pure idiom/perf nicety (and dropping them would trade
    `i64.clone()` for `clippy::clone_on_copy` lints in generated code, so
    it's a wash). Listed for completeness; not a violation.
 
-4. **Hand-rolled Dart type maps** — `frame_expansion.rs` (state-var read)
+3. **Hand-rolled Dart type maps** — `frame_expansion.rs` (state-var read)
    and `state_dispatch.rs` (handler-param unpack) inline a four-entry
    `match { "int"|"number" => "int", "double"|"float" => "double", … }`
    instead of calling a shared Dart spelling helper. Consolidate into one
-   `dart_map_type` and reuse it. Category-1 nit, not new licence.
+   `dart_map_type` and reuse it (note: the current `_ => ""` "no cast"
+   arm differs from `DartBackend::convert_type`'s verbatim pass-through,
+   so this isn't a pure mechanical swap). Category-1 nit, not new licence.
 
 ## See also
 
