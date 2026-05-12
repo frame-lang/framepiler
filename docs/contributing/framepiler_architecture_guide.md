@@ -276,6 +276,15 @@ Location: `framec/src/frame_c/compiler/validation/`
 
 ## Type Wrapping in Codegen
 
+> For the broader rule — *framec emits the user's declared type, spelled
+> the target way, and lets the target's tooling do the type work; the only
+> per-type branching allowed is spelling, definite-init defaults, and
+> downcasts out of type-erased kernel storage* — see
+> [type-ignorant-codegen.md](type-ignorant-codegen.md). The wrapping
+> described here is an instance of category (3): the downcast out of
+> Rust's `Box<dyn Any>` / C++'s `std::any` has to name the exact stored
+> type, so portable expressions are coerced to match.
+
 Two target languages — Rust and C++ — have **typed runtime storage** that requires exact type matching between the value stored and the type used to retrieve it. Frame's codegen automatically wraps portable expressions to match these type systems.
 
 ### Why wrapping exists

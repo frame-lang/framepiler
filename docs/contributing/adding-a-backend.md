@@ -76,6 +76,19 @@ The backend must emit code that implements Frame's runtime semantics:
 - State stack operations (if used)
 - Context stack (if `frame_event` is enabled)
 
+**Before you write a `match` on a Frame primitive type name** (`int`,
+`str`, `bool`, `float`, `list`, `dict`, …), read
+[type-ignorant-codegen.md](type-ignorant-codegen.md). The short version:
+framec emits the user's declared type *spelled the target way* and lets
+the target's own tooling (serializer, `==`, `toString`) do the type work.
+The only per-type branching that's allowed is (1) the spelling itself —
+`map_type` and friends, which always have a verbatim pass-through arm;
+(2) a definite-init *default value* when a field/state-var has no
+initializer; (3) downcasting out of a type-erased kernel collection
+(`state_args`, `_return`, `state_vars`) or the C `void*` ABI / Rust
+`Box<dyn Any>`. Anything else means you're doing the target's job — emit
+the type verbatim instead.
+
 ## Step 5: Pipeline Registration
 
 Register your language in:
