@@ -199,18 +199,19 @@ Everything else that branches on a type name is category 1, 2, or 3.
 Not blockers; documented so a future pass can mop them up.
 
 1. **`rust_context_return_read_typed`** (`rust_system.rs`) — the typed
-   `@@:return` read still hard-codes `int` / `bool` / `str` and falls
-   back to the raw `Option<&Box<dyn Any>>` for anything else. Widening it
-   means downcasting to `frame_type_to_rust_type(T)` with a `Copy`-aware
-   `.copied()` / `.cloned()`, and for an unrecognized `T` you can only
-   safely emit a `downcast_ref::<T>()` if `T: Clone + Default` — so it'd
-   want a fallback. The other 16 backends' `context_return_read_typed`
-   arms are type-ignorant (C++/Go/Swift/Kotlin/C# downcast to
-   `*_map_type(T)` uniformly; Java box-then-unboxes any primitive,
-   reference cast otherwise; C dispatches by `void*`-ABI category —
-   `double` bit-pun, string pointer, integer width). Only bites a
-   typed-return handler that reads its *own* `@@:return` for an unusual
-   type — no test in the corpus hits it.
+   `@@:return` read downcasts the `Box<dyn Any>` for the box shapes
+   `rust_wrap_for_boxing` pins (`int`→`i64`, `float`→`f64`, `bool`→`bool`,
+   `str`→`String`) and falls back to the raw `Option<&Box<dyn Any>>` for
+   anything else — including a `: SomeUserStruct`-returning handler that
+   reads its own `@@:return`, because the generalised form
+   (`downcast_ref::<T>().cloned().unwrap_or_default()`) would require
+   `T: Clone + Default`, which a user struct may not satisfy. The other
+   16 backends' `context_return_read_typed` arms are type-ignorant
+   (C++/Go/Swift/Kotlin/C# downcast to `*_map_type(T)` uniformly; Java
+   box-then-unboxes any primitive, reference cast otherwise; C dispatches
+   by `void*`-ABI category — `double` bit-pun, string pointer, integer
+   width). Only bites a typed-return handler that reads its *own*
+   `@@:return` for an unusual type — no test in the corpus hits it.
 
 2. **Rust `.clone()` elision** — `rust_system.rs::rust_expand_state_var_read`'s
    `is_copy` check and `rust_type_is_copy` decide whether to *skip* a
