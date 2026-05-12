@@ -2332,7 +2332,15 @@ self._context_stack.pop()"#,
                 ),
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
                     let _ = event_class;
-                    "this.__fire_enter_cascade();\nthis.__process_transition_loop();".to_string()
+                    format!(
+                        r#"const __e = new {sys}FrameEvent("$>", this.__compartment.enter_args);
+const __ctx = new {sys}FrameContext(__e, null);
+this._context_stack.push(__ctx);
+this.__router(__e);
+this.__process_transition_loop();
+this._context_stack.pop();"#,
+                        sys = system.name
+                    )
                 }
                 TargetLanguage::Rust => format!(
                     r#"let __frame_event = {}::new("$>");
@@ -3088,102 +3096,48 @@ if (handler) {{
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — fires <$ on every layer, walking bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"let comp{cast} = this.__compartment;
-while (comp !== null) {{
-    const exit_event = new {evt}("<$", comp.exit_args);
-    this.__route_to_state(comp.state, exit_event, comp);
-    comp = comp.parent_compartment;
-}}"#,
-                cast = if is_ts {
-                    format!(": {} | null", compartment_class)
-                } else {
-                    String::new()
-                },
-                evt = event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
+    // RFC-0019: no enter/exit cascade. $> / <$ are ordinary events,
+    // dispatched to the current (leaf) state via __route_to_state; an
+    // ancestor's $> / <$ runs only if the leaf forwards (=> $^,
+    // in-handler or state-level). __prepareEnter still builds the chain.
 
-    // __fire_enter_cascade — fires $> on every layer, walking top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"const chain{cast} = [];
-let comp{cast2} = this.__compartment;
-while (comp !== null) {{
-    chain.push(comp);
-    comp = comp.parent_compartment;
-}}
-for (let i = chain.length - 1; i >= 0; i--) {{
-    const layer = chain[i];
-    const enter_event = new {evt}("$>", layer.enter_args);
-    this.__route_to_state(layer.state, enter_event, layer);
-}}"#,
-                cast = if is_ts {
-                    format!(": {}[]", compartment_class)
-                } else {
-                    String::new()
-                },
-                cast2 = if is_ts {
-                    format!(": {} | null", compartment_class)
-                } else {
-                    String::new()
-                },
-                evt = event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains pending transitions.
+    // __process_transition_loop — drains pending transitions. On each:
+    // dispatch <$ to the current (leaf) state, switch compartments,
+    // dispatch $> to the new (leaf) state, then re-check.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"while (this.__next_compartment !== null) {
+            code: format!(
+                r#"while (this.__next_compartment !== null) {{
     const next_compartment = this.__next_compartment;
     this.__next_compartment = null;
-    // Exit current chain (bottom-up)
-    this.__fire_exit_cascade();
-    // Switch compartment
+    // Exit the current (leaf) state
+    const exit_event = new {evt}("<$", this.__compartment.exit_args);
+    this.__route_to_state(this.__compartment.state, exit_event, this.__compartment);
+    // Switch to the new compartment
     this.__compartment = next_compartment;
-    // Enter new chain (top-down) or forward event
-    if (next_compartment.forward_event === null) {
-        this.__fire_enter_cascade();
-    } else {
+    // Enter the new (leaf) state — or the forwarded event
+    if (next_compartment.forward_event === null) {{
+        const enter_event = new {evt}("$>", this.__compartment.enter_args);
+        this.__route_to_state(this.__compartment.state, enter_event, this.__compartment);
+    }} else {{
         const forward_event = next_compartment.forward_event;
         next_compartment.forward_event = null;
-        this.__fire_enter_cascade();
-        if (forward_event._message !== "$>") {
+        const enter_event = new {evt}("$>", this.__compartment.enter_args);
+        this.__route_to_state(this.__compartment.state, enter_event, this.__compartment);
+        if (forward_event._message !== "$>") {{
             this.__router(forward_event);
-        }
-    }
+        }}
+    }}
     // Mark all stacked contexts as transitioned
-    for (const ctx of this._context_stack) {
+    for (const ctx of this._context_stack) {{
         ctx._transitioned = true;
-    }
-}"#
-            .to_string(),
+    }}
+}}"#,
+                evt = event_class
+            ),
             span: None,
         }],
         is_async: false,
