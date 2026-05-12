@@ -748,7 +748,23 @@ impl SwiftBackend {
         };
         let init_suffix = match &field.initializer {
             Some(init) => format!(" = {}", self.emit(init, ctx)),
-            None => String::new(),
+            // Swift requires every stored property to be initialized by
+            // the end of the designated `init()`. A domain field whose
+            // initializer was stripped (because it references a system
+            // param — the assignment moves to `__frame_init`) reaches
+            // here with no initializer, so seed it with the type's zero
+            // value; `__frame_init` then overwrites it. Custom types
+            // have no zero value, so leave those to `init()`.
+            None => match type_str.as_str() {
+                "Int" => " = 0".to_string(),
+                "Double" => " = 0.0".to_string(),
+                "Bool" => " = false".to_string(),
+                "String" => " = \"\"".to_string(),
+                t if t.ends_with('?') => " = nil".to_string(),
+                t if t.starts_with('[') && t.contains(':') => " = [:]".to_string(),
+                t if t.starts_with('[') => " = []".to_string(),
+                _ => String::new(),
+            },
         };
         let comments = field.format_leading_comments(&ctx.get_indent());
         if vis.is_empty() {

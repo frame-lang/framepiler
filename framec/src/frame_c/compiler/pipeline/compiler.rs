@@ -1152,4 +1152,57 @@ mod tests {
             code
         );
     }
+
+    /// RFC-0017 regression: a single `@@system Foo : RefCounted` emits at
+    /// GDScript script-module scope (no `class Foo:` wrapper — the file
+    /// IS Foo). The init-decouple `_create()` body references the script
+    /// by name (`Foo.new()`), which has no referent at module scope
+    /// without a `class_name` declaration → Godot "Identifier not found:
+    /// Foo". The assembler must prepend `class_name Foo` (before
+    /// `extends`).
+    #[test]
+    fn test_gdscript_module_scope_system_has_class_name() {
+        let source = br#"@@[target("gdscript")]
+@@system Adventure : RefCounted {
+    interface:
+        bump()
+        get_value(): int
+    machine:
+        $S {
+            bump() { self.n = self.n + 1 }
+            get_value(): int { @@:(self.n) }
+        }
+    domain:
+        n: int = 0
+}
+"#;
+        let config = PipelineConfig::production(TargetLanguage::GDScript);
+        let output = compile_module(source, &config).expect("pipeline error");
+        assert!(
+            output.errors.is_empty(),
+            "compile errors: {:?}",
+            output.errors
+        );
+        let code = &output.code;
+        // The module-scope system's `_create` references `Adventure.new()`.
+        assert!(
+            code.contains("Adventure.new()"),
+            "expected the module-scope `_create` to reference `Adventure.new()`; got:\n{}",
+            code
+        );
+        // ...so the script must declare `class_name Adventure` (before
+        // `extends`) for that identifier to resolve.
+        let class_name_at = code.find("class_name Adventure");
+        let extends_at = code.find("extends RefCounted");
+        assert!(
+            class_name_at.is_some(),
+            "module-scope GDScript system must emit `class_name Adventure`; got:\n{}",
+            code
+        );
+        assert!(
+            class_name_at < extends_at,
+            "`class_name` must precede `extends`; got:\n{}",
+            code
+        );
+    }
 }

@@ -397,8 +397,29 @@ impl LanguageBackend for CppBackend {
                     .map(|sc| format!(" : {}", self.emit(sc, ctx)))
                     .unwrap_or_default();
 
+                // A member-initializer list (const domain fields seeded
+                // from system parameters: `const x: int = x` -> `: x(x)`)
+                // can only run in a constructor, so when one is present
+                // the bare ctor must take the system parameters too —
+                // `__create` then threads them through both the ctor and
+                // `__frame_init`. With no member-init list the bare ctor
+                // stays parameterless (a parameterless ctor is what the
+                // restore path's `make_shared<T>()` and `@@!T()` rely on).
+                let needs_ctor_params = super_call.is_some() && !params.is_empty();
+                let bare_ctor_params = if needs_ctor_params {
+                    self.emit_params(params)
+                } else {
+                    String::new()
+                };
+
                 // Emit `Counter()` — bare framework
-                let mut result = format!("{}{}(){} {{\n", ctx.get_indent(), class_name, init_list);
+                let mut result = format!(
+                    "{}{}({}){} {{\n",
+                    ctx.get_indent(),
+                    class_name,
+                    bare_ctor_params,
+                    init_list
+                );
                 for line in &framework_lines {
                     result.push_str(line);
                 }
@@ -417,33 +438,39 @@ impl LanguageBackend for CppBackend {
                 }
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
 
-                // Emit `static std::shared_ptr<Counter> __create(...)`
-                // — factory. Frame emits system-typed domain fields as
-                // `std::shared_ptr<T>` and copy-initializes them from
-                // the factory result (`shared_ptr<Counter> c =
-                // Counter::__create(7)`), so the factory must return a
-                // shared_ptr directly: `Counter` by value can't
-                // convert to `shared_ptr<Counter>`, and `Counter*`
-                // can't either (the `shared_ptr(T*)` ctor is
-                // explicit). The pre-RFC-0017 path emitted `new
-                // Counter(args)` straight into the field — superseded.
+                // Emit `static Counter __create(...)` — factory,
+                // returning by value. Driver code does `auto x =
+                // Counter::__create(7); x.method()`, so `__create`
+                // must hand back a `Counter` value, not a
+                // `shared_ptr<Counter>` (that would force `x->method()`)
+                // and not a `Counter*` (raw, same problem + leak).
+                // System-typed *domain fields* are `shared_ptr<T>`;
+                // their initializer wraps the factory result —
+                // `std::make_shared<Counter>(Counter::__create(7))`,
+                // move-constructed from the returned temporary — see
+                // `expand_system_instantiation_in_domain`.
                 result.push('\n');
                 let create_params = self.emit_params(params);
                 result.push_str(&format!(
-                    "{}static std::shared_ptr<{}> __create({}) {{\n",
+                    "{}static {} __create({}) {{\n",
                     ctx.get_indent(),
                     class_name,
                     create_params
                 ));
                 ctx.push_indent();
-                result.push_str(&format!(
-                    "{}auto c = std::make_shared<{}>();\n",
-                    ctx.get_indent(),
-                    class_name
-                ));
                 let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                if needs_ctor_params {
+                    result.push_str(&format!(
+                        "{}{} c({});\n",
+                        ctx.get_indent(),
+                        class_name,
+                        arg_pass.join(", ")
+                    ));
+                } else {
+                    result.push_str(&format!("{}{} c;\n", ctx.get_indent(), class_name));
+                }
                 result.push_str(&format!(
-                    "{}c->__frame_init({});\n",
+                    "{}c.__frame_init({});\n",
                     ctx.get_indent(),
                     arg_pass.join(", ")
                 ));

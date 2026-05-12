@@ -204,21 +204,29 @@ pub fn generate_system_shared(
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return {}.new({})", system.name, params_arg_list(system)),
+                    &format!(
+                        "return {}._create({})",
+                        system.name,
+                        params_arg_list(system)
+                    ),
                 ));
             }
             TargetLanguage::Lua => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return {}:new({})", system.name, params_arg_list(system)),
+                    &format!(
+                        "return {}._create({})",
+                        system.name,
+                        params_arg_list(system)
+                    ),
                 ));
             }
             TargetLanguage::Ruby => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("new({})", params_arg_list(system)),
+                    &format!("_create({})", params_arg_list(system)),
                 ));
             }
             TargetLanguage::Php => {
@@ -231,35 +239,54 @@ pub fn generate_system_shared(
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return new {}({});", system.name, php_args),
+                    &format!("return self::_create({});", php_args),
                 ));
             }
             TargetLanguage::Dart => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return {}({});", system.name, params_arg_list(system)),
+                    &format!(
+                        "return {}._create({});",
+                        system.name,
+                        params_arg_list(system)
+                    ),
                 ));
             }
             TargetLanguage::Java | TargetLanguage::CSharp => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return new {}({});", system.name, params_arg_list(system)),
+                    &format!(
+                        "return {}.__create({});",
+                        system.name,
+                        params_arg_list(system)
+                    ),
                 ));
             }
             TargetLanguage::Cpp => {
+                // C++ `__create` returns `System` by value; the renamed
+                // alias does too (the `generate_static_factory_alias`
+                // default), so no return-type override.
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return {}({});", system.name, params_arg_list(system)),
+                    &format!(
+                        "return {}::__create({});",
+                        system.name,
+                        params_arg_list(system)
+                    ),
                 ));
             }
             TargetLanguage::Kotlin | TargetLanguage::Swift => {
                 methods.push(generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return {}({})", system.name, params_arg_list(system)),
+                    &format!(
+                        "return {}.__create({})",
+                        system.name,
+                        params_arg_list(system)
+                    ),
                 ));
             }
             TargetLanguage::C => {
@@ -272,7 +299,11 @@ pub fn generate_system_shared(
                 let mut method = generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return {}_new({});", system.name, params_arg_list(system)),
+                    &format!(
+                        "return {}_create({});",
+                        system.name,
+                        params_arg_list(system)
+                    ),
                 );
                 if let CodegenNode::Method {
                     ref mut return_type,
@@ -292,7 +323,7 @@ pub fn generate_system_shared(
                 let mut method = generate_static_factory_alias(
                     system,
                     factory_name,
-                    &format!("return New{}({})", system.name, params_arg_list(system)),
+                    &format!("return Create{}({})", system.name, params_arg_list(system)),
                 );
                 if let CodegenNode::Method {
                     ref mut return_type,
@@ -1064,6 +1095,18 @@ pub(crate) fn generate_fields(
         let strip_unconditionally =
             matches!(syntax.language, TargetLanguage::Go | TargetLanguage::C);
         let strip_collision = init_references_param(init_text_str, &sys_param_names);
+
+        // When a const field's init references a system param the
+        // assignment moves to the constructor body / `__frame_init`
+        // (see `should_emit_constructor_body_init`). A method-body
+        // assignment to a `val` / `let` / `final` won't compile, so
+        // emit those fields as mutable at the target-language level —
+        // the Frame-level `const` is enforced by the validator (E814+).
+        // C++ is the exception: it seeds the const field via the
+        // member-initializer list, so `const T` is fine there.
+        if field.is_const && strip_collision && !matches!(syntax.language, TargetLanguage::Cpp) {
+            field.is_const = false;
+        }
         // PHP rejects non-const expressions in class-field defaults:
         // `public $inner = new Counter();` is a parse error
         // ("New expressions are not supported in this context"). Strip
@@ -1211,13 +1254,13 @@ fn init_collection_stack(
 ///   TS, JS, PHP): the field has a literal init at declaration scope,
 ///   except when that init references a system param — then the init
 ///   moves into the constructor body to avoid the name-collision.
-/// - **Kotlin**: same as the OO group, but const fields with collisions
-///   are suppressed entirely (they're declared in the primary
-///   constructor as `val name: Type`).
+/// - **Kotlin**: same as the OO group. (Const fields whose init refers
+///   to a system param are emitted as `var` at the Kotlin level so the
+///   constructor-body assignment compiles — see `build_system_fields`.)
 /// - **Erlang / Graphviz**: never go through this code path.
 fn should_emit_constructor_body_init(
     lang: TargetLanguage,
-    is_const: bool,
+    _is_const: bool,
     init_refs_param: bool,
     init_has_tagged: bool,
 ) -> bool {
@@ -1229,8 +1272,13 @@ fn should_emit_constructor_body_init(
         // body — same flag the field-emission path uses to strip the
         // inline init.
         Php => init_refs_param || init_has_tagged,
-        Cpp | Java | Swift | CSharp | Dart | GDScript | TypeScript | JavaScript => init_refs_param,
-        Kotlin => init_refs_param && !is_const,
+        Cpp | Java | Swift | CSharp | Dart | GDScript | TypeScript | JavaScript | Kotlin => {
+            init_refs_param
+        }
+        // (Kotlin previously skipped const fields here on the assumption
+        //  they'd be primary-constructor params; RFC-0017 made the system
+        //  ctor parameterless, so the const field must take its value via
+        //  the constructor-body assignment like every other backend.)
         Erlang | Graphviz => false,
     }
 }
@@ -2425,7 +2473,7 @@ fn generate_python_factory_alias(system: &SystemAst, factory_name: &str) -> Code
         .join(", ");
 
     let body = vec![CodegenNode::NativeBlock {
-        code: format!("return cls({})", arg_list),
+        code: format!("return cls._create({})", arg_list),
         span: None,
     }];
 
@@ -2469,7 +2517,7 @@ fn generate_js_static_factory_alias(system: &SystemAst, factory_name: &str) -> C
         .join(", ");
 
     let body = vec![CodegenNode::NativeBlock {
-        code: format!("return new {}({});", system.name, arg_list),
+        code: format!("return {}._create({});", system.name, arg_list),
         span: None,
     }];
 
@@ -6333,10 +6381,21 @@ pub(crate) fn expand_system_instantiation_in_domain(
                 // for source-level `@@Name(args)`. Delegating keeps
                 // the two paths in sync so a future per-backend
                 // spelling change only updates one site.
-                let constructor = if matches!(lang, TargetLanguage::Graphviz) {
-                    name.to_string()
-                } else {
-                    crate::frame_c::compiler::assembler::generate_constructor(name, args, lang)
+                let constructor = match lang {
+                    TargetLanguage::Graphviz => name.to_string(),
+                    // C++ system-typed domain fields are `shared_ptr<T>`;
+                    // the factory returns `T` by value (so drivers stay
+                    // value-semantics), so wrap it — move-constructing the
+                    // returned temporary into a heap-managed instance.
+                    TargetLanguage::Cpp => {
+                        let factory = crate::frame_c::compiler::assembler::generate_constructor(
+                            name, args, lang,
+                        );
+                        format!("std::make_shared<{}>({})", name, factory)
+                    }
+                    _ => {
+                        crate::frame_c::compiler::assembler::generate_constructor(name, args, lang)
+                    }
                 };
                 result.push_str(&constructor);
                 continue;
@@ -6353,7 +6412,6 @@ pub(crate) fn expand_system_instantiation_in_domain(
     }
     result
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -6488,7 +6546,10 @@ mod tests {
             (TargetLanguage::Kotlin, "Counter.__create(7)"),
             (TargetLanguage::Swift, "Counter.__create(7)"),
             (TargetLanguage::CSharp, "Counter.__create(7)"),
-            (TargetLanguage::Cpp, "Counter::__create(7)"),
+            (
+                TargetLanguage::Cpp,
+                "std::make_shared<Counter>(Counter::__create(7))",
+            ),
             (TargetLanguage::Rust, "Counter::__create(7)"),
             (TargetLanguage::C, "Counter_create(7)"),
             (TargetLanguage::Go, "CreateCounter(7)"),

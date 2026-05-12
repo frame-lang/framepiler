@@ -398,7 +398,7 @@ pub(crate) fn generate_rust_factory_alias(system: &SystemAst, factory_name: &str
         params,
         return_type: Some("Self".to_string()),
         body: vec![CodegenNode::NativeBlock {
-            code: format!("Self::new({})", arg_list),
+            code: format!("Self::__create({})", arg_list),
             span: None,
         }],
         is_async: false,
