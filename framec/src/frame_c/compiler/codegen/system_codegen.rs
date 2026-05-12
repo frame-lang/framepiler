@@ -2353,7 +2353,14 @@ self._context_stack.pop();"#,
                 TargetLanguage::C => {
                     let _ = start_state_has_enter_params;
                     format!(
-                        "{sys}_fire_enter_cascade(self);\n{sys}_process_transition_loop(self);",
+                        r#"{sys}_FrameEvent* __e = {sys}_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+{sys}_FrameContext* __ctx = {sys}_FrameContext_new(__e, NULL);
+{sys}_FrameVec_push(self->_context_stack, __ctx);
+{sys}_router(self, __e);
+{sys}_process_transition_loop(self);
+{sys}_FrameContext* __init_ctx = ({sys}_FrameContext*){sys}_FrameVec_pop(self->_context_stack);
+{sys}_FrameContext_destroy(__init_ctx);
+{sys}_FrameEvent_destroy(__e);"#,
                         sys = system.name
                     )
                 }
@@ -3791,63 +3798,13 @@ while (comp != NULL) {{
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"{sys}_Compartment* comp = self->__compartment;
-while (comp != NULL) {{
-    {sys}_FrameEvent* exit_event = {sys}_FrameEvent_new("<$", comp->exit_args, 0);
-    {sys}_route_to_state(self, comp->state, exit_event, comp);
-    {sys}_FrameEvent_destroy(exit_event);
-    comp = comp->parent_compartment;
-}}"#,
-                sys = sys
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
+    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
+    // dispatched to the current (leaf) state via {sys}_route_to_state; an
+    // ancestor's `$>` / `<$` runs only if the leaf forwards (=> $^).
 
-    // __fire_enter_cascade — top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"// Build chain bottom-up into a stack-allocated array (reasonable
-// upper bound: HSM depth is ~16 in practice).
-{sys}_Compartment* chain[64];
-int depth = 0;
-{sys}_Compartment* comp = self->__compartment;
-while (comp != NULL && depth < 64) {{
-    chain[depth++] = comp;
-    comp = comp->parent_compartment;
-}}
-for (int i = depth - 1; i >= 0; i--) {{
-    {sys}_Compartment* layer = chain[i];
-    {sys}_FrameEvent* enter_event = {sys}_FrameEvent_new("$>", layer->enter_args, 0);
-    {sys}_route_to_state(self, layer->state, enter_event, layer);
-    {sys}_FrameEvent_destroy(enter_event);
-}}"#,
-                sys = sys
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains queued transitions.
+    // __process_transition_loop — drains queued transitions. On each:
+    // dispatch `<$` to the current (leaf) state, switch compartments,
+    // dispatch `$>` to the new (leaf) state, then re-check.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
@@ -3857,15 +3814,23 @@ for (int i = depth - 1; i >= 0; i--) {{
                 r#"while (self->__next_compartment != NULL) {{
     {sys}_Compartment* next_compartment = self->__next_compartment;
     self->__next_compartment = NULL;
-    {sys}_fire_exit_cascade(self);
+    // Exit the current (leaf) state
+    {sys}_FrameEvent* __exit_event = {sys}_FrameEvent_new("<$", self->__compartment->exit_args, 0);
+    {sys}_route_to_state(self, self->__compartment->state, __exit_event, self->__compartment);
+    {sys}_FrameEvent_destroy(__exit_event);
     {sys}_Compartment_unref(self->__compartment);
     self->__compartment = next_compartment;
+    // Enter the new (leaf) state — or the forwarded event
     if (next_compartment->forward_event == NULL) {{
-        {sys}_fire_enter_cascade(self);
+        {sys}_FrameEvent* __enter_event = {sys}_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+        {sys}_route_to_state(self, self->__compartment->state, __enter_event, self->__compartment);
+        {sys}_FrameEvent_destroy(__enter_event);
     }} else {{
         {sys}_FrameEvent* forward_event = next_compartment->forward_event;
         next_compartment->forward_event = NULL;
-        {sys}_fire_enter_cascade(self);
+        {sys}_FrameEvent* __enter_event = {sys}_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+        {sys}_route_to_state(self, self->__compartment->state, __enter_event, self->__compartment);
+        {sys}_FrameEvent_destroy(__enter_event);
         if (strcmp(forward_event->_message, "$>") != 0) {{
             {sys}_router(self, forward_event);
         }}

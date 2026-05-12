@@ -73,14 +73,7 @@ impl LanguageBackend for CBackend {
                     "static void {}_route_to_state({}* self, const char* state_name, {}_FrameEvent* __e, {}_Compartment* compartment);\n",
                     name, name, name, name
                 ));
-                result.push_str(&format!(
-                    "static void {}_fire_enter_cascade({}* self);\n",
-                    name, name
-                ));
-                result.push_str(&format!(
-                    "static void {}_fire_exit_cascade({}* self);\n",
-                    name, name
-                ));
+                // RFC-0019: no enter/exit cascade — those helpers are gone.
                 result.push_str(&format!(
                     "static void {}_process_transition_loop({}* self);\n",
                     name, name
@@ -366,7 +359,12 @@ impl LanguageBackend for CBackend {
 
                 let is_cascade_line = |line: &str| {
                     line.contains("_fire_enter_cascade")
+                        || line.contains("_fire_exit_cascade")
                         || line.contains("_process_transition_loop")
+                        // RFC-0019: the start-state `$>` is dispatched via
+                        // `<sys>_router(self, __e)` inside `__frame_init`;
+                        // the bare allocator must not run it.
+                        || line.contains("_router(")
                 };
                 let mentions_param = |line: &str| {
                     param_names.iter().any(|p| {
