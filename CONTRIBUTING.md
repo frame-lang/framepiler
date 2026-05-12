@@ -42,6 +42,15 @@ python3 scripts/validate_doc_samples.py   # Every runnable docs/ example compile
 
 The doc validator extracts runnable Frame blocks from `docs/*.md`, compiles them with `framec`, and runs the generated Python. It's also wired into the pre-commit hook (see `.githooks/pre-commit`) so edits to docs are checked before they're committed.
 
+**If your change touches codegen** (`framec/src/frame_c/compiler/codegen/` — the per-backend files, `frame_expansion.rs`, `system_codegen.rs`, the runtime emitters) — the unit tests above are *necessary but not sufficient*. Run the 17-backend differential matrix:
+
+```bash
+cd /path/to/framec-test-env/docker
+make framec && make test               # 17/17, ~4,800 fixture×backend executions, 0 failed
+```
+
+A change that emits target-language code **is not "complete" until the matrix that proves it works for all 17 targets is green in front of you.** The codegen has 14+ near-identical per-language paths; a kernel-level change has to be made in all of them, and it's easy to miss one — that exact mistake landed a 17-backend feature claiming "ALL 17 COMPLETE" with 12 of 17 broken. CI does not yet run the matrix; until it does, this is on you. See [`docs/contributing/testing.md`](docs/contributing/testing.md).
+
 ## Project Structure
 
 ```
