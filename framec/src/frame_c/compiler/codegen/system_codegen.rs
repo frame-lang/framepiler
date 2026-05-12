@@ -2386,8 +2386,16 @@ _context_stack.remove(_context_stack.size() - 1);"#,
                     )
                 }
                 TargetLanguage::CSharp => {
-                    let _ = (event_class, &system.name);
-                    "__fire_enter_cascade();\n__process_transition_loop();".to_string()
+                    let _ = event_class;
+                    format!(
+                        r#"{sys}FrameEvent __e = new {sys}FrameEvent("$>", __compartment.enter_args);
+{sys}FrameContext __ctx = new {sys}FrameContext(__e, null);
+_context_stack.Add(__ctx);
+__router(__e);
+__process_transition_loop();
+_context_stack.RemoveAt(_context_stack.Count - 1);"#,
+                        sys = system.name
+                    )
                 }
                 TargetLanguage::Go => {
                     let _ = (event_class, &system.name);
@@ -5010,58 +5018,13 @@ while (comp != null) {{
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"{0}? comp = __compartment;
-while (comp != null) {{
-    {1} exit_event = new {1}("<$", comp.exit_args);
-    __route_to_state(comp.state, exit_event, comp);
-    comp = comp.parent_compartment;
-}}"#,
-                compartment_class, event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
+    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
+    // dispatched to the current (leaf) state via __route_to_state; an
+    // ancestor's `$>` / `<$` runs only if the leaf forwards (=> $^).
 
-    // __fire_enter_cascade — top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"List<{0}> chain = new List<{0}>();
-{0}? comp = __compartment;
-while (comp != null) {{
-    chain.Add(comp);
-    comp = comp.parent_compartment;
-}}
-for (int i = chain.Count - 1; i >= 0; i--) {{
-    {0} layer = chain[i];
-    {1} enter_event = new {1}("$>", layer.enter_args);
-    __route_to_state(layer.state, enter_event, layer);
-}}"#,
-                compartment_class, event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains queued transitions.
+    // __process_transition_loop — drains queued transitions. On each:
+    // dispatch `<$` to the current (leaf) state, switch compartments,
+    // dispatch `$>` to the new (leaf) state, then re-check.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
@@ -5071,14 +5034,17 @@ for (int i = chain.Count - 1; i >= 0; i--) {{
                 r#"while (__next_compartment != null) {{
     {0} next_compartment = __next_compartment;
     __next_compartment = null;
-    __fire_exit_cascade();
+    {1} __exit_event = new {1}("<$", __compartment.exit_args);
+    __route_to_state(__compartment.state, __exit_event, __compartment);
     __compartment = next_compartment;
     if (next_compartment.forward_event == null) {{
-        __fire_enter_cascade();
+        {1} __enter_event = new {1}("$>", __compartment.enter_args);
+        __route_to_state(__compartment.state, __enter_event, __compartment);
     }} else {{
         {1} forward_event = next_compartment.forward_event;
         next_compartment.forward_event = null;
-        __fire_enter_cascade();
+        {1} __enter_event = new {1}("$>", __compartment.enter_args);
+        __route_to_state(__compartment.state, __enter_event, __compartment);
         if (forward_event._message != "$>") {{
             __router(forward_event);
         }}
