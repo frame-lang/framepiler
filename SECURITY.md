@@ -36,6 +36,19 @@ Acknowledgement target: 5 business days. Initial assessment and remediation plan
 
 Coordinated disclosure preferred. Once a fix is released, the advisory will be published with credit (unless you request otherwise).
 
+## Supply chain
+
+framec is a single Rust crate published to crates.io with 16 direct dependencies (123 transitive). The full dependency graph is pinned by the committed `Cargo.lock`; reproducible builds use that lock. `cargo audit` against the [RustSec advisory database](https://rustsec.org/) is run before each release — as of the 4.2 cut: **0 known vulnerabilities, 0 unmaintained-crate warnings** across all 123 deps.
+
+**Hardening not yet in place (4.2 / public-beta accepted risk).** The following are on the [roadmap](ROADMAP.md#hardening) but not yet wired up; the residual risk is accepted for the 4.2 beta and tracked there:
+
+- **Trusted Publishing (OIDC) for crates.io** — the publish step still uses a long-lived API token rather than short-lived OIDC credentials. Risk: token compromise → a malicious release. Mitigation in the meantime: the token is scoped to publish-only and stored as a GitHub Actions secret on a branch-protected repo.
+- **Dependabot / `cargo audit` in CI** — dependency-update PRs and per-PR advisory checks are not yet automated; advisory scanning is manual-before-release. Risk: a window between an advisory landing and the next release where a vulnerable transitive dep ships.
+- **CodeQL static analysis** — not yet enabled on PRs/main.
+- **Branch protection with required checks + linear history** — not yet enforced on `main`.
+
+Build provenance for the prebuilt-binary releases is attested via [SLSA](https://slsa.dev/) (each platform tarball/zip is checksummed and signed) — see the release assets on GitHub.
+
 ## Supported Versions
 
 Only the latest minor release of the `4.x` line currently receives security fixes. Earlier major versions are unsupported.
