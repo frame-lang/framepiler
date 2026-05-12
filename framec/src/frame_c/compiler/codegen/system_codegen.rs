@@ -2364,13 +2364,15 @@ self._context_stack.pop();"#,
                         sys = system.name
                     )
                 }
-                TargetLanguage::Cpp => {
-                    // RFC-0017 Phase A3: cascade runs unconditionally
-                    // inside `__frame_init`. The `__skipInitialEnter`
-                    // gate is gone — bare `Counter()` skips
-                    // `__frame_init` entirely.
-                    "__fire_enter_cascade();\n__process_transition_loop();".to_string()
-                }
+                TargetLanguage::Cpp => format!(
+                    r#"{sys}FrameEvent __e("$>", __compartment->enter_args);
+{sys}FrameContext __ctx(std::move(__e));
+_context_stack.push_back(std::move(__ctx));
+__router(_context_stack.back()._event);
+__process_transition_loop();
+_context_stack.pop_back();"#,
+                    sys = system.name
+                ),
                 TargetLanguage::Java => {
                     // RFC-0017 Phase A1: cascade runs unconditionally
                     // inside `__frame_init`. The old `__skipInitialEnter`
@@ -4051,81 +4053,43 @@ while (comp) {{
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"{0} comp = __compartment;
-while (comp) {{
-    {1} exit_event("<$", comp->exit_args);
-    __route_to_state(comp->state, exit_event, comp);
-    comp = comp->parent_compartment;
-}}"#,
-                comp_ptr, event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
+    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
+    // dispatched to the current (leaf) state via __route_to_state; an
+    // ancestor's `$>` / `<$` runs only if the leaf forwards (=> $^).
 
-    // __fire_enter_cascade — top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"std::vector<{0}> chain;
-{0} comp = __compartment;
-while (comp) {{
-    chain.push_back(comp);
-    comp = comp->parent_compartment;
-}}
-for (auto it = chain.rbegin(); it != chain.rend(); ++it) {{
-    auto& layer = *it;
-    {1} enter_event("$>", layer->enter_args);
-    __route_to_state(layer->state, enter_event, layer);
-}}"#,
-                comp_ptr, event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains queued transitions.
+    // __process_transition_loop — drains queued transitions. On each:
+    // dispatch `<$` to the current (leaf) state, switch compartments,
+    // dispatch `$>` to the new (leaf) state, then re-check.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"while (__next_compartment) {
+            code: format!(
+                r#"while (__next_compartment) {{
     auto next_compartment = std::move(__next_compartment);
-    __fire_exit_cascade();
+    // Exit the current (leaf) state
+    {evt} __exit_event("<$", __compartment->exit_args);
+    __route_to_state(__compartment->state, __exit_event, __compartment);
     __compartment = std::move(next_compartment);
-    if (!__compartment->forward_event) {
-        __fire_enter_cascade();
-    } else {
+    // Enter the new (leaf) state — or the forwarded event
+    if (!__compartment->forward_event) {{
+        {evt} __enter_event("$>", __compartment->enter_args);
+        __route_to_state(__compartment->state, __enter_event, __compartment);
+    }} else {{
         auto forward_event = std::move(__compartment->forward_event);
-        __fire_enter_cascade();
-        if (forward_event->_message != "$>") {
+        {evt} __enter_event("$>", __compartment->enter_args);
+        __route_to_state(__compartment->state, __enter_event, __compartment);
+        if (forward_event->_message != "$>") {{
             __router(*forward_event);
-        }
-    }
-    for (auto& ctx : _context_stack) {
+        }}
+    }}
+    for (auto& ctx : _context_stack) {{
         ctx._transitioned = true;
-    }
-}"#
-            .to_string(),
+    }}
+}}"#,
+                evt = event_class
+            ),
             span: None,
         }],
         is_async: false,
