@@ -5544,6 +5544,16 @@ pub(crate) fn generate_erlang_system(
         // child process via the child's load_state.
         let mut domain_fields: Vec<(String, Option<String>)> = Vec::new();
         for var in &system.domain {
+            // RFC-0016.1: `@@[no_persist]` fields are transient — skip
+            // adding them to the save/load maps. The Erlang #data{}
+            // record still declares the field (with its initializer
+            // text as the compile-time default), so on load_state the
+            // re-built record gets the default value for the missing
+            // key — matching the RFC's "leave at the `domain:` default"
+            // contract.
+            if var.attributes.iter().any(|a| a.name == "no_persist") {
+                continue;
+            }
             let child_module = match &var.initializer_text {
                 Some(t) => {
                     let t = t.trim();
