@@ -2344,17 +2344,29 @@ pub(crate) fn generate_frame_expansion(
                         }
                     }
                     TargetLanguage::Erlang => {
-                        // gen_statem: delegate to parent by calling parent state function directly.
-                        // The parent handler returns a gen_statem response tuple.
-                        // We must ensure the reply action includes From so the caller gets a response.
                         let parent_atom = to_snake_case(parent);
-                        let event_atom = to_snake_case(&ctx.event_name);
-                        // Call parent directly with the same {call, From} context so
-                        // the parent's reply reaches the original caller.
-                        format!(
-                            "{}{}({{call, From}}, {}, Data)",
-                            indent_str, parent_atom, event_atom
-                        )
+                        match ctx.event_name.as_str() {
+                            // RFC-0019: `=> $^` inside a `$>` / `<$` handler
+                            // runs the parent's lifecycle code by calling its
+                            // `frame_enter__<P>(Data) -> Data` /
+                            // `frame_exit__<P>(Data) -> Data` helper. The body
+                            // processor threads the returned Data record. (The
+                            // `($>`/`<$` callbacks in gen_statem are `enter` /
+                            // `frame_exit_dispatch__`, not regular events — so
+                            // there's no `{call, From}` to re-dispatch here.)
+                            "$>" => format!("{}frame_enter__{}(Data)", indent_str, parent_atom),
+                            "<$" => format!("{}frame_exit__{}(Data)", indent_str, parent_atom),
+                            // Ordinary event handler: delegate to the parent
+                            // state function with the same `{call, From}` so
+                            // the parent's reply reaches the original caller.
+                            other => {
+                                let event_atom = to_snake_case(other);
+                                format!(
+                                    "{}{}({{call, From}}, {}, Data)",
+                                    indent_str, parent_atom, event_atom
+                                )
+                            }
+                        }
                     }
                     TargetLanguage::Graphviz => unreachable!(),
                 }

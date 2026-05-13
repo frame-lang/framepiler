@@ -1411,6 +1411,28 @@ fn erlang_process_body_lines_full(
             l.clone()
         };
 
+        // RFC-0019: `=> $^` inside a `$>` / `<$` handler lowered to a
+        // call to the parent's lifecycle helper (`frame_enter__<P>(Data)
+        // -> Data` / `frame_exit__<P>(Data) -> Data`). Bind the returned
+        // record into a fresh `DataN` and thread it forward so any
+        // post-forward statements in the handler see the parent's
+        // updates. The helper's single argument is the literal `Data`
+        // (emitted by frame_expansion.rs) — point it at the current
+        // `data_var`.
+        if l.starts_with("frame_enter__") || l.starts_with("frame_exit__") {
+            let mut call = l.trim_end_matches([',', ';']).trim().to_string();
+            if data_var != "Data" {
+                if let Some(prefix) = call.strip_suffix("(Data)") {
+                    call = format!("{}({})", prefix, data_var);
+                }
+            }
+            data_gen += 1;
+            let new_var = format!("Data{}", data_gen);
+            result.push(format!("    {} = {}", new_var, call));
+            data_var = new_var;
+            continue;
+        }
+
         match erlang_rewrite_native_classified_full(&l, action_names, interface_names, &data_var) {
             ErlangRewrite::ActionCall(call) => {
                 data_gen += 1;
@@ -3586,36 +3608,18 @@ pub(crate) fn generate_erlang_system(
                 ));
             }
 
-            // Enter handler. For HSM, walk the parent chain top-down
-            // and call each ancestor's `frame_enter__<state>` helper
-            // first (the helpers are emitted after the state-function
-            // loop). Then run the leaf's own body inline (preserving
-            // the existing transition-in-enter handling via
-            // `state_timeout`).
+            // Enter handler. RFC-0019: `$>` is a leaf-dispatched event —
+            // gen_statem fires `enter` only on the leaf, and we run only
+            // the leaf's own body here. Ancestors run their `$>` solely
+            // when the leaf forwards (`=> $^` lowers to a
+            // `frame_enter__<parent>(Data)` call — see frame_expansion.rs
+            // and the body processor). No ancestor chain walk.
             code.push_str(&format!("{}(enter, _OldState, Data) ->\n", state_name));
-            // Emit ancestor cascade calls. `data_var` threads through
-            // each helper's return value.
-            let mut data_var = "Data".to_string();
-            let mut data_gen = 0;
-            for ancestor_name in ancestor_chain_top_down(state.name.as_str()) {
-                if let Some(ancestor) = by_name.get(ancestor_name.as_str()) {
-                    if needs_enter_emission(ancestor) {
-                        data_gen += 1;
-                        let new_var = format!("Data{}", data_gen);
-                        code.push_str(&format!(
-                            "    {} = frame_enter__{}({}),\n",
-                            new_var,
-                            state_atom(&ancestor_name),
-                            data_var
-                        ));
-                        data_var = new_var;
-                    }
-                }
-            }
-            // The leaf's inline body uses `data_var` as the starting
-            // Data. The existing emission code below was written
-            // assuming `Data`; substitute when emitting.
-            let leaf_data_in = data_var.clone();
+            let data_gen = 0;
+            // The leaf's inline body starts from `Data` (the enter
+            // callback's record param). The emission code below was
+            // written referring to `Data` directly.
+            let leaf_data_in = "Data".to_string();
             // State-args binding: when the state was declared as
             // `$State(p1: T1, p2: T2)`, the enter handler can
             // reference each param by name. Bind from
@@ -4769,78 +4773,24 @@ pub(crate) fn generate_erlang_system(
     code.push_str("frame_extract_reply__([_ | Rest]) -> frame_extract_reply__(Rest);\n");
     code.push_str("frame_extract_reply__([]) -> ok.\n\n");
 
-    // Exit handler dispatch — walks the HSM chain bottom-up (leaf to
-    // root), calling each layer's `frame_exit__<state>` helper if it
-    // has an exit handler. Mirrors the spec's cascade-exit rule
-    // (docs/frame_runtime.md Step 21+): on transition, every layer of
-    // the source chain fires `<$` in leaf-first order. Layers without
-    // an exit handler are skipped (no helper emitted, no call).
+    // Exit handler dispatch — RFC-0019: `<$` is a leaf-dispatched event.
+    // On transition, only the *leaf* (the state being left) fires its
+    // `<$` here. Ancestors run their `<$` solely when the leaf forwards
+    // (`=> $^` inside a `<$` body lowers to `frame_exit__<parent>(Data)`).
+    // No ancestor chain walk.
     code.push_str("frame_exit_dispatch__(Data) ->\n");
     code.push_str("    case Data#data.frame_current_state of\n");
     if let Some(ref machine) = system.machine {
-        // Build state-name → state map for parent-chain walks.
-        let by_name: std::collections::HashMap<&str, &_> = machine
-            .states
-            .iter()
-            .map(|s| (s.name.as_str(), s))
-            .collect();
-        // Helper: yield the chain leaf-first for a given state name.
-        let chain_for = |leaf: &str| -> Vec<String> {
-            let mut chain = Vec::new();
-            let mut cur = Some(leaf.to_string());
-            while let Some(name) = cur {
-                chain.push(name.clone());
-                cur = by_name
-                    .get(name.as_str())
-                    .and_then(|s| s.parent.as_deref().map(|p| p.to_string()));
-            }
-            chain
-        };
-
         for state in &machine.states {
-            // Each state's chain — only emit a clause if at least one
-            // layer in the chain has an exit handler. Pure no-op
-            // chains fall through to the catch-all `_ -> Data` clause.
-            let chain = chain_for(state.name.as_str());
-            let layers_with_exit: Vec<&str> = chain
-                .iter()
-                .filter(|n| {
-                    by_name
-                        .get(n.as_str())
-                        .map(|s| s.exit.is_some())
-                        .unwrap_or(false)
-                })
-                .map(|s| s.as_str())
-                .collect();
-            if layers_with_exit.is_empty() {
+            if state.exit.is_none() {
+                // No exit handler — falls through to the `_ -> Data` arm.
                 continue;
             }
-
             let sname = state_atom(&state.name);
-            code.push_str(&format!("        {} ->\n", sname));
-            // Thread Data through each layer's exit helper, leaf-first.
-            for (i, layer_name) in layers_with_exit.iter().enumerate() {
-                let layer_atom = state_atom(layer_name);
-                let in_var = if i == 0 {
-                    "Data".to_string()
-                } else {
-                    format!("Data{}", i)
-                };
-                if i + 1 == layers_with_exit.len() {
-                    // Last layer — its return is the case-arm result.
-                    code.push_str(&format!(
-                        "            frame_exit__{}({});\n",
-                        layer_atom, in_var
-                    ));
-                } else {
-                    code.push_str(&format!(
-                        "            Data{} = frame_exit__{}({}),\n",
-                        i + 1,
-                        layer_atom,
-                        in_var
-                    ));
-                }
-            }
+            code.push_str(&format!(
+                "        {} -> frame_exit__{}(Data);\n",
+                sname, sname
+            ));
         }
     }
     code.push_str("        _ -> Data\n");
