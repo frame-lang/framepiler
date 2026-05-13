@@ -2455,13 +2455,27 @@ __process_transition_loop
                     ec = event_class,
                     sys = system.name
                 ),
-                TargetLanguage::Lua => {
-                    let _ = (event_class, &system.name);
-                    "self:__fire_enter_cascade()\nself:__process_transition_loop()".to_string()
-                }
+                TargetLanguage::Lua => format!(
+                    r#"local __e = {ec}.new("$>", self.__compartment.enter_args)
+local __ctx = {sys}FrameContext.new(__e, nil)
+self._context_stack[#self._context_stack + 1] = __ctx
+self:__router(__e)
+self:__process_transition_loop()
+table.remove(self._context_stack)"#,
+                    ec = event_class,
+                    sys = system.name
+                ),
                 TargetLanguage::Dart => {
-                    let _ = (event_class, &system.name);
-                    "__fire_enter_cascade();\n__process_transition_loop();".to_string()
+                    let _ = event_class;
+                    format!(
+                        r#"final __e = {sys}FrameEvent("\$>", __compartment.enter_args);
+final __ctx = {sys}FrameContext(__e, null);
+_context_stack.add(__ctx);
+__router(__e);
+__process_transition_loop();
+_context_stack.removeLast();"#,
+                        sys = system.name
+                    )
                 }
                 TargetLanguage::GDScript => {
                     let _ = event_class;
@@ -5298,74 +5312,29 @@ end"#
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"local comp = self.__compartment
-while comp ~= nil do
-    local exit_event = {}.new("<$", comp.exit_args)
-    self:__route_to_state(comp.state, exit_event, comp)
-    comp = comp.parent_compartment
-end"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __fire_enter_cascade — top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"local chain = {{}}
-local comp = self.__compartment
-while comp ~= nil do
-    chain[#chain + 1] = comp
-    comp = comp.parent_compartment
-end
-for i = #chain, 1, -1 do
-    local layer = chain[i]
-    local enter_event = {}.new("$>", layer.enter_args)
-    self:__route_to_state(layer.state, enter_event, layer)
-end"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains pending transitions.
+    // __process_transition_loop — drains pending transitions. RFC-0019:
+    // <$/$> are dispatched to the leaf (current/new) compartment only —
+    // ancestors run via an explicit `=> $^` forward, never a chain walk.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"while self.__next_compartment ~= nil do
+            code: format!(
+                r#"while self.__next_compartment ~= nil do
     local next_compartment = self.__next_compartment
     self.__next_compartment = nil
-    self:__fire_exit_cascade()
+    local exit_event = {ec}.new("<$", self.__compartment.exit_args)
+    self:__route_to_state(self.__compartment.state, exit_event, self.__compartment)
     self.__compartment = next_compartment
     if next_compartment.forward_event == nil then
-        self:__fire_enter_cascade()
+        local enter_event = {ec}.new("$>", self.__compartment.enter_args)
+        self:__route_to_state(self.__compartment.state, enter_event, self.__compartment)
     else
         local forward_event = next_compartment.forward_event
         next_compartment.forward_event = nil
-        self:__fire_enter_cascade()
+        local enter_event = {ec}.new("$>", self.__compartment.enter_args)
+        self:__route_to_state(self.__compartment.state, enter_event, self.__compartment)
         if forward_event._message ~= "$>" then
             self:__router(forward_event)
         end
@@ -5373,8 +5342,9 @@ end"#,
     for _, ctx in ipairs(self._context_stack) do
         ctx._transitioned = true
     end
-end"#
-                .to_string(),
+end"#,
+                ec = event_class
+            ),
             span: None,
         }],
         is_async: false,
@@ -5540,58 +5510,9 @@ while (comp != null) {{
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"{0}? comp = __compartment;
-while (comp != null) {{
-    final exit_event = {1}("<\$", comp.exit_args);
-    __route_to_state(comp.state, exit_event, comp);
-    comp = comp.parent_compartment;
-}}"#,
-                compartment_class, event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __fire_enter_cascade — top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"final List<{0}> chain = [];
-{0}? comp = __compartment;
-while (comp != null) {{
-    chain.add(comp);
-    comp = comp.parent_compartment;
-}}
-for (int i = chain.length - 1; i >= 0; i--) {{
-    final layer = chain[i];
-    final enter_event = {1}("\$>", layer.enter_args);
-    __route_to_state(layer.state, enter_event, layer);
-}}"#,
-                compartment_class, event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains queued transitions.
+    // __process_transition_loop — drains queued transitions. RFC-0019:
+    // <$/$> are dispatched to the leaf (current/new) compartment only —
+    // ancestors run via an explicit `=> $^` forward, never a chain walk.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
@@ -5600,14 +5521,17 @@ for (int i = chain.length - 1; i >= 0; i--) {{
             code: r#"while (__next_compartment != null) {
     final next_compartment = __next_compartment!;
     __next_compartment = null;
-    __fire_exit_cascade();
+    final exit_event = __EVT__("<\$", __compartment.exit_args);
+    __route_to_state(__compartment.state, exit_event, __compartment);
     __compartment = next_compartment;
     if (next_compartment.forward_event == null) {
-        __fire_enter_cascade();
+        final enter_event = __EVT__("\$>", __compartment.enter_args);
+        __route_to_state(__compartment.state, enter_event, __compartment);
     } else {
         final forward_event = next_compartment.forward_event!;
         next_compartment.forward_event = null;
-        __fire_enter_cascade();
+        final enter_event = __EVT__("\$>", __compartment.enter_args);
+        __route_to_state(__compartment.state, enter_event, __compartment);
         if (forward_event._message != "\$>") {
             __router(forward_event);
         }
@@ -5616,7 +5540,7 @@ for (int i = chain.length - 1; i >= 0; i--) {{
         ctx._transitioned = true;
     }
 }"#
-            .to_string(),
+            .replace("__EVT__", event_class),
             span: None,
         }],
         is_async: false,
