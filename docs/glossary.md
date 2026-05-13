@@ -380,8 +380,10 @@ System-level attribute naming the generated [factory](#factory). See
 
 Domain-field attribute excluding the field from the serialized blob; after
 [restore](#restore) the field holds its `domain:` default (typically `null` for
-a resource handle, which the user reattaches explicitly). See
-[persist contract](#persist-contract) and [RFC-0015](rfcs/rfc-0015.md).
+a resource handle, which the user reattaches explicitly). Applies only to
+`domain:` fields — not [state variables](#state-variable) or the rest of the
+[compartment](#compartment) bookkeeping, which is always persisted. Specified in
+[RFC-0016.1](rfcs/rfc-0016-1.md); see also [persist contract](#persist-contract).
 
 ### `@@SystemName(args)`
 

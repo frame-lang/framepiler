@@ -894,8 +894,9 @@ domain:
     connection : Connection = null   // not in the blob; null after restore
 ```
 
-A proposed system-level *inclusion* list — `@@[persist_fields([...])]` — is
-tracked in [RFC-0016](rfcs/rfc-0016.md) (deferred; not yet shipped).
+`@@[no_persist]` is specified in [RFC-0016.1](rfcs/rfc-0016-1.md). A proposed
+system-level *inclusion* list — `@@[persist_fields([...])]` — is tracked in
+[RFC-0016](rfcs/rfc-0016.md) (deferred; not yet shipped).
 
 ---
 

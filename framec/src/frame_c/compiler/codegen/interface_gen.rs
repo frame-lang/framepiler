@@ -5163,6 +5163,12 @@ pub(crate) fn generate_persistence_methods(
             // Add domain variables. Nested @@SystemName() instances
             // round-trip via child save_state/restore_state.
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields are transient — skip
+                // them on save; on restore they keep their `domain:` default
+                // (already set by the constructor / no-init allocation).
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
                     save_body.push_str(&format!(
@@ -5265,6 +5271,11 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str(&format!("{}._context_stack = []\n", target));
 
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields aren't in the blob —
+                // leave them at their `domain:` default (set on construction).
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     restore_body.push_str(&format!(

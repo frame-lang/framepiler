@@ -166,8 +166,14 @@ An RFC moves through:
    any section that was superseded ("The per-backend mechanism here was
    superseded by RFC-MMMM — see there.").
 
-RFC files are named `rfc-NNNN.md`, zero-padded, in `docs/rfcs/`. This style
-guide and the [glossary](../glossary.md) are *not* RFCs.
+RFC files are named `rfc-NNNN.md`, zero-padded, in `docs/rfcs/`. A *sub-RFC* —
+one that defines or amends one specific piece of an existing RFC, rather than a
+new feature — uses `rfc-NNNN-M.md` (e.g. `rfc-0016-1.md` defines the
+`@@[no_persist]` attribute that RFC-0016 only mentions in passing) and carries
+a `**Companion to:** RFC-NNNN` (or `**Builds on:**`) line in its front-matter.
+Prefer a fresh top-level number for anything that's really a new feature; reserve
+the sub-RFC form for "this thing was buried in / underspecified by RFC-NNNN".
+This style guide and the [glossary](../glossary.md) are *not* RFCs.
 
 ## When to write an RFC vs. a doc edit
 
