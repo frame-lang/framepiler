@@ -2445,10 +2445,16 @@ array_pop($this->_context_stack);"#,
                         sys = system.name
                     )
                 }
-                TargetLanguage::Ruby => {
-                    let _ = (event_class, &system.name);
-                    "__fire_enter_cascade\n__process_transition_loop".to_string()
-                }
+                TargetLanguage::Ruby => format!(
+                    r#"__e = {ec}.new("$>", @__compartment.enter_args)
+__ctx = {sys}FrameContext.new(__e, nil)
+@_context_stack.push(__ctx)
+__router(__e)
+__process_transition_loop
+@_context_stack.pop"#,
+                    ec = event_class,
+                    sys = system.name
+                ),
                 TargetLanguage::Lua => {
                     let _ = (event_class, &system.name);
                     "self:__fire_enter_cascade()\nself:__process_transition_loop()".to_string()
@@ -3544,80 +3550,37 @@ end"#
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — fires <$ on every layer, walking bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"comp = @__compartment
-while comp != nil
-    exit_event = {}.new("<$", comp.exit_args)
-    __route_to_state(comp.state, exit_event, comp)
-    comp = comp.parent_compartment
-end"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __fire_enter_cascade — fires $> on every layer, walking top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"chain = []
-comp = @__compartment
-while comp != nil
-    chain.push(comp)
-    comp = comp.parent_compartment
-end
-chain.reverse_each do |layer|
-    enter_event = {}.new("$>", layer.enter_args)
-    __route_to_state(layer.state, enter_event, layer)
-end"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains pending transitions.
+    // __process_transition_loop — drains pending transitions. RFC-0019:
+    // <$/$> are dispatched to the leaf (current/new) compartment only —
+    // ancestors run via an explicit `=> $^` forward, never a chain walk.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"while @__next_compartment != nil
+            code: format!(
+                r#"while @__next_compartment != nil
     next_compartment = @__next_compartment
     @__next_compartment = nil
-    __fire_exit_cascade
+    exit_event = {ec}.new("<$", @__compartment.exit_args)
+    __route_to_state(@__compartment.state, exit_event, @__compartment)
     @__compartment = next_compartment
     if next_compartment.forward_event == nil
-        __fire_enter_cascade
+        enter_event = {ec}.new("$>", @__compartment.enter_args)
+        __route_to_state(@__compartment.state, enter_event, @__compartment)
     else
         forward_event = next_compartment.forward_event
         next_compartment.forward_event = nil
-        __fire_enter_cascade
+        enter_event = {ec}.new("$>", @__compartment.enter_args)
+        __route_to_state(@__compartment.state, enter_event, @__compartment)
         if forward_event._message != "$>"
             __router(forward_event)
         end
     end
-    @_context_stack.each { |ctx| ctx._transitioned = true }
-end"#
-                .to_string(),
+    @_context_stack.each {{ |ctx| ctx._transitioned = true }}
+end"#,
+                ec = event_class
+            ),
             span: None,
         }],
         is_async: false,
