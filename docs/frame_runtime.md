@@ -2808,6 +2808,16 @@ stack discipline.
 
 ## Step 21 — Thermostat (hierarchical state machines)
 
+> **Updated for [RFC-0019](rfcs/rfc-0019.md).** `$>` and `<$` are
+> ordinary leaf-dispatched events — there is no kernel cascade. Only the
+> *current* state's `$>`/`<$` runs on entry/exit. An ancestor's lifecycle
+> runs **only** if the leaf explicitly forwards via `=> $^` (placement in
+> the handler body controls order). This step's example below uses the
+> explicit-`=> $^` shape. The kernel-walkthrough later in this step still
+> references the older `__fire_*_cascade` helpers in places — those have
+> been deleted from codegen; the walkthrough will be re-rendered in a
+> follow-up doc pass.
+
 A thermostat that has multiple operating modes — heating, cooling,
 and fan-only — but shares logic for power on/off across all of
 them.
@@ -2844,6 +2854,7 @@ them.
 
         **$Heating => $Active {**
             $>() {
+                => $^              // RFC-0019: forward to $Active.$> first
                 print("heating mode")
             }
 
@@ -2854,6 +2865,7 @@ them.
 
         **$Cooling => $Active {**
             $>() {
+                => $^              // RFC-0019: forward to $Active.$> first
                 print("cooling mode")
             }
 
@@ -2878,14 +2890,23 @@ handlers participate in the lifecycle.
 
 Three things become visible with HSM:
 
-1. When the system enters `$Heating`, both `$Active.$>` and
-   `$Heating.$>` fire — parent first, child second.
-2. When the system leaves `$Heating`, both `$Heating.<$` and
-   `$Active.<$` fire — child first, parent second.
+1. When the system enters `$Heating`, only `$Heating.$>` fires by
+   default. The `=> $^` at the *start* of `$Heating.$>` (above)
+   re-routes the enter event to `$Active.$>` first — so the print
+   order ends up *parent then child*, which is what we want here.
+2. Similarly, an explicit `=> $^` placed at the *end* of `$Heating.<$`
+   would run the child's exit code first and the parent's after.
+   (This example has no `<$` on `$Heating`, so `$Active.<$` doesn't
+   fire when `$Heating` is left — the leaf "overrides" the ancestor
+   lifecycle, per RFC-0019.)
 3. The parent's compartment is reachable from the child's
    compartment.
 
-The first two are the *cascade*. The third is what makes parameter
+The first two are what *used to* be the kernel cascade, before
+[RFC-0019](rfcs/rfc-0019.md) made `$>`/`<$` ordinary leaf-dispatched
+events. Today, ancestor `$>`/`<$` runs only when the leaf explicitly
+forwards; the third point — parent compartment reachability — is
+unchanged. The next paragraph is what makes parameter
 propagation and event forwarding work in later steps.
 
 Compartments need to know their parent in the chain, so the

@@ -6,6 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed — RFC-0019 uniform `$>` / `<$` dispatch (breaking)
+
+- **The HSM enter/exit cascade is gone.** Before RFC-0019 the kernel walked the
+  state's parent chain on every `$>` (top-down) and `<$` (bottom-up), firing
+  every layer's lifecycle handler. After RFC-0019, `$>` and `<$` are **ordinary
+  leaf-dispatched events**: only the *current* state's `$>`/`<$` runs on
+  entry/exit. An ancestor's lifecycle runs **only** if the leaf explicitly
+  forwards via `=> $^` (placement in the handler body controls order). A leaf
+  with no `$>`/`<$` and no forward silently *overrides* its ancestor's lifecycle.
+  See [RFC-0019](docs/rfcs/rfc-0019.md).
+- **Kernel surface deleted.** `__fire_enter_cascade` and `__fire_exit_cascade`
+  are removed from every backend. `__process_transition_loop` now dispatches
+  `<$` to the current leaf and `$>` to the new leaf — no chain walk. Erlang's
+  gen_statem `enter` callback runs only the leaf's `$>` body; its
+  `frame_exit_dispatch__` runs only `frame_exit__<leaf>`.
+- **Construction-context push** (resolves RFC-0018 / F1). `_frame_init` /
+  `__frame_init` now pushes a `FrameContext` for the start `$>` so the
+  context-stack invariant (*every event handler runs in a context*) holds
+  during construction. `@@:self.method()` inside a start `$>` no longer
+  crashes on the post-call self-call guard.
+- **`=> $^` inside `$>` / `<$` is now meaningful and supported on every
+  backend.** In dynamic / typed backends it routes the lifecycle event to the
+  parent's compartment dispatcher synchronously. In Erlang, `=> $^` in a `$>`
+  body lowers to `frame_enter__<P>(Data)` and in a `<$` body to
+  `frame_exit__<P>(Data)`, threaded through `Data`. Documented residual: a
+  transition inside an ancestor's `$>` reached via `=> $^` on Erlang doesn't
+  fire (`state_timeout` only works in the leaf's own `enter` clause).
+- **Migration.** The cascade-asserting matrix HSM fixtures per backend
+  (`40_hsm_parent_state_vars`, `42_hsm_three_levels`, `46_hsm_enter_parent_only`,
+  `47_hsm_enter_both`, `48_hsm_exit_handlers`, `51_hsm_persist`) gained explicit
+  `=> $^` forwards to keep their ancestor-lifecycle assertions green. User
+  code with HSM cascades needs the same treatment: walk each substate, decide
+  whether the parent's lifecycle should still run, and add `=> $^` if so.
+  Matrix is 17/17 clean post-migration.
+
+### Added — RFC-0016.1 `@@[no_persist]` honored end-to-end
+
+- **`@@[no_persist]` now works on every backend.** The per-field opt-out
+  attribute was parsed and validated (E801) since RFC-0012's persist-stress
+  wave, but **no backend's codegen actually skipped the field** — it
+  round-tripped just like every other domain field. As of this release, all
+  17 backends honor it: the generated `save` body omits the tagged field; the
+  `load` body leaves it at its `domain:` default (the value the constructor /
+  `@@!Foo()` no-init allocation sets it to). New matrix fixture
+  `100_no_persist_field.f*` covers every backend.
+- **Python pickle → JSON migration** (deferred from RFC-0012). Python persist
+  is now field-by-field UTF-8 JSON (the same wire shape the other dynamic
+  backends already use), not whole-object pickle. Side-effect: all 15
+  field-emitting backends now share **one** JSON wire format, so a blob from
+  one backend can in principle be loaded by another. GDScript (Godot binary
+  Variant) and Erlang (native map term) remain on their native formats.
+- **Wire-format break (Python only).** Pickle blobs written by prior framec
+  releases will not load. Persist work is still `[Unreleased]` — no
+  released-format-compat promise yet.
+- New spec: [RFC-0016.1](docs/rfcs/rfc-0016-1.md). Complementary inclusion-list
+  form `@@[persist_fields([...])]` (RFC-0016) remains deferred.
+
+### Fixed — Erlang `#` comments inside handler bodies
+
+- A `#` (Frame comment) inside an Erlang handler body — `$>` / `<$` / a regular
+  event handler — used to leak verbatim into the generated `.erl` as `# ...,`.
+  Erlang uses `#` for record / map syntax, not comments, so this was a parse
+  error (no fixture exercised it before today). The body processor now
+  translates Frame `#` comments to Erlang `%` in its pre-pass, distinguishing
+  comment-`#` from `Var#rec{...}` / `Var#rec.field` / `#{...}` / `Map#{...}`
+  by neighbour chars. `erlang_smart_join` already drops `%` comment-only lines,
+  so handler-body comments don't appear in the output — they just no longer
+  break it.
+
 ### Changed — RFC-0017 init decoupling (breaking)
 
 - Every system class is now emitted as three artifacts instead of one: a **bare constructor** (framework setup only — state stack, compartment placeholder, domain defaults, no user `$>`), a **`__frame_init(args)` method** (runs the user `$>` body, fires the enter cascade, drains the transition loop), and a **`__create(args)` factory** (bare ctor + `__frame_init` + return). Per-backend spellings: typed backends use `__create` / `__frame_init`; Python/Dart/JS/TS/Ruby/Lua/PHP/GDScript use `_create` / `_frame_init`; Go uses `CreateCounter` / `NewCounter`; C uses `Counter_create` / `Counter_new` / `Counter_frame_init`; Erlang uses `create/N` / `start_link/0` / `frame_init/(N+1)`.

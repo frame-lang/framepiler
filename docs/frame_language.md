@@ -690,6 +690,39 @@ $Child => $Parent {
 - `=> $^` can appear **anywhere** in a handler
 - Without `=> $^`, unhandled events are **ignored**
 
+### Lifecycle handlers in HSM (`$>` and `<$`)
+
+Since [RFC-0019](rfcs/rfc-0019.md), `$>` (enter) and `<$` (exit) are
+**ordinary leaf-dispatched events** — the kernel does **not** walk the parent
+chain firing ancestor `$>`/`<$` handlers. Only the *current* state's lifecycle
+handler runs on entry / exit. If you want an ancestor's lifecycle to run, the
+leaf must explicitly forward via `=> $^` (placement controls order):
+
+```frame
+$Child => $Parent {
+    $>() {
+        => $^                      // run $Parent.$> first (parent-then-child)
+        self.log.append("Child:enter")
+    }
+    <$() {
+        self.log.append("Child:exit")
+        => $^                      // run $Parent.<$ last (child-then-parent)
+    }
+}
+$Parent {
+    $>() { self.log.append("Parent:enter") }
+    <$() { self.log.append("Parent:exit") }
+}
+```
+
+A `$Child` with **no** `$>`/`<$` handler and **no** state-level `=> $^`
+silently *overrides* its ancestor's lifecycle — the parent's `$>`/`<$` does
+**not** run. Tag the child with a state-level `=> $^` if you want the parent's
+lifecycle to fire when the child has nothing to add.
+
+This is intentionally different from UML statecharts; the rationale is in
+[RFC-0019 § Motivation](rfcs/rfc-0019.md).
+
 ---
 
 ## System Context

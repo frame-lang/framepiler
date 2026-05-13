@@ -99,13 +99,13 @@ A [system parameter](#system-parameter) tagged with `$>` that flows into the
 ### event handler
 
 *(Also: handler.)* The block a [state](#state) runs in response to a named event
-— an [interface](#interface) method call, an `$>` enter, an `$<` exit, or a
+— an [interface](#interface) method call, an `$>` enter, an `<$` exit, or a
 [forwarded](#forward) event. See
 [language reference § Event Handlers](frame_language.md#event-handlers).
 
 ### exit-args
 
-The arguments passed to a [state](#state)'s [`$<` exit handler](#-exit-handler)
+The arguments passed to a [state](#state)'s [`<$` exit handler](#-exit-handler)
 when that state is left. See
 [language reference § Exit Handler](frame_language.md#exit-handler).
 
@@ -304,7 +304,7 @@ groups by sigil: `$(...)` → [state-param](#state-param), `$>(...)` →
 
 Moving the [system](#system) from one [state](#state) to another, written
 `-> $Target` (optionally with `$(...)` / `$>(...)` argument groups). A
-transition runs the old state's `$<` [exit handler](#-exit-handler), creates a
+transition runs the old state's `<$` [exit handler](#-exit-handler), creates a
 fresh [compartment](#compartment) for the target, and runs the target's `$>`
 [enter handler](#-enter-handler). See
 [language reference § Transition](frame_language.md#transition---state).
@@ -403,14 +403,22 @@ becomes in each target language).
 ### `$>` (enter handler)
 
 A [state](#state)'s *enter handler*: the block run when the state is entered.
-Receives [enter-args](#enter-args). See
-[language reference § Enter Handler](frame_language.md#enter-handler).
+Receives [enter-args](#enter-args). Since RFC-0019, `$>` is an
+ordinary leaf-dispatched event — only the *current* state's `$>` runs on
+entry. Ancestor `$>` handlers run only if the leaf explicitly forwards via
+[`=> $^`](#-) (placement in the handler body controls order). See
+[language reference § Enter Handler](frame_language.md#enter-handler) and
+[RFC-0019](rfcs/rfc-0019.md).
 
-### `$<` (exit handler)
+### `<$` (exit handler)
 
 A [state](#state)'s *exit handler*: the block run when the state is left.
-Receives [exit-args](#exit-args). See
-[language reference § Exit Handler](frame_language.md#exit-handler).
+Receives [exit-args](#exit-args). Since RFC-0019, `<$` is an ordinary
+leaf-dispatched event — only the *current* state's `<$` runs on exit.
+Ancestor `<$` handlers run only if the leaf explicitly forwards via
+[`=> $^`](#-) (placement in the handler body controls order). See
+[language reference § Exit Handler](frame_language.md#exit-handler) and
+[RFC-0019](rfcs/rfc-0019.md).
 
 ### `$Start(...)`
 
