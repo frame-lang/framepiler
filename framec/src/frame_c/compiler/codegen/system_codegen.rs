@@ -2398,8 +2398,16 @@ _context_stack.RemoveAt(_context_stack.Count - 1);"#,
                     )
                 }
                 TargetLanguage::Go => {
-                    let _ = (event_class, &system.name);
-                    "s.__fire_enter_cascade()\ns.__process_transition_loop()".to_string()
+                    let _ = event_class;
+                    format!(
+                        r#"__e := {sys}FrameEvent{{_message: "$>", _parameters: s.__compartment.enterArgs}}
+__ctx := {sys}FrameContext{{_event: __e, _data: make(map[string]any)}}
+s._context_stack = append(s._context_stack, __ctx)
+s.__router(&s._context_stack[len(s._context_stack)-1]._event)
+s.__process_transition_loop()
+s._context_stack = s._context_stack[:len(s._context_stack)-1]"#,
+                        sys = system.name
+                    )
                 }
                 TargetLanguage::Kotlin => {
                     // RFC-0017 Phase A1: cascade runs unconditionally
@@ -5218,83 +5226,44 @@ _ = comp"#
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"comp := s.__compartment
-for comp != nil {{
-    exit_event := &{}FrameEvent{{_message: "<$", _parameters: comp.exitArgs}}
-    s.__route_to_state(comp.state, exit_event, comp)
-    comp = comp.parentCompartment
-}}"#,
-                system.name
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
+    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
+    // dispatched to the current (leaf) state via __route_to_state; an
+    // ancestor's `$>` / `<$` runs only if the leaf forwards (=> $^).
+    let _ = comp_type;
 
-    // __fire_enter_cascade — top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"chain := []{0}{{}}
-comp := s.__compartment
-for comp != nil {{
-    chain = append(chain, comp)
-    comp = comp.parentCompartment
-}}
-for i := len(chain) - 1; i >= 0; i-- {{
-    layer := chain[i]
-    enter_event := &{1}FrameEvent{{_message: "$>", _parameters: layer.enterArgs}}
-    s.__route_to_state(layer.state, enter_event, layer)
-}}"#,
-                comp_type, system.name
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains queued transitions.
+    // __process_transition_loop — drains queued transitions. On each:
+    // dispatch `<$` to the current (leaf) state, switch compartments,
+    // dispatch `$>` to the new (leaf) state, then re-check.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"for s.__next_compartment != nil {
+            code: format!(
+                r#"for s.__next_compartment != nil {{
     next_compartment := s.__next_compartment
     s.__next_compartment = nil
-    s.__fire_exit_cascade()
+    exit_event := &{sys}FrameEvent{{_message: "<$", _parameters: s.__compartment.exitArgs}}
+    s.__route_to_state(s.__compartment.state, exit_event, s.__compartment)
     s.__compartment = next_compartment
-    if next_compartment.forwardEvent == nil {
-        s.__fire_enter_cascade()
-    } else {
+    if next_compartment.forwardEvent == nil {{
+        enter_event := &{sys}FrameEvent{{_message: "$>", _parameters: s.__compartment.enterArgs}}
+        s.__route_to_state(s.__compartment.state, enter_event, s.__compartment)
+    }} else {{
         forward_event := next_compartment.forwardEvent
         next_compartment.forwardEvent = nil
-        s.__fire_enter_cascade()
-        if forward_event._message != "$>" {
+        enter_event := &{sys}FrameEvent{{_message: "$>", _parameters: s.__compartment.enterArgs}}
+        s.__route_to_state(s.__compartment.state, enter_event, s.__compartment)
+        if forward_event._message != "$>" {{
             s.__router(forward_event)
-        }
-    }
-    for i := range s._context_stack {
+        }}
+    }}
+    for i := range s._context_stack {{
         s._context_stack[i]._transitioned = true
-    }
-}"#
-            .to_string(),
+    }}
+}}"#,
+                sys = system.name
+            ),
             span: None,
         }],
         is_async: false,
