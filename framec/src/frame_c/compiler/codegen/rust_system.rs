@@ -1645,6 +1645,10 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
 
     // Nested @@SystemName() instances round-trip via child save_state.
     for var in &system.domain {
+        // RFC-0016.1: `@@[no_persist]` fields are transient — skip.
+        if var.attributes.iter().any(|a| a.name == "no_persist") {
+            continue;
+        }
         let init = var.initializer_text.as_deref().unwrap_or("");
         if super::interface_gen::extract_tagged_system_name(init).is_some() {
             save_body.push_str(&format!(
@@ -1766,6 +1770,13 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
         restore_body.push_str("self.__compartment = compartment;\n");
         restore_body.push_str("self.__next_compartment = None;\n");
         for var in &system.domain {
+            // RFC-0016.1: `@@[no_persist]` fields aren't in the blob.
+            // The field already holds its `domain:` default because
+            // restore_state runs on an instance constructed via `new()`,
+            // which seeded every field from its declared initializer.
+            if var.attributes.iter().any(|a| a.name == "no_persist") {
+                continue;
+            }
             let init = var.initializer_text.as_deref().unwrap_or("");
             if let Some(child_sys) = super::interface_gen::extract_tagged_system_name(init) {
                 if super::interface_gen::nested_uses_new_contract(child_sys) {
@@ -1799,6 +1810,23 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
         restore_body.push_str("    __next_compartment: None,\n");
         for var in &system.domain {
             let init = var.initializer_text.as_deref().unwrap_or("");
+            // RFC-0016.1: `@@[no_persist]` fields aren't in the blob.
+            // The legacy contract builds the instance via a struct
+            // literal, so we still have to emit a value for the field —
+            // use the declared `domain:` default. (Legacy is E814-rejected
+            // in practice; this branch is dead but kept consistent.)
+            if var.attributes.iter().any(|a| a.name == "no_persist") {
+                restore_body.push_str(&format!(
+                    "    {}: {},\n",
+                    var.name,
+                    if init.is_empty() {
+                        "Default::default()"
+                    } else {
+                        init
+                    }
+                ));
+                continue;
+            }
             if let Some(child_sys) = super::interface_gen::extract_tagged_system_name(init) {
                 if super::interface_gen::nested_uses_new_contract(child_sys) {
                     // Nested on new contract — can't use static factory
