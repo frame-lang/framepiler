@@ -2426,9 +2426,16 @@ s._context_stack = s._context_stack[:len(s._context_stack)-1]"#,
                     "__fire_enter_cascade()\n__process_transition_loop()".to_string()
                 }
                 TargetLanguage::Php => {
-                    let _ = (event_class, &system.name);
-                    "$this->__fire_enter_cascade();\n$this->__process_transition_loop();"
-                        .to_string()
+                    let _ = event_class;
+                    format!(
+                        r#"$__e = new {sys}FrameEvent("$>", $this->__compartment->enter_args);
+$__ctx = new {sys}FrameContext($__e, null);
+$this->_context_stack[] = $__ctx;
+$this->__router($__e);
+$this->__process_transition_loop();
+array_pop($this->_context_stack);"#,
+                        sys = system.name
+                    )
                 }
                 TargetLanguage::Ruby => {
                     let _ = (event_class, &system.name);
@@ -3325,83 +3332,43 @@ if (method_exists($this, $handler_name)) {
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"$comp = $this->__compartment;
-while ($comp !== null) {{
-    $exit_event = new {}("<$", $comp->exit_args);
-    $this->__route_to_state($comp->state, $exit_event, $comp);
-    $comp = $comp->parent_compartment;
-}}"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
+    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
+    // dispatched to the current (leaf) state via __route_to_state; an
+    // ancestor's `$>` / `<$` runs only if the leaf forwards (=> $^).
 
-    // __fire_enter_cascade — top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"$chain = [];
-$comp = $this->__compartment;
-while ($comp !== null) {{
-    $chain[] = $comp;
-    $comp = $comp->parent_compartment;
-}}
-for ($i = count($chain) - 1; $i >= 0; $i--) {{
-    $layer = $chain[$i];
-    $enter_event = new {}("$>", $layer->enter_args);
-    $this->__route_to_state($layer->state, $enter_event, $layer);
-}}"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains queued transitions.
+    // __process_transition_loop — drains queued transitions. On each:
+    // dispatch `<$` to the current (leaf) state, switch compartments,
+    // dispatch `$>` to the new (leaf) state, then re-check.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"while ($this->__next_compartment !== null) {
+            code: format!(
+                r#"while ($this->__next_compartment !== null) {{
     $next_compartment = $this->__next_compartment;
     $this->__next_compartment = null;
-    $this->__fire_exit_cascade();
+    $exit_event = new {evt}("<$", $this->__compartment->exit_args);
+    $this->__route_to_state($this->__compartment->state, $exit_event, $this->__compartment);
     $this->__compartment = $next_compartment;
-    if ($next_compartment->forward_event === null) {
-        $this->__fire_enter_cascade();
-    } else {
+    if ($next_compartment->forward_event === null) {{
+        $enter_event = new {evt}("$>", $this->__compartment->enter_args);
+        $this->__route_to_state($this->__compartment->state, $enter_event, $this->__compartment);
+    }} else {{
         $forward_event = $next_compartment->forward_event;
         $next_compartment->forward_event = null;
-        $this->__fire_enter_cascade();
-        if ($forward_event->_message !== "$>") {
+        $enter_event = new {evt}("$>", $this->__compartment->enter_args);
+        $this->__route_to_state($this->__compartment->state, $enter_event, $this->__compartment);
+        if ($forward_event->_message !== "$>") {{
             $this->__router($forward_event);
-        }
-    }
-    foreach ($this->_context_stack as $ctx) {
+        }}
+    }}
+    foreach ($this->_context_stack as $ctx) {{
         $ctx->_transitioned = true;
-    }
-}"#
-            .to_string(),
+    }}
+}}"#,
+                evt = event_class
+            ),
             span: None,
         }],
         is_async: false,
