@@ -2458,12 +2458,16 @@ array_pop($this->_context_stack);"#,
                     "__fire_enter_cascade();\n__process_transition_loop();".to_string()
                 }
                 TargetLanguage::GDScript => {
-                    // RFC-0017 Phase A4: cascade runs unconditionally
-                    // inside `_frame_init`. The `__skipInitialEnter`
-                    // gate is gone — bare `_init()` skips `_frame_init`
-                    // entirely.
-                    let _ = (event_class, &system.name);
-                    "self.__fire_enter_cascade()\nself.__process_transition_loop()".to_string()
+                    let _ = event_class;
+                    format!(
+                        r#"var __e = {sys}FrameEvent.new("$>", self.__compartment.enter_args)
+var __ctx = {sys}FrameContext.new(__e, null)
+self._context_stack.append(__ctx)
+self.__router(__e)
+self.__process_transition_loop()
+self._context_stack.pop_back()"#,
+                        sys = system.name
+                    )
                 }
                 TargetLanguage::Erlang => String::new(), // gen_statem: handled natively by erlang_system.rs
                 TargetLanguage::Graphviz => unreachable!(),
@@ -5805,76 +5809,38 @@ if self.has_method(handler_name):
         decorators: vec![],
     });
 
-    // __fire_exit_cascade — bottom-up.
-    methods.push(CodegenNode::Method {
-        name: "__fire_exit_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"var comp = self.__compartment
-while comp != null:
-    var exit_event = {}.new("<$", comp.exit_args)
-    self.__route_to_state(comp.state, exit_event, comp)
-    comp = comp.parent_compartment"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
+    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
+    // dispatched to the current (leaf) state via __route_to_state; an
+    // ancestor's `$>` / `<$` runs only if the leaf forwards (=> $^).
 
-    // __fire_enter_cascade — top-down.
-    methods.push(CodegenNode::Method {
-        name: "__fire_enter_cascade".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"var chain = []
-var comp = self.__compartment
-while comp != null:
-    chain.append(comp)
-    comp = comp.parent_compartment
-for i in range(chain.size() - 1, -1, -1):
-    var layer = chain[i]
-    var enter_event = {}.new("$>", layer.enter_args)
-    self.__route_to_state(layer.state, enter_event, layer)"#,
-                event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __process_transition_loop — drains pending transitions.
+    // __process_transition_loop — drains pending transitions. On each:
+    // dispatch `<$` to the current (leaf) state, switch compartments,
+    // dispatch `$>` to the new (leaf) state, then re-check.
     methods.push(CodegenNode::Method {
         name: "__process_transition_loop".to_string(),
         params: vec![],
         return_type: None,
         body: vec![CodegenNode::NativeBlock {
-            code: r#"while self.__next_compartment != null:
+            code: format!(
+                r#"while self.__next_compartment != null:
     var next_compartment = self.__next_compartment
     self.__next_compartment = null
-    self.__fire_exit_cascade()
+    var exit_event = {evt}.new("<$", self.__compartment.exit_args)
+    self.__route_to_state(self.__compartment.state, exit_event, self.__compartment)
     self.__compartment = next_compartment
+    var enter_event = {evt}.new("$>", self.__compartment.enter_args)
     if next_compartment.forward_event == null:
-        self.__fire_enter_cascade()
+        self.__route_to_state(self.__compartment.state, enter_event, self.__compartment)
     else:
         var forward_event = next_compartment.forward_event
         next_compartment.forward_event = null
-        self.__fire_enter_cascade()
+        self.__route_to_state(self.__compartment.state, enter_event, self.__compartment)
         if forward_event._message != "$>":
             self.__router(forward_event)
     for ctx in self._context_stack:
-        ctx._transitioned = true"#
-                .to_string(),
+        ctx._transitioned = true"#,
+                evt = event_class
+            ),
             span: None,
         }],
         is_async: false,
