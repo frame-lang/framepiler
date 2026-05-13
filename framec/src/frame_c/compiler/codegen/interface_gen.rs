@@ -3629,6 +3629,10 @@ pub(crate) fn generate_persistence_methods(
             // Domain vars: nested @@SystemName() instances round-trip via
             // child's save_state/restore_state — preserves class identity.
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields are transient — skip.
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
                     save_body.push_str(&format!(
@@ -3692,6 +3696,10 @@ pub(crate) fn generate_persistence_methods(
             ));
             restore_body.push_str("}\n");
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields aren't in the blob.
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     if nested_uses_new_contract(child_sys) {
@@ -4305,6 +4313,10 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("@_state_stack.each { |c| stack.push(__ser_comp(c)) }\n");
             save_body.push_str("j[\"_state_stack\"] = stack\n");
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields are transient — skip.
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
                     save_body.push_str(&format!(
@@ -4355,6 +4367,10 @@ pub(crate) fn generate_persistence_methods(
                 restore_body.push_str("  @_state_stack = []\n");
                 restore_body.push_str("end\n");
                 for var in &system.domain {
+                    // RFC-0016.1: `@@[no_persist]` fields aren't in the blob.
+                    if var.attributes.iter().any(|a| a.name == "no_persist") {
+                        continue;
+                    }
                     let init = var.initializer_text.as_deref().unwrap_or("");
                     if let Some(child_sys) = extract_tagged_system_name(init) {
                         if nested_uses_new_contract(child_sys) {
@@ -4389,6 +4405,10 @@ pub(crate) fn generate_persistence_methods(
                 restore_body.push_str("  instance.instance_variable_set(:@_state_stack, [])\n");
                 restore_body.push_str("end\n");
                 for var in &system.domain {
+                    // RFC-0016.1: `@@[no_persist]` fields aren't in the blob.
+                    if var.attributes.iter().any(|a| a.name == "no_persist") {
+                        continue;
+                    }
                     let init = var.initializer_text.as_deref().unwrap_or("");
                     if let Some(child_sys) = extract_tagged_system_name(init) {
                         restore_body.push_str(&format!(
@@ -4795,6 +4815,10 @@ pub(crate) fn generate_persistence_methods(
                 "    '_state_stack': this._state_stack.map((c) => serializeComp(c)).toList(),\n",
             );
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields are transient — skip.
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
                     save_body.push_str(&format!(
@@ -4959,6 +4983,10 @@ pub(crate) fn generate_persistence_methods(
             ));
             // Domain field restores via the comprehension emitter.
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields aren't in the blob.
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     if nested_uses_new_contract(child_sys) {
@@ -5059,6 +5087,10 @@ pub(crate) fn generate_persistence_methods(
             save_body.push_str("result._compartment = serialize_comp(self.__compartment)\n");
             save_body.push_str("result._state_stack = stack\n");
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields are transient — skip.
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
                     save_body.push_str(&format!(
@@ -5134,6 +5166,10 @@ pub(crate) fn generate_persistence_methods(
             restore_body.push_str("    end\n");
             restore_body.push_str("end\n");
             for var in &system.domain {
+                // RFC-0016.1: `@@[no_persist]` fields aren't in the blob.
+                if var.attributes.iter().any(|a| a.name == "no_persist") {
+                    continue;
+                }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
                     if nested_uses_new_contract(child_sys) {
