@@ -635,7 +635,49 @@ fn erlang_process_body_lines_full(
         .unwrap_or(0);
     let mut case_data_stack: Vec<CaseFrame> = Vec::new();
 
-    // Pre-process: split lines with inline % comments so the comment
+    // Pre-process step 1: translate Frame `#` comments to Erlang `%`
+    // comments. Left as-is, `# foo` is an Erlang syntax error. But `#`
+    // is *also* Erlang record/map syntax — `Var#rec{...}`, `Var#rec.f`,
+    // `#{k => v}`, `Map#{k => v}` — and by this point some body lines
+    // already carry it (a lowered `if ($.x) {...}` becomes
+    // `case Data#data.sv_... of`; dict literals become `#{...}`). A
+    // record `#` is flanked by identifier chars on both sides; a map
+    // `#` is followed by `{`. A comment `#` is neither.
+    let is_ident_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let comment_translated: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            let l: &str = line;
+            let bytes = l.as_bytes();
+            let mut in_string = false;
+            let mut escape = false;
+            for (i, c) in l.char_indices() {
+                if escape {
+                    escape = false;
+                    continue;
+                }
+                match c {
+                    '\\' => escape = true,
+                    '"' => in_string = !in_string,
+                    '#' if !in_string => {
+                        let next = bytes.get(i + 1).copied();
+                        let next_is_map = next == Some(b'{');
+                        let next_ident = next.map(is_ident_byte).unwrap_or(false);
+                        let prev_ident = i > 0 && is_ident_byte(bytes[i - 1]);
+                        let is_record_or_map = next_is_map || (prev_ident && next_ident);
+                        if !is_record_or_map {
+                            return format!("{}%{}", &l[..i], &l[i + 1..]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            l.to_string()
+        })
+        .collect();
+    let lines: Vec<&str> = comment_translated.iter().map(|s| s.as_str()).collect();
+
+    // Pre-process step 2: split lines with inline % comments so the comment
     // can't eat trailing syntax (commas, semicolons, record close braces).
     // "code  % comment" → ["code", "% comment"]
     let preprocessed: Vec<String> = lines
@@ -939,6 +981,15 @@ fn erlang_process_body_lines_full(
     for line in &lines {
         let l = line.trim();
         if l.is_empty() {
+            continue;
+        }
+
+        // Erlang `%` comments aren't expressions — emit them verbatim,
+        // no separator handling / param-capitalization / classification.
+        // (Frame `#` comments were translated to `%` in the pre-process
+        // above; an inline one was split onto its own line there.)
+        if l.starts_with('%') {
+            result.push(format!("    {}", l));
             continue;
         }
 
