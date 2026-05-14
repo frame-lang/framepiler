@@ -27,7 +27,9 @@
 pub(super) mod dart;
 pub(super) mod gdscript;
 pub(super) mod javascript;
+pub(super) mod kotlin;
 pub(super) mod lua;
 pub(super) mod php;
 pub(super) mod python;
 pub(super) mod ruby;
+pub(super) mod swift;
