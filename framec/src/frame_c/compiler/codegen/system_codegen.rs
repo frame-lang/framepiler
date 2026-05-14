@@ -2797,7 +2797,15 @@ pub(crate) fn generate_frame_machinery(
                 &compartment_class,
             ));
         }
-        TargetLanguage::Go => methods.extend(generate_go_machinery(system)),
+        TargetLanguage::Go => {
+            use super::machinery::{generate_machinery, go::GoMachinery};
+            methods.extend(generate_machinery(
+                &GoMachinery,
+                system,
+                &event_class,
+                &compartment_class,
+            ));
+        }
         TargetLanguage::Erlang => {
             // gen_statem: kernel/router/transition are built into OTP — no custom methods needed
         }
@@ -3329,206 +3337,6 @@ while (comp) {{
 
 
 
-fn generate_go_machinery(system: &SystemAst) -> Vec<CodegenNode> {
-    let mut methods = Vec::new();
-    let chains = compute_hsm_chains(system);
-    let event_type = format!("*{}FrameEvent", system.name);
-    let comp_type = format!("*{}Compartment", system.name);
-
-    // hsm_chain — instance method returning the topology table.
-    let mut chain_method = format!(
-        "func (s *{}) hsm_chain() map[string][]string {{\n    return map[string][]string{{\n",
-        system.name
-    );
-    for (leaf, chain) in &chains {
-        let chain_str = chain
-            .iter()
-            .map(|n| format!("\"{}\"", n))
-            .collect::<Vec<_>>()
-            .join(", ");
-        chain_method.push_str(&format!("        \"{}\": {{{}}},\n", leaf, chain_str));
-    }
-    chain_method.push_str("    }\n}");
-    methods.push(CodegenNode::NativeBlock {
-        code: chain_method,
-        span: None,
-    });
-
-    // __prepareEnter — constructs the destination HSM chain.
-    methods.push(CodegenNode::Method {
-        name: "__prepareEnter".to_string(),
-        params: vec![
-            Param::new("leaf").with_type("string"),
-            Param::new("state_args").with_type("[]any"),
-            Param::new("enter_args").with_type("[]any"),
-        ],
-        return_type: Some(comp_type.clone()),
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"var comp {0} = nil
-for _, name := range s.hsm_chain()[leaf] {{
-    new_comp := new{1}Compartment(name)
-    new_comp.stateArgs = append([]any{{}}, state_args...)
-    new_comp.enterArgs = append([]any{{}}, enter_args...)
-    new_comp.parentCompartment = comp
-    comp = new_comp
-}}
-return comp"#,
-                comp_type, system.name
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __prepareExit — populates exit_args on every layer.
-    methods.push(CodegenNode::Method {
-        name: "__prepareExit".to_string(),
-        params: vec![Param::new("exit_args").with_type("[]any")],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"comp := s.__compartment
-for comp != nil {{
-    comp.exitArgs = append([]any{{}}, exit_args...)
-    comp = comp.parentCompartment
-}}
-_ = comp"#
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __route_to_state — cascade router.
-    let states: Vec<&str> = system
-        .machine
-        .as_ref()
-        .map(|m| m.states.iter().map(|s| s.name.as_str()).collect())
-        .unwrap_or_default();
-    let mut route_code = String::from("switch state_name {\n");
-    for state in &states {
-        route_code.push_str(&format!("case \"{}\":\n", state));
-        route_code.push_str(&format!("    s._state_{}(__e, compartment)\n", state));
-    }
-    route_code.push_str("}");
-    methods.push(CodegenNode::Method {
-        name: "__route_to_state".to_string(),
-        params: vec![
-            Param::new("state_name").with_type("string"),
-            Param::new("__e").with_type(&event_type),
-            Param::new("compartment").with_type(&comp_type),
-        ],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: route_code,
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
-    // dispatched to the current (leaf) state via __route_to_state; an
-    // ancestor's `$>` / `<$` runs only if the leaf forwards (=> $^).
-    let _ = comp_type;
-
-    // __process_transition_loop — drains queued transitions. On each:
-    // dispatch `<$` to the current (leaf) state, switch compartments,
-    // dispatch `$>` to the new (leaf) state, then re-check.
-    methods.push(CodegenNode::Method {
-        name: "__process_transition_loop".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"for s.__next_compartment != nil {{
-    next_compartment := s.__next_compartment
-    s.__next_compartment = nil
-    exit_event := &{sys}FrameEvent{{_message: "<$", _parameters: s.__compartment.exitArgs}}
-    s.__route_to_state(s.__compartment.state, exit_event, s.__compartment)
-    s.__compartment = next_compartment
-    if next_compartment.forwardEvent == nil {{
-        enter_event := &{sys}FrameEvent{{_message: "$>", _parameters: s.__compartment.enterArgs}}
-        s.__route_to_state(s.__compartment.state, enter_event, s.__compartment)
-    }} else {{
-        forward_event := next_compartment.forwardEvent
-        next_compartment.forwardEvent = nil
-        enter_event := &{sys}FrameEvent{{_message: "$>", _parameters: s.__compartment.enterArgs}}
-        s.__route_to_state(s.__compartment.state, enter_event, s.__compartment)
-        if forward_event._message != "$>" {{
-            s.__router(forward_event)
-        }}
-    }}
-    for i := range s._context_stack {{
-        s._context_stack[i]._transitioned = true
-    }}
-}}"#,
-                sys = system.name
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __kernel — routes event then drains.
-    methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![Param::new("__e").with_type(&event_type)],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: "s.__router(__e)\ns.__process_transition_loop()".to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __router — delegates to __route_to_state.
-    methods.push(CodegenNode::Method {
-        name: "__router".to_string(),
-        params: vec![Param::new("__e").with_type(&event_type)],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: "s.__route_to_state(s.__compartment.state, __e, s.__compartment)".to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __transition
-    methods.push(CodegenNode::Method {
-        name: "__transition".to_string(),
-        params: vec![Param::new("next").with_type(&comp_type)],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: "s.__next_compartment = next".to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    methods
-}
 
 /// Generate C router dispatch using if-else chain with strcmp
 fn generate_c_router_dispatch(system: &SystemAst) -> String {

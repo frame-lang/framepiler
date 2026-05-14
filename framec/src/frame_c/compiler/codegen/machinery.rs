@@ -197,6 +197,7 @@ pub(crate) fn generate_machinery<G: MachineryGenerator + ?Sized>(
 pub(crate) mod csharp;
 pub(crate) mod dart;
 pub(crate) mod gdscript;
+pub(crate) mod go;
 pub(crate) mod java;
 pub(crate) mod javascript;
 pub(crate) mod kotlin;
