@@ -7,6 +7,18 @@
 //!   return sugar, $.var, @@:return, etc. to target language code
 //! - Helper functions for extracting transition targets, args, state vars
 
+mod utility;
+
+use utility::{
+    c_return_assign, cpp_wrap_string_literal, is_ident_char, paren_wrap_if_multiline,
+    split_transition_return, strip_outer_parens,
+};
+
+pub(crate) use utility::{
+    extract_dot_key, extract_state_var_name, normalize_indentation, php_prefix_params,
+    strip_java_unreachable,
+};
+
 use super::codegen_utils::{
     cpp_map_type, cpp_wrap_any_arg, csharp_map_type, expression_to_string, go_map_type,
     java_map_type, kotlin_map_type, replace_outside_strings_and_comments, state_var_init_value,
@@ -26,34 +38,6 @@ use crate::frame_c::compiler::native_region_scanner::{
 use crate::frame_c::compiler::splice::Splicer;
 use crate::frame_c::visitors::TargetLanguage;
 
-/// C `_return` assignment with double-aware marshalling.
-///
-/// The `_return` slot is `void*`. Ints/bools/pointers travel via
-/// `(void*)(intptr_t)(val)` cleanly. Doubles don't — `(intptr_t)(42.0)`
-/// truncates the fractional part. When the handler's declared return
-/// type is `float`/`double`, pack via a memcpy helper the runtime emits
-/// (`Sys_pack_double`).
-fn c_return_assign(system_name: &str, expanded_expr: &str, return_type: &Option<String>) -> String {
-    let is_dbl = return_type
-        .as_deref()
-        .map(|t| {
-            let t = t.trim();
-            t == "float" || t == "double"
-        })
-        .unwrap_or(false);
-    if is_dbl {
-        format!(
-            "{sys}_CTX(self)->_return = {sys}_pack_double({expr});",
-            sys = system_name,
-            expr = expanded_expr,
-        )
-    } else {
-        format!(
-            "{}_CTX(self)->_return = (void*)(intptr_t)({});",
-            system_name, expanded_expr
-        )
-    }
-}
 
 /// Resolve the storage key for a positional state-arg in a transition.
 /// Returns the declared param name — used by Rust backend for typed
@@ -66,56 +50,8 @@ pub(crate) fn resolve_state_arg_key(i: usize, target_state: &str, ctx: &HandlerC
         .unwrap_or_else(|| i.to_string())
 }
 
-/// Strip the outer parentheses from `(inner)` → `inner`.
-///
-/// Preconditions (checked by the caller): `s` is non-empty and wrapped
-/// in a matching outer `(…)` pair. The three @@:self.method expansion
-/// sites use this to unwrap `raw_args_with_parens` before splicing the
-/// arg list into a target's native call form (e.g. C's free-function
-/// dispatch `Sys_method(self, <inner>)`).
-fn strip_outer_parens(s: &str) -> &str {
-    debug_assert!(
-        s.len() >= 2 && s.starts_with('(') && s.ends_with(')'),
-        "strip_outer_parens called on non-paren-wrapped input: {:?}",
-        s
-    );
-    &s[1..s.len() - 1]
-}
 
-/// Wrap a C++ expression in std::string() if it's a string literal.
-/// Prevents std::bad_any_cast when storing in std::any (const char* vs std::string).
-fn cpp_wrap_string_literal(expr: &str) -> String {
-    let trimmed = expr.trim();
-    if trimmed.starts_with('"') && trimmed.ends_with('"') {
-        format!("std::string({})", trimmed)
-    } else {
-        expr.to_string()
-    }
-}
 
-/// Wrap an expression in `(...)` when it spans multiple source lines.
-///
-/// Frame's `@@:(<expr>)` and `@@:return = <expr>` sigils carry parens
-/// that serve as syntactic markers for the return-value form. The
-/// codegen consumes those markers and emits the inner expression as
-/// the RHS of an assignment to the context-stack `_return` slot. On
-/// indent-sensitive targets (Python, GDScript) a multi-line RHS
-/// without grouping parens hits a parse error: the assignment closes
-/// at the first newline and the continuation line ("    and ...")
-/// becomes an unexpected `Indent`.
-///
-/// Re-introducing parens around a multi-line RHS restores the
-/// implicit line-continuation that those targets require. For
-/// curly-brace targets the parens are redundant but harmless. Single-
-/// line expressions skip the wrap so the common case stays
-/// paren-free.
-fn paren_wrap_if_multiline(expr: &str) -> String {
-    if expr.contains('\n') {
-        format!("({})", expr)
-    } else {
-        expr.to_string()
-    }
-}
 
 /// `@@:return` typed-read expansion across all 17 targets.
 ///
@@ -499,63 +435,7 @@ pub(crate) fn emit_handler_body_via_statements(
     }
 }
 
-/// Strip unreachable code after terminal statements for Java.
-/// Java treats code after `return;` as a compile error, unlike TypeScript/C++ which ignore it.
-pub(crate) fn strip_java_unreachable(text: &str) -> String {
-    let mut result = Vec::new();
-    let mut skip = false;
-    for line in text.lines() {
-        if skip {
-            // Stop skipping when we hit a closing brace or another control structure
-            let trimmed = line.trim();
-            if trimmed.starts_with('}') || trimmed.is_empty() {
-                skip = false;
-                // Don't include the empty lines that were between return and next code
-                if !trimmed.is_empty() {
-                    result.push(line.to_string());
-                }
-            }
-            // Skip all other lines (unreachable code)
-            continue;
-        }
-        result.push(line.to_string());
-        // Check if this line ends with a terminal return
-        let trimmed = line.trim();
-        if trimmed == "return;" || trimmed == "return" {
-            skip = true;
-        }
-    }
-    result.join("\n")
-}
 
-/// Normalize indentation by removing common leading whitespace from all lines
-pub(crate) fn normalize_indentation(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() {
-        return String::new();
-    }
-
-    // Find minimum indentation (ignoring empty lines)
-    let min_indent = lines
-        .iter()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.len() - line.trim_start().len())
-        .min()
-        .unwrap_or(0);
-
-    // Strip the common indentation from all lines
-    lines
-        .iter()
-        .map(|line| {
-            if line.len() >= min_indent {
-                &line[min_indent..]
-            } else {
-                line.trim()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 /// RFC-0015 D7: render `@@!SystemName()` to the per-language no-initialization
 /// primitive. The uninitialized instance has no init code run — `$Start` body and
@@ -4047,152 +3927,9 @@ pub(crate) fn generate_frame_expansion(
     }
 }
 
-/// PHP helper: prefix bare identifiers matching the current handler's declared
-/// params with `$`. PHP variables are sigil-required — `sig` must be `$sig`.
-///
-/// The Frame parser captures expression text (enter args, state-var RHS, etc.)
-/// verbatim, so `-> (sig) $State` and `$.signum = sig` leak `sig` into the
-/// generated PHP where it's interpreted as an undefined constant. This walks
-/// the expression outside of string literals and rewrites bare-word occurrences
-/// of known handler params to `$param`.
-///
-/// Safe under:
-///   - string literals (skipped)
-///   - already-prefixed `$foo` (not doubled)
-///   - method/property access `->foo`, `::foo` (not prefixed — `foo` is a
-///     member name, not a variable)
-///   - member calls on `$this` (already has `$`)
-pub(crate) fn php_prefix_params(expr: &str, params: &[String]) -> String {
-    if params.is_empty() {
-        return expr.to_string();
-    }
-    // Delegate string-literal and comment skipping to the PHP skipper
-    // rather than re-implementing quote tracking inline. Only the
-    // identifier-walking + param-matching logic below is PHP-specific
-    // to this transformation.
-    let skipper = crate::frame_c::compiler::native_region_scanner::create_skipper(
-        crate::frame_c::visitors::TargetLanguage::Php,
-    );
-    let bytes = expr.as_bytes();
-    let end = bytes.len();
-    let mut out = String::with_capacity(expr.len() + 4);
-    let mut i = 0;
-    while i < end {
-        if let Some(next) = skipper.skip_string(bytes, i, end) {
-            out.push_str(&expr[i..next]);
-            i = next;
-            continue;
-        }
-        if let Some(next) = skipper.skip_comment(bytes, i, end) {
-            out.push_str(&expr[i..next]);
-            i = next;
-            continue;
-        }
-        let c = bytes[i];
-        // Identifier start: lowercase alpha or underscore, not already
-        // preceded by `$`, `->`, `::`, or an ident char (i.e. part of a
-        // larger token).
-        let is_ident_start = (c.is_ascii_lowercase() || c == b'_')
-            && !(i > 0 && (bytes[i - 1] == b'$' || is_ident_char(bytes[i - 1])))
-            && !(i >= 2 && bytes[i - 1] == b'>' && bytes[i - 2] == b'-')
-            && !(i >= 2 && bytes[i - 1] == b':' && bytes[i - 2] == b':');
-        if is_ident_start {
-            let start = i;
-            while i < bytes.len() && is_ident_char(bytes[i]) {
-                i += 1;
-            }
-            let ident = &expr[start..i];
-            // Skip PHP keywords
-            let is_keyword = matches!(
-                ident,
-                "true"
-                    | "false"
-                    | "null"
-                    | "and"
-                    | "or"
-                    | "xor"
-                    | "new"
-                    | "return"
-                    | "if"
-                    | "else"
-                    | "elseif"
-                    | "while"
-                    | "for"
-                    | "foreach"
-                    | "do"
-                    | "switch"
-                    | "case"
-                    | "break"
-                    | "continue"
-                    | "function"
-                    | "class"
-                    | "public"
-                    | "private"
-                    | "protected"
-                    | "static"
-                    | "use"
-                    | "namespace"
-                    | "as"
-                    | "throw"
-                    | "try"
-                    | "catch"
-                    | "finally"
-                    | "instanceof"
-            );
-            // Next non-space char: if it's `(`, this is a function call,
-            // not a variable reference — leave it alone.
-            let mut j = i;
-            while j < bytes.len() && bytes[j] == b' ' {
-                j += 1;
-            }
-            let followed_by_call = j < bytes.len() && bytes[j] == b'(';
-            if !is_keyword && !followed_by_call && params.iter().any(|p| p == ident) {
-                out.push('$');
-            }
-            out.push_str(ident);
-            continue;
-        }
-        out.push(c as char);
-        i += 1;
-    }
-    out
-}
 
-fn is_ident_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
-}
 
-/// Extract bracketed key from syntax like "@@:data[key]" or "@@:params[key]"
-/// Returns the raw content between [ and ] — including any user-supplied quotes.
-/// For languages that need a bare key (C, Rust), call .trim_matches on the result.
-/// Extract the key from a dot-accessor: `@@:params.key` → `key`
-pub(crate) fn extract_dot_key(text: &str, prefix: &str) -> String {
-    if let Some(rest) = text.strip_prefix(prefix) {
-        if let Some(rest) = rest.strip_prefix('.') {
-            // Extract only the identifier (alphanumeric + underscore)
-            let key: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
-            return key;
-        }
-    }
-    "".to_string()
-}
 
-/// Extract state variable name from "$.varName"
-pub(crate) fn extract_state_var_name(text: &str) -> String {
-    // Skip "$." prefix and get identifier
-    if text.starts_with("$.") {
-        let after_prefix = &text[2..];
-        let end = after_prefix
-            .find(|c: char| !c.is_alphanumeric() && c != '_')
-            .unwrap_or(after_prefix.len());
-        after_prefix[..end].to_string()
-    } else {
-        "unknown".to_string()
-    }
-}
 
 /// Expand state variable references ($.varName) and context syntax (@@) in an expression string
 /// Expand all Frame segments within an expression string.
@@ -4920,25 +4657,6 @@ fn generate_pop_transition(
 }
 
 /// Get the native region scanner for the target language
-/// Split a transition expansion into the body (compartment setup +
-/// `__transition()` call) and the trailing `return` keyword.
-///
-/// Transition expansions always end with `return` or `return;` to exit
-/// the handler after the state change. The orchestrator needs these
-/// separated so it can insert a return-expr between the body and the
-/// return when `-> $State` is followed by `@@:(expr)` in the same scope.
-fn split_transition_return(expansion: &str) -> (&str, &str) {
-    let trimmed = expansion.trim_end();
-    if trimmed.ends_with("return;") {
-        (trimmed[..trimmed.len() - 7].trim_end(), "return;")
-    } else if trimmed.ends_with("return") {
-        (trimmed[..trimmed.len() - 6].trim_end(), "return")
-    } else {
-        // Expansion doesn't end with return (e.g., Rust uses different
-        // control flow, or Graphviz). Emit as-is.
-        (trimmed, "")
-    }
-}
 
 /// Generate the transition guard check for a self-call.
 /// Emitted by the orchestrator AFTER the line containing the self-call
