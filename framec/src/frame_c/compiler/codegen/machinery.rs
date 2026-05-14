@@ -168,5 +168,6 @@ pub(crate) fn generate_machinery<G: MachineryGenerator + ?Sized>(
 
 // --- per-backend impls live in submodules; each is small (~200 LOC) ---
 
+pub(crate) mod java;
 pub(crate) mod python;
 pub(crate) mod rust;
