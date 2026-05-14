@@ -24,4 +24,6 @@
 //! `rust_system::generate_rust_persistence_methods`. Erlang is a
 //! no-op here (gen_statem owns persist natively).
 
+pub(super) mod javascript;
+pub(super) mod lua;
 pub(super) mod python;
