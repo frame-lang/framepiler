@@ -207,6 +207,7 @@ pub(crate) fn generate_machinery<G: MachineryGenerator + ?Sized>(
 // --- per-backend impls live in submodules; each is small (~200 LOC) ---
 
 pub(crate) mod c;
+pub(crate) mod cpp;
 pub(crate) mod csharp;
 pub(crate) mod dart;
 pub(crate) mod gdscript;
