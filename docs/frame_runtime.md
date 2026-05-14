@@ -470,33 +470,60 @@ interface method named `enter` and it would generate
 
 The start state's `$>` handler also needs to run when the system
 is first constructed — entering the start state is itself a state
-entry — so the constructor fires it. Like every other entry into
-the kernel, the firing goes through a wrapper that pushes a
-FrameContext, runs the router, and pops:
+entry. Mixing user `$>` code into the language constructor turned
+out to fight several targets, so framec splits construction into
+three artifacts ([RFC-0017](rfcs/rfc-0017.md) has the design):
+
+1. **The bare constructor** does framework setup only — state and
+   context stacks, the start compartment, the transition slot. No
+   user `$>` body runs here.
+2. **`_frame_init`** fires the start state's `$>`. It pushes a
+   FrameContext, runs the router, drains any transition the `$>`
+   queued, and pops. Exactly the wrapper interface methods use.
+3. **`_create`** is the factory: it calls the bare ctor, then
+   `_frame_init`, then returns the instance. This is what
+   `@@Lamp()` in Frame source generates.
 
 ```python
 def __init__(self):
+    self._state_stack = []
     self._context_stack = []
-    self.__compartment = LampCompartment("Off")
+    self.__compartment = self.__prepareEnter("Off", [], [])
     self.__next_compartment = None
 
+def _frame_init(self):
     **# Fire $> on the start state
-    enter_event = LampFrameEvent("$>", [])
-    enter_ctx = LampFrameContext(enter_event)
+    enter_event = LampFrameEvent("$>", self.__compartment.enter_args)
+    enter_ctx = LampFrameContext(enter_event, None)
     self._context_stack.append(enter_ctx)
     self.__router(enter_event)
+    self.__process_transition_loop()
     self._context_stack.pop()**
+
+@classmethod
+def _create(cls):
+    c = cls()
+    c._frame_init()
+    return c
 ```
 
-The push/pop is the same pattern interface method wrappers use.
-Every event handler — including the start state's `$>` — needs a
-context on the stack so that `@@:return`, `@@:data`, and other
-context-stack reads have something to resolve against. The context
-pushed here is discarded after the constructor returns; there's no
-caller to give the return value to. But the handler runs without
-crashing on an empty stack. (Pre-RFC-0017 the constructor ran the
-start `$>` outside the stack and any `@@:self.method()` from it
-crashed; see [RFC-0018](rfcs/rfc-0018.md) for the history.)
+The push/pop in `_frame_init` is the same pattern interface method
+wrappers use. Every event handler — including the start state's
+`$>` — needs a context on the stack so that `@@:return`, `@@:data`,
+and other context-stack reads have something to resolve against.
+The context pushed here is discarded after `_frame_init` returns;
+there's no caller to give the return value to. But the handler
+runs without crashing on an empty stack. (Pre-RFC-0018 the start
+`$>` ran outside the stack and `@@:self.method()` from it crashed;
+see [RFC-0018](rfcs/rfc-0018.md) for the history.)
+
+Splitting `_frame_init` out of the ctor also makes
+[`@@!Lamp()`](frame_language.md#-noinit) — Frame's "give me an
+instance without running `$>`" form — a plain bare-ctor call. No
+runtime skip flag, no synthesized bypass helper; the bare ctor
+*is* the no-init form by construction. See
+[RFC-0017](rfcs/rfc-0017.md) for the per-backend spelling and
+why the split was needed.
 
 The lamp doesn't currently declare `$Off.$>`, so this routes
 through the dispatcher and finds no match, doing nothing. But the
