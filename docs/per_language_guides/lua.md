@@ -404,6 +404,67 @@ local c2 = Counter:new()
 c2:restore_state(data)
 ```
 
+**Wire format — serpent (Lua-native textual table-literal).** Where most
+backends emit JSON inside their persist blob, **Lua emits a serialized
+Lua table literal** via the `serpent` library
+([github.com/pkulchenko/serpent](https://github.com/pkulchenko/serpent)).
+The motivation is fidelity: lua-cjson decodes every JSON number as
+`lua_Number` (Lua's float type), erasing the Lua 5.3+ **integer
+subtype** distinction. Most user code is unaffected — Lua's `==` is
+numeric-equal across int and float — but code that uses
+`math.type()` subtype queries, bitwise operations (which require
+integer in Lua 5.3+), or stores ints in containers that propagate
+subtype, silently breaks. Serpent dumps each value with the exact
+Lua syntax that, when read back via `serpent.load(...)`, produces the
+same value — integers stay integers, floats stay floats, nested
+tables / strings / booleans / nil all round-trip exactly. The
+wire-format **shape** still matches every other backend (a Lua
+`string`); the **encoding** inside that string is a Lua table literal,
+not JSON. Mirrors Erlang's ETF and GDScript's `var_to_bytes` fidelity-
+exception rationale.
+
+```lua
+-- Codegen sketch:
+function Counter:save_op()
+    if #self._context_stack > 0 then error("E700: system not quiescent") end
+    local serpent = require("serpent")
+    local result = {}                           -- @@[no_persist] fields omitted
+    result._compartment = serialize_comp(self.__compartment)
+    result._state_stack = stack
+    result.n = self.n
+    return serpent.dump(result)
+end
+
+function Counter:restore_state(blob)
+    local serpent = require("serpent")
+    local ok, _parsed = serpent.load(blob)
+    if not ok then error("persist load failed: " .. tostring(_parsed)) end
+    self.n = _parsed.n
+    -- … rest of restore …
+end
+```
+
+`serpent.load(...)` returns `(ok, value)`; failure raises a runtime
+error with the parser's message. Serpent is a single ~700-line Lua
+file with no native-code deps — installed via curl in the
+framec-test-env Lua container at
+`/usr/local/share/lua/5.4/serpent.lua`.
+
+**Cross-language consumers**: the wire format is Lua-source-code,
+readable by anyone who can run a Lua interpreter. A Python /
+JavaScript consumer that wants to read a Lua persist blob can either
+shell out to `lua -e "print(serpent.dump(loadstring(...)()))"` or use
+a Lua-table-literal parser (small libraries exist for most languages).
+Not as universal as JSON, but the trade-off is the same as Erlang's
+ETF: native fidelity wins over cross-language readability when the
+language has real types JSON can't represent.
+
+**@@[no_persist] interaction.** Fields marked `@@[no_persist]` are
+omitted from the `result` table on save. On load, the freshly-
+constructed Counter table's domain initializers (set by
+`Counter:new()`) populate them. Matches RFC-0016.1's "leave at
+`domain:` default" contract.
+
 Bare `@@[persist]` (no save/load names) is rejected with **E814**.
 The legacy operation-attribute form (`operations: @@[save] foo()`)
 is rejected with **E819** at framec 4.1.0+; the codemod at

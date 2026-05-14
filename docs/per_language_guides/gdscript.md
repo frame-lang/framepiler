@@ -456,6 +456,65 @@ var c2 = Counter.new()
 c2.restore_state(data)
 ```
 
+**Wire format — Godot binary Variant (`var_to_bytes` / `bytes_to_var`).**
+Where most backends emit JSON inside their persist blob, **GDScript
+emits Godot's native binary Variant format** via `var_to_bytes` /
+`bytes_to_var`. The motivation is fidelity: Godot's
+`JSON.parse_string` returns every JSON number as `float`, erasing
+the `int` vs `float` distinction Variant carries. A persisted
+`int`-typed domain field or list element comes back as `float`, and
+`Array.has(typed_int)` after restore returns `false` even when the
+value is present (the list holds floats, `has` does type-equal
+match). `var_to_bytes` round-trips Variants exactly — int stays
+int, float stays float, nested arrays / dictionaries / strings /
+booleans / null all preserve type. The wire-format **shape** still
+matches every other backend (a `PackedByteArray`); the **encoding**
+inside is Godot binary, not JSON. Mirrors Erlang's ETF and Lua's
+serpent fidelity-exception rationale.
+
+```gdscript
+# Codegen sketch:
+func save_op() -> PackedByteArray:
+    if not self._context_stack.is_empty():
+        push_error("E700: system not quiescent")
+        return PackedByteArray()
+    var state_data = {}                         # @@[no_persist] fields omitted
+    state_data["_compartment"] = _ser_chain.call(self.__compartment)
+    state_data["_state_stack"] = stack_arr
+    state_data["n"] = self.n
+    return var_to_bytes(state_data)
+
+func restore_state(data: PackedByteArray) -> void:
+    var state_data = bytes_to_var(data)
+    self.n = state_data.get("n", null)
+    # … rest of restore …
+```
+
+**Cross-language consumers**: Godot binary Variant format is not
+directly readable by other languages. A consumer that wants to
+inspect a GDScript persist blob from outside Godot either has to
+run the Godot CLI to deserialize, or wait for the post-4.2 opt-in
+cross-language wire format (MessagePack / tagged JSON via
+`@@[persist_format(...)]`). Not as universal as JSON, but the
+trade-off is the same as Erlang's ETF and Lua's serpent: native
+fidelity wins over cross-language readability when the language
+has types JSON can't represent.
+
+**@@[no_persist] interaction.** Fields marked `@@[no_persist]` are
+omitted from the `state_data` dictionary on save. On load, the
+freshly-constructed Counter's domain initializers (set in `_init`)
+populate them. Matches RFC-0016.1's "leave at `domain:` default"
+contract.
+
+**Why the JSON migration was reverted (2026-05-13).** An earlier
+attempt to migrate GDScript persist to JSON (matching the other
+JSON-shaped backends) was reverted after a real fidelity bug: a
+user reported that `Array.has(persisted_int)` returned false after
+restore. Investigation confirmed `JSON.parse_string`'s float-only
+return policy and prompted the fidelity-exception decision
+documented here. See `_scratch/bug_json_int_float*` for the
+original repro.
+
 Bare `@@[persist]` (no save/load names) is rejected with **E814**.
 The legacy operation-attribute form (`operations: @@[save] foo()`)
 is rejected with **E819** at framec 4.1.0+; the codemod at

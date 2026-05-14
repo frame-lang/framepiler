@@ -5115,13 +5115,27 @@ pub(crate) fn generate_persistence_methods(
                 "instance"
             };
 
-            // save_state — serialize to JSON via cjson
+            // Lua fidelity-exception: persist wire format is Lua's
+            // native textual table-literal serialization via the
+            // `serpent` library (https://github.com/pkulchenko/serpent),
+            // NOT JSON. Rationale: lua-cjson decodes every JSON number
+            // as a Lua float (`lua_Number`), erasing the Lua 5.3+
+            // integer subtype distinction. Most user code is unaffected
+            // (Lua's `==` is numeric-equal across int/float) but code
+            // that uses `math.type()` subtype queries or bitwise ops
+            // on persisted integers silently breaks. Serpent dumps
+            // each value with the syntax Lua's parser will read back
+            // as the same type — integers stay integers, floats stay
+            // floats, nested tables / strings / booleans / nil all
+            // round-trip exactly. Mirrors Erlang's ETF and GDScript's
+            // `var_to_bytes` fidelity-exception rationale.
+            // See `docs/per_language_guides/lua.md`.
             let mut save_body = String::new();
             // Quiescent contract (E700): see RFC-0012.
             save_body.push_str(
                 "if #self._context_stack > 0 then error(\"E700: system not quiescent\") end\n",
             );
-            save_body.push_str("local json = require(\"cjson\")\n");
+            save_body.push_str("local serpent = require(\"serpent\")\n");
             save_body.push_str("local function serialize_comp(comp)\n");
             save_body.push_str("    if not comp then return nil end\n");
             save_body.push_str("    local t = {}\n");
@@ -5149,15 +5163,18 @@ pub(crate) fn generate_persistence_methods(
                 }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
+                    // Nested child returns a serpent-encoded string;
+                    // load it to embed the sub-table in our tree,
+                    // then `serpent.dump(result)` re-emits the whole.
                     save_body.push_str(&format!(
-                        "result.{0} = (self.{0} ~= nil) and json.decode(self.{0}:save_state()) or nil\n",
+                        "result.{0} = (self.{0} ~= nil) and (select(2, serpent.load(self.{0}:save_state()))) or nil\n",
                         var.name
                     ));
                 } else {
                     save_body.push_str(&format!("result.{} = self.{}\n", var.name, var.name));
                 }
             }
-            save_body.push_str("return json.encode(result)");
+            save_body.push_str("return serpent.dump(result)");
 
             methods.push(CodegenNode::Method {
                 name: save_method_name.clone(),
@@ -5176,12 +5193,15 @@ pub(crate) fn generate_persistence_methods(
             // Load body — instance method (new) or static factory
             // (legacy). New contract mutates `self`; legacy creates a
             // bare table + sets metatable to bypass `:new(...)`.
+            // See save-side comment for the serpent-vs-cjson rationale.
             let mut restore_body = String::new();
-            restore_body.push_str("local json = require(\"cjson\")\n");
+            restore_body.push_str("local serpent = require(\"serpent\")\n");
             restore_body.push_str(&format!(
-                "local _parsed = json.decode({})\n",
+                "local ok, _parsed = serpent.load({})\n",
                 load_param_name
             ));
+            restore_body
+                .push_str("if not ok then error(\"persist load failed: \" .. tostring(_parsed)) end\n");
             restore_body.push_str("local function deserialize_comp(d)\n");
             restore_body.push_str("    if not d then return nil end\n");
             restore_body.push_str(&format!(
@@ -5228,32 +5248,26 @@ pub(crate) fn generate_persistence_methods(
                 }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if let Some(child_sys) = extract_tagged_system_name(init) {
+                    // Re-encode the sub-table via serpent.dump for
+                    // the child's restore_state string contract.
                     if nested_uses_new_contract(child_sys) {
                         restore_body.push_str(&format!(
-                            "if _parsed.{1} ~= nil then {0}.{1} = {2}:new(); {0}.{1}:restore_state(json.encode(_parsed.{1})) else {0}.{1} = nil end\n",
+                            "if _parsed.{1} ~= nil then {0}.{1} = {2}:new(); {0}.{1}:restore_state(serpent.dump(_parsed.{1})) else {0}.{1} = nil end\n",
                             target, var.name, child_sys
                         ));
                     } else {
                         restore_body.push_str(&format!(
-                            "if _parsed.{1} ~= nil then {0}.{1} = {2}.restore_state(json.encode(_parsed.{1})) else {0}.{1} = nil end\n",
+                            "if _parsed.{1} ~= nil then {0}.{1} = {2}.restore_state(serpent.dump(_parsed.{1})) else {0}.{1} = nil end\n",
                             target, var.name, child_sys
                         ));
                     }
                     continue;
                 }
-                let is_int = matches!(
-                    &var.var_type,
-                    crate::frame_c::compiler::frame_ast::Type::Custom(t) if t.trim() == "int"
-                );
-                if is_int {
-                    restore_body.push_str(&format!(
-                        "{0}.{1} = (_parsed.{1} ~= nil) and math.floor(_parsed.{1}) or nil\n",
-                        target, var.name
-                    ));
-                } else {
-                    restore_body
-                        .push_str(&format!("{}.{} = _parsed.{}\n", target, var.name, var.name));
-                }
+                // Type-ignorant: serpent round-trips Lua subtypes
+                // (integer / float / string / boolean / nested table)
+                // exactly — no math.floor coercion needed.
+                restore_body
+                    .push_str(&format!("{}.{} = _parsed.{}\n", target, var.name, var.name));
             }
             if !uses_new_contract {
                 restore_body.push_str("return instance");
@@ -5354,12 +5368,15 @@ pub(crate) fn generate_persistence_methods(
                 }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
-                    // RFC-0019-aligned: emit UTF-8 JSON like every other
-                    // backend. The nested child's save_state() returns a
-                    // PackedByteArray of UTF-8 JSON bytes; decode → parse
-                    // so it embeds as a sub-object in our JSON tree.
+                    // GDScript fidelity-exception: nested child's
+                    // save_state returns a Godot-binary PackedByteArray
+                    // (var_to_bytes shape). Decode to Variant before
+                    // embedding so the parent's outer var_to_bytes
+                    // can serialize the whole tree without nested
+                    // byte-array blobs. See the top-level fidelity-
+                    // exception comment below for the int/float rationale.
                     save_body.push_str(&format!(
-                        "state_data[\"{0}\"] = JSON.parse_string(self.{0}.save_state().get_string_from_utf8()) if self.{0} != null else null\n",
+                        "state_data[\"{0}\"] = bytes_to_var(self.{0}.save_state()) if self.{0} != null else null\n",
                         var.name
                     ));
                 } else {
@@ -5370,11 +5387,19 @@ pub(crate) fn generate_persistence_methods(
                 }
             }
 
-            // JSON wire format — UTF-8 JSON bytes wrapped in PackedByteArray
-            // (same shape as `string` in TS/JS/Ruby/Lua/PHP/Dart, just
-            // packaged in Godot's byte-array type so the declared
-            // `@@[persist(PackedByteArray)]` signature stays as-is).
-            save_body.push_str("return JSON.stringify(state_data).to_utf8_buffer()");
+            // GDScript fidelity-exception: persist wire format is
+            // Godot binary Variant (`var_to_bytes` / `bytes_to_var`),
+            // NOT JSON. The brief JSON-for-all migration was reverted
+            // after a real fidelity bug: Godot's `JSON.parse_string`
+            // returns every JSON number as `float`, erasing the
+            // `int` vs `float` distinction Variant draws. A persisted
+            // `int`-typed domain field or list element came back as
+            // `float`, and `Array.has(typed_int)` after restore
+            // returned false even when the value was present (the
+            // list held floats). `var_to_bytes` round-trips Variants
+            // exactly. Mirrors Erlang's ETF fidelity-exception
+            // rationale. See `docs/per_language_guides/gdscript.md`.
+            save_body.push_str("return var_to_bytes(state_data)");
 
             // save_state body is identical regardless of contract — it
             // was already an instance method that uses `self.` to read
@@ -5407,9 +5432,12 @@ pub(crate) fn generate_persistence_methods(
                 "instance"
             };
             let mut restore_body = String::new();
-            // JSON wire format — decode UTF-8 bytes → JSON string → Variant.
+            // GDScript fidelity-exception: bytes_to_var decodes Godot
+            // binary Variant exactly — int/float distinction preserved.
+            // See save-side comment for the JSON-parse_string fidelity
+            // bug that drove the revert.
             restore_body.push_str(&format!(
-                "var state_data = JSON.parse_string({}.get_string_from_utf8())\n",
+                "var state_data = bytes_to_var({})\n",
                 load_param_name
             ));
             // Deserialize compartment chain iteratively
@@ -5485,15 +5513,16 @@ pub(crate) fn generate_persistence_methods(
                         // Construct the no-init shell and let
                         // restore_state do the rehydration. The
                         // nested child sub-object goes back through
-                        // its child save/load — JSON-stringify the
-                        // sub-Variant, encode to UTF-8 bytes.
+                        // its child save/load — re-encode the
+                        // sub-Variant via var_to_bytes for the
+                        // child's restore_state.
                         restore_body.push_str(&format!(
-                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new()\n    {0}.{1}.restore_state(JSON.stringify(__raw_{1}).to_utf8_buffer())\nelse:\n    {0}.{1} = null\n",
+                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new()\n    {0}.{1}.restore_state(var_to_bytes(__raw_{1}))\nelse:\n    {0}.{1} = null\n",
                             target, var.name, child_sys
                         ));
                     } else {
                         restore_body.push_str(&format!(
-                            "{0}.{1} = {2}.restore_state(JSON.stringify(__raw_{1}).to_utf8_buffer()) if __raw_{1} != null else null\n",
+                            "{0}.{1} = {2}.restore_state(var_to_bytes(__raw_{1})) if __raw_{1} != null else null\n",
                             target, var.name, child_sys
                         ));
                     }

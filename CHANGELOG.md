@@ -54,13 +54,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Python pickle → JSON migration** (deferred from RFC-0012). Python persist
   is now field-by-field UTF-8 JSON (the same wire shape the other dynamic
   backends already use), not whole-object pickle.
-- **GDScript native binary → JSON migration.** `var_to_bytes` / `bytes_to_var`
-  were replaced with `JSON.stringify(...).to_utf8_buffer()` /
-  `JSON.parse_string(...get_string_from_utf8())`. GDScript's
-  `@@[persist(PackedByteArray)]` wire type is unchanged; the bytes inside it
-  now spell JSON. **16 backends** (everything except Erlang) now share **one**
-  JSON wire format — a blob from one backend can in principle be loaded by
-  another. GDScript matrix 282/282 clean post-migration.
+- **GDScript: native fidelity preserved (Godot binary Variant).** A brief
+  JSON-for-all migration shipped on the morning of 2026-05-13 was reverted
+  the same day after a user-reported fidelity bug: Godot's
+  `JSON.parse_string` returns every JSON number as `float`, so a persisted
+  `int`-typed domain field or list element came back as `float`, and
+  `Array.has(typed_int)` after restore returned false even when the value
+  was present. The fix is to keep GDScript on `var_to_bytes` /
+  `bytes_to_var` — Godot's native binary Variant format, which round-trips
+  every Variant type (int / float / string / array / dictionary /
+  boolean / null) exactly. Wire-format **shape** still matches every
+  other backend (a `PackedByteArray`); the **encoding** inside is Godot
+  binary, not JSON. New matrix fixture `101_persist_int_fidelity.fgd`
+  locks the regression. GDScript matrix 283/283 clean post-revert.
+- **Lua: native fidelity preserved (serpent textual table-literal).** Lua
+  has the same class of bug as GDScript: lua-cjson decodes every JSON
+  number as `lua_Number` (Lua's float type), erasing the Lua 5.3+ integer
+  subtype. Most user code is unaffected (Lua's `==` is numeric-equal
+  across int and float) but `math.type()` queries and bitwise operations
+  on persisted ints break. Lua persist now uses the **serpent** library
+  ([github.com/pkulchenko/serpent](https://github.com/pkulchenko/serpent))
+  — a single ~700-line pure-Lua file that dumps each value as a Lua
+  table literal serpent.load can read back as the same type. Integers
+  stay integers, floats stay floats, nested tables / strings / booleans
+  / nil all round-trip exactly. As a side benefit, the previous
+  type-aware `math.floor` int-coercion workaround in framec's Lua
+  codegen (a type-ignorant boundary violation) was removed. Wire-format
+  **shape** still matches every other backend (a Lua `string`); the
+  **encoding** inside is a Lua table literal, not JSON. New fixture
+  `101_persist_int_fidelity.flua` locks the regression. Lua matrix
+  280/280 clean (1 pre-existing async skip).
+- **Net wire-format inventory.** **14 backends share JSON**
+  (Python, JS, TS, Ruby, PHP, Dart, Java, Kotlin, Swift, C#, Rust, Go,
+  C, C++). Three documented native-fidelity exceptions:
+  **Erlang** uses ETF (`term_to_binary`), **GDScript** uses Godot
+  binary Variant (`var_to_bytes`), **Lua** uses serpent textual
+  table-literal. All three exceptions are driven by the same pattern:
+  the language has real types JSON can't represent (atoms, Variant
+  int/float distinction, Lua int subtype), and forcing a lossy
+  conversion silently breaks idiomatic code. A future opt-in
+  `@@[persist_format(...)]` attribute (RFC pending) will give the
+  14 JSON backends a typed-binary path (MessagePack / CBOR) for
+  cross-language use cases that need int/float fidelity outside Frame.
 - **Erlang: native fidelity preserved (Erlang External Term Format).** After
   weighing tagged-JSON marshalling against the cost of forcing Erlang
   programmers to deal with lossy round-trip for atoms, tagged tuples, and
@@ -78,8 +113,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Wire-format breaks.**
   - **Python**: pickle blobs written by prior framec releases will not load
     (now JSON).
-  - **GDScript**: `var_to_bytes`-shaped blobs from prior framec releases
-    will not load (now JSON).
+  - **GDScript**: the wire format is **back on `var_to_bytes`** (the
+    pre-yesterday format). Pre-4.2 blobs continue to load. If anyone
+    pulled framec between the morning-of-2026-05-13 JSON migration and
+    the same-day revert, their JSON blobs from that window will not
+    load — but the window was a few hours.
+  - **Lua**: cjson JSON → serpent textual table-literal. Pre-4.2 cjson
+    blobs will not load.
   - **Erlang**: persist now returns `binary()` instead of `map()`. The 3
     existing test drivers that introspected `Saved` directly
     (`23_persist_basic`, `24_persist_roundtrip`, `25_persist_stack`) were
