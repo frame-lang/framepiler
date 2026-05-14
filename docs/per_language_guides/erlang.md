@@ -641,7 +641,7 @@ on the system class — save returns the blob, load is an instance
 method that mutates self.
 
 ```frame
-@@[persist(map())]
+@@[persist(binary())]
 @@[save(save_state)]
 @@[load(load_state)]
 @@system Counter {
@@ -651,14 +651,54 @@ method that mutates self.
 }
 ```
 
-Load is an instance method (allocate, then populate):
+Load returns a fresh `{ok, Pid}` (the gen_statem actor model — see the next paragraph):
 
 ```erlang
-%% Erlang persist is a documented design exclusion:
 {ok, P2} = counter:load_state(Data).
 ```
 
-**Erlang specifics:** Erlang's gen_statem actor model means `load_state` returns a fresh `{ok, Pid}` rather than mutating an existing instance — a Pid is an immutable handle, the process holds state. Functionally equivalent: the caller binds the new Pid and uses it from there.
+**Wire format — Erlang External Term Format (ETF).** Where the other 16
+backends emit JSON inside their persist blob, **Erlang emits ETF** via
+`term_to_binary` / `binary_to_term`. The motivation is fidelity: an Erlang
+programmer expects save/load to faithfully round-trip every Erlang term —
+atoms, tuples, char-list strings, maps with any key type, binaries — and
+JSON cannot represent any of those without lossy conventions or verbose
+tagging. ETF is the OTP-standard format that mnesia, dets, ets, and
+distributed Erlang already use for the same job: lossless, zero-dep,
+documented. The wire-format **shape** still matches every other backend
+(a `binary()`); the **encoding** inside that binary is ETF, not JSON.
+
+```erlang
+%% Codegen:
+save_state(Pid) ->
+    {State, Data} = sys:get_state(Pid),
+    Persisted = #{n => Data#data.n, ...},     %% @@[no_persist] fields omitted
+    term_to_binary({State, Persisted}).
+
+load_state(Bin) ->
+    {State, Persisted} = binary_to_term(Bin, [safe]),
+    Data = #data{n = maps:get(n, Persisted, undefined), ...},
+    {ok, Pid} = gen_statem:start_link(?MODULE, [], []),
+    sys:replace_state(Pid, fun(_) -> {State, Data} end),
+    {ok, Pid}.
+```
+
+The `safe` flag on `binary_to_term/2` refuses to create new atoms or
+funs, defending against malicious blobs — OTP's documented best
+practice.
+
+**Cross-language consumers** who want to inspect the payload from outside
+Erlang can use an ETF parser: every major language has one
+(`erlang-py`, `erlpack` for Node, `OtpErlangObject` in OTP's `jinterface`
+for Java, etc.). ETF is a documented format with a fixed grammar.
+
+**@@[no_persist] interaction.** Fields marked `@@[no_persist]` are simply
+omitted from the saved `Persisted` map. On load, the freshly-constructed
+`#data{}` record's compile-time defaults (from the user's `domain:`
+initializers) populate them. Matches RFC-0016.1's "leave at `domain:`
+default" contract.
+
+**Erlang specifics — actor-model load.** Erlang's gen_statem actor model means `load_state` returns a fresh `{ok, Pid}` rather than mutating an existing instance — a Pid is an immutable handle, the process holds state. Functionally equivalent: the caller binds the new Pid and uses it from there.
 
 Bare `@@[persist]` (no save/load names) is rejected with **E814**.
 The legacy operation-attribute form (`operations: @@[save] foo()`)

@@ -5354,8 +5354,12 @@ pub(crate) fn generate_persistence_methods(
                 }
                 let init = var.initializer_text.as_deref().unwrap_or("");
                 if extract_tagged_system_name(init).is_some() {
+                    // RFC-0019-aligned: emit UTF-8 JSON like every other
+                    // backend. The nested child's save_state() returns a
+                    // PackedByteArray of UTF-8 JSON bytes; decode → parse
+                    // so it embeds as a sub-object in our JSON tree.
                     save_body.push_str(&format!(
-                        "state_data[\"{0}\"] = bytes_to_var(self.{0}.save_state()) if self.{0} != null else null\n",
+                        "state_data[\"{0}\"] = JSON.parse_string(self.{0}.save_state().get_string_from_utf8()) if self.{0} != null else null\n",
                         var.name
                     ));
                 } else {
@@ -5366,7 +5370,11 @@ pub(crate) fn generate_persistence_methods(
                 }
             }
 
-            save_body.push_str("return var_to_bytes(state_data)");
+            // JSON wire format — UTF-8 JSON bytes wrapped in PackedByteArray
+            // (same shape as `string` in TS/JS/Ruby/Lua/PHP/Dart, just
+            // packaged in Godot's byte-array type so the declared
+            // `@@[persist(PackedByteArray)]` signature stays as-is).
+            save_body.push_str("return JSON.stringify(state_data).to_utf8_buffer()");
 
             // save_state body is identical regardless of contract — it
             // was already an instance method that uses `self.` to read
@@ -5399,8 +5407,9 @@ pub(crate) fn generate_persistence_methods(
                 "instance"
             };
             let mut restore_body = String::new();
+            // JSON wire format — decode UTF-8 bytes → JSON string → Variant.
             restore_body.push_str(&format!(
-                "var state_data = bytes_to_var({})\n",
+                "var state_data = JSON.parse_string({}.get_string_from_utf8())\n",
                 load_param_name
             ));
             // Deserialize compartment chain iteratively
@@ -5474,14 +5483,17 @@ pub(crate) fn generate_persistence_methods(
                         // work and (b) fail Godot's "Too many
                         // arguments for new() call" parse check.
                         // Construct the no-init shell and let
-                        // restore_state do the rehydration.
+                        // restore_state do the rehydration. The
+                        // nested child sub-object goes back through
+                        // its child save/load — JSON-stringify the
+                        // sub-Variant, encode to UTF-8 bytes.
                         restore_body.push_str(&format!(
-                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new()\n    {0}.{1}.restore_state(var_to_bytes(__raw_{1}))\nelse:\n    {0}.{1} = null\n",
+                            "if __raw_{1} != null:\n    {0}.{1} = {2}.new()\n    {0}.{1}.restore_state(JSON.stringify(__raw_{1}).to_utf8_buffer())\nelse:\n    {0}.{1} = null\n",
                             target, var.name, child_sys
                         ));
                     } else {
                         restore_body.push_str(&format!(
-                            "{0}.{1} = {2}.restore_state(var_to_bytes(__raw_{1})) if __raw_{1} != null else null\n",
+                            "{0}.{1} = {2}.restore_state(JSON.stringify(__raw_{1}).to_utf8_buffer()) if __raw_{1} != null else null\n",
                             target, var.name, child_sys
                         ));
                     }

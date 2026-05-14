@@ -53,13 +53,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   `100_no_persist_field.f*` covers every backend.
 - **Python pickle → JSON migration** (deferred from RFC-0012). Python persist
   is now field-by-field UTF-8 JSON (the same wire shape the other dynamic
-  backends already use), not whole-object pickle. Side-effect: all 15
-  field-emitting backends now share **one** JSON wire format, so a blob from
-  one backend can in principle be loaded by another. GDScript (Godot binary
-  Variant) and Erlang (native map term) remain on their native formats.
-- **Wire-format break (Python only).** Pickle blobs written by prior framec
-  releases will not load. Persist work is still `[Unreleased]` — no
-  released-format-compat promise yet.
+  backends already use), not whole-object pickle.
+- **GDScript native binary → JSON migration.** `var_to_bytes` / `bytes_to_var`
+  were replaced with `JSON.stringify(...).to_utf8_buffer()` /
+  `JSON.parse_string(...get_string_from_utf8())`. GDScript's
+  `@@[persist(PackedByteArray)]` wire type is unchanged; the bytes inside it
+  now spell JSON. **16 backends** (everything except Erlang) now share **one**
+  JSON wire format — a blob from one backend can in principle be loaded by
+  another. GDScript matrix 282/282 clean post-migration.
+- **Erlang: native fidelity preserved (Erlang External Term Format).** After
+  weighing tagged-JSON marshalling against the cost of forcing Erlang
+  programmers to deal with lossy round-trip for atoms, tagged tuples, and
+  char-list strings, Erlang's persist wire format is `term_to_binary` /
+  `binary_to_term({safe})` — the OTP-standard, zero-dep, fully-lossless
+  serialization the rest of the Erlang ecosystem (mnesia, dets, ets,
+  distributed Erlang) uses for the same job. Wire-format **shape** still
+  matches the other 16 backends (a `binary()`); the **encoding** inside that
+  binary is ETF, not JSON. Cross-language consumers who need to inspect the
+  payload can use an ETF parser (one exists in every major language). The
+  `@@[no_persist]` skip contract is preserved by omitting the field from
+  the saved `Persisted` map, so the freshly-constructed `#data{}` on load
+  picks up the record's compile-time default. Erlang matrix 275/275 clean
+  (9 pre-existing framec-gap skips).
+- **Wire-format breaks.**
+  - **Python**: pickle blobs written by prior framec releases will not load
+    (now JSON).
+  - **GDScript**: `var_to_bytes`-shaped blobs from prior framec releases
+    will not load (now JSON).
+  - **Erlang**: persist now returns `binary()` instead of `map()`. The 3
+    existing test drivers that introspected `Saved` directly
+    (`23_persist_basic`, `24_persist_roundtrip`, `25_persist_stack`) were
+    updated to call `binary_to_term/2` first. User code that calls
+    `save_state` / `load_state` round-trip-only is unaffected.
+  Persist work is still `[Unreleased]` — no released-format-compat promise
+  yet.
 - New spec: [RFC-0016.1](docs/rfcs/rfc-0016-1.md). Complementary inclusion-list
   form `@@[persist_fields([...])]` (RFC-0016) remains deferred.
 

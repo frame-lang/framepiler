@@ -5591,88 +5591,113 @@ pub(crate) fn generate_erlang_system(
         }
 
         let total_fields = domain_fields.len() + other_fields.len();
+        let _ = total_fields; // retained for clarity; not needed in the ETF path
 
-        // save_state/1 — serializes current state + Data to a map.
-        // Nested @@SystemName fields recurse through child save_state.
+        // save_state/1 — Erlang's wire format is the Erlang External
+        // Term Format (term_to_binary / binary_to_term). Rationale:
+        // an Erlang programmer expects save/load to faithfully
+        // round-trip every Erlang term — atoms, tuples, char-list
+        // strings, maps with any key type, binaries. JSON cannot
+        // represent any of those except as lossy or tagged
+        // conventions. ETF is the standard library, zero-dep,
+        // documented serialization format that mnesia, dets, ets and
+        // distributed Erlang all use. Cross-language consumers who
+        // need to inspect the payload can use an ETF parser (one
+        // exists in every major language). See the Erlang per-language
+        // guide for the full rationale.
+        //
+        // Shape: term_to_binary({State, PersistedFields}). PersistedFields
+        // is a map containing only the fields we wish to persist —
+        // @@[no_persist] domain fields are omitted, so on load the
+        // freshly-constructed #data{} record's compile-time defaults
+        // (set by the user's `domain` initializers) populate them.
+        // Nested @@SystemName fields recurse: the child's save_state
+        // returns a binary, which embeds as an opaque binary value;
+        // load_state hands that binary to the child's load_state to
+        // spawn a fresh child process.
         code.push_str(&format!("{}(Pid) ->\n", save_method_name));
         code.push_str("    {State, Data} = sys:get_state(Pid),\n");
-        code.push_str("    #{state => State,\n");
-        let mut emitted = 0;
+        code.push_str("    Persisted = #{\n");
+        let mut entries: Vec<String> = Vec::new();
         for (field, child_module) in &domain_fields {
-            let comma = if emitted < total_fields - 1 { "," } else { "" };
             match child_module {
                 Some(child) => {
-                    // Nested system: child Pid serializes to its own state map.
-                    code.push_str(&format!(
-                        "      {field} => case Data#data.{field} of\n\
-                         \x20                  undefined -> undefined;\n\
-                         \x20                  ChildPid_{field} -> {child}:save_state(ChildPid_{field})\n\
-                         \x20             end{comma}\n",
-                        field = field,
-                        child = child,
-                        comma = comma
-                    ));
-                }
-                None => {
-                    code.push_str(&format!(
-                        "      {} => Data#data.{}{}\n",
-                        field, field, comma
-                    ));
-                }
-            }
-            emitted += 1;
-        }
-        for field in &other_fields {
-            let comma = if emitted < total_fields - 1 { "," } else { "" };
-            code.push_str(&format!(
-                "      {} => Data#data.{}{}\n",
-                field, field, comma
-            ));
-            emitted += 1;
-        }
-        code.push_str("    }.\n\n");
-
-        // load_state/1 — deserializes map and starts a new gen_statem.
-        // Nested fields spawn fresh child processes via child:load_state.
-        code.push_str(&format!("{}(Map) ->\n", load_method_name));
-        code.push_str("    State = maps:get(state, Map),\n");
-        code.push_str("    Data = #data{\n");
-        let mut emitted = 0;
-        for (field, child_module) in &domain_fields {
-            let comma = if emitted < total_fields - 1 { "," } else { "" };
-            match child_module {
-                Some(child) => {
-                    // Nested system: child sub-map → spawn fresh child Pid.
-                    code.push_str(&format!(
-                        "        {field} = case maps:get({field}, Map, undefined) of\n\
+                    entries.push(format!(
+                        "        {field} => case Data#data.{field} of\n\
                          \x20                       undefined -> undefined;\n\
-                         \x20                       ChildMap_{field} ->\n\
-                         \x20                           {{ok, ChildPid_{field}}} = {child}:load_state(ChildMap_{field}),\n\
-                         \x20                           ChildPid_{field}\n\
-                         \x20                   end{comma}\n",
+                         \x20                       ChildPid_{field} ->\n\
+                         \x20                           {child}:save_state(ChildPid_{field})\n\
+                         \x20                   end",
                         field = field,
-                        child = child,
-                        comma = comma
+                        child = child
                     ));
                 }
                 None => {
-                    code.push_str(&format!(
-                        "        {} = maps:get({}, Map, undefined){}\n",
-                        field, field, comma
+                    entries.push(format!("        {field} => Data#data.{field}", field = field));
+                }
+            }
+        }
+        for field in &other_fields {
+            entries.push(format!("        {field} => Data#data.{field}", field = field));
+        }
+        code.push_str(&entries.join(",\n"));
+        code.push_str("\n    },\n");
+        code.push_str("    term_to_binary({State, Persisted}).\n\n");
+
+        // load_state/1 — takes an ETF binary, reconstructs the
+        // gen_statem. Nested-system field values are themselves
+        // child ETF binaries which load_state hands off to the
+        // child module's load_state to spawn a fresh child Pid.
+        // @@[no_persist] fields are absent from Persisted, so the
+        // freshly-constructed #data{} record picks up their
+        // compile-time defaults (the `domain:` initializer text).
+        code.push_str(&format!("{}(Bin) ->\n", load_method_name));
+        code.push_str("    {State, Persisted} = binary_to_term(Bin, [safe]),\n");
+        code.push_str("    Data = #data{\n");
+        let mut entries: Vec<String> = Vec::new();
+        for (field, child_module) in &domain_fields {
+            match child_module {
+                Some(child) => {
+                    entries.push(format!(
+                        "        {field} = case maps:get({field}, Persisted, undefined) of\n\
+                         \x20                       undefined -> undefined;\n\
+                         \x20                       ChildBin_{field} ->\n\
+                         \x20                           {{ok, ChildPid_{field}}} = {child}:load_state(ChildBin_{field}),\n\
+                         \x20                           ChildPid_{field}\n\
+                         \x20                   end",
+                        field = field,
+                        child = child
+                    ));
+                }
+                None => {
+                    entries.push(format!(
+                        "        {field} = maps:get({field}, Persisted, undefined)",
+                        field = field
                     ));
                 }
             }
-            emitted += 1;
         }
         for field in &other_fields {
-            let comma = if emitted < total_fields - 1 { "," } else { "" };
-            code.push_str(&format!(
-                "        {} = maps:get({}, Map, undefined){}\n",
-                field, field, comma
+            // frame_stack / frame_state_args / frame_enter_args default
+            // to [] on a fresh system; if the saved blob predates a
+            // field, fall back to []. (Today no such field exists; this
+            // is forward-compatibility insurance.)
+            let dflt = if field == "frame_stack"
+                || field == "frame_state_args"
+                || field == "frame_enter_args"
+            {
+                "[]"
+            } else {
+                "undefined"
+            };
+            entries.push(format!(
+                "        {field} = maps:get({field}, Persisted, {dflt})",
+                field = field,
+                dflt = dflt
             ));
-            emitted += 1;
         }
-        code.push_str("    },\n");
+        code.push_str(&entries.join(",\n"));
+        code.push_str("\n    },\n");
         code.push_str("    {ok, Pid} = gen_statem:start_link(?MODULE, [], []),\n");
         code.push_str("    sys:replace_state(Pid, fun(_) -> {State, Data} end),\n");
         code.push_str("    {ok, Pid}.\n\n");
