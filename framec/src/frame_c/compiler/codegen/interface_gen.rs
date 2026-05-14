@@ -6,55 +6,17 @@
 //! - Operation method bodies (static/class methods)
 //! - Persistence serialization/deserialization methods
 
-use std::cell::RefCell;
+mod dart_types;
+mod nested_registry;
+
+use dart_types::{dart_conv_expr, parse_dart_type, render_dart_type, DartTypeNode};
+
+pub use nested_registry::{
+    get_nested_system_domain_params, nested_uses_new_contract, set_new_contract_systems,
+    set_nested_system_domain_params,
+};
+
 use std::collections::{HashMap, HashSet};
-
-thread_local! {
-    /// Set of system names that use the RFC-0012 amendment new
-    /// persist contract (have `@@[save]` and/or `@@[load]` ops).
-    /// Populated by the pipeline before per-system codegen so that
-    /// nested-system restore emission can branch on the inner
-    /// system's contract — `Inner` on new contract has only the
-    /// instance-method load, not the legacy static factory.
-    static NEW_CONTRACT_SYSTEMS: RefCell<HashSet<String>> =
-        RefCell::new(HashSet::new());
-
-    /// Map of system name → its declared Domain-kind params (the
-    /// bare-form `@@system Inner(seed: int)` params, not state-args
-    /// or enter-args). Each entry is (param_name, type_string).
-    /// Populated alongside NEW_CONTRACT_SYSTEMS so nested-system
-    /// restore emission can extract the saved values from the
-    /// child's saved JSON and pass them to the constructor — fixes
-    /// FRAMEC_BUGS.md Issue #2 (parameterized sub-system zero-arg
-    /// restore crash).
-    static NESTED_SYSTEM_DOMAIN_PARAMS: RefCell<HashMap<String, Vec<(String, String)>>> =
-        RefCell::new(HashMap::new());
-}
-
-/// Set the names of systems using the new persist contract. Called
-/// once per compilation, before per-system codegen runs.
-pub fn set_new_contract_systems(names: HashSet<String>) {
-    NEW_CONTRACT_SYSTEMS.with(|s| *s.borrow_mut() = names);
-}
-
-/// Set the per-system Domain-kind param signatures. Called once per
-/// compilation, before per-system codegen runs. Each (param_name,
-/// type) pair is in declaration order.
-pub fn set_nested_system_domain_params(map: HashMap<String, Vec<(String, String)>>) {
-    NESTED_SYSTEM_DOMAIN_PARAMS.with(|s| *s.borrow_mut() = map);
-}
-
-/// True if a system uses the new persist contract. Used by nested-
-/// system restore emission to pick the right call shape.
-pub fn nested_uses_new_contract(name: &str) -> bool {
-    NEW_CONTRACT_SYSTEMS.with(|s| s.borrow().contains(name))
-}
-
-/// Get the Domain-kind params of a nested system by name. Returns an
-/// empty Vec if the system isn't registered or has no Domain params.
-pub fn get_nested_system_domain_params(name: &str) -> Vec<(String, String)> {
-    NESTED_SYSTEM_DOMAIN_PARAMS.with(|s| s.borrow().get(name).cloned().unwrap_or_default())
-}
 
 use super::ast::{CodegenNode, Param, Visibility};
 use super::codegen_utils::{
@@ -1333,106 +1295,6 @@ pub(crate) fn extract_tagged_system_name(init: &str) -> Option<&str> {
         None
     } else {
         Some(&rest[..end])
-    }
-}
-
-/// Dart type-tree node. Used by the Dart persist-restore emitter to
-/// produce deep-typed comprehension expressions from type-string
-/// declarations. Architecturally type-ignorant: parses only `List<...>`
-/// and `Map<...,...>` shapes; everything else passes through as
-/// Primitive(name) and is emitted as `value as <name>`.
-enum DartTypeNode {
-    Primitive(String),
-    List(Box<DartTypeNode>),
-    Map(Box<DartTypeNode>, Box<DartTypeNode>),
-}
-
-fn parse_dart_type(s: &str) -> DartTypeNode {
-    let s = s.trim();
-    if let Some(inner) = s.strip_prefix("List<").and_then(|x| x.strip_suffix('>')) {
-        return DartTypeNode::List(Box::new(parse_dart_type(inner)));
-    }
-    if let Some(inner) = s.strip_prefix("Map<").and_then(|x| x.strip_suffix('>')) {
-        // Find top-level comma (not nested in <>).
-        let mut depth = 0i32;
-        let mut comma_pos: Option<usize> = None;
-        for (i, c) in inner.char_indices() {
-            match c {
-                '<' => depth += 1,
-                '>' => depth -= 1,
-                ',' if depth == 0 => {
-                    comma_pos = Some(i);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        if let Some(p) = comma_pos {
-            let k = parse_dart_type(&inner[..p]);
-            let v = parse_dart_type(&inner[p + 1..]);
-            return DartTypeNode::Map(Box::new(k), Box::new(v));
-        }
-    }
-    // Normalize Frame keyword types to Dart's actual primitive names
-    // so the downstream cast emitter doesn't produce `as str` /
-    // `as float` (Dart errors). `int` and `bool` already match.
-    let normalized = match s {
-        "str" | "string" => "String",
-        "float" => "double",
-        other => other,
-    };
-    DartTypeNode::Primitive(normalized.to_string())
-}
-
-fn render_dart_type(t: &DartTypeNode) -> String {
-    match t {
-        DartTypeNode::Primitive(s) => s.clone(),
-        DartTypeNode::List(inner) => format!("List<{}>", render_dart_type(inner)),
-        DartTypeNode::Map(k, v) => {
-            format!("Map<{}, {}>", render_dart_type(k), render_dart_type(v))
-        }
-    }
-}
-
-/// Emit a Dart expression that converts `input` (type `dynamic`) to
-/// the typed shape described by `t`. Uses comprehensions (`<T>[for ...]`
-/// / `<K,V>{for ...}`) to produce genuinely-typed collections — the
-/// only Dart construct that reliably bridges `dynamic`-shaped JSON
-/// output to reified-generic typed fields without per-access casts.
-///
-/// Variable names carry a depth suffix so nested comprehensions don't
-/// shadow each other (`__e1`, `__me2`, etc.).
-fn dart_conv_expr(t: &DartTypeNode, input: &str) -> String {
-    dart_conv_expr_at(t, input, 0)
-}
-
-fn dart_conv_expr_at(t: &DartTypeNode, input: &str, depth: usize) -> String {
-    match t {
-        DartTypeNode::Primitive(name) => match name.as_str() {
-            "int" => format!("({input} as num).toInt()"),
-            "double" => format!("({input} as num).toDouble()"),
-            "num" => format!("{input} as num"),
-            "String" => format!("{input} as String"),
-            "bool" => format!("{input} as bool"),
-            "dynamic" | "Object" | "Object?" => input.to_string(),
-            other => format!("{input} as {other}"),
-        },
-        DartTypeNode::List(inner) => {
-            let var = format!("__e{}", depth);
-            let elem = dart_conv_expr_at(inner, &var, depth + 1);
-            let inner_t = render_dart_type(inner);
-            format!("<{inner_t}>[for (var {var} in ({input} as List)) {elem}]")
-        }
-        DartTypeNode::Map(k, v) => {
-            let var = format!("__me{}", depth);
-            let k_expr = dart_conv_expr_at(k, &format!("{var}.key"), depth + 1);
-            let v_expr = dart_conv_expr_at(v, &format!("{var}.value"), depth + 1);
-            let k_t = render_dart_type(k);
-            let v_t = render_dart_type(v);
-            format!(
-                "<{k_t}, {v_t}>{{for (var {var} in ({input} as Map).entries) {k_expr}: {v_expr}}}"
-            )
-        }
     }
 }
 
