@@ -87,6 +87,7 @@ use super::arcanum::Arcanum;
 use super::frame_ast::*;
 use super::native_region_scanner::{FrameSegmentKind, Region, SegmentMetadata};
 use crate::frame_c::compiler::codegen::frame_expansion::get_native_scanner;
+use crate::frame_c::compiler::codegen::system_codegen::init_references_param;
 use std::collections::{HashMap, HashSet};
 
 /// Validation error with error code and message
@@ -1637,10 +1638,29 @@ impl FrameValidator {
     }
 
     /// E613: Domain field shadows system parameter
-    /// E614: Duplicate domain field name
+    /// E614: Duplicate domain field name.
+    /// W706: `const` domain field seeded from a required (no-default)
+    /// system param. `@@!Foo()` and persist `@@[load]` / restore skip
+    /// the system's initialization, so the `const` field can't be
+    /// seeded — on C++ the bare ctor takes the param so `Foo()` won't
+    /// type-check; on other backends the field silently picks up the
+    /// type's zero value, which is worse (silent wrong behaviour).
+    /// Tracked as A8/A1 in the 4.2 plan; this warning surfaces the
+    /// gap at validate time so the user can choose a fix before the
+    /// codegen output bites them.
     fn validate_domain_fields(&mut self, system: &SystemAst) {
-        let param_names: HashSet<&str> = system.params.iter().map(|p| p.name.as_str()).collect();
+        let _param_names: HashSet<&str> =
+            system.params.iter().map(|p| p.name.as_str()).collect();
         let mut seen: HashSet<&str> = HashSet::new();
+
+        // Collect required (no-default) param names once — the W706
+        // scan tests every `const` field's initializer against this set.
+        let required_param_names: Vec<String> = system
+            .params
+            .iter()
+            .filter(|p| p.default.is_none())
+            .map(|p| p.name.clone())
+            .collect();
 
         for var in &system.domain {
             // E614: Duplicate domain field name
@@ -1660,6 +1680,45 @@ impl FrameValidator {
             // Note: Domain fields intentionally share names with Domain-kind system
             // params (the param initializes the field). E613 is reserved for future
             // use if we want to warn about non-Domain param shadowing.
+
+            // W706: const + required-param-seeded field is a no-init hazard.
+            if var.is_const && !required_param_names.is_empty() {
+                if let Some(init_text) = &var.initializer_text {
+                    // Per-param scan so we can name the specific param
+                    // in the warning. init_references_param is the
+                    // same word-boundary checker codegen uses elsewhere.
+                    for param_name in &required_param_names {
+                        let one = vec![param_name.clone()];
+                        if init_references_param(init_text, &one) {
+                            self.warnings.push(
+                                ValidationError::new(
+                                    "W706",
+                                    format!(
+                                        "system '{sys}' has a `const` domain field '{field}' \
+                                         initialized from required (no-default) system param \
+                                         '{param}'. `@@!{sys}()` (no-init allocation) and \
+                                         `@@[load]` / restore skip the system's initialization, \
+                                         so the `const` field cannot be seeded — on C++ the bare \
+                                         constructor requires the param so `{sys}()` won't \
+                                         type-check; on other backends the field silently picks \
+                                         up the type's zero value. Fix options: (1) give the \
+                                         param a default — `{param}: T = <value>`; (2) drop the \
+                                         `const` so the field is settable post-construction; \
+                                         or (3) initialize the field with a literal instead of \
+                                         the param. See RFC-0017's \"Generated calls\" section \
+                                         and the 4.2 plan note on A1.",
+                                        sys = system.name,
+                                        field = var.name,
+                                        param = param_name
+                                    ),
+                                )
+                                .with_span(var.span.clone()),
+                            );
+                            break; // one warning per field; don't spam if the init refs multiple required params.
+                        }
+                    }
+                }
+            }
         }
     }
 

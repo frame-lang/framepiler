@@ -54,8 +54,9 @@ NewData}` tuples.
 - The Frame runtime's `__kernel`, `_state_<S>`, and dispatch helpers
   do not exist as separate functions in the Erlang output — the
   callbacks are the dispatch.
-- Some Frame mechanisms (the self-call transition guard, the
-  exit cascade) are implemented using `gen_statem`-native primitives
+- Some Frame mechanisms (the self-call transition guard,
+  RFC-0019 lifecycle dispatch and the `=> $^` ancestor-forward
+  lowering) are implemented using `gen_statem`-native primitives
   rather than the runtime patterns used on other backends.
 
 ---
@@ -428,34 +429,34 @@ recommended on idiomaticity grounds).
 
 ---
 
-## HSM cascade — fully spec-conformant
+## HSM lifecycle — RFC-0019 uniform dispatch
 
-`gen_statem`'s built-in `state_enter` mode fires `enter` on the
-*leaf* state only, with no symmetric `state_exit` callback. Frame's
-runtime spec requires HSM transitions to fire the full
-exit-leaf-to-LCA cascade followed by the full enter-LCA-to-leaf
-cascade.
+**As of RFC-0019 (framec 4.2):** the historical HSM enter/exit
+*cascade* is gone — on every backend, including Erlang. Lifecycle
+handlers (`$>` / `<$`) are ordinary leaf-dispatched events; an
+ancestor's lifecycle fires only when the leaf handler explicitly
+forwards with `=> $^`. Placement of `=> $^` inside the leaf handler
+controls order (parent-then-child if it runs first, child-then-parent
+if it runs last). See [RFC-0019](../rfcs/rfc-0019.md) for the full
+spec.
 
-For most of v4, Erlang's HSM rows in the capability matrix carried
-footnote `[d]` documenting "leaf only" enter cascade. **As of
-2026-04-26, this divergence is closed.** Framec now emits the full
-cascade for Erlang (commit referenced in
-`memory/erlang_hsm_cascade_2026_04_26.md`); the implementation
-walks `state_hsm_parents` in `erlang_system.rs` and emits the
-appropriate enter / exit calls.
+Erlang's lowering of `=> $^` is the structurally-distinct case
+because `gen_statem` lacks subclassing. Framec emits a pair of
+helper functions per parent state — `frame_enter__<P>(Data)` and
+`frame_exit__<P>(Data)` — that thread the `Data` record through the
+ancestor's lifecycle body; the child's leaf handler calls the helper
+inline at the `=> $^` site. The kernel walks `__fire_*_cascade` that
+the other backends used to emit were deleted entirely on this
+backend too — there is no implicit traversal, just the explicit
+helper calls the user opted into.
 
-You can rely on the spec contract — HSM transitions on Erlang fire
-exit and enter callbacks in the same order as on every other
-target.
+You can rely on the spec contract on Erlang: HSM lifecycle dispatch
+happens in the same order, with the same opt-in semantics, as on
+every other target.
 
-The forward-transition re-dispatch case (`-> => $State`) was the
-final remaining divergence and was implemented via `gen_statem`'s
-`{next_event, ...}` action (commit referenced in
-`memory/erlang_complete_2026_04_26.md`). The Erlang capability
-footnote `[d]` was removed.
-
-**The only remaining intentional divergence is the self-call guard
-mechanism (footnote `[i]`)** — see the previous section.
+**The only remaining intentional divergence from the cross-backend
+contract is the self-call guard mechanism (footnote `[i]`)** —
+see the previous section.
 
 ---
 
