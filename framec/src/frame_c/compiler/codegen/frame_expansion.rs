@@ -7,6 +7,7 @@
 //!   return sugar, $.var, @@:return, etc. to target language code
 //! - Helper functions for extracting transition targets, args, state vars
 
+mod scanner_dispatch;
 mod utility;
 
 use utility::{
@@ -14,6 +15,9 @@ use utility::{
     split_transition_return, strip_outer_parens,
 };
 
+pub(crate) use scanner_dispatch::{
+    expand_system_state, expand_system_state_in_code, get_native_scanner,
+};
 pub(crate) use utility::{
     extract_dot_key, extract_state_var_name, normalize_indentation, php_prefix_params,
     strip_java_unreachable,
@@ -4656,7 +4660,6 @@ fn generate_pop_transition(
     code
 }
 
-/// Get the native region scanner for the target language
 
 /// Generate the transition guard check for a self-call.
 /// Emitted by the orchestrator AFTER the line containing the self-call
@@ -4741,113 +4744,6 @@ pub(crate) fn generate_self_call_guard(
     }
 }
 
-pub(crate) fn get_native_scanner(lang: TargetLanguage) -> Box<dyn NativeRegionScanner> {
-    match lang {
-        TargetLanguage::Python3 => Box::new(NativeRegionScannerPy),
-        TargetLanguage::TypeScript => Box::new(NativeRegionScannerTs),
-        TargetLanguage::JavaScript => Box::new(NativeRegionScannerJs),
-        TargetLanguage::Rust => Box::new(NativeRegionScannerRust),
-        TargetLanguage::CSharp => Box::new(NativeRegionScannerCs),
-        TargetLanguage::C => Box::new(NativeRegionScannerC),
-        TargetLanguage::Cpp => Box::new(NativeRegionScannerCpp),
-        TargetLanguage::Java => Box::new(NativeRegionScannerJava),
-        TargetLanguage::Kotlin => Box::new(NativeRegionScannerKotlin),
-        TargetLanguage::Swift => Box::new(NativeRegionScannerSwift),
-        TargetLanguage::Go => Box::new(NativeRegionScannerGo),
-        TargetLanguage::Php => Box::new(NativeRegionScannerPhp),
-        TargetLanguage::Ruby => Box::new(NativeRegionScannerRuby),
-        TargetLanguage::Erlang => Box::new(NativeRegionScannerErlang),
-        TargetLanguage::Lua => Box::new(NativeRegionScannerLua),
-        TargetLanguage::Dart => Box::new(NativeRegionScannerDart),
-        TargetLanguage::GDScript => Box::new(NativeRegionScannerGDScript),
-        // Graphviz is an output-only target (emitted from the SystemGraph IR,
-        // not from native code). The validator still scans for Frame tokens
-        // (e.g. @@:self.method()) during the graphviz compile path; those
-        // tokens are target-language-agnostic, so any skipper works. Use the
-        // Python scanner as a neutral default.
-        TargetLanguage::Graphviz => Box::new(NativeRegionScannerPy),
-    }
-}
-
-/// Expand `@@:system.state` to the target-language compartment state accessor.
-/// Used by both handler body expansion and operation body expansion.
-pub(crate) fn expand_system_state(lang: TargetLanguage) -> String {
-    match lang {
-        TargetLanguage::Python3 | TargetLanguage::GDScript => {
-            "self.__compartment.state".to_string()
-        }
-        TargetLanguage::TypeScript | TargetLanguage::JavaScript | TargetLanguage::Dart => {
-            "this.__compartment.state".to_string()
-        }
-        TargetLanguage::Rust => super::rust_system::rust_system_state(),
-        TargetLanguage::C => "self->__compartment->state".to_string(),
-        TargetLanguage::Cpp => "__compartment->state".to_string(),
-        TargetLanguage::Java | TargetLanguage::Kotlin | TargetLanguage::CSharp => {
-            "__compartment.state".to_string()
-        }
-        TargetLanguage::Swift => "__compartment.state".to_string(),
-        TargetLanguage::Go => "s.__compartment.state".to_string(),
-        TargetLanguage::Php => "$this->__compartment->state".to_string(),
-        TargetLanguage::Ruby => "@__compartment.state".to_string(),
-        TargetLanguage::Lua => "self.__compartment.state".to_string(),
-        TargetLanguage::Erlang => "\"\"".to_string(),
-        TargetLanguage::Graphviz => unreachable!(),
-    }
-}
-
-/// Expand `@@:system.state` occurrences in operation body code.
-/// Operations are native code but `@@:system.state` is a read-only accessor
-/// that's safe in non-static operations.
-pub(crate) fn expand_system_state_in_code(code: &str, lang: TargetLanguage) -> String {
-    let mut result = code.to_string();
-
-    // Expand @@:system.state → compartment accessor
-    if result.contains("@@:system.state") {
-        result = result.replace("@@:system.state", &expand_system_state(lang));
-    }
-
-    // Expand @@:(expr) → return expr
-    // In operation bodies, @@:(expr) means "return this value" (no context stack).
-    // This handles patterns like @@:(@@:system.state) where the inner was already expanded.
-    while let Some(start) = result.find("@@:(") {
-        let after = start + 4; // position after "@@:("
-        let bytes = result.as_bytes();
-        let mut depth = 1i32;
-        let mut j = after;
-        while j < bytes.len() && depth > 0 {
-            match bytes[j] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth > 0 {
-                j += 1;
-            }
-        }
-        if depth == 0 {
-            let expr = &result[after..j];
-            let expansion = match lang {
-                // Erlang: last expression IS the return value
-                TargetLanguage::Erlang => expr.to_string(),
-                // No-semicolon languages
-                TargetLanguage::Python3
-                | TargetLanguage::GDScript
-                | TargetLanguage::Ruby
-                | TargetLanguage::Kotlin
-                | TargetLanguage::Swift
-                | TargetLanguage::Lua
-                | TargetLanguage::Go => format!("return {}", expr),
-                // Semicolon languages
-                _ => format!("return {};", expr),
-            };
-            result = format!("{}{}{}", &result[..start], expansion, &result[j + 1..]);
-        } else {
-            break; // unmatched paren — bail
-        }
-    }
-
-    result
-}
 
 #[cfg(test)]
 mod tests {
