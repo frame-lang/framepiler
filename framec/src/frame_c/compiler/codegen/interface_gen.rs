@@ -7,9 +7,14 @@
 //! - Persistence serialization/deserialization methods
 
 mod dart_types;
+mod extract;
 mod nested_registry;
+mod utility;
+
+pub(crate) use extract::{extract_body_content, extract_tagged_system_name};
 
 use dart_types::{dart_conv_expr, parse_dart_type, render_dart_type, DartTypeNode};
+use utility::{frame_return_default, is_dynamic_target};
 
 pub use nested_registry::{
     get_nested_system_domain_params, nested_uses_new_contract, set_new_contract_systems,
@@ -29,192 +34,6 @@ use crate::frame_c::compiler::frame_ast::{
 };
 use crate::frame_c::visitors::TargetLanguage;
 
-/// True for dynamically-typed targets where every function returns
-/// *something* regardless of the source's declared return type. The
-/// interface method wrapper for these targets always exposes the
-/// FrameContext's return slot to the caller — there's no `void` to
-/// honor (see docs/frame_runtime.md § "Return values across target
-/// languages"). For statically-typed targets, the wrapper conditions
-/// on the source's declared return type so it doesn't try to return
-/// from a `void`-typed method.
-fn is_dynamic_target(lang: TargetLanguage) -> bool {
-    matches!(
-        lang,
-        TargetLanguage::Python3
-            | TargetLanguage::JavaScript
-            | TargetLanguage::Ruby
-            | TargetLanguage::Lua
-            | TargetLanguage::Php
-            | TargetLanguage::GDScript
-            | TargetLanguage::Erlang
-    )
-}
-
-/// Compute the type-default literal for a Frame return type, per
-/// language. Used by interface wrappers to initialize the
-/// FrameContext._return slot so that handlers that don't explicitly
-/// write @@:return still produce a valid type-default at the wrapper
-/// boundary — rather than null/None which crashes typed langs on
-/// unboxing (Java/C#) or violates the typed-return contract on
-/// dynamic langs (Python/JS/Ruby/Lua/PHP returning None when an
-/// `: int` was promised).
-///
-/// Frame source uses canonical type names: `int`, `str`, `bool`,
-/// `float`, `double`, `long`. Each backend maps them to its own
-/// type system; defaults follow each language's own zero-value
-/// convention (0 for ints, "" for strings, false for booleans).
-///
-/// Unknown types fall back to the language's null/None — caller
-/// can opt out by checking the unspecified-default sentinel
-/// (returns None from this function for void returns).
-fn frame_return_default(lang: TargetLanguage, type_str: &str) -> String {
-    let t = type_str.trim();
-    // Common int/string/bool patterns each lang accepts.
-    let is_int = matches!(
-        t,
-        "int" | "Int" | "i32" | "i64" | "long" | "Long" | "Integer"
-    );
-    let is_str = matches!(t, "str" | "string" | "String");
-    let is_bool = matches!(t, "bool" | "boolean" | "Boolean");
-    let is_float = matches!(t, "float" | "Float" | "double" | "Double" | "f32" | "f64");
-
-    match lang {
-        TargetLanguage::Python3 => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "False".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "None".to_string()
-            }
-        }
-        TargetLanguage::JavaScript | TargetLanguage::TypeScript => {
-            if is_int || is_float {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else {
-                "null".to_string()
-            }
-        }
-        TargetLanguage::Ruby => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "nil".to_string()
-            }
-        }
-        TargetLanguage::Lua => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "nil".to_string()
-            }
-        }
-        TargetLanguage::Php => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "null".to_string()
-            }
-        }
-        TargetLanguage::Java => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "null".to_string()
-            }
-        }
-        TargetLanguage::CSharp => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "null".to_string()
-            }
-        }
-        TargetLanguage::Kotlin => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "null".to_string()
-            }
-        }
-        TargetLanguage::Dart => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "null".to_string()
-            }
-        }
-        TargetLanguage::GDScript => {
-            if is_int {
-                "0".to_string()
-            } else if is_str {
-                "\"\"".to_string()
-            } else if is_bool {
-                "false".to_string()
-            } else if is_float {
-                "0.0".to_string()
-            } else {
-                "null".to_string()
-            }
-        }
-        // Other langs (Rust, Go, C, C++, Swift, Erlang) handle
-        // defaults via their own context-init paths; this helper
-        // is currently called only by the wrappers above. Return
-        // a generic null marker for safety — those backends don't
-        // wire it through.
-        _ => "null".to_string(),
-    }
-}
 
 /// Generate interface wrapper methods
 ///
@@ -1233,69 +1052,6 @@ pub(crate) fn generate_operation(
         decorators: vec![],
     });
     nodes
-}
-
-/// Extract body content from source using span
-///
-/// Strips the outer braces and extracts the inner content while preserving
-/// consistent line-by-line indentation for proper re-indentation by backends.
-pub(crate) fn extract_body_content(
-    source: &[u8],
-    span: &crate::frame_c::compiler::frame_ast::Span,
-) -> String {
-    let bytes = &source[span.start..span.end];
-    let content = String::from_utf8_lossy(bytes).to_string();
-
-    // Strip outer braces if present
-    let trimmed = content.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        // Extract content between braces
-        let inner = &trimmed[1..trimmed.len() - 1];
-
-        // Split into lines, preserving structure
-        let lines: Vec<&str> = inner.lines().collect();
-
-        // Skip leading and trailing empty lines, but preserve internal structure
-        let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
-        let end = lines
-            .iter()
-            .rposition(|l| !l.trim().is_empty())
-            .map(|i| i + 1)
-            .unwrap_or(lines.len());
-
-        if start >= end {
-            return String::new();
-        }
-
-        // Return lines with preserved indentation - let NativeBlock emitter normalize
-        lines[start..end].join("\n")
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Extract the child @@System() name from a domain field's initializer text.
-/// Returns Some("Counter") for `@@Counter()`, `@@Counter(args)`, etc.
-/// Returns None for any non-tagged-system initializer (primitives, native
-/// constructors like `new Counter()` after expand_system_instantiation_in_domain has
-/// already run, etc.).
-///
-/// Used by persist codegen to detect domain fields holding nested system
-/// instances. For those, save_state recurses into the child's saveState
-/// and restore_state rebuilds via the child's restoreState — preserving
-/// class identity through a JSON round-trip that would otherwise produce
-/// a plain object dict.
-pub(crate) fn extract_tagged_system_name(init: &str) -> Option<&str> {
-    let s = init.trim();
-    let rest = s.strip_prefix("@@")?;
-    let end = rest
-        .find(|c: char| !c.is_alphanumeric() && c != '_')
-        .unwrap_or(rest.len());
-    if end == 0 {
-        None
-    } else {
-        Some(&rest[..end])
-    }
 }
 
 /// Generate persistence methods (save_state, restore_state) for @@persist
