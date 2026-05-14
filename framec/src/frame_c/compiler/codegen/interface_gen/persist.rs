@@ -27,3 +27,4 @@
 pub(super) mod javascript;
 pub(super) mod lua;
 pub(super) mod python;
+pub(super) mod ruby;
