@@ -294,88 +294,21 @@ pub fn run() {
 }
 
 pub fn run_with(args: Cli) {
-    match args.command {
+    // Clone the command so the match scrutinee is independent of `args`.
+    // Per-handler arms borrow `&args` for shared flags after destructuring,
+    // which would conflict with a partial move out of args.command.
+    let command = args.command.clone();
+    match command {
         CliCommand::Init => {
             handle_init_command();
             return;
         }
         CliCommand::ProjectBuild {
             language,
-            ref output_dir,
+            output_dir,
             recursive,
         } => {
-            // PRT-first, advisory project build:
-            // - If a frame.toml is found, use its root and source dirs.
-            // - Otherwise, delegate to compile-project over the current directory.
-            //
-            // Project builds should honour the same validation/debug flags as
-            // direct compile-project invocations, so we thread those settings
-            // through when we construct the inner Cli value.
-            if let Some((config_path, cfg)) = FrameConfig::find_project_config() {
-                let project_root = config_path
-                    .parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| std::path::PathBuf::from("."));
-                let src_dirs: Vec<std::path::PathBuf> = if !cfg.build.source_dirs.is_empty() {
-                    cfg.build
-                        .source_dirs
-                        .iter()
-                        .map(|p| project_root.join(p))
-                        .collect()
-                } else if !cfg.paths.modules.is_empty() {
-                    cfg.paths
-                        .modules
-                        .iter()
-                        .map(|p| project_root.join(p))
-                        .collect()
-                } else {
-                    vec![project_root.join("src")]
-                };
-                for dir in src_dirs {
-                    let project_args = Cli {
-                        stdin_flag: false,
-                        path: None,
-                        // The compile-project command carries the language/dir/output;
-                        // we keep the top-level language field unused here.
-                        language: None,
-                        multifile: false,
-                        output_dir: Some(output_dir.clone()),
-                        debug_output: args.debug_output,
-                        validate_only: args.validate_only,
-                        validate: args.validate,
-                        validate_native: args.validate_native,
-                        emit_debug: args.emit_debug,
-                        command: CliCommand::CompileProject {
-                            language: language.clone(),
-                            dir: dir.clone(),
-                            output_dir: output_dir.clone(),
-                            recursive,
-                        },
-                    };
-                    run_with(project_args);
-                }
-            } else {
-                let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let project_args = Cli {
-                    stdin_flag: false,
-                    path: None,
-                    language: None,
-                    multifile: false,
-                    output_dir: Some(output_dir.clone()),
-                    debug_output: args.debug_output,
-                    validate_only: args.validate_only,
-                    validate: args.validate,
-                    validate_native: args.validate_native,
-                    emit_debug: args.emit_debug,
-                    command: CliCommand::CompileProject {
-                        language,
-                        dir: dir.clone(),
-                        output_dir: output_dir.clone(),
-                        recursive,
-                    },
-                };
-                run_with(project_args);
-            }
+            handle_project_build(&args, language, output_dir, recursive);
             return;
         }
         CliCommand::FidImport {
@@ -383,45 +316,7 @@ pub fn run_with(args: Cli) {
             input,
             cache_root,
         } => {
-            // Phase A: simple file copy into the FID cache layout. This does not
-            // invoke external tools; it only organizes existing JSON into the
-            // expected `.frame/cache/fid/<target>/` directory.
-            let target_dir = match target.as_str() {
-                "python" | "python_3" => "python",
-                "typescript" | "ts" => "typescript",
-                "rust" | "rs" => "rust",
-                other => {
-                    eprintln!(
-                        "Unsupported FID target '{}'; expected one of python, python_3, typescript, ts, rust, rs",
-                        other
-                    );
-                    std::process::exit(exitcode::USAGE);
-                }
-            };
-            let root = cache_root.unwrap_or_else(|| std::path::PathBuf::from(".frame/cache/fid"));
-            let dest_dir = root.join(target_dir);
-            if let Err(e) = std::fs::create_dir_all(&dest_dir) {
-                eprintln!("Failed to create FID cache directory {:?}: {}", dest_dir, e);
-                std::process::exit(exitcode::IOERR);
-            }
-            let file_name = input
-                .file_name()
-                .map(|s| s.to_owned())
-                .unwrap_or_else(|| std::ffi::OsStr::new("fid.json").to_owned());
-            let dest_path = dest_dir.join(&file_name);
-            match std::fs::copy(&input, &dest_path) {
-                Ok(_) => {
-                    println!("Imported FID: {}", dest_path.display());
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Failed to import FID from {:?} to {:?}: {}",
-                        input, dest_path, e
-                    );
-                    std::process::exit(exitcode::IOERR);
-                }
-            }
+            handle_fid_import(target, input, cache_root);
         }
         CliCommand::CompileProject {
             language,
@@ -429,342 +324,7 @@ pub fn run_with(args: Cli) {
             output_dir,
             recursive,
         } => {
-            let lang = match TargetLanguage::try_from(language) {
-                Ok(l) => l,
-                Err(e) => {
-                    eprintln!("Invalid target language: {}", e);
-                    std::process::exit(exitcode::USAGE);
-                }
-            };
-            let allowed_targets: std::collections::HashSet<&str> = match lang {
-                TargetLanguage::Python3 => ["python_3", "python"].into_iter().collect(),
-                TargetLanguage::TypeScript => ["typescript", "ts"].into_iter().collect(),
-                TargetLanguage::Rust => ["rust", "rs"].into_iter().collect(),
-                TargetLanguage::CSharp => ["csharp"].into_iter().collect(),
-                TargetLanguage::C => ["c"].into_iter().collect(),
-                TargetLanguage::Cpp => ["cpp", "c++"].into_iter().collect(),
-                TargetLanguage::Java => ["java"].into_iter().collect(),
-                TargetLanguage::Go => ["go", "golang"].into_iter().collect(),
-                TargetLanguage::JavaScript => ["javascript", "js"].into_iter().collect(),
-                TargetLanguage::Php => ["php"].into_iter().collect(),
-                TargetLanguage::Kotlin => ["kotlin", "kt"].into_iter().collect(),
-                TargetLanguage::Swift => ["swift"].into_iter().collect(),
-                TargetLanguage::Ruby => ["ruby", "rb"].into_iter().collect(),
-                TargetLanguage::Erlang => ["erlang", "erl"].into_iter().collect(),
-                TargetLanguage::Lua => ["lua"].into_iter().collect(),
-                TargetLanguage::Dart => ["dart"].into_iter().collect(),
-                TargetLanguage::GDScript => ["gdscript"].into_iter().collect(),
-                TargetLanguage::Graphviz => ["graphviz"].into_iter().collect(),
-            };
-            fn detect_target(content: &str) -> Option<String> {
-                for line in content.lines() {
-                    let trimmed = line.trim_start();
-                    if trimmed.starts_with("@target") {
-                        let rest = trimmed["@target".len()..].trim();
-                        let token = rest.split_whitespace().next()?;
-                        let clean = token.trim_matches(|c| c == '"' || c == '\'').to_lowercase();
-                        return Some(clean);
-                    }
-                }
-                None
-            }
-            // Walk directory, compile module files (@target present), write outputs to output_dir
-            fn iter(
-                dir: &std::path::Path,
-                recursive: bool,
-            ) -> std::io::Result<Vec<std::path::PathBuf>> {
-                let mut out = Vec::new();
-                fn walk(
-                    acc: &mut Vec<std::path::PathBuf>,
-                    p: &std::path::Path,
-                    recursive: bool,
-                ) -> std::io::Result<()> {
-                    for entry in std::fs::read_dir(p)? {
-                        let entry = entry?;
-                        let path = entry.path();
-                        if path.is_dir() {
-                            if recursive {
-                                walk(acc, &path, recursive)?;
-                            }
-                        } else if path.is_file() {
-                            acc.push(path);
-                        }
-                    }
-                    Ok(())
-                }
-                walk(&mut out, dir, recursive)?;
-                Ok(out)
-            }
-            let files = match iter(&dir, recursive) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("walk error: {}", e);
-                    std::process::exit(exitcode::IOERR);
-                }
-            };
-            let output_root = output_dir.join("build");
-            if let Err(e) = std::fs::create_dir_all(&output_root) {
-                eprintln!("cannot create output dir: {}", e);
-                std::process::exit(exitcode::IOERR);
-            }
-            let mut compiled: Vec<String> = Vec::new();
-            let mut had_errors = false;
-            let mut errors_count: usize = 0;
-            let mut validated_count: usize = 0;
-            let mut missing_target: Vec<std::path::PathBuf> = Vec::new();
-            let mut mismatched_target: Vec<(std::path::PathBuf, String)> = Vec::new();
-            let mut dup_systems: BTreeMap<String, Vec<std::path::PathBuf>> = BTreeMap::new();
-            for f in files {
-                let Ok(content) = std::fs::read_to_string(&f) else {
-                    continue;
-                };
-                let target_decl = match detect_target(&content) {
-                    Some(t) => t,
-                    None => {
-                        missing_target.push(f.clone());
-                        had_errors = true;
-                        continue;
-                    }
-                };
-                if !allowed_targets.contains(target_decl.as_str()) {
-                    mismatched_target.push((f.clone(), target_decl));
-                    had_errors = true;
-                    continue;
-                }
-                // Check for duplicate system names across modules (best-effort)
-                if let Some(sys_name) =
-                    crate::frame_c::compiler::find_system_name(content.as_bytes(), 0)
-                {
-                    let entry = dup_systems.entry(sys_name).or_insert_with(Vec::new);
-                    entry.push(f.clone());
-                }
-                if args.validate || args.validate_only {
-                    match crate::frame_c::compiler::validate_module_with_mode(
-                        &content,
-                        lang,
-                        args.validate_native,
-                    ) {
-                        Ok(res) => {
-                            let mut had_any = false;
-                            for issue in &res.issues {
-                                eprintln!("{}: validation: {}", f.display(), issue.message);
-                                had_any = true;
-                            }
-                            if had_any {
-                                had_errors = true;
-                            }
-                            errors_count += res.issues.len();
-                            validated_count += 1;
-                            if args.validate_only && !res.ok { /* defer exit to post-loop */ }
-                            if args.validate_native && !res.ok { /* continue; we'll still compile but print issues */
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("{}: validation error: {}", f.display(), e.error);
-                            if args.validate_only || args.validate_native {
-                                std::process::exit(e.code);
-                            }
-                        }
-                    }
-                }
-                if args.validate_only {
-                    continue;
-                }
-                match crate::frame_c::compiler::compile_module(&content, lang) {
-                    Ok(code) => {
-                        let ext = match lang {
-                            TargetLanguage::Python3 => ".py",
-                            TargetLanguage::TypeScript => ".ts",
-                            TargetLanguage::CSharp => ".cs",
-                            TargetLanguage::C => ".c",
-                            TargetLanguage::Cpp => ".cpp",
-                            TargetLanguage::Java => ".java",
-                            TargetLanguage::Rust => ".rs",
-                            TargetLanguage::Go => ".go",
-                            TargetLanguage::JavaScript => ".js",
-                            TargetLanguage::Php => ".php",
-                            TargetLanguage::Kotlin => ".kt",
-                            TargetLanguage::Swift => ".swift",
-                            TargetLanguage::Ruby => ".rb",
-                            TargetLanguage::Erlang => ".erl",
-                            TargetLanguage::Lua => ".lua",
-                            TargetLanguage::Dart => ".dart",
-                            TargetLanguage::GDScript => ".gd",
-                            TargetLanguage::Graphviz => ".dot",
-                        };
-                        let _stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
-                        let lang_dir = match lang {
-                            TargetLanguage::Python3 => "python",
-                            TargetLanguage::TypeScript => "typescript",
-                            TargetLanguage::JavaScript => "javascript",
-                            TargetLanguage::CSharp => "csharp",
-                            TargetLanguage::C => "c",
-                            TargetLanguage::Cpp => "cpp",
-                            TargetLanguage::Java => "java",
-                            TargetLanguage::Rust => "rust",
-                            TargetLanguage::Go => "go",
-                            TargetLanguage::Php => "php",
-                            TargetLanguage::Kotlin => "kotlin",
-                            TargetLanguage::Swift => "swift",
-                            TargetLanguage::Ruby => "ruby",
-                            TargetLanguage::Erlang => "erlang",
-                            TargetLanguage::Lua => "lua",
-                            TargetLanguage::Dart => "dart",
-                            TargetLanguage::GDScript => "gdscript",
-                            TargetLanguage::Graphviz => "graphviz",
-                        };
-                        let rel = f.strip_prefix(&dir).unwrap_or(&f);
-                        let mut outp = output_root.join(lang_dir).join(rel);
-                        outp.set_extension(ext.trim_start_matches('.'));
-
-                        // Java requires filename to match the public class name
-                        if matches!(lang, TargetLanguage::Java) {
-                            if let Some(cap) = code.find("public class ") {
-                                let after = &code[cap + 13..];
-                                let end = after
-                                    .find(|c: char| !c.is_alphanumeric() && c != '_')
-                                    .unwrap_or(after.len());
-                                let class_name = &after[..end];
-                                if !class_name.is_empty() {
-                                    outp.set_file_name(format!("{}.java", class_name));
-                                }
-                            }
-                        }
-                        if let Some(parent) = outp.parent() {
-                            if let Err(e) = std::fs::create_dir_all(parent) {
-                                eprintln!("cannot create output dir: {}", e);
-                                std::process::exit(exitcode::IOERR);
-                            }
-                        }
-                        if let Err(e) = std::fs::write(&outp, code) {
-                            eprintln!("write error: {}", e);
-                            std::process::exit(exitcode::IOERR);
-                        }
-                        compiled.push(outp.display().to_string());
-                    }
-                    Err(e) => {
-                        eprintln!("{}", e.error);
-                        std::process::exit(e.code);
-                    }
-                }
-            }
-            if !missing_target.is_empty() {
-                for p in &missing_target {
-                    eprintln!("{}: missing @target declaration (compile-project requires explicit @target per module)", p.display());
-                }
-            }
-            if !mismatched_target.is_empty() {
-                for (p, t) in &mismatched_target {
-                    eprintln!(
-                        "{}: @target '{}' does not match requested project target",
-                        p.display(),
-                        t
-                    );
-                }
-            }
-            for (sys, paths) in &dup_systems {
-                if paths.len() > 1 {
-                    eprintln!("Duplicate system '{}' across modules:", sys);
-                    for p in paths {
-                        eprintln!("  - {}", p.display());
-                    }
-                }
-            }
-            if args.validate_only {
-                println!(
-                    "[compile-project] summary: validated={} errors={}",
-                    validated_count, errors_count
-                );
-                // Fail if no modules were validated or if any had errors
-                if validated_count == 0 || had_errors {
-                    std::process::exit(exitcode::DATAERR);
-                } else {
-                    std::process::exit(0);
-                }
-            }
-            if !missing_target.is_empty()
-                || !mismatched_target.is_empty()
-                || dup_systems.values().any(|v| v.len() > 1)
-            {
-                std::process::exit(exitcode::DATAERR);
-            }
-            // Print a simple manifest for now
-            println!("Compiled {} module(s)", compiled.len());
-            for p in &compiled {
-                println!("{}", p);
-            }
-            // For Python projects, copy frame_runtime_py once to the output directory root
-            if matches!(lang, TargetLanguage::Python3) {
-                if let Some(outdir) = args.output_dir.as_ref() {
-                    let outdir = outdir.join("build").join("python");
-                    let env_override = std::env::var("FRAME_RUNTIME_PY_DIR")
-                        .ok()
-                        .map(std::path::PathBuf::from);
-                    let exe_dir = std::env::current_exe()
-                        .ok()
-                        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-                    let repo_guess = exe_dir
-                        .as_ref()
-                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                        .map(|d| d.join("frame_runtime_py"));
-                    let target_guess = exe_dir
-                        .as_ref()
-                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                        .map(|d| d.join("frame_runtime_py"));
-                    let cwd_guess = Some(std::path::PathBuf::from("frame_runtime_py"));
-                    let runtime_src = env_override
-                        .filter(|p| p.exists())
-                        .or(repo_guess.filter(|p| p.exists()))
-                        .or(target_guess.filter(|p| p.exists()))
-                        .or(cwd_guess.filter(|p| p.exists()))
-                        .unwrap_or_else(|| std::path::PathBuf::from("frame_runtime_py"));
-                    let dst_dir = outdir.join("frame_runtime_py");
-                    if runtime_src.exists() {
-                        if let Err(e) = copy_dir_recursive(&runtime_src, &dst_dir) {
-                            eprintln!("warning: failed to copy frame_runtime_py: {}", e);
-                        }
-                    } else {
-                        eprintln!("warning: frame_runtime_py not found at {:?}; set FRAME_RUNTIME_PY_DIR to override", runtime_src);
-                    }
-                }
-            }
-            // For TypeScript projects, copy frame_runtime_ts once to the output directory root
-            if matches!(lang, TargetLanguage::TypeScript) {
-                if let Some(outdir) = args.output_dir.as_ref() {
-                    let outdir = outdir.join("build").join("typescript");
-                    let env_override = std::env::var("FRAME_RUNTIME_TS_DIR")
-                        .ok()
-                        .map(std::path::PathBuf::from);
-                    let exe_dir = std::env::current_exe()
-                        .ok()
-                        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-                    let repo_guess = exe_dir
-                        .as_ref()
-                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                        .map(|d| d.join("frame_runtime_ts"));
-                    let target_guess = exe_dir
-                        .as_ref()
-                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                        .map(|d| d.join("frame_runtime_ts"));
-                    let cwd_guess = Some(std::path::PathBuf::from("frame_runtime_ts"));
-                    let runtime_src = env_override
-                        .filter(|p| p.exists())
-                        .or(repo_guess.filter(|p| p.exists()))
-                        .or(target_guess.filter(|p| p.exists()))
-                        .or(cwd_guess.filter(|p| p.exists()))
-                        .unwrap_or_else(|| std::path::PathBuf::from("frame_runtime_ts"));
-                    let dst_dir = outdir.join("frame_runtime_ts");
-                    if runtime_src.exists() {
-                        if let Err(e) = copy_dir_recursive(&runtime_src, &dst_dir) {
-                            eprintln!("warning: failed to copy frame_runtime_ts: {}", e);
-                        }
-                    } else {
-                        eprintln!("warning: frame_runtime_ts not found at {:?}; set FRAME_RUNTIME_TS_DIR to override", runtime_src);
-                    }
-                }
-            }
+            handle_compile_project(&args, language, dir, output_dir, recursive);
             return;
         }
         CliCommand::Compile {
@@ -772,173 +332,23 @@ pub fn run_with(args: Cli) {
             file,
             format,
         } => {
-            let lang = match TargetLanguage::try_from(language) {
-                Ok(l) => l,
-                Err(e) => {
-                    eprintln!("Invalid target language: {}", e);
-                    std::process::exit(exitcode::USAGE);
-                }
-            };
-            match std::fs::read_to_string(&file) {
-                Ok(content) => {
-                    // --format model: emit semantic JSON model instead of code
-                    if format.as_deref() == Some("model") {
-                        let target_lang = crate::frame_c::compiler::TargetLanguage::from(lang);
-                        let compiler = crate::frame_c::compiler::FrameCompiler::new(target_lang);
-                        match compiler.compile_to_model(
-                            &content,
-                            file.to_str().unwrap_or("<unknown>"),
-                            lang.file_extension(),
-                        ) {
-                            Ok(json) => {
-                                if let Some(dir) = args.output_dir.as_ref() {
-                                    if let Err(e) = std::fs::create_dir_all(dir) {
-                                        eprintln!("cannot create output dir: {}", e);
-                                        std::process::exit(exitcode::IOERR);
-                                    }
-                                    let stem =
-                                        file.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
-                                    let out_path = dir.join(format!("{}.json", stem));
-                                    if let Err(e) = std::fs::write(&out_path, &json) {
-                                        eprintln!("write error: {}", e);
-                                        std::process::exit(exitcode::IOERR);
-                                    }
-                                    println!("{}", out_path.display());
-                                } else {
-                                    println!("{}", json);
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("{}", e);
-                                std::process::exit(exitcode::DATAERR);
-                            }
-                        }
-                        return;
-                    }
-
-                    // Compile Frame file
-                    let target_lang = crate::frame_c::compiler::TargetLanguage::from(lang);
-                    let compiler = crate::frame_c::compiler::FrameCompiler::new(target_lang);
-
-                    match compiler.compile(&content, file.to_str().unwrap_or("<unknown>")) {
-                        crate::frame_c::compiler::FrameResult::Ok(output) => {
-                            let code = output.code;
-                            if let Some(dir) = args.output_dir.as_ref() {
-                                if let Err(e) = std::fs::create_dir_all(dir) {
-                                    eprintln!("cannot create output dir: {}", e);
-                                    std::process::exit(exitcode::IOERR);
-                                }
-                                let ext = match lang {
-                                    TargetLanguage::Python3 => ".py",
-                                    TargetLanguage::TypeScript => ".ts",
-                                    TargetLanguage::CSharp => ".cs",
-                                    TargetLanguage::C => ".c",
-                                    TargetLanguage::Cpp => ".cpp",
-                                    TargetLanguage::Java => ".java",
-                                    TargetLanguage::Rust => ".rs",
-                                    TargetLanguage::Go => ".go",
-                                    TargetLanguage::JavaScript => ".js",
-                                    TargetLanguage::Php => ".php",
-                                    TargetLanguage::Kotlin => ".kt",
-                                    TargetLanguage::Swift => ".swift",
-                                    TargetLanguage::Ruby => ".rb",
-                                    TargetLanguage::Erlang => ".erl",
-                                    TargetLanguage::Lua => ".lua",
-                                    TargetLanguage::Dart => ".dart",
-                                    TargetLanguage::GDScript => ".gd",
-                                    TargetLanguage::Graphviz => ".dot",
-                                };
-                                let mut stem = file
-                                    .file_stem()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("out")
-                                    .to_string();
-                                // Java requires filename to match the public class name
-                                if matches!(lang, TargetLanguage::Java) {
-                                    if let Some(cap) = code.find("public class ") {
-                                        let after = &code[cap + 13..];
-                                        let end = after
-                                            .find(|c: char| !c.is_alphanumeric() && c != '_')
-                                            .unwrap_or(after.len());
-                                        let class_name = &after[..end];
-                                        if !class_name.is_empty() {
-                                            stem = class_name.to_string();
-                                        }
-                                    }
-                                }
-                                let out_path = dir.join(format!("{}{}", stem, ext));
-                                if let Err(e) = std::fs::write(&out_path, code) {
-                                    eprintln!("write error: {}", e);
-                                    std::process::exit(exitcode::IOERR);
-                                }
-                                // Emit Python runtime package next to outputs when compiling Python modules
-                                if matches!(lang, TargetLanguage::Python3) {
-                                    // Resolve runtime source directory robustly for compile -o
-                                    let env_override = std::env::var("FRAME_RUNTIME_PY_DIR")
-                                        .ok()
-                                        .map(std::path::PathBuf::from);
-                                    let exe_dir = std::env::current_exe()
-                                        .ok()
-                                        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-                                    let repo_guess = exe_dir
-                                        .as_ref()
-                                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                                        .map(|d| d.join("frame_runtime_py"));
-                                    let target_guess = exe_dir
-                                        .as_ref()
-                                        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
-                                        .map(|d| d.join("frame_runtime_py"));
-                                    let cwd_guess =
-                                        Some(std::path::PathBuf::from("frame_runtime_py"));
-                                    let runtime_src = env_override
-                                        .filter(|p| p.exists())
-                                        .or(repo_guess.filter(|p| p.exists()))
-                                        .or(target_guess.filter(|p| p.exists()))
-                                        .or(cwd_guess.filter(|p| p.exists()))
-                                        .unwrap_or_else(|| {
-                                            std::path::PathBuf::from("frame_runtime_py")
-                                        });
-                                    let dst_dir = dir.join("frame_runtime_py");
-                                    if runtime_src.exists() {
-                                        if let Err(e) = copy_dir_recursive(&runtime_src, &dst_dir) {
-                                            eprintln!(
-                                                "warning: failed to copy frame_runtime_py: {}",
-                                                e
-                                            );
-                                        }
-                                    } else {
-                                        eprintln!("warning: frame_runtime_py not found at {:?}; set FRAME_RUNTIME_PY_DIR to override", runtime_src);
-                                    }
-                                }
-                                println!("{}", out_path.display());
-                            } else {
-                                println!("{}", code);
-                            }
-                        }
-                        crate::frame_c::compiler::FrameResult::Err(err) => {
-                            // compilation errors
-                            eprintln!("Frame compilation error");
-                            for error in err.errors() {
-                                eprintln!("{}", error);
-                            }
-                            std::process::exit(exitcode::DATAERR);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to read {}: {}", file.display(), e);
-                    std::process::exit(exitcode::NOINPUT);
-                }
-            }
+            handle_compile(&args, language, file, format);
             return;
         }
 
         CliCommand::None => {}
     }
 
+    handle_default_pathway(args);
+}
+
+/// Validation-and-run pathway for the no-subcommand invocation.
+/// Used by `CliCommand::None` and as the fallthrough from `FidImport`
+/// (which does its own exit). Honours `--validate-only` / `--validate`
+/// (with `@target`-bearing module files), `--stdin`, `--debug-output`,
+/// and `--multifile`.
+fn handle_default_pathway(args: Cli) {
     let exe = Exe::new();
-    // Validation-only pathway
     let target_language = match &args.language {
         Some(lang_str) => match TargetLanguage::try_from(lang_str.clone()) {
             Ok(lang) => Some(lang),
@@ -958,7 +368,6 @@ pub fn run_with(args: Cli) {
             // Module file validation (@target present)
             let is_module = content.contains("@target ");
             if is_module {
-                // Require target language
                 let lang = target_language.unwrap_or(TargetLanguage::Python3);
                 match super::compiler::validate_module_with_mode(
                     &content,
@@ -1071,6 +480,598 @@ fn main() {
         Err(e) => {
             eprintln!("Failed to create frame.toml: {}", e);
             std::process::exit(exitcode::IOERR);
+        }
+    }
+}
+
+/// PRT-first, advisory project build:
+/// - If a frame.toml is found, use its root and source dirs.
+/// - Otherwise, delegate to compile-project over the current directory.
+///
+/// Project builds honour the same validation/debug flags as direct
+/// compile-project invocations, so we thread those settings through
+/// when constructing the inner Cli value.
+fn handle_project_build(args: &Cli, language: String, output_dir: PathBuf, recursive: bool) {
+    if let Some((config_path, cfg)) = FrameConfig::find_project_config() {
+        let project_root = config_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let src_dirs: Vec<std::path::PathBuf> = if !cfg.build.source_dirs.is_empty() {
+            cfg.build
+                .source_dirs
+                .iter()
+                .map(|p| project_root.join(p))
+                .collect()
+        } else if !cfg.paths.modules.is_empty() {
+            cfg.paths
+                .modules
+                .iter()
+                .map(|p| project_root.join(p))
+                .collect()
+        } else {
+            vec![project_root.join("src")]
+        };
+        for dir in src_dirs {
+            let project_args = Cli {
+                stdin_flag: false,
+                path: None,
+                // The compile-project command carries the language/dir/output;
+                // we keep the top-level language field unused here.
+                language: None,
+                multifile: false,
+                output_dir: Some(output_dir.clone()),
+                debug_output: args.debug_output,
+                validate_only: args.validate_only,
+                validate: args.validate,
+                validate_native: args.validate_native,
+                emit_debug: args.emit_debug,
+                command: CliCommand::CompileProject {
+                    language: language.clone(),
+                    dir: dir.clone(),
+                    output_dir: output_dir.clone(),
+                    recursive,
+                },
+            };
+            run_with(project_args);
+        }
+    } else {
+        let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let project_args = Cli {
+            stdin_flag: false,
+            path: None,
+            language: None,
+            multifile: false,
+            output_dir: Some(output_dir.clone()),
+            debug_output: args.debug_output,
+            validate_only: args.validate_only,
+            validate: args.validate,
+            validate_native: args.validate_native,
+            emit_debug: args.emit_debug,
+            command: CliCommand::CompileProject {
+                language,
+                dir: dir.clone(),
+                output_dir,
+                recursive,
+            },
+        };
+        run_with(project_args);
+    }
+}
+
+/// Phase A: simple file copy into the FID cache layout. This does not
+/// invoke external tools; it only organizes existing JSON into the
+/// expected `.frame/cache/fid/<target>/` directory.
+fn handle_fid_import(target: String, input: PathBuf, cache_root: Option<PathBuf>) {
+    let target_dir = match target.as_str() {
+        "python" | "python_3" => "python",
+        "typescript" | "ts" => "typescript",
+        "rust" | "rs" => "rust",
+        other => {
+            eprintln!(
+                "Unsupported FID target '{}'; expected one of python, python_3, typescript, ts, rust, rs",
+                other
+            );
+            std::process::exit(exitcode::USAGE);
+        }
+    };
+    let root = cache_root.unwrap_or_else(|| std::path::PathBuf::from(".frame/cache/fid"));
+    let dest_dir = root.join(target_dir);
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        eprintln!("Failed to create FID cache directory {:?}: {}", dest_dir, e);
+        std::process::exit(exitcode::IOERR);
+    }
+    let file_name = input
+        .file_name()
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| std::ffi::OsStr::new("fid.json").to_owned());
+    let dest_path = dest_dir.join(&file_name);
+    match std::fs::copy(&input, &dest_path) {
+        Ok(_) => {
+            println!("Imported FID: {}", dest_path.display());
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!(
+                "Failed to import FID from {:?} to {:?}: {}",
+                input, dest_path, e
+            );
+            std::process::exit(exitcode::IOERR);
+        }
+    }
+}
+
+/// Walk a project directory, validate + compile every `.frm` module
+/// whose `@target` matches the requested language, write each output
+/// under `<output_dir>/build/<lang>/`. Honours `--validate-only`,
+/// `--validate`, and `--validate-native`. For Python and TypeScript,
+/// also materialises the frame_runtime_* package into the output tree.
+fn handle_compile_project(
+    args: &Cli,
+    language: String,
+    dir: PathBuf,
+    output_dir: PathBuf,
+    recursive: bool,
+) {
+    let lang = match TargetLanguage::try_from(language) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Invalid target language: {}", e);
+            std::process::exit(exitcode::USAGE);
+        }
+    };
+    let allowed_targets: std::collections::HashSet<&str> = match lang {
+        TargetLanguage::Python3 => ["python_3", "python"].into_iter().collect(),
+        TargetLanguage::TypeScript => ["typescript", "ts"].into_iter().collect(),
+        TargetLanguage::Rust => ["rust", "rs"].into_iter().collect(),
+        TargetLanguage::CSharp => ["csharp"].into_iter().collect(),
+        TargetLanguage::C => ["c"].into_iter().collect(),
+        TargetLanguage::Cpp => ["cpp", "c++"].into_iter().collect(),
+        TargetLanguage::Java => ["java"].into_iter().collect(),
+        TargetLanguage::Go => ["go", "golang"].into_iter().collect(),
+        TargetLanguage::JavaScript => ["javascript", "js"].into_iter().collect(),
+        TargetLanguage::Php => ["php"].into_iter().collect(),
+        TargetLanguage::Kotlin => ["kotlin", "kt"].into_iter().collect(),
+        TargetLanguage::Swift => ["swift"].into_iter().collect(),
+        TargetLanguage::Ruby => ["ruby", "rb"].into_iter().collect(),
+        TargetLanguage::Erlang => ["erlang", "erl"].into_iter().collect(),
+        TargetLanguage::Lua => ["lua"].into_iter().collect(),
+        TargetLanguage::Dart => ["dart"].into_iter().collect(),
+        TargetLanguage::GDScript => ["gdscript"].into_iter().collect(),
+        TargetLanguage::Graphviz => ["graphviz"].into_iter().collect(),
+    };
+    fn detect_target(content: &str) -> Option<String> {
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("@target") {
+                let rest = trimmed["@target".len()..].trim();
+                let token = rest.split_whitespace().next()?;
+                let clean = token.trim_matches(|c| c == '"' || c == '\'').to_lowercase();
+                return Some(clean);
+            }
+        }
+        None
+    }
+    fn iter(dir: &Path, recursive: bool) -> std::io::Result<Vec<PathBuf>> {
+        let mut out = Vec::new();
+        fn walk(acc: &mut Vec<PathBuf>, p: &Path, recursive: bool) -> std::io::Result<()> {
+            for entry in std::fs::read_dir(p)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    if recursive {
+                        walk(acc, &path, recursive)?;
+                    }
+                } else if path.is_file() {
+                    acc.push(path);
+                }
+            }
+            Ok(())
+        }
+        walk(&mut out, dir, recursive)?;
+        Ok(out)
+    }
+    let files = match iter(&dir, recursive) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("walk error: {}", e);
+            std::process::exit(exitcode::IOERR);
+        }
+    };
+    let output_root = output_dir.join("build");
+    if let Err(e) = std::fs::create_dir_all(&output_root) {
+        eprintln!("cannot create output dir: {}", e);
+        std::process::exit(exitcode::IOERR);
+    }
+    let mut compiled: Vec<String> = Vec::new();
+    let mut had_errors = false;
+    let mut errors_count: usize = 0;
+    let mut validated_count: usize = 0;
+    let mut missing_target: Vec<PathBuf> = Vec::new();
+    let mut mismatched_target: Vec<(PathBuf, String)> = Vec::new();
+    let mut dup_systems: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    for f in files {
+        let Ok(content) = std::fs::read_to_string(&f) else {
+            continue;
+        };
+        let target_decl = match detect_target(&content) {
+            Some(t) => t,
+            None => {
+                missing_target.push(f.clone());
+                had_errors = true;
+                continue;
+            }
+        };
+        if !allowed_targets.contains(target_decl.as_str()) {
+            mismatched_target.push((f.clone(), target_decl));
+            had_errors = true;
+            continue;
+        }
+        if let Some(sys_name) =
+            crate::frame_c::compiler::find_system_name(content.as_bytes(), 0)
+        {
+            let entry = dup_systems.entry(sys_name).or_insert_with(Vec::new);
+            entry.push(f.clone());
+        }
+        if args.validate || args.validate_only {
+            match crate::frame_c::compiler::validate_module_with_mode(
+                &content,
+                lang,
+                args.validate_native,
+            ) {
+                Ok(res) => {
+                    let mut had_any = false;
+                    for issue in &res.issues {
+                        eprintln!("{}: validation: {}", f.display(), issue.message);
+                        had_any = true;
+                    }
+                    if had_any {
+                        had_errors = true;
+                    }
+                    errors_count += res.issues.len();
+                    validated_count += 1;
+                    if args.validate_only && !res.ok { /* defer exit to post-loop */ }
+                    if args.validate_native && !res.ok { /* continue; we'll still compile but print issues */
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}: validation error: {}", f.display(), e.error);
+                    if args.validate_only || args.validate_native {
+                        std::process::exit(e.code);
+                    }
+                }
+            }
+        }
+        if args.validate_only {
+            continue;
+        }
+        match crate::frame_c::compiler::compile_module(&content, lang) {
+            Ok(code) => {
+                let ext = match lang {
+                    TargetLanguage::Python3 => ".py",
+                    TargetLanguage::TypeScript => ".ts",
+                    TargetLanguage::CSharp => ".cs",
+                    TargetLanguage::C => ".c",
+                    TargetLanguage::Cpp => ".cpp",
+                    TargetLanguage::Java => ".java",
+                    TargetLanguage::Rust => ".rs",
+                    TargetLanguage::Go => ".go",
+                    TargetLanguage::JavaScript => ".js",
+                    TargetLanguage::Php => ".php",
+                    TargetLanguage::Kotlin => ".kt",
+                    TargetLanguage::Swift => ".swift",
+                    TargetLanguage::Ruby => ".rb",
+                    TargetLanguage::Erlang => ".erl",
+                    TargetLanguage::Lua => ".lua",
+                    TargetLanguage::Dart => ".dart",
+                    TargetLanguage::GDScript => ".gd",
+                    TargetLanguage::Graphviz => ".dot",
+                };
+                let _stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+                let lang_dir = match lang {
+                    TargetLanguage::Python3 => "python",
+                    TargetLanguage::TypeScript => "typescript",
+                    TargetLanguage::JavaScript => "javascript",
+                    TargetLanguage::CSharp => "csharp",
+                    TargetLanguage::C => "c",
+                    TargetLanguage::Cpp => "cpp",
+                    TargetLanguage::Java => "java",
+                    TargetLanguage::Rust => "rust",
+                    TargetLanguage::Go => "go",
+                    TargetLanguage::Php => "php",
+                    TargetLanguage::Kotlin => "kotlin",
+                    TargetLanguage::Swift => "swift",
+                    TargetLanguage::Ruby => "ruby",
+                    TargetLanguage::Erlang => "erlang",
+                    TargetLanguage::Lua => "lua",
+                    TargetLanguage::Dart => "dart",
+                    TargetLanguage::GDScript => "gdscript",
+                    TargetLanguage::Graphviz => "graphviz",
+                };
+                let rel = f.strip_prefix(&dir).unwrap_or(&f);
+                let mut outp = output_root.join(lang_dir).join(rel);
+                outp.set_extension(ext.trim_start_matches('.'));
+
+                // Java requires filename to match the public class name
+                if matches!(lang, TargetLanguage::Java) {
+                    if let Some(cap) = code.find("public class ") {
+                        let after = &code[cap + 13..];
+                        let end = after
+                            .find(|c: char| !c.is_alphanumeric() && c != '_')
+                            .unwrap_or(after.len());
+                        let class_name = &after[..end];
+                        if !class_name.is_empty() {
+                            outp.set_file_name(format!("{}.java", class_name));
+                        }
+                    }
+                }
+                if let Some(parent) = outp.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        eprintln!("cannot create output dir: {}", e);
+                        std::process::exit(exitcode::IOERR);
+                    }
+                }
+                if let Err(e) = std::fs::write(&outp, code) {
+                    eprintln!("write error: {}", e);
+                    std::process::exit(exitcode::IOERR);
+                }
+                compiled.push(outp.display().to_string());
+            }
+            Err(e) => {
+                eprintln!("{}", e.error);
+                std::process::exit(e.code);
+            }
+        }
+    }
+    if !missing_target.is_empty() {
+        for p in &missing_target {
+            eprintln!("{}: missing @target declaration (compile-project requires explicit @target per module)", p.display());
+        }
+    }
+    if !mismatched_target.is_empty() {
+        for (p, t) in &mismatched_target {
+            eprintln!(
+                "{}: @target '{}' does not match requested project target",
+                p.display(),
+                t
+            );
+        }
+    }
+    for (sys, paths) in &dup_systems {
+        if paths.len() > 1 {
+            eprintln!("Duplicate system '{}' across modules:", sys);
+            for p in paths {
+                eprintln!("  - {}", p.display());
+            }
+        }
+    }
+    if args.validate_only {
+        println!(
+            "[compile-project] summary: validated={} errors={}",
+            validated_count, errors_count
+        );
+        if validated_count == 0 || had_errors {
+            std::process::exit(exitcode::DATAERR);
+        } else {
+            std::process::exit(0);
+        }
+    }
+    if !missing_target.is_empty()
+        || !mismatched_target.is_empty()
+        || dup_systems.values().any(|v| v.len() > 1)
+    {
+        std::process::exit(exitcode::DATAERR);
+    }
+    println!("Compiled {} module(s)", compiled.len());
+    for p in &compiled {
+        println!("{}", p);
+    }
+    if matches!(lang, TargetLanguage::Python3) {
+        if let Some(outdir) = args.output_dir.as_ref() {
+            let outdir = outdir.join("build").join("python");
+            copy_python_runtime(&outdir);
+        }
+    }
+    if matches!(lang, TargetLanguage::TypeScript) {
+        if let Some(outdir) = args.output_dir.as_ref() {
+            let outdir = outdir.join("build").join("typescript");
+            copy_typescript_runtime(&outdir);
+        }
+    }
+}
+
+/// Resolve the frame_runtime_py source and copy it into `outdir`.
+/// Resolution order: `FRAME_RUNTIME_PY_DIR`, repo-relative guess
+/// (`<exe>/../../frame_runtime_py`), target-relative guess
+/// (`<exe>/../frame_runtime_py`), then plain `./frame_runtime_py`.
+fn copy_python_runtime(outdir: &Path) {
+    let env_override = std::env::var("FRAME_RUNTIME_PY_DIR").ok().map(PathBuf::from);
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let repo_guess = exe_dir
+        .as_ref()
+        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
+        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
+        .map(|d| d.join("frame_runtime_py"));
+    let target_guess = exe_dir
+        .as_ref()
+        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
+        .map(|d| d.join("frame_runtime_py"));
+    let cwd_guess = Some(PathBuf::from("frame_runtime_py"));
+    let runtime_src = env_override
+        .filter(|p| p.exists())
+        .or(repo_guess.filter(|p| p.exists()))
+        .or(target_guess.filter(|p| p.exists()))
+        .or(cwd_guess.filter(|p| p.exists()))
+        .unwrap_or_else(|| PathBuf::from("frame_runtime_py"));
+    let dst_dir = outdir.join("frame_runtime_py");
+    if runtime_src.exists() {
+        if let Err(e) = copy_dir_recursive(&runtime_src, &dst_dir) {
+            eprintln!("warning: failed to copy frame_runtime_py: {}", e);
+        }
+    } else {
+        eprintln!("warning: frame_runtime_py not found at {:?}; set FRAME_RUNTIME_PY_DIR to override", runtime_src);
+    }
+}
+
+/// Same as copy_python_runtime, but for the TypeScript runtime.
+fn copy_typescript_runtime(outdir: &Path) {
+    let env_override = std::env::var("FRAME_RUNTIME_TS_DIR").ok().map(PathBuf::from);
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let repo_guess = exe_dir
+        .as_ref()
+        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
+        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
+        .map(|d| d.join("frame_runtime_ts"));
+    let target_guess = exe_dir
+        .as_ref()
+        .and_then(|d| d.parent().map(|d| d.to_path_buf()))
+        .map(|d| d.join("frame_runtime_ts"));
+    let cwd_guess = Some(PathBuf::from("frame_runtime_ts"));
+    let runtime_src = env_override
+        .filter(|p| p.exists())
+        .or(repo_guess.filter(|p| p.exists()))
+        .or(target_guess.filter(|p| p.exists()))
+        .or(cwd_guess.filter(|p| p.exists()))
+        .unwrap_or_else(|| PathBuf::from("frame_runtime_ts"));
+    let dst_dir = outdir.join("frame_runtime_ts");
+    if runtime_src.exists() {
+        if let Err(e) = copy_dir_recursive(&runtime_src, &dst_dir) {
+            eprintln!("warning: failed to copy frame_runtime_ts: {}", e);
+        }
+    } else {
+        eprintln!("warning: frame_runtime_ts not found at {:?}; set FRAME_RUNTIME_TS_DIR to override", runtime_src);
+    }
+}
+
+/// Compile a single Frame file. `--format model` emits the semantic
+/// JSON model; otherwise produces target-language source. When
+/// `--output-dir` is set, the result is written to disk (with
+/// language-specific extension and Java public-class-name handling);
+/// otherwise it goes to stdout. For Python, the frame_runtime_py
+/// package is materialised alongside the output.
+fn handle_compile(args: &Cli, language: String, file: PathBuf, format: Option<String>) {
+    let lang = match TargetLanguage::try_from(language) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Invalid target language: {}", e);
+            std::process::exit(exitcode::USAGE);
+        }
+    };
+    let content = match std::fs::read_to_string(&file) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to read {}: {}", file.display(), e);
+            std::process::exit(exitcode::NOINPUT);
+        }
+    };
+    // --format model: emit semantic JSON model instead of code
+    if format.as_deref() == Some("model") {
+        let target_lang = crate::frame_c::compiler::TargetLanguage::from(lang);
+        let compiler = crate::frame_c::compiler::FrameCompiler::new(target_lang);
+        match compiler.compile_to_model(
+            &content,
+            file.to_str().unwrap_or("<unknown>"),
+            lang.file_extension(),
+        ) {
+            Ok(json) => {
+                if let Some(dir) = args.output_dir.as_ref() {
+                    if let Err(e) = std::fs::create_dir_all(dir) {
+                        eprintln!("cannot create output dir: {}", e);
+                        std::process::exit(exitcode::IOERR);
+                    }
+                    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+                    let out_path = dir.join(format!("{}.json", stem));
+                    if let Err(e) = std::fs::write(&out_path, &json) {
+                        eprintln!("write error: {}", e);
+                        std::process::exit(exitcode::IOERR);
+                    }
+                    println!("{}", out_path.display());
+                } else {
+                    println!("{}", json);
+                }
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(exitcode::DATAERR);
+            }
+        }
+        return;
+    }
+
+    // Compile Frame file
+    let target_lang = crate::frame_c::compiler::TargetLanguage::from(lang);
+    let compiler = crate::frame_c::compiler::FrameCompiler::new(target_lang);
+
+    match compiler.compile(&content, file.to_str().unwrap_or("<unknown>")) {
+        crate::frame_c::compiler::FrameResult::Ok(output) => {
+            let code = output.code;
+            if let Some(dir) = args.output_dir.as_ref() {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    eprintln!("cannot create output dir: {}", e);
+                    std::process::exit(exitcode::IOERR);
+                }
+                let ext = match lang {
+                    TargetLanguage::Python3 => ".py",
+                    TargetLanguage::TypeScript => ".ts",
+                    TargetLanguage::CSharp => ".cs",
+                    TargetLanguage::C => ".c",
+                    TargetLanguage::Cpp => ".cpp",
+                    TargetLanguage::Java => ".java",
+                    TargetLanguage::Rust => ".rs",
+                    TargetLanguage::Go => ".go",
+                    TargetLanguage::JavaScript => ".js",
+                    TargetLanguage::Php => ".php",
+                    TargetLanguage::Kotlin => ".kt",
+                    TargetLanguage::Swift => ".swift",
+                    TargetLanguage::Ruby => ".rb",
+                    TargetLanguage::Erlang => ".erl",
+                    TargetLanguage::Lua => ".lua",
+                    TargetLanguage::Dart => ".dart",
+                    TargetLanguage::GDScript => ".gd",
+                    TargetLanguage::Graphviz => ".dot",
+                };
+                let mut stem = file
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("out")
+                    .to_string();
+                // Java requires filename to match the public class name
+                if matches!(lang, TargetLanguage::Java) {
+                    if let Some(cap) = code.find("public class ") {
+                        let after = &code[cap + 13..];
+                        let end = after
+                            .find(|c: char| !c.is_alphanumeric() && c != '_')
+                            .unwrap_or(after.len());
+                        let class_name = &after[..end];
+                        if !class_name.is_empty() {
+                            stem = class_name.to_string();
+                        }
+                    }
+                }
+                let out_path = dir.join(format!("{}{}", stem, ext));
+                if let Err(e) = std::fs::write(&out_path, code) {
+                    eprintln!("write error: {}", e);
+                    std::process::exit(exitcode::IOERR);
+                }
+                // Emit Python runtime package next to outputs when compiling Python modules
+                if matches!(lang, TargetLanguage::Python3) {
+                    copy_python_runtime(dir);
+                }
+                println!("{}", out_path.display());
+            } else {
+                println!("{}", code);
+            }
+        }
+        crate::frame_c::compiler::FrameResult::Err(err) => {
+            eprintln!("Frame compilation error");
+            for error in err.errors() {
+                eprintln!("{}", error);
+            }
+            std::process::exit(exitcode::DATAERR);
         }
     }
 }
