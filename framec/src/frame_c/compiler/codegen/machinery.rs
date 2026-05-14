@@ -179,5 +179,6 @@ pub(crate) fn generate_machinery<G: MachineryGenerator + ?Sized>(
 
 pub(crate) mod gdscript;
 pub(crate) mod java;
+pub(crate) mod javascript;
 pub(crate) mod python;
 pub(crate) mod rust;
