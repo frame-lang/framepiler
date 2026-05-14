@@ -502,15 +502,6 @@ pub fn run_with(args: Cli) {
                     std::process::exit(exitcode::IOERR);
                 }
             };
-            // Respect debug/map flags for trailers
-            if args.debug_output {
-                std::env::set_var("FRAME_ERROR_JSON", "1");
-            }
-            if args.emit_debug {
-                std::env::set_var("FRAME_ERROR_JSON", "1");
-                std::env::set_var("FRAME_MAP_TRAILER", "1");
-                std::env::set_var("FRAME_DEBUG_MANIFEST", "1");
-            }
             let output_root = output_dir.join("build");
             if let Err(e) = std::fs::create_dir_all(&output_root) {
                 eprintln!("cannot create output dir: {}", e);
@@ -825,14 +816,6 @@ pub fn run_with(args: Cli) {
                         return;
                     }
 
-                    if args.debug_output {
-                        std::env::set_var("FRAME_ERROR_JSON", "1");
-                    }
-                    if args.emit_debug {
-                        std::env::set_var("FRAME_ERROR_JSON", "1");
-                        std::env::set_var("FRAME_MAP_TRAILER", "1");
-                        std::env::set_var("FRAME_DEBUG_MANIFEST", "1");
-                    }
                     // Compile Frame file
                     let target_lang = crate::frame_c::compiler::TargetLanguage::from(lang);
                     let compiler = crate::frame_c::compiler::FrameCompiler::new(target_lang);
@@ -1027,11 +1010,6 @@ pub fn run_with(args: Cli) {
         } else if args.multifile {
             exe.run_multifile(&path, target_language, args.output_dir)
         } else {
-            if args.emit_debug {
-                std::env::set_var("FRAME_ERROR_JSON", "1");
-                std::env::set_var("FRAME_MAP_TRAILER", "1");
-                std::env::set_var("FRAME_DEBUG_MANIFEST", "1");
-            }
             exe.run_file(&path, target_language)
         };
 
