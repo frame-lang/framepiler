@@ -1704,9 +1704,10 @@ context on top of the stack.
 ### Context data spans the dispatch chain
 
 `@@:data` lives for one full dispatch — the original handler, any
-exit/enter cascade triggered by transitions, and any actions
-called by any of those. Once the interface call returns, the
-context is popped and `_data` is discarded.
+`<$` / `$>` events triggered by transitions (including any
+`=> $^` ancestor-forwards), and any actions called by any of those.
+Once the interface call returns, the context is popped and `_data`
+is discarded.
 
 This means a handler can stash data, transition, and the
 destination state's `$>` handler will see the same `_data`. The
@@ -2503,7 +2504,7 @@ class SensorFrameContext:
 def __kernel(self, __e):
     self.__router(__e)
     if self.__next_compartment is not None:
-        # ...transition processing (exit cascade, switch, enter cascade)...
+        # ...transition processing (leaf <$, switch, leaf $>; see Step 21)...
         **for ctx in self._context_stack:
             ctx._transitioned = True**
 
@@ -2723,10 +2724,10 @@ the stack. The compartment itself isn't copied; the stack and the
 system both point at the same object.
 
 After `push$`, the handler builds an `$Interrupted` compartment
-and calls `__transition`. The kernel runs the exit cascade for
-`$Working`, then enters `$Interrupted` — but the `$Working`
-compartment isn't garbage collected because the state stack still
-has a reference to it.
+and calls `__transition`. The kernel dispatches `<$` to `$Working`
+(the current leaf), then enters `$Interrupted` — but the
+`$Working` compartment isn't garbage collected because the state
+stack still has a reference to it.
 
 `-> pop$` reverses the operation:
 
@@ -2808,15 +2809,15 @@ stack discipline.
 
 ## Step 21 — Thermostat (hierarchical state machines)
 
-> **Updated for [RFC-0019](rfcs/rfc-0019.md).** `$>` and `<$` are
-> ordinary leaf-dispatched events — there is no kernel cascade. Only the
-> *current* state's `$>`/`<$` runs on entry/exit. An ancestor's lifecycle
-> runs **only** if the leaf explicitly forwards via `=> $^` (placement in
-> the handler body controls order). This step's example below uses the
-> explicit-`=> $^` shape. The kernel-walkthrough later in this step still
-> references the older `__fire_*_cascade` helpers in places — those have
-> been deleted from codegen; the walkthrough will be re-rendered in a
-> follow-up doc pass.
+> **As of [RFC-0019](rfcs/rfc-0019.md)** (framec 4.2): `$>` and `<$`
+> are ordinary leaf-dispatched events — there is no kernel cascade.
+> Only the *current* state's `$>`/`<$` runs on entry/exit. An
+> ancestor's lifecycle runs **only** if the leaf explicitly forwards
+> via `=> $^`; placement of `=> $^` in the handler body controls
+> order (parent-then-child if `=> $^` is first, child-then-parent
+> if it's last). The kernel walkthrough later in this step shows
+> exactly how `=> $^` lowers and what the runtime does on a
+> transition under the new model.
 
 A thermostat that has multiple operating modes — heating, cooling,
 and fan-only — but shares logic for power on/off across all of
@@ -2979,10 +2980,12 @@ Same pattern as before — build the next compartment, hand it to
 `__transition`, return — but the construction goes through the
 helper.
 
-The kernel needs to fire the cascade in the right order. On entry,
-top-down (parent's `$>` first, then child's). On exit, bottom-up
-(child's `<$` first, then parent's). The kernel's transition
-processing picks up two helpers:
+**RFC-0019 changes the dispatch model**: `$>` and `<$` are no longer
+fanned out by the kernel — they're ordinary events routed to the
+*leaf* state only. The kernel's transition processing is simpler than
+before: install the new compartment, dispatch the leaf's `$>` event,
+done. The leaf's `$>` body optionally contains `=> $^`, which
+synchronously dispatches the same event to the parent state.
 
 ```python
 def __kernel(self, __e):
@@ -2992,53 +2995,33 @@ def __kernel(self, __e):
         next_compartment = self.__next_compartment
         self.__next_compartment = None
 
-        **self.__fire_exit_cascade()**
+        # 1. Dispatch <$ to the *current leaf* only (no cascade).
+        #    If the leaf wants its ancestor's <$ to run too, the
+        #    leaf's <$ body contains `=> $^`.
+        exit_event = ThermostatFrameEvent("<$", self.__compartment.exit_args)
+        self.__route_to_state(
+            self.__compartment.state, exit_event, self.__compartment
+        )
 
+        # 2. Swap in the new compartment chain.
         self.__compartment = next_compartment
 
-        **self.__fire_enter_cascade()**
+        # 3. Dispatch $> to the *new leaf* only (no cascade).
+        #    Same rule on entry: explicit `=> $^` if the leaf wants
+        #    its ancestor's $> to run.
+        enter_event = ThermostatFrameEvent("$>", self.__compartment.enter_args)
+        self.__route_to_state(
+            self.__compartment.state, enter_event, self.__compartment
+        )
 ```
 
-The exit cascade walks up from the current leaf compartment,
-firing `<$` on each:
+That's the entire transition kernel for the lifecycle part. There is
+**no** `__fire_enter_cascade` and **no** `__fire_exit_cascade`. Each
+side dispatches one event to one state.
 
-```python
-**def __fire_exit_cascade(self):
-    comp = self.__compartment
-    while comp is not None:
-        exit_event = ThermostatFrameEvent("<$", comp.exit_args)
-        self.__route_to_state(comp.state, exit_event, comp)
-        comp = comp.parent_compartment**
-```
-
-It starts at `self.__compartment` (the leaf), fires `<$` against
-that compartment, walks up via `parent_compartment`, fires `<$`
-against the next one, and so on until it hits `None`. For
-`$Heating`, this fires `$Heating.<$` then `$Active.<$`.
-
-The enter cascade walks down from the new chain's root, firing
-`$>` on each:
-
-```python
-**def __fire_enter_cascade(self):
-    chain = []
-    comp = self.__compartment
-    while comp is not None:
-        chain.append(comp)
-        comp = comp.parent_compartment
-
-    for comp in reversed(chain):
-        enter_event = ThermostatFrameEvent("$>", comp.enter_args)
-        self.__route_to_state(comp.state, enter_event, comp)**
-```
-
-It collects the chain by walking up, then iterates in reverse
-(root first, leaf last). For an entry into `$Heating`, this fires
-`$Active.$>` then `$Heating.$>`.
-
-Both cascades route through a small helper that calls a specific
-state's dispatcher with a specific compartment, rather than the
-system's current compartment:
+`__route_to_state` is still useful, but it now has a narrower role —
+calling a specific state's dispatcher with that state's compartment.
+The `=> $^` lowering uses it to route to the parent.
 
 ```python
 **def __route_to_state(self, state_name, __e, compartment):
@@ -3052,34 +3035,70 @@ system's current compartment:
         self._state_Off(__e, compartment)**
 ```
 
-This is a variant of the router from earlier steps. The original
-router always uses `self.__compartment`; this one takes the
-compartment as a parameter so cascades can route to ancestors.
+### How `=> $^` is lowered
 
-When a handler runs during a cascade, it gets *its own state's
-compartment* — not the leaf's. `$Active.$>` runs against the
-`$Active` compartment; `$Heating.$>` runs against the `$Heating`
-compartment. State variables stay per-state because each
-compartment in the chain is its own object.
+Source:
 
-Trace what happens when external code calls `adjust(72)` from
-`$Off`. The wrapper queues the event; the router calls
-`_state_Off`'s dispatcher, which calls `_s_Off_hdl_user_adjust`.
-The handler calls `__prepareEnter("Heating", [], [])`, which
-builds an `$Active` compartment, then a `$Heating` compartment
-with `parent_compartment` pointing at the `$Active` one, and
-returns the `$Heating` compartment. The handler calls
-`__transition(next_comp)` and returns. The kernel sees
-`__next_compartment` is set; it calls `__fire_exit_cascade()`,
-but the current compartment is `$Off` (no parent), so this fires
-`$Off.<$` and stops — and since `$Off` has no exit handler,
-nothing actually runs. The kernel sets `__compartment` to the new
-leaf (`$Heating`), then calls `__fire_enter_cascade()`. This
-walks up the chain from `$Heating` to find `$Active` at the root,
-then iterates in reverse: fires `$Active.$>` (prints "thermostat
-active") against the `$Active` compartment, then fires
-`$Heating.$>` (prints "heating mode") against the `$Heating`
-compartment.
+```frame
+$Heating => $Active {
+    $>() {
+        => $^                  // RFC-0019: forward to $Active.$>
+        print("heating mode")
+    }
+}
+```
+
+Generated:
+
+```python
+def _s_Heating_hdl_$>(self, __e, compartment):
+    # `=> $^` lowers to a synchronous dispatch of the same event
+    # to the parent state, with the parent's compartment context.
+    self._state_Active(__e, compartment.parent_compartment)
+    # The rest of the handler body follows.
+    print("heating mode")
+```
+
+That's the whole mechanism. `=> $^` becomes a call to the parent's
+state dispatcher; the parent's `$>` handler runs against the parent's
+compartment. **Placement of `=> $^` in the leaf handler controls
+order**:
+
+- `=> $^` at the *start* of `$Heating.$>` → `$Active.$>` runs first,
+  then `$Heating.$>` continues. Order: parent-then-child.
+- `=> $^` at the *end* of `$Heating.$>` → `$Heating.$>` runs first,
+  then `$Active.$>`. Order: child-then-parent.
+- No `=> $^` → only `$Heating.$>` runs.
+
+Exit (`<$`) is symmetric: `=> $^` at the *end* of `$Heating.<$` runs
+the child's exit code first, then the parent's. At the *start*, the
+parent's runs first.
+
+When `=> $^` dispatches to the parent, the parent's handler gets the
+*parent's* compartment — not the leaf's. State variables stay
+per-state because each compartment in the chain is its own object.
+
+### A full trace
+
+Trace what happens when external code calls `adjust(72)` from `$Off`.
+The wrapper queues the event; the router calls `_state_Off`'s
+dispatcher, which calls `_s_Off_hdl_user_adjust`. The handler calls
+`__prepareEnter("Heating", [], [])`, which builds an `$Active`
+compartment, then a `$Heating` compartment with `parent_compartment`
+pointing at the `$Active` one, and returns the `$Heating`
+compartment. The handler calls `__transition(next_comp)` and returns.
+The kernel sees `__next_compartment` is set.
+
+1. It dispatches `<$` to the *current leaf only* — `$Off`. `$Off`
+   has no exit handler in this example, so nothing runs.
+2. It swaps `__compartment` to point at the new `$Heating`
+   compartment (with `$Active` as its parent).
+3. It dispatches `$>` to the *new leaf only* — `$Heating`.
+   `$Heating.$>` runs. The handler body's first statement is
+   `=> $^`, which dispatches `$>` to `$Active` with the parent
+   compartment; `$Active.$>` runs (prints "thermostat active").
+   Control returns to `$Heating.$>`, which continues to its next
+   statement and prints "heating mode".
 
 The system is now in `$Heating`, with an `$Active` compartment
 underneath. `__compartment` points at the leaf.
@@ -3101,26 +3120,32 @@ This means a transition between siblings under a shared parent —
 say `$Heating` to `$Cooling`, both children of `$Active` — does
 the following:
 
-1. Exit cascade fires bottom-up on the source chain: `$Heating.<$`,
-   then `$Active.<$`. Both run.
-2. The kernel switches `__compartment` to the new chain's leaf.
-3. Enter cascade fires top-down on the destination chain:
-   `$Active.$>` (on a *new* `$Active` compartment), then
-   `$Cooling.$>`. Both run.
+1. The kernel dispatches `<$` to the *source leaf* (`$Heating`).
+   If `$Heating.<$` contains `=> $^`, `$Active.<$` runs at that
+   point too. Otherwise the parent's exit does *not* fire.
+2. The kernel switches `__compartment` to the new chain's leaf
+   (`$Cooling`). The previous `$Active` compartment is discarded
+   and a *new* `$Active` compartment is built underneath.
+3. The kernel dispatches `$>` to the *new leaf* (`$Cooling`). If
+   `$Cooling.$>` contains `=> $^`, `$Active.$>` runs (on the *new*
+   `$Active` compartment) at that point.
 
-The previous `$Active` compartment is discarded. Any state
-variables it held are gone. Its `<$` ran on exit; the new
-`$Active` compartment's `$>` runs on entry.
+State variables on the discarded `$Active` compartment are gone.
+Whether `$Active.<$` and `$Active.$>` fire at all is the leaf's
+choice via `=> $^`.
 
-This differs from UML statecharts, which suppress the parent's
-lifecycle on intra-subtree moves to preserve composite-state
-identity. Frame's runtime treats every transition uniformly —
-build the destination chain, fire the cascades, no exceptions.
-The model is simpler (one rule, applied uniformly) at the cost
-of composite-state persistence within a subtree.
+This differs from UML statecharts twice over: UML suppresses the
+parent's lifecycle on intra-subtree moves to preserve
+composite-state identity; Frame instead lets the *leaf* opt the
+parent's lifecycle in or out, on entry and exit independently, and
+the destination chain is always rebuilt fresh. The trade-off is the
+same as before — composite-state persistence within a subtree is
+not preserved — but RFC-0019 makes the *decision* (parent fires or
+not) explicit at the source-code level instead of always-on by
+kernel rule.
 
-If you need state to persist across sibling transitions, put it
-in domain (it survives all transitions) rather than on the parent
+If you need state to persist across sibling transitions, put it in
+domain (it survives all transitions) rather than on the parent
 state. Domain is the right tool for "this value belongs to the
 system, not to any particular state's lifecycle."
 
@@ -3144,6 +3169,13 @@ The guard pattern is unaffected by HSM depth.
 ---
 
 ## Step 22 — Thermostat (parameter propagation)
+
+> **[RFC-0019](rfcs/rfc-0019.md) note.** Under RFC-0019 the parent
+> state's `$>` / `<$` does *not* run on a transition into / out of a
+> child unless the child's handler explicitly forwards via `=> $^`.
+> The example below puts `=> $^` in `$Heating` / `$Cooling`'s
+> lifecycle handlers so the parent's logic (which is the point of
+> this step — parameter propagation between layers) still runs.
 
 The thermostat's `$Active` parent state needs more than just
 lifecycle handlers — it needs to receive and act on parameters.
@@ -3192,21 +3224,25 @@ fact.
 
         **$Heating(setpoint: int) => $Active {**
             **$>(message: str) {**
+                **=> $^                  // RFC-0019: run $Active.$> first**
                 print(f"heating mode: {message}, target {setpoint}")
             }
 
             **<$(reason: str) {**
                 print(f"heating off: {reason}")
+                **=> $^                  // RFC-0019: run $Active.<$ after**
             }
         }
 
         **$Cooling(setpoint: int) => $Active {**
             **$>(message: str) {**
+                **=> $^                  // RFC-0019: run $Active.$> first**
                 print(f"cooling mode: {message}, target {setpoint}")
             }
 
             **<$(reason: str) {**
                 print(f"cooling off: {reason}")
+                **=> $^                  // RFC-0019: run $Active.<$ after**
             }
         }
 
@@ -3232,13 +3268,13 @@ Let's see why it matters.
 
 ### The signature-match rule
 
-When a transition targets `$Heating(72)`, both `$Active.$>` and
-`$Heating.$>` need to run. If `$Active` declares
-`$>(message: str)`, then the kernel needs to deliver a `message`
-string to it. If `$Heating` declares `$>(message: str)`, the
-kernel needs to deliver one to it too. The transition supplies
-*one* enter arg list, and that same list flows to every layer of
-the chain.
+When a transition targets `$Heating(72)` and `$Heating.$>` opens
+with `=> $^`, both `$Active.$>` and `$Heating.$>` end up running.
+If `$Active` declares `$>(message: str)`, then the `=> $^` forward
+needs to deliver a `message` string to it. If `$Heating` declares
+`$>(message: str)`, the leaf dispatch needs to deliver one to it
+too. The transition supplies *one* enter arg list, and that same
+list flows to every layer the leaf chooses to forward to.
 
 For this to be type-safe, every state in the chain has to declare
 the same signature. Mismatched signatures would mean a parent
@@ -3330,11 +3366,12 @@ def _s_Active_hdl_user_power_off(self, __e, compartment):
     return
 ```
 
-By the time the kernel fires the exit cascade, every compartment
-in the source chain has `exit_args` populated. The cascade reads
-`comp.exit_args` from each compartment (which it was already
-doing — that line was generic from Step 21), so each layer's `<$`
-handler receives the values.
+By the time the kernel dispatches the leaf's `<$`, every compartment
+in the source chain has `exit_args` populated. When the leaf's `<$`
+handler calls `=> $^`, the parent's `<$` runs against the parent's
+compartment and reads `comp.exit_args` from there — the same list
+the transition supplied — so each layer's `<$` handler receives the
+values.
 
 ### Each layer binds its own copy
 
@@ -3357,12 +3394,14 @@ def _s_Heating_hdl_frame_enter(self, __e, compartment):
 ```
 
 Both handlers bind `message` from `__e._parameters[0]` — the
-kernel synthesized one `$>` event per layer, each carrying the
-same enter args list as `_parameters`. Both bind `setpoint` from
-`compartment.state_args[0]` — but each handler's `compartment` is
-its own layer's compartment (`$Active`'s compartment for
-`$Active.$>`, `$Heating`'s compartment for `$Heating.$>`). The
-kernel's cascade routing made sure of this in Step 21.
+same `$>` event flows from the leaf into the parent via `=> $^`,
+carrying the same enter args list as `_parameters`. Both bind
+`setpoint` from `compartment.state_args[0]` — but each handler's
+`compartment` is its own layer's compartment (`$Active`'s
+compartment for `$Active.$>`, `$Heating`'s compartment for
+`$Heating.$>`). The `=> $^` lowering routes to the *parent*
+state's dispatcher with `compartment.parent_compartment`, which is
+how the parent sees its own state-args.
 
 The user handler `get_setpoint()` reads from its own state's
 compartment too:
@@ -3379,28 +3418,29 @@ that picks this handler is `_state_Active`'s, which receives the
 call to `get_setpoint` from `$Heating` actually reaches
 `$Active`'s dispatcher — that's the event forwarding mechanism.
 
-### Cascade and context data
+### `=> $^` and context data
 
-The cascade fires multiple lifecycle handlers — but it's still
-one interface call, so they all share the same FrameContext on
-top of the `_context_stack`. That has consequences for
-`@@:data`. If `$Active.$>` writes `@@:data.timestamp = "T1"` and
-then `$Heating.$>` writes `@@:data.timestamp = "T2"`, the second
-write wins. The dict is shared; last writer takes the slot.
+The leaf's lifecycle handler and any ancestor it forwards to via
+`=> $^` run within one interface call, so they share the same
+FrameContext on top of the `_context_stack`. That has consequences
+for `@@:data`. If `$Heating.$>` writes `@@:data.timestamp = "T1"`
+before `=> $^` and `$Active.$>` writes `@@:data.timestamp = "T2"`,
+the second write wins. The dict is shared; last writer takes the
+slot.
 
-Same for `@@:return` set during a cascade — though setting return
-values from lifecycle handlers is unusual. The point is just that
-cascade layers aren't isolated from each other through the
-context stack the way self-calls are. They're all part of one
-dispatch.
+Same for `@@:return` set during a lifecycle chain — though setting
+return values from `$>`/`<$` is unusual. The point is just that
+the leaf and the ancestor it forwards to aren't isolated from each
+other through the context stack the way self-calls are. They're
+all part of one dispatch.
 
 In practice this rarely surprises anyone. Lifecycle handlers
-across cascade layers usually write to disjoint keys when they
-write to `@@:data` at all, and the inheritance is what authors
-want — a parent's `$>` setting up `@@:data.session_id` so the
-child's `$>` can use it is a reasonable pattern. But if you find
-two layers both writing the same key, the later layer (closer to
-the leaf on entry, closer to the leaf on exit) wins.
+across layers usually write to disjoint keys when they write to
+`@@:data` at all, and the chaining is what authors want — a parent's
+`$>` setting up `@@:data.session_id` so the child's `$>` can use it
+is a reasonable pattern (place `=> $^` first in the child's handler
+so the parent runs first). If you find two layers both writing the
+same key, the layer that runs *later* wins.
 
 ### Trace through a transition
 
@@ -3416,26 +3456,30 @@ up"])`, which builds the `$Active` compartment with `state_args =
 `$Heating` compartment.
 
 The handler calls `__transition` and returns. The kernel sees
-`__next_compartment` is set. The exit cascade fires `<$` on the
-source chain — just `$Off`, which has no exit handler. Then the
-kernel switches `__compartment` to the new `$Heating`
+`__next_compartment` is set. It dispatches `<$` to the source
+leaf — just `$Off`, which has no exit handler, so nothing runs.
+Then the kernel switches `__compartment` to the new `$Heating`
 compartment.
 
-The enter cascade walks up to find `$Active` at the root, then
-iterates in reverse. First it fires `$Active.$>` against the
-`$Active` compartment with `_parameters = ["starting up"]`. The
-handler binds `message = "starting up"` from the event and
-`setpoint = 72` from `compartment.state_args[0]`. It prints
-"thermostat active: starting up" and sets `self.last_setpoint =
-72`.
+The kernel dispatches `$>` to the new leaf — `$Heating`. The
+`$Heating.$>` handler's first statement is `=> $^`, which
+forwards the `$>` event to `$Active`'s dispatcher with
+`compartment.parent_compartment` (the `$Active` compartment).
+`$Active.$>` runs against the `$Active` compartment with
+`_parameters = ["starting up"]`. The handler binds
+`message = "starting up"` from the event and `setpoint = 72` from
+`compartment.state_args[0]`. It prints "thermostat active:
+starting up" and sets `self.last_setpoint = 72`.
 
-Then it fires `$Heating.$>` against the `$Heating` compartment
-with `_parameters = ["starting up"]`. The handler binds `message
-= "starting up"` from the event and `setpoint = 72` from
-`compartment.state_args[0]`. It prints "heating mode: starting
-up, target 72".
+Control returns to `$Heating.$>`'s next statement, with
+`_parameters = ["starting up"]` and the `$Heating` compartment as
+context. The handler binds `message = "starting up"` and
+`setpoint = 72` from *its* compartment's `state_args[0]`. It
+prints "heating mode: starting up, target 72".
 
-Two prints; two lifecycle handlers; same args at every layer.
+Two prints; two lifecycle handlers; same args at every layer —
+because the leaf chose to forward, and signature-match means each
+layer's compartment carries the same values.
 
 ### Switching modes (sibling transition)
 
@@ -3462,16 +3506,17 @@ calls `__transition` and returns.
 
 The kernel processes the transition:
 
-1. Exit cascade, bottom-up on the source chain. Fire
-   `$Heating.<$` with `_parameters = ["evening"]`: prints
-   "heating off: evening". Walk up to `$Active`. Fire
-   `$Active.<$` with `_parameters = ["evening"]`: prints
+1. Dispatch `<$` to the source *leaf* — `$Heating` — with
+   `_parameters = ["evening"]`. `$Heating.<$`'s body runs:
+   prints "heating off: evening", then `=> $^` forwards to
+   `$Active.<$` (same event, parent compartment) which prints
    "powering down: evening".
 2. Switch `__compartment` to the new `$Cooling` leaf.
-3. Enter cascade, top-down on the destination chain. Fire
-   `$Active.$>` with `_parameters = ["starting up"]`: prints
-   "thermostat active: starting up", sets `self.last_setpoint =
-   68`. Fire `$Cooling.$>` with `_parameters = ["starting up"]`:
+3. Dispatch `$>` to the new *leaf* — `$Cooling` — with
+   `_parameters = ["starting up"]`. `$Cooling.$>`'s body runs:
+   `=> $^` forwards first to `$Active.$>` which prints
+   "thermostat active: starting up" and sets `self.last_setpoint =
+   68`. Control returns to `$Cooling.$>`'s next statement, which
    prints "cooling mode: starting up, target 68".
 
 Four prints, in order:
@@ -3484,16 +3529,17 @@ cooling mode: starting up, target 68
 ```
 
 Two of those — `$Active.<$` and `$Active.$>` — are the parent
-state's lifecycle running on the way out and back in. The
-previous `$Active` compartment is gone. Any state variables it
-held are gone with it. The new `$Active` compartment is freshly
-constructed.
+state's lifecycle running on the way out and back in. They ran
+because the leaf chose to forward via `=> $^`. The previous
+`$Active` compartment is gone. Any state variables it held are
+gone with it. The new `$Active` compartment is freshly constructed.
 
 If `$Active` had a state variable like `$.uptime`, switching from
 `$Heating` to `$Cooling` would reset it. Authors who expect the
 parent to "stay active" while switching modes are working from a
-mental model Frame doesn't share. The runtime treats the parent
-as part of the chain, and chains are rebuilt on every transition.
+mental model Frame doesn't share. Every transition rebuilds the
+destination chain; whether the parent's lifecycle fires at all is
+the leaf's call via `=> $^`.
 
 Use domain for cross-mode persistence (`self.uptime` survives
 every transition). Use state vars for state-local concerns. The
@@ -3634,14 +3680,19 @@ of truth, regardless of which child the system is in.
 Worth being explicit about this: `=> $^` forwards an event up the
 chain at *dispatch* time. It doesn't transition the system. The
 system is still in `$Heating` after `get_setpoint()` returns. No
-exit cascade fires; no enter cascade fires; `__compartment`
-doesn't change.
+`<$` runs; no `$>` runs; `__compartment` doesn't change.
 
 This is different from a transition that targets the parent. If
 the source said `-> $Active`, that *would* transition — leaving
-`$Heating` (firing `$Heating.<$`) and entering `$Active` (firing
-`$Active.$>`). The cascade would also trigger because of the HSM
-relationship.
+`$Heating` (the kernel dispatches `<$` to the `$Heating` leaf) and
+entering `$Active` (the kernel dispatches `$>` to the new
+`$Active` leaf). Whether `$Active.<$` runs on the way out depends
+on whether `$Heating.<$` itself called `=> $^`. The HSM
+relationship between `$Heating` and `$Active` shapes the *new*
+chain's compartment topology, but under RFC-0019 the lifecycle
+events themselves are leaf-only — the cascade you might expect
+from "transitioning into a parent" only happens if the
+leaf handler opts in.
 
 `=> $^` is purely a dispatch-routing construct. The state stays
 where it is; the event just gets dispatched to the parent's
@@ -3824,7 +3875,7 @@ The handler builds the destination compartment, sets
 `forward_event` and act on it.
 
 The kernel's transition processing checks for the forward and
-re-dispatches it after the entry cascade:
+re-dispatches it after the new leaf's `$>`:
 
 ```python
 def __kernel(self, __e):
@@ -3834,29 +3885,37 @@ def __kernel(self, __e):
         next_compartment = self.__next_compartment
         self.__next_compartment = None
 
-        self.__fire_exit_cascade()
+        # Dispatch <$ to the source leaf (RFC-0019).
+        exit_event = ThermostatFrameEvent("<$", self.__compartment.exit_args)
+        self.__route_to_state(
+            self.__compartment.state, exit_event, self.__compartment
+        )
 
         self.__compartment = next_compartment
 
-        **if next_compartment.forward_event is None:**
-            self.__fire_enter_cascade()
-        **else:
+        # Dispatch $> to the new leaf (RFC-0019).
+        enter_event = ThermostatFrameEvent("$>", self.__compartment.enter_args)
+        self.__route_to_state(
+            self.__compartment.state, enter_event, self.__compartment
+        )
+
+        **if next_compartment.forward_event is not None:
             forward_event = next_compartment.forward_event
             next_compartment.forward_event = None
-            self.__fire_enter_cascade()
             self.__router(forward_event)**
 ```
 
-If `forward_event` is `None`, the kernel fires the enter cascade
-normally — same as before. If `forward_event` is set, the kernel
-extracts it (clearing the field so it doesn't trigger again),
-fires the enter cascade, and then calls the router with the
-saved event. The router routes through the new state's
-dispatcher, which now has the chance to handle the event.
+If `forward_event` is `None`, the kernel does nothing extra after
+dispatching the leaf's `$>`. If `forward_event` is set, the kernel
+extracts it (clearing the field so it doesn't trigger again) and
+calls the router with the saved event. The router routes through
+the new state's dispatcher, which now has the chance to handle the
+event.
 
-The order matters: enter cascade first, then forward. By the
-time the new state sees the event, its `$>` handler has already
-run. State variables are initialized; the state is fully set up.
+The order matters: the new leaf's `$>` runs first (along with any
+`=> $^` chain it triggers), then the forward. By the time the new
+state sees the original event, its `$>` handler has already run.
+State variables are initialized; the state is fully set up.
 
 ### Trace a forwarded transition
 
@@ -3871,12 +3930,12 @@ travel..."`, takes the first branch, builds an `$ExpenseReview`
 compartment, sets `next_comp.forward_event = __e`, calls
 `__transition`, and returns.
 
-The kernel sees `__next_compartment` is set. Exit cascade runs
-on `$Triage` — no handler, nothing prints. The kernel switches
-`__compartment` to the new `$ExpenseReview` compartment. It sees
-`forward_event` is set, so it pulls it out, clears the field,
-fires the enter cascade ($ExpenseReview.$> prints "expense
-reviewer assigned"), then calls the router with the saved event.
+The kernel sees `__next_compartment` is set. It dispatches `<$`
+to the source leaf — `$Triage` — no handler, nothing prints. The
+kernel switches `__compartment` to the new `$ExpenseReview`
+compartment and dispatches `$>` to it (prints "expense reviewer
+assigned"). Then it sees `forward_event` is set, pulls it out,
+clears the field, and calls the router with the saved event.
 
 The router now routes the original `submit` event with
 `__compartment` being the `$ExpenseReview` compartment. It calls
