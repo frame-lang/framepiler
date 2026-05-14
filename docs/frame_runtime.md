@@ -489,12 +489,14 @@ def __init__(self):
 ```
 
 The push/pop is the same pattern interface method wrappers use.
-Any handler that runs during the cascade — including the start
-state's `$>` — needs a context on the stack so that `@@:return`,
-`@@:data`, and other context-stack reads have something to
-resolve against. The context pushed here is discarded after the
-constructor returns; there's no caller to give the return value
-to. But the handler runs without crashing on an empty stack.
+Every event handler — including the start state's `$>` — needs a
+context on the stack so that `@@:return`, `@@:data`, and other
+context-stack reads have something to resolve against. The context
+pushed here is discarded after the constructor returns; there's no
+caller to give the return value to. But the handler runs without
+crashing on an empty stack. (Pre-RFC-0017 the constructor ran the
+start `$>` outside the stack and any `@@:self.method()` from it
+crashed; see [RFC-0018](rfcs/rfc-0018.md) for the history.)
 
 The lamp doesn't currently declare `$Off.$>`, so this routes
 through the dispatcher and finds no match, doing nothing. But the
@@ -2173,9 +2175,10 @@ The guard looks redundant: the compartment was just built with an
 empty `state_vars`, so the check always succeeds. The guard
 matters for `pop$`, which we'll see in Step 20 — popped
 compartments come back with their `state_vars` already populated,
-and the guard is what prevents re-initialization. The same
-pattern also applies in HSM cascades (Step 21) where every layer
-in a chain runs its own `$>` initialization independently.
+and the guard is what prevents re-initialization. The same guard
+also fires in HSM (Step 21) when a leaf forwards `$>` to its
+parent via `=> $^` — each layer's synthesized `$>` initializes
+its own `state_vars` independently, once.
 
 `$Closed` doesn't declare a `$>` handler in the source, but it has
 a state variable to initialize. The framepiler emits one anyway:
@@ -3966,10 +3969,10 @@ dispatch-and-handoff patterns like the approval chain.
 
 Both rely on the compartment carrying just enough information for
 the kernel to do the right thing. `=> $^` doesn't need any
-runtime support beyond `parent_compartment` (which already exists
-for the cascade). `-> =>` needs the `forward_event` field on the
-compartment, populated at the transition site, consumed by the
-kernel after entry.
+runtime support beyond `parent_compartment` (which is also what
+HSM forwarding of `$>` / `<$` uses — see Step 21). `-> =>` needs
+the `forward_event` field on the compartment, populated at the
+transition site, consumed by the kernel after entry.
 
 ---
 
