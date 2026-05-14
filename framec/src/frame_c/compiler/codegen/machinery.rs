@@ -72,6 +72,20 @@ pub(crate) trait MachineryGenerator {
     /// Backend identifier — used for assertions and diagnostic output.
     fn lang_name(&self) -> &'static str;
 
+    /// Optional prelude nodes emitted *before* the 8-node scaffold.
+    ///
+    /// Default: empty. Override only when the backend needs extra
+    /// machinery-level nodes that don't fit the 8-node contract — e.g.
+    /// Kotlin's `@JvmStatic fun __create(...)` factory, which has to be
+    /// a sibling NativeBlock so the class-body emitter can partition it
+    /// into the `companion object`. The other typed backends (Java /
+    /// Rust / Swift / C# / Go / C / C++) emit `__create` from the
+    /// Constructor arm of their `backends/<lang>.rs`, so they leave
+    /// this default in place.
+    fn emit_prelude(&self, _system: &SystemAst) -> Vec<CodegenNode> {
+        Vec::new()
+    }
+
     /// Node 1 — `_HSM_CHAIN` topology table (or language-equivalent).
     ///
     /// Most languages emit a static class field; PHP emits an instance
@@ -160,19 +174,22 @@ pub(crate) fn generate_machinery<G: MachineryGenerator + ?Sized>(
     compartment_class: &str,
 ) -> Vec<CodegenNode> {
     let chains = compute_hsm_chains(system);
-    [
-        g.emit_hsm_chain(system, &chains),
-        g.emit_prepare_enter(system, compartment_class),
-        g.emit_prepare_exit(system),
-        g.emit_route_to_state(system),
-        g.emit_process_transition_loop(system, event_class),
-        g.emit_kernel(system),
-        g.emit_router(system),
-        g.emit_transition(system, compartment_class),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
+    let mut out = g.emit_prelude(system);
+    out.extend(
+        [
+            g.emit_hsm_chain(system, &chains),
+            g.emit_prepare_enter(system, compartment_class),
+            g.emit_prepare_exit(system),
+            g.emit_route_to_state(system),
+            g.emit_process_transition_loop(system, event_class),
+            g.emit_kernel(system),
+            g.emit_router(system),
+            g.emit_transition(system, compartment_class),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    out
 }
 
 // --- per-backend impls live in submodules; each is small (~200 LOC) ---
@@ -181,6 +198,7 @@ pub(crate) mod dart;
 pub(crate) mod gdscript;
 pub(crate) mod java;
 pub(crate) mod javascript;
+pub(crate) mod kotlin;
 pub(crate) mod lua;
 pub(crate) mod php;
 pub(crate) mod python;
