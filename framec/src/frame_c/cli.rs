@@ -3,7 +3,29 @@ use crate::frame_c::driver::{Exe, TargetLanguage};
 use clap::{Arg, Command};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Recursively copy a directory tree. Used by the project-build /
+/// compile-project paths to materialise `frame_runtime_py` and
+/// `frame_runtime_ts` into the output tree alongside generated code.
+/// Overwrites existing files; creates missing directories.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let p = entry.path();
+        let name = entry.file_name();
+        let to = dst.join(name);
+        if p.is_dir() {
+            copy_dir_recursive(&p, &to)?;
+        } else if p.is_file() {
+            std::fs::copy(&p, &to)?;
+        }
+    }
+    Ok(())
+}
 
 pub struct Cli {
     stdin_flag: bool,
@@ -708,27 +730,7 @@ pub fn run_with(args: Cli) {
                         .unwrap_or_else(|| std::path::PathBuf::from("frame_runtime_py"));
                     let dst_dir = outdir.join("frame_runtime_py");
                     if runtime_src.exists() {
-                        fn copy_dir(
-                            src: &std::path::Path,
-                            dst: &std::path::Path,
-                        ) -> std::io::Result<()> {
-                            if !dst.exists() {
-                                std::fs::create_dir_all(dst)?;
-                            }
-                            for entry in std::fs::read_dir(src)? {
-                                let entry = entry?;
-                                let p = entry.path();
-                                let name = entry.file_name();
-                                let to = dst.join(name);
-                                if p.is_dir() {
-                                    copy_dir(&p, &to)?;
-                                } else if p.is_file() {
-                                    std::fs::copy(&p, &to)?;
-                                }
-                            }
-                            Ok(())
-                        }
-                        if let Err(e) = copy_dir(&runtime_src, &dst_dir) {
+                        if let Err(e) = copy_dir_recursive(&runtime_src, &dst_dir) {
                             eprintln!("warning: failed to copy frame_runtime_py: {}", e);
                         }
                     } else {
@@ -764,27 +766,7 @@ pub fn run_with(args: Cli) {
                         .unwrap_or_else(|| std::path::PathBuf::from("frame_runtime_ts"));
                     let dst_dir = outdir.join("frame_runtime_ts");
                     if runtime_src.exists() {
-                        fn copy_dir(
-                            src: &std::path::Path,
-                            dst: &std::path::Path,
-                        ) -> std::io::Result<()> {
-                            if !dst.exists() {
-                                std::fs::create_dir_all(dst)?;
-                            }
-                            for entry in std::fs::read_dir(src)? {
-                                let entry = entry?;
-                                let p = entry.path();
-                                let name = entry.file_name();
-                                let to = dst.join(name);
-                                if p.is_dir() {
-                                    copy_dir(&p, &to)?;
-                                } else if p.is_file() {
-                                    std::fs::copy(&p, &to)?;
-                                }
-                            }
-                            Ok(())
-                        }
-                        if let Err(e) = copy_dir(&runtime_src, &dst_dir) {
+                        if let Err(e) = copy_dir_recursive(&runtime_src, &dst_dir) {
                             eprintln!("warning: failed to copy frame_runtime_ts: {}", e);
                         }
                     } else {
@@ -936,29 +918,7 @@ pub fn run_with(args: Cli) {
                                         });
                                     let dst_dir = dir.join("frame_runtime_py");
                                     if runtime_src.exists() {
-                                        // Recursively copy (create dirs as needed)
-                                        fn copy_dir(
-                                            src: &std::path::Path,
-                                            dst: &std::path::Path,
-                                        ) -> std::io::Result<()>
-                                        {
-                                            if !dst.exists() {
-                                                std::fs::create_dir_all(dst)?;
-                                            }
-                                            for entry in std::fs::read_dir(src)? {
-                                                let entry = entry?;
-                                                let p = entry.path();
-                                                let name = entry.file_name();
-                                                let to = dst.join(name);
-                                                if p.is_dir() {
-                                                    copy_dir(&p, &to)?;
-                                                } else if p.is_file() {
-                                                    std::fs::copy(&p, &to)?; // overwrite if exists
-                                                }
-                                            }
-                                            Ok(())
-                                        }
-                                        if let Err(e) = copy_dir(&runtime_src, &dst_dir) {
+                                        if let Err(e) = copy_dir_recursive(&runtime_src, &dst_dir) {
                                             eprintln!(
                                                 "warning: failed to copy frame_runtime_py: {}",
                                                 e
