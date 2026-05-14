@@ -24,13 +24,13 @@
 /// Dart type-tree node. Two structural shapes plus a primitive leaf.
 /// Anything that doesn't pattern-match `List<...>` / `Map<...,...>`
 /// becomes a `Primitive(name)` and is emitted as `value as <name>`.
-pub(super) enum DartTypeNode {
+pub(in crate::frame_c::compiler::codegen::interface_gen) enum DartTypeNode {
     Primitive(String),
     List(Box<DartTypeNode>),
     Map(Box<DartTypeNode>, Box<DartTypeNode>),
 }
 
-pub(super) fn parse_dart_type(s: &str) -> DartTypeNode {
+pub(in crate::frame_c::compiler::codegen::interface_gen) fn parse_dart_type(s: &str) -> DartTypeNode {
     let s = s.trim();
     if let Some(inner) = s.strip_prefix("List<").and_then(|x| x.strip_suffix('>')) {
         return DartTypeNode::List(Box::new(parse_dart_type(inner)));
@@ -67,7 +67,7 @@ pub(super) fn parse_dart_type(s: &str) -> DartTypeNode {
     DartTypeNode::Primitive(normalized.to_string())
 }
 
-pub(super) fn render_dart_type(t: &DartTypeNode) -> String {
+pub(in crate::frame_c::compiler::codegen::interface_gen) fn render_dart_type(t: &DartTypeNode) -> String {
     match t {
         DartTypeNode::Primitive(s) => s.clone(),
         DartTypeNode::List(inner) => format!("List<{}>", render_dart_type(inner)),
@@ -86,7 +86,7 @@ pub(super) fn render_dart_type(t: &DartTypeNode) -> String {
 ///
 /// Variable names carry a depth suffix so nested comprehensions
 /// don't shadow each other (`__e1`, `__me2`, etc.).
-pub(super) fn dart_conv_expr(t: &DartTypeNode, input: &str) -> String {
+pub(in crate::frame_c::compiler::codegen::interface_gen) fn dart_conv_expr(t: &DartTypeNode, input: &str) -> String {
     dart_conv_expr_at(t, input, 0)
 }
 
