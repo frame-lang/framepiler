@@ -158,6 +158,17 @@ pub(crate) trait MachineryGenerator {
         system: &SystemAst,
         compartment_class: &str,
     ) -> Option<CodegenNode>;
+
+    /// Optional postlude nodes emitted *after* the 8-node scaffold.
+    ///
+    /// Default: empty. Override only when the backend needs extra
+    /// machinery-level nodes — e.g. C's `destroy(self)` cleanup
+    /// function, which is unique to the no-GC family. The other
+    /// backends rely on their language's garbage collector / RAII for
+    /// teardown and leave this default in place.
+    fn emit_postlude(&self, _system: &SystemAst) -> Vec<CodegenNode> {
+        Vec::new()
+    }
 }
 
 /// Drive a `MachineryGenerator` to produce the per-system runtime
@@ -189,11 +200,13 @@ pub(crate) fn generate_machinery<G: MachineryGenerator + ?Sized>(
         .into_iter()
         .flatten(),
     );
+    out.extend(g.emit_postlude(system));
     out
 }
 
 // --- per-backend impls live in submodules; each is small (~200 LOC) ---
 
+pub(crate) mod c;
 pub(crate) mod csharp;
 pub(crate) mod dart;
 pub(crate) mod gdscript;
