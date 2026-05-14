@@ -1,0 +1,105 @@
+name: matrix-smoke
+
+# 4-backend parallel smoke tier of the 17-backend differential matrix.
+# Rationale: the Arc-A "ALL 17 BACKENDS COMPLETE" failure shipped 16
+# commits with 12/17 backends broken because nobody ran the gate. This
+# workflow exists so that gate runs automatically on every framec
+# change. Covers 4 of the 5 architectural buckets:
+#
+#   - Python:  dynamic-baseline (catches cross-target codegen drift
+#              that most often surfaces first in dynamic-typed targets)
+#   - Rust:    typed-by-value, serde, ownership (catches type-system
+#              bugs)
+#   - Java:    JVM, Jackson, reference semantics (catches JVM-specific
+#              lowering bugs and Kotlin-shape regressions)
+#   - Erlang:  gen_statem actor model (the structurally-distinct backend
+#              with the most idiomatic divergence)
+#
+# Out of scope: full 17-backend matrix runs as a nightly via a separate
+# workflow, not here. PR-time wants minutes, not the full ~10 min cold
+# Docker build. GDScript needs Godot; C/C++/Go/Dart/Swift/C#/Kotlin/
+# Lua/Ruby/PHP/JS/TS round-trip through the same dynamic-or-typed
+# lowering categories Python/Rust/Java/Erlang cover.
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  matrix-smoke:
+    name: matrix-smoke (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [python, rust, java, erlang]
+    steps:
+      - name: Checkout framec
+        uses: actions/checkout@v4
+        with:
+          path: framec
+
+      - name: Checkout framec-test-env
+        uses: actions/checkout@v4
+        with:
+          repository: frame-lang/framec-test-env
+          path: framec-test-env
+          # The test-env's main branch is the gate target — it
+          # carries the matrix fixtures the framec under test has
+          # to satisfy.
+          ref: main
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: framec
+
+      - name: Build framec (Linux release)
+        working-directory: framec
+        # The test-env's run.sh refuses a macOS binary. On
+        # ubuntu-latest, cargo build produces Linux x86_64 natively;
+        # the binary is what test-env expects.
+        run: |
+          cargo build --release -p framec
+          cp target/release/framec ../framec-test-env/docker/framec-linux
+          file ../framec-test-env/docker/framec-linux
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run matrix backend
+        working-directory: framec-test-env/docker
+        # FRAMEC_BIN is required by docker-compose.yml's volume mount.
+        # run.sh's `--build-framec` path is the macOS dev-loop convenience;
+        # we skip it because we already have a Linux binary.
+        env:
+          FRAMEC_BIN: ./framec-linux
+        run: |
+          bash run.sh ./framec-linux ${{ matrix.backend }} 2>&1 | tee matrix-output.txt
+
+      - name: Assert zero failures
+        working-directory: framec-test-env/docker
+        # The 17-backend matrix runner emits TAP-formatted lines:
+        #   ok N - <test>
+        #   not ok N - <test> # <reason>
+        # Any `not ok` line means a fixture failed (compile, runtime,
+        # or assertion). The "# <reason>" tail covers all three.
+        # collect-results.sh aggregates per-language but we only need
+        # the per-line check here.
+        run: |
+          if grep -E '^[a-z_]+-1\s*\|\s*not ok ' matrix-output.txt > /dev/null; then
+            echo "::error::Matrix smoke for backend '${{ matrix.backend }}' surfaced failures:"
+            grep -E '^[a-z_]+-1\s*\|\s*not ok ' matrix-output.txt | head -50
+            exit 1
+          fi
+          # Backend summary line — runner emits e.g. "# python: 350 passed, 0 failed, 0 skipped"
+          grep -E '^[a-z_]+-1\s*\|\s*#\s+[a-z_]+:\s+[0-9]+ passed' matrix-output.txt | tail -1
