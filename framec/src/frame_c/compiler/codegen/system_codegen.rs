@@ -2740,11 +2740,16 @@ pub(crate) fn generate_frame_machinery(
             &event_class,
             &compartment_class,
         )),
-        TargetLanguage::Rust => methods.extend(super::rust_system::generate_rust_machinery(
-            system,
-            &event_class,
-            &compartment_class,
-        )),
+        TargetLanguage::Rust => {
+            // 4.2 plan §7.1.P2: Rust migrated to the MachineryGenerator trait.
+            use super::machinery::{generate_machinery, rust::RustMachinery};
+            methods.extend(generate_machinery(
+                &RustMachinery,
+                system,
+                &event_class,
+                &compartment_class,
+            ));
+        }
         TargetLanguage::C => methods.extend(generate_c_machinery(system)),
         TargetLanguage::Cpp => methods.extend(generate_cpp_machinery(
             system,
