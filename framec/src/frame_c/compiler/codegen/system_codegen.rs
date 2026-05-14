@@ -6,6 +6,13 @@
 //! Uses the "oceans model" - native code is preserved exactly, Frame segments
 //! are replaced with generated code using the splicer.
 
+mod factory;
+
+use factory::{
+    generate_js_static_factory_alias, generate_python_factory_alias,
+    generate_static_factory_alias, params_arg_list,
+};
+
 use super::ast::*;
 use super::backend::get_backend;
 use super::codegen_utils::{
@@ -2529,140 +2536,6 @@ self._context_stack.pop_back()"#,
     }
 }
 
-/// RFC-0015 phase 1.1d: factory alias for Python.
-///
-/// When `@@[create(<name>)]` is set on a system, emit a
-/// `@classmethod` named `<name>` that delegates to `__init__` via
-/// `cls(...)`. The signature mirrors the constructor exactly. The
-/// existing `__init__` continues to work for callers who still
-/// write `Inner(seed)`; the rename is additive.
-fn generate_python_factory_alias(system: &SystemAst, factory_name: &str) -> CodegenNode {
-    let params: Vec<Param> = system
-        .params
-        .iter()
-        .map(|p| {
-            let type_str = type_to_string(&p.param_type);
-            Param::new(&p.name).with_type(&type_str)
-        })
-        .collect();
-
-    let arg_list = system
-        .params
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let body = vec![CodegenNode::NativeBlock {
-        code: format!("return cls._create({})", arg_list),
-        span: None,
-    }];
-
-    // Quote the return type as a string-form forward reference so
-    // the annotation is evaluated lazily — at class-definition time
-    // the class name itself is not yet bound.
-    CodegenNode::Method {
-        name: factory_name.to_string(),
-        params,
-        return_type: Some(format!("'{}'", system.name)),
-        body,
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Public,
-        decorators: vec!["classmethod".to_string()],
-    }
-}
-
-/// RFC-0015 phase 1.1d: factory alias for JS / TS.
-///
-/// When `@@[create(<name>)]` is set on a system, emit a `static`
-/// method named `<name>` that delegates to the constructor via
-/// `new ClassName(...)`. The signature mirrors the constructor.
-/// The existing `new ClassName(seed)` call site is unaffected;
-/// the rename is additive.
-fn generate_js_static_factory_alias(system: &SystemAst, factory_name: &str) -> CodegenNode {
-    let params: Vec<Param> = system
-        .params
-        .iter()
-        .map(|p| {
-            let type_str = type_to_string(&p.param_type);
-            Param::new(&p.name).with_type(&type_str)
-        })
-        .collect();
-
-    let arg_list = system
-        .params
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let body = vec![CodegenNode::NativeBlock {
-        code: format!("return {}._create({});", system.name, arg_list),
-        span: None,
-    }];
-
-    CodegenNode::Method {
-        name: factory_name.to_string(),
-        params,
-        return_type: Some(system.name.clone()),
-        body,
-        is_async: false,
-        is_static: true,
-        visibility: Visibility::Public,
-        decorators: vec![],
-    }
-}
-
-/// RFC-0015: param-name list for a system, comma-separated.
-/// Used by factory aliases to forward arguments to the constructor.
-fn params_arg_list(system: &SystemAst) -> String {
-    system
-        .params
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// RFC-0015 phase 1.1d: shared static-factory alias generator for
-/// backends whose `is_static: true` Method renders cleanly as a
-/// static method on the class. The body is supplied as a raw
-/// target-language snippet that constructs and returns an instance.
-///
-/// Used by GDScript, Lua, Ruby, PHP, and Dart. Python uses its own
-/// path (classmethod with `cls`); JS/TS use their own path (no
-/// param types in body).
-fn generate_static_factory_alias(
-    system: &SystemAst,
-    factory_name: &str,
-    body_code: &str,
-) -> CodegenNode {
-    let params: Vec<Param> = system
-        .params
-        .iter()
-        .map(|p| {
-            let type_str = type_to_string(&p.param_type);
-            Param::new(&p.name).with_type(&type_str)
-        })
-        .collect();
-
-    let body = vec![CodegenNode::NativeBlock {
-        code: body_code.to_string(),
-        span: None,
-    }];
-
-    CodegenNode::Method {
-        name: factory_name.to_string(),
-        params,
-        return_type: Some(system.name.clone()),
-        body,
-        is_async: false,
-        is_static: true,
-        visibility: Visibility::Public,
-        decorators: vec![],
-    }
-}
 
 /// Compute the HSM topology chain for each state in the machine.
 ///
