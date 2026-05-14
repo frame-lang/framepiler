@@ -42,6 +42,15 @@
 //!    methods. The compiler enforces completeness.
 //! 3. Add the new variant to `dispatch_machinery()` in this file.
 //! 4. Validate the matrix for the new backend.
+//!
+//! ## Out of scope: Erlang
+//!
+//! Erlang is **not** a `MachineryGenerator` consumer. The class-based
+//! kernel scaffold (`__prepareEnter`, `__route_to_state`, etc.) doesn't
+//! apply: `gen_statem` owns dispatch natively, and the per-system code
+//! is emitted by the parallel `erlang_system.rs` codegen path. The
+//! `system_codegen::generate_frame_machinery` dispatcher's
+//! `TargetLanguage::Erlang` arm is intentionally a no-op.
 
 use super::ast::CodegenNode;
 use super::system_codegen::compute_hsm_chains;
@@ -168,6 +177,7 @@ pub(crate) fn generate_machinery<G: MachineryGenerator + ?Sized>(
 
 // --- per-backend impls live in submodules; each is small (~200 LOC) ---
 
+pub(crate) mod gdscript;
 pub(crate) mod java;
 pub(crate) mod python;
 pub(crate) mod rust;
