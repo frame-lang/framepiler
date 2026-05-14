@@ -624,6 +624,7 @@ pub(crate) fn generate_erlang_system(
                     let (processed, final_data, _final_rv) = erlang_process_body_lines_with_params(
                         &lines,
                         &action_names,
+                        &interface_names,
                         &leaf_data_in,
                         &enter_params,
                     );
@@ -1490,6 +1491,7 @@ pub(crate) fn generate_erlang_system(
                 let (processed, _, _) = erlang_process_body_lines_with_params(
                     &lines,
                     &action_names,
+                    &interface_names,
                     "Data",
                     &enter_params,
                 );
@@ -1569,6 +1571,7 @@ pub(crate) fn generate_erlang_system(
                     let (processed, final_data, _) = erlang_process_body_lines_with_params(
                         &lines,
                         &action_names,
+                        &interface_names,
                         "Data",
                         &enter_params,
                     );
@@ -1665,6 +1668,7 @@ pub(crate) fn generate_erlang_system(
                 let (processed, final_data, _final_rv) = erlang_process_body_lines_with_params(
                     &lines,
                     &action_names,
+                    &interface_names,
                     "Data",
                     &exit_params,
                 );

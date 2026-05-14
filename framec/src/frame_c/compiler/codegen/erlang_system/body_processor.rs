@@ -104,16 +104,17 @@ pub(super) fn erlang_process_body_lines(
     action_names: &[String],
     initial_data: &str,
 ) -> ErlangBodyResult {
-    erlang_process_body_lines_with_params(lines, action_names, initial_data, &[])
+    erlang_process_body_lines_with_params(lines, action_names, &[], initial_data, &[])
 }
 
 pub(super) fn erlang_process_body_lines_with_params(
     lines: &[&str],
     action_names: &[String],
+    interface_names: &[String],
     initial_data: &str,
     param_names: &[(&str, String)],
 ) -> ErlangBodyResult {
-    erlang_process_body_lines_full(lines, action_names, &[], initial_data, param_names)
+    erlang_process_body_lines_full(lines, action_names, interface_names, initial_data, param_names)
 }
 
 /// Tracks per-arm data-threading state so each case's arms can converge
