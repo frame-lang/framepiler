@@ -2711,11 +2711,22 @@ pub(crate) fn generate_frame_machinery(
     let event_class = format!("{}FrameEvent", system.name);
 
     match lang {
-        TargetLanguage::Python3 => methods.extend(generate_python3_machinery(
-            system,
-            &event_class,
-            &compartment_class,
-        )),
+        TargetLanguage::Python3 => {
+            // 4.2 plan §7.1.P1: Python migrated to the MachineryGenerator
+            // trait (canary). Output is byte-canonical with the previous
+            // `generate_python3_machinery` fn; matrix gates the safety.
+            // The legacy fn below is retained until §7.1.P4 (after all
+            // backends migrate) — at which point the entire match falls
+            // away and `super::machinery::dispatch(lang)` becomes the
+            // single entry point.
+            use super::machinery::{generate_machinery, python::PythonMachinery};
+            methods.extend(generate_machinery(
+                &PythonMachinery,
+                system,
+                &event_class,
+                &compartment_class,
+            ));
+        }
         TargetLanguage::TypeScript | TargetLanguage::JavaScript => methods.extend(
             generate_javascript_machinery(system, lang, &event_class, &compartment_class),
         ),
@@ -2795,219 +2806,6 @@ pub(crate) fn generate_frame_machinery(
 // ~1374 lines (one giant match across 17 backends). Splitting them
 // out gives each language an isolated, navigable function while
 // keeping codegen entirely in this file.
-
-fn generate_python3_machinery(
-    system: &SystemAst,
-    event_class: &str,
-    compartment_class: &str,
-) -> Vec<CodegenNode> {
-    let mut methods = Vec::new();
-    let chains = compute_hsm_chains(system);
-
-    // _HSM_CHAIN class attribute — static topology table mapping each
-    // state name to its root-to-leaf ancestor chain. Used by
-    // __prepareEnter to construct destination compartment chains and by
-    // restore_state() to reconstruct chains from a save blob.
-    let mut chain_lines = String::from("_HSM_CHAIN = {\n");
-    for (leaf, chain) in &chains {
-        let chain_str = chain
-            .iter()
-            .map(|n| format!("\"{}\"", n))
-            .collect::<Vec<_>>()
-            .join(", ");
-        chain_lines.push_str(&format!("    \"{}\": [{}],\n", leaf, chain_str));
-    }
-    chain_lines.push('}');
-    methods.push(CodegenNode::NativeBlock {
-        code: chain_lines,
-        span: None,
-    });
-
-    // __prepareEnter — constructs the destination HSM chain for a
-    // transition. Each compartment in the chain receives its own copy of
-    // state_args / enter_args; ancestors and the leaf get the same
-    // values under the signature-match rule (see docs/frame_runtime.md
-    // § "Uniform Parameter Propagation").
-    methods.push(CodegenNode::Method {
-        name: "__prepareEnter".to_string(),
-        params: vec![
-            Param::new("leaf"),
-            Param::new("state_args"),
-            Param::new("enter_args"),
-        ],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"comp = None
-for name in self._HSM_CHAIN[leaf]:
-    new_comp = {}(name)
-    new_comp.state_args = list(state_args)
-    new_comp.enter_args = list(enter_args)
-    new_comp.parent_compartment = comp
-    comp = new_comp
-return comp"#,
-                compartment_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __prepareExit — populates exit_args on every compartment in the
-    // current source chain before the kernel's exit cascade fires.
-    methods.push(CodegenNode::Method {
-        name: "__prepareExit".to_string(),
-        params: vec![Param::new("exit_args")],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: r#"comp = self.__compartment
-while comp is not None:
-    comp.exit_args = list(exit_args)
-    comp = comp.parent_compartment"#
-                .to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __route_to_state — cascade router. Routes an event to a specific
-    // state's dispatcher with a specific compartment, instead of using
-    // self.__compartment. Used by the enter/exit cascades to dispatch to
-    // every layer of the HSM chain.
-    methods.push(CodegenNode::Method {
-        name: "__route_to_state".to_string(),
-        params: vec![
-            Param::new("state_name"),
-            Param::new("__e"),
-            Param::new("compartment"),
-        ],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: r#"handler_name = f"_state_{state_name}"
-handler = getattr(self, handler_name, None)
-if handler:
-    handler(__e, compartment)"#
-                .to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // RFC-0019: no enter/exit cascade. `$>` / `<$` are ordinary events,
-    // dispatched to the current (leaf) state via __route_to_state. An
-    // ancestor's `$>` / `<$` runs only if the leaf forwards the event
-    // (an in-handler `=> $^`, or a state-level default-forward). The
-    // kernel still builds the whole compartment chain (__prepareEnter);
-    // it just doesn't auto-fire ancestor lifecycle handlers.
-
-    // __process_transition_loop — drains any pending transitions queued
-    // by handlers (or by the start state's enter dispatch in
-    // __frame_init). On each transition: dispatch `<$` to the current
-    // (leaf) state, switch compartments, dispatch `$>` to the new (leaf)
-    // state — then re-check for another queued transition.
-    methods.push(CodegenNode::Method {
-        name: "__process_transition_loop".to_string(),
-        params: vec![],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: format!(
-                r#"while self.__next_compartment is not None:
-    next_compartment = self.__next_compartment
-    self.__next_compartment = None
-    # Exit the current (leaf) state
-    exit_event = {ec}("<$", self.__compartment.exit_args)
-    self.__route_to_state(self.__compartment.state, exit_event, self.__compartment)
-    # Switch to the new compartment
-    self.__compartment = next_compartment
-    # Enter the new (leaf) state — or the forwarded event
-    if next_compartment.forward_event is None:
-        enter_event = {ec}("$>", self.__compartment.enter_args)
-        self.__route_to_state(self.__compartment.state, enter_event, self.__compartment)
-    else:
-        forward_event = next_compartment.forward_event
-        next_compartment.forward_event = None
-        enter_event = {ec}("$>", self.__compartment.enter_args)
-        self.__route_to_state(self.__compartment.state, enter_event, self.__compartment)
-        if forward_event._message != "$>":
-            self.__router(forward_event)
-    # Mark all stacked contexts as transitioned
-    for ctx in self._context_stack:
-        ctx._transitioned = True"#,
-                ec = event_class
-            ),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __kernel method - the main event processing loop. Routes the
-    // event to the current state's dispatcher, then drains any pending
-    // transitions via __process_transition_loop.
-    methods.push(CodegenNode::Method {
-        name: "__kernel".to_string(),
-        params: vec![Param::new("__e")],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: r#"# Route event to current state
-self.__router(__e)
-# Process any pending transition
-self.__process_transition_loop()"#
-                .to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __router — dispatches events to the current state's dispatcher
-    // method. Always uses self.__compartment.
-    methods.push(CodegenNode::Method {
-        name: "__router".to_string(),
-        params: vec![Param::new("__e")],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: r#"self.__route_to_state(self.__compartment.state, __e, self.__compartment)"#
-                .to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    // __transition method - caches next compartment (deferred transition)
-    // Does NOT execute transition - __kernel does that after handler returns
-    methods.push(CodegenNode::Method {
-        name: "__transition".to_string(),
-        params: vec![Param::new("next_compartment")],
-        return_type: None,
-        body: vec![CodegenNode::NativeBlock {
-            code: "self.__next_compartment = next_compartment".to_string(),
-            span: None,
-        }],
-        is_async: false,
-        is_static: false,
-        visibility: Visibility::Private,
-        decorators: vec![],
-    });
-
-    methods
-}
 
 fn generate_javascript_machinery(
     system: &SystemAst,
