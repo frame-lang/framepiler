@@ -128,7 +128,11 @@ impl Default for Exe {
     }
 }
 
-/// Detect @@target pragma in Frame source files.
+/// Detect the `@@[target("...")]` / bare `@@target <lang>` pragma in
+/// Frame source files. The bracket form (RFC-0013 wave 2) is the
+/// canonical form; the bare form is legacy and hard-cut by E804 at
+/// validation time, but the lexer still parses it so we recognize both
+/// for backend dispatch.
 pub fn detect_at_target(content: &str) -> Option<TargetLanguage> {
     for line in content.lines() {
         let trimmed = line.trim();
@@ -136,14 +140,26 @@ pub fn detect_at_target(content: &str) -> Option<TargetLanguage> {
         if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
             continue;
         }
-        // Look for @@target <lang>
+        // Bracket form: @@[target("lang")]  or  @@[target(lang)]
+        if let Some(rest) = trimmed.strip_prefix("@@[target") {
+            let inner = rest
+                .trim_start()
+                .strip_prefix('(')?
+                .rsplit_once(')')?
+                .0
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            return TargetLanguage::try_from(inner).ok();
+        }
+        // Bare form: @@target lang (legacy; E804 fails at validation
+        // but the detection still helps before that stage)
         if let Some(rest) = trimmed.strip_prefix("@@target") {
             let lang_str = rest.trim();
-            // Extract the language token (first word)
             let lang_token = lang_str.split_whitespace().next()?.trim();
             return TargetLanguage::try_from(lang_token).ok();
         }
-        // Stop looking after first non-comment, non-empty line that isn't @@target
+        // Stop looking after first non-comment, non-empty line that isn't @@
         if !trimmed.starts_with("@@") {
             break;
         }
