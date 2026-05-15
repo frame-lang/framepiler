@@ -3,6 +3,7 @@
 //! V4 pure preprocessor configuration.
 
 use crate::frame_c::visitors::TargetLanguage;
+use std::path::PathBuf;
 
 /// Compilation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -81,6 +82,12 @@ pub struct PipelineConfig {
     pub debug: bool,
     /// System name override (for single-system modules)
     pub system_name: Option<String>,
+    /// Path to the source file being compiled, when known. RFC-0022
+    /// uses this to resolve relative `@@import "..."` paths against
+    /// the importer's directory and peek `@@system` names for the
+    /// const binding. `None` for stdin / in-memory sources; relative
+    /// imports then fall back to CWD-relative resolution.
+    pub source_path: Option<PathBuf>,
 }
 
 impl PipelineConfig {

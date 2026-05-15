@@ -40,11 +40,23 @@ mod compile_tests;
 ///
 /// All Frame code is processed through the pipeline: parse -> validate -> codegen.
 pub fn compile_module(content_str: &str, lang: TargetLanguage) -> Result<String, RunError> {
+    compile_module_with_path(content_str, lang, None)
+}
+
+/// As `compile_module`, but with the source file's path so RFC-0022
+/// `@@import` resolution can walk relative paths from the importer's
+/// directory. Pass `None` for stdin / in-memory sources.
+pub fn compile_module_with_path(
+    content_str: &str,
+    lang: TargetLanguage,
+    source_path: Option<std::path::PathBuf>,
+) -> Result<String, RunError> {
     use crate::frame_c::compiler::pipeline::compiler;
     use crate::frame_c::compiler::pipeline::config::PipelineConfig;
 
     // Create config from environment, falling back to production defaults
-    let config = PipelineConfig::from_env(lang);
+    let mut config = PipelineConfig::from_env(lang);
+    config.source_path = source_path;
 
     // AST-based compilation
     match compiler::compile_ast_based(content_str.as_bytes(), &config) {
@@ -256,8 +268,17 @@ impl FrameCompiler {
         Ok(emit_model_json(models))
     }
 
-    pub fn compile(&self, source: &str, _file_path: &str) -> FrameResult {
-        match compile_module(source, self.target) {
+    pub fn compile(&self, source: &str, file_path: &str) -> FrameResult {
+        // Pass the source path through so RFC-0022 `@@import` directives
+        // can resolve relative paths against the importer's directory.
+        // Sentinels like "<stdin>" / "<unknown>" yield None (no useful
+        // base directory for relative resolution).
+        let source_path = if file_path.starts_with('<') {
+            None
+        } else {
+            Some(std::path::PathBuf::from(file_path))
+        };
+        match compile_module_with_path(source, self.target, source_path) {
             Ok(code) => FrameResult::Ok(FrameOutput {
                 code,
                 warnings: Vec::new(),

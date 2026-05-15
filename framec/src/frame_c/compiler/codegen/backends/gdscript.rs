@@ -830,41 +830,60 @@ impl LanguageBackend for GDScriptBackend {
         imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
         // RFC-0022 — GDScript pilot. Translate `@@import "path/to/x.fgd"`
-        // into `const X = preload("res://path/to/x.gd")`.
-        //
-        // Phase 1 lax mode has no symbol-list resolution, so the const
-        // name is derived from the filename stem with PascalCase
-        // conversion. Convention: name the source file after its
-        // primary `@@system` (`counter.fgd` → `Counter`,
-        // `aspect_bus.fgd` → `AspectBus`). Phase 2 strict mode will
-        // parse the imported file to enumerate every declared system
-        // and emit one const per system.
-        imports
-            .iter()
-            .filter_map(|imp| {
-                let path = imp.module.as_str();
-                if path.is_empty() {
-                    return None;
+        // into one or more `const Name = preload("res://path/to/x.gd")`
+        // lines, where `Name` is the `@@system` declared in the imported
+        // file. Phase 1 lax mode peeks the imported file to discover its
+        // system names; when the peek finds nothing (missing file, no
+        // `@@system` declaration, etc.) we fall back to deriving a
+        // binding from the filename stem with PascalCase conversion —
+        // the original convention works for `counter.fgd` → `Counter`,
+        // `aspect_bus.fgd` → `AspectBus`. Phase 2 strict mode will
+        // replace the peek with a full pipeline pre-pass against the
+        // imported file.
+        let mut out: Vec<String> = Vec::new();
+        for imp in imports {
+            let path = imp.module.as_str();
+            if path.is_empty() {
+                continue;
+            }
+            // Strip the Frame extension and append .gd.
+            let stem = match path.rfind('.') {
+                Some(idx) => &path[..idx],
+                None => path,
+            };
+            let gd_path = format!("res://{}.gd", stem);
+            if !imp.symbols.is_empty() {
+                // Multi-system source files are valid: emit one const
+                // per discovered `@@system` name. The first system in
+                // the imported file emits at script scope and is
+                // reachable via the preloaded script directly; every
+                // subsequent system wraps as an inner class on the same
+                // script (per the assembler's GDScript multi-system
+                // wrapping) and is reached as `Script.InnerClassName`.
+                for (idx, sym) in imp.symbols.iter().enumerate() {
+                    if idx == 0 {
+                        out.push(format!("const {} = preload(\"{}\")", sym, gd_path));
+                    } else {
+                        out.push(format!(
+                            "const {} = preload(\"{}\").{}",
+                            sym, gd_path, sym
+                        ));
+                    }
                 }
-                // Strip the Frame extension and append .gd.
-                let stem = match path.rfind('.') {
-                    Some(idx) => &path[..idx],
-                    None => path,
-                };
-                let gd_path = format!("res://{}.gd", stem);
-                // PascalCase the file's base name (after the last `/`)
-                // for the const binding.
+            } else {
+                // Fallback: filename-derived binding.
                 let base = match stem.rfind('/') {
                     Some(idx) => &stem[idx + 1..],
                     None => stem,
                 };
                 let pascal = snake_or_dashed_to_pascal(base);
                 if pascal.is_empty() {
-                    return None;
+                    continue;
                 }
-                Some(format!("const {} = preload(\"{}\")", pascal, gd_path))
-            })
-            .collect()
+                out.push(format!("const {} = preload(\"{}\")", pascal, gd_path));
+            }
+        }
+        out
     }
 
     fn class_syntax(&self) -> ClassSyntax {

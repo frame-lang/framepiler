@@ -81,12 +81,21 @@ pub fn assemble(
     // RFC-0022 — emit module-scope `@@import` translations after the
     // runtime imports but before the user prolog. Each backend's
     // `emit_module_imports` produces the native form.
-    for import in module_imports {
-        output.push_str(import);
-        output.push('\n');
-    }
-    if !module_imports.is_empty() {
-        output.push('\n');
+    //
+    // GDScript is special-cased: `class_name` and `extends` must lead
+    // the file (and `class_name` must precede `extends`). Const-level
+    // `preload(...)` bindings are statements and must appear *after*
+    // those header lines. We defer the GDScript module-imports
+    // emission until after the class_name/extends header block below.
+    let is_gdscript = matches!(lang, TargetLanguage::GDScript);
+    if !is_gdscript {
+        for import in module_imports {
+            output.push_str(import);
+            output.push('\n');
+        }
+        if !module_imports.is_empty() {
+            output.push('\n');
+        }
     }
 
     // Build lookup for generated systems
@@ -122,7 +131,7 @@ pub fn assemble(
     // `extends` line to the top of the file and strip it from the
     // main system's emission during the walk so the script parses
     // cleanly.
-    let main_extends_line: Option<String> = if matches!(lang, TargetLanguage::GDScript) {
+    let main_extends_line: Option<String> = if is_gdscript {
         main_system.and_then(|m| {
             generated_systems
                 .iter()
@@ -139,7 +148,7 @@ pub fn assemble(
     // script has no implicit self-identifier, so declare `class_name`
     // (which must precede `extends`) to make the script resolvable as
     // a global identifier.
-    if matches!(lang, TargetLanguage::GDScript) {
+    if is_gdscript {
         if let (Some(m), Some(_)) = (main_system, &main_extends_line) {
             output.push_str(&format!("class_name {}\n", m));
         }
@@ -147,6 +156,19 @@ pub fn assemble(
     if let Some(ref ext_line) = main_extends_line {
         output.push_str(ext_line);
         output.push_str("\n\n");
+    }
+    // Now emit GDScript module-imports (deferred above) — placement is
+    // after class_name + extends, before any user prolog or system
+    // emission. `const X = preload(...)` is a statement; Godot
+    // requires it to follow the header directives.
+    if is_gdscript {
+        for import in module_imports {
+            output.push_str(import);
+            output.push('\n');
+        }
+        if !module_imports.is_empty() {
+            output.push('\n');
+        }
     }
 
     // Walk segments in order

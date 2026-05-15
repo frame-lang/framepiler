@@ -298,8 +298,12 @@ pub fn compile_ast_based(
         } = segment
         {
             // RFC-0022: `@@import "path"` — strip surrounding quotes,
-            // store raw path. Phase 1 is lax (no cross-file resolution).
-            // Path resolution + symbol enumeration are Phase 2.
+            // store raw path. Phase 1 is lax (no cross-file resolution
+            // *errors*); we still do a best-effort peek on the imported
+            // file to discover its `@@system` names so per-target hooks
+            // can bind a const to the right identifier. Phase 2 strict
+            // mode replaces the peek with full parsing + per-symbol
+            // resolution.
             if let Some(raw) = value {
                 let stripped = raw
                     .trim()
@@ -307,9 +311,13 @@ pub fn compile_ast_based(
                     .trim_end_matches('"')
                     .to_string();
                 if !stripped.is_empty() {
+                    let symbols = peek_imported_system_names(
+                        &stripped,
+                        config.source_path.as_deref(),
+                    );
                     module_imports.push(crate::frame_c::compiler::frame_ast::Import {
                         module: stripped,
-                        symbols: Vec::new(),
+                        symbols,
                         alias: None,
                         span: crate::frame_c::compiler::frame_ast::Span::new(
                             span.start, span.end,
@@ -972,6 +980,87 @@ pub fn compile_ast_based(
 /// or more `target` attributes is emitted only when at least one matches
 /// `current`. Unparseable target args are treated as non-matches (a future
 /// validator pass will surface them as a hard error).
+/// RFC-0022 Phase 1 lax peek. Resolve `import_path` relative to the
+/// importer's directory (or CWD when unknown), read the file, and pull
+/// out every `@@system <Name>` declaration. Returns the discovered
+/// system names in source order. Missing files / IO errors / unreadable
+/// content return an empty Vec — Phase 1 is lax: codegen's per-target
+/// hook falls back to filename-derived bindings when the peek finds
+/// nothing.
+///
+/// This is a regex-grade scan, not a full parse — bracket-form
+/// attributes, line comments, and multi-line `@@system` blocks
+/// surrounding the declaration are all handled by anchoring on the
+/// `@@system` keyword and reading the next identifier. Phase 2 strict
+/// mode replaces this with the actual segmenter + parser pipeline run
+/// against the imported file, surfacing every exported symbol with
+/// type fidelity.
+fn peek_imported_system_names(
+    import_path: &str,
+    importer_path: Option<&std::path::Path>,
+) -> Vec<String> {
+    let import_buf = std::path::PathBuf::from(import_path);
+    let resolved = if import_buf.is_absolute() {
+        import_buf
+    } else if let Some(importer) = importer_path.and_then(|p| p.parent()) {
+        importer.join(&import_buf)
+    } else {
+        import_buf
+    };
+    let content = match std::fs::read_to_string(&resolved) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let mut names: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        // Skip comment lines so commented-out `@@system` declarations
+        // don't pollute the peek.
+        if trimmed.starts_with("//") || trimmed.starts_with('#') {
+            continue;
+        }
+        let rest = match trimmed.strip_prefix("@@system") {
+            Some(r) => r,
+            None => continue,
+        };
+        // Require a separator after `@@system` so `@@systemd` (a
+        // hypothetical future keyword / typo) doesn't false-match.
+        let next = rest.chars().next();
+        if !matches!(next, Some(c) if c.is_whitespace()) {
+            continue;
+        }
+        // RFC-0014 visibility marker (`@@system private Name`) sits
+        // between the keyword and the name; skip it if present.
+        let mut tokens = rest.split_whitespace();
+        let first = match tokens.next() {
+            Some(t) => t,
+            None => continue,
+        };
+        let name_token = if first == "private" || first == "public" {
+            match tokens.next() {
+                Some(t) => t,
+                None => continue,
+            }
+        } else {
+            first
+        };
+        // Trim trailing punctuation that can attach to the name token
+        // when there's no separating whitespace (e.g. `Counter:` for a
+        // base-class declaration, `Counter{` for an inlined body).
+        let clean: String = name_token
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if clean.is_empty() {
+            continue;
+        }
+        if !names.iter().any(|n| n == &clean) {
+            names.push(clean);
+        }
+    }
+    names
+}
+
 fn filter_by_target_attribute(
     system_ast: &mut crate::frame_c::compiler::frame_ast::SystemAst,
     current: TargetLanguage,
