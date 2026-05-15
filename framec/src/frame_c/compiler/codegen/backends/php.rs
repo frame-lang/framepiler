@@ -616,6 +616,30 @@ impl LanguageBackend for PhpBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — `require_once` brings the file's class
+        // definitions into the global require chain. PHP classes are
+        // globally accessible after include, so bare `new Counter()`
+        // resolves once the file is loaded.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                Some(format!("require_once __DIR__ . '/{}.php';", stem))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         vec![] // PHP doesn't need imports for basic types
     }

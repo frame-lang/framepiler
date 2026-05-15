@@ -701,6 +701,39 @@ impl LanguageBackend for TypeScriptBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — TS, like ESM JS, has no wildcard form
+        // that binds bare names. Phase 1 emits a side-effect import
+        // + comment marker. Phase 2 strict will emit
+        // `import { Counter } from "./x";` enumerating systems.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                let normalized = if stem.starts_with("./") || stem.starts_with("../") {
+                    stem.to_string()
+                } else {
+                    format!("./{}", stem)
+                };
+                Some(format!(
+                    "// RFC-0022 lax: import \"{src}\" — Phase 2 strict will bind symbols\nimport \"{normalized}\";",
+                    src = imp.module,
+                    normalized = normalized
+                ))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         vec![]
     }

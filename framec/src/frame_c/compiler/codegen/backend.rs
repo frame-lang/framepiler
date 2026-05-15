@@ -425,6 +425,19 @@ pub trait LanguageBackend: Send + Sync {
     /// Get runtime imports needed for Frame state machines
     fn runtime_imports(&self) -> Vec<String>;
 
+    /// RFC-0022: Translate `@@import "path"` directives into the
+    /// target's native import / preload / package-include syntax.
+    /// Default impl returns empty (no emission); backends override to
+    /// emit per-target form. Path strings are passed through verbatim
+    /// from the user's source (the `Import.module` field, already
+    /// quote-stripped by the pipeline driver).
+    fn emit_module_imports(
+        &self,
+        _imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Get class/struct syntax for this language
     fn class_syntax(&self) -> ClassSyntax;
 

@@ -825,6 +825,48 @@ impl LanguageBackend for GDScriptBackend {
         vec![]
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 — GDScript pilot. Translate `@@import "path/to/x.fgd"`
+        // into `const X = preload("res://path/to/x.gd")`.
+        //
+        // Phase 1 lax mode has no symbol-list resolution, so the const
+        // name is derived from the filename stem with PascalCase
+        // conversion. Convention: name the source file after its
+        // primary `@@system` (`counter.fgd` → `Counter`,
+        // `aspect_bus.fgd` → `AspectBus`). Phase 2 strict mode will
+        // parse the imported file to enumerate every declared system
+        // and emit one const per system.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                // Strip the Frame extension and append .gd.
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                let gd_path = format!("res://{}.gd", stem);
+                // PascalCase the file's base name (after the last `/`)
+                // for the const binding.
+                let base = match stem.rfind('/') {
+                    Some(idx) => &stem[idx + 1..],
+                    None => stem,
+                };
+                let pascal = snake_or_dashed_to_pascal(base);
+                if pascal.is_empty() {
+                    return None;
+                }
+                Some(format!("const {} = preload(\"{}\")", pascal, gd_path))
+            })
+            .collect()
+    }
+
     fn class_syntax(&self) -> ClassSyntax {
         ClassSyntax::gdscript()
     }
@@ -899,4 +941,29 @@ impl GDScriptBackend {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+/// Convert a snake_case or dash-separated filename stem to PascalCase
+/// for use as a GDScript class-name binding.
+///
+/// `counter` → `Counter`
+/// `aspect_bus` → `AspectBus`
+/// `magic-word-teleport` → `MagicWordTeleport`
+/// `bug_no_cross_file_imports_a` → `BugNoCrossFileImportsA`
+fn snake_or_dashed_to_pascal(stem: &str) -> String {
+    let mut out = String::with_capacity(stem.len());
+    let mut next_upper = true;
+    for ch in stem.chars() {
+        if ch == '_' || ch == '-' {
+            next_upper = true;
+            continue;
+        }
+        if next_upper {
+            out.extend(ch.to_uppercase());
+            next_upper = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }

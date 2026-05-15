@@ -893,6 +893,29 @@ impl LanguageBackend for CppBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — `#include "x.h"`. C++ headers expose
+        // class declarations file-globally after include. User-provided
+        // header is required (framec currently emits `.cpp` only).
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                Some(format!("#include \"{}.h\"", stem))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         vec![
             "#include <string>".to_string(),

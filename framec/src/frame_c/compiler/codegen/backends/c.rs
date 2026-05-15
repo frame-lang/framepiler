@@ -831,6 +831,31 @@ impl LanguageBackend for CBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — `#include "x.h"`. C headers expose
+        // struct + function declarations file-globally after include.
+        // Caller is responsible for providing a matching `.h` file
+        // (framec currently emits `.c` only; a header-generation
+        // mode is a separate concern).
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                Some(format!("#include \"{}.h\"", stem))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         // Runtime imports are now included in generate_c_compartment_types
         vec![]

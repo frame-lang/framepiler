@@ -711,6 +711,28 @@ impl LanguageBackend for DartBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — Dart `import 'x.dart';` brings every
+        // top-level identifier into scope. Bare class references resolve.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                Some(format!("import '{}.dart';", stem))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         vec![]
     }

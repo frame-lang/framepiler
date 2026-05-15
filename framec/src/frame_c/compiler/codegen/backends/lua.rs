@@ -646,6 +646,38 @@ impl LanguageBackend for LuaBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — `local X = require 'x'` returns the
+        // module table. Convention: name `local` binding from the
+        // filename stem PascalCased (same as GDScript). User accesses
+        // `Counter.new()` via the module table.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                let base = match stem.rfind('/') {
+                    Some(idx) => &stem[idx + 1..],
+                    None => stem,
+                };
+                let pascal = snake_to_pascal(base);
+                if pascal.is_empty() {
+                    return None;
+                }
+                Some(format!("local {} = require '{}'", pascal, stem))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         vec![]
     }
@@ -688,4 +720,24 @@ impl LuaBackend {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+/// Convert snake_case or dash-separated filename stem to PascalCase
+/// for use as a Lua local binding (RFC-0022).
+fn snake_to_pascal(stem: &str) -> String {
+    let mut out = String::with_capacity(stem.len());
+    let mut next_upper = true;
+    for ch in stem.chars() {
+        if ch == '_' || ch == '-' {
+            next_upper = true;
+            continue;
+        }
+        if next_upper {
+            out.extend(ch.to_uppercase());
+            next_upper = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }

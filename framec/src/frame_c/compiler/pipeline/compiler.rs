@@ -216,6 +216,10 @@ pub fn compile_ast_based(
     // followed by native code-then-system doesn't bleed into a later
     // system.
     let mut system_asts: Vec<crate::frame_c::compiler::frame_ast::SystemAst> = Vec::new();
+    // RFC-0022: `@@import "path"` module-scope directives accumulate here
+    // before being attached to the ModuleAst. Phase 1 stores the raw
+    // (quote-stripped) path; symbols + alias remain empty (lax mode).
+    let mut module_imports: Vec<crate::frame_c::compiler::frame_ast::Import> = Vec::new();
     let mut pending_main_attr_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
     // Vec (not Option) so multiple occurrences of the same lifecycle
     // pragma — `@@[create(a)]` followed by `@@[create(b)]` — all
@@ -285,6 +289,34 @@ pub fn compile_ast_based(
                 strip_paren_arg(value),
                 crate::frame_c::compiler::frame_ast::Span::new(span.start, span.end),
             ));
+            continue;
+        }
+        if let Segment::Pragma {
+            kind: crate::frame_c::compiler::segmenter::PragmaKind::Import,
+            span,
+            value,
+        } = segment
+        {
+            // RFC-0022: `@@import "path"` — strip surrounding quotes,
+            // store raw path. Phase 1 is lax (no cross-file resolution).
+            // Path resolution + symbol enumeration are Phase 2.
+            if let Some(raw) = value {
+                let stripped = raw
+                    .trim()
+                    .trim_start_matches('"')
+                    .trim_end_matches('"')
+                    .to_string();
+                if !stripped.is_empty() {
+                    module_imports.push(crate::frame_c::compiler::frame_ast::Import {
+                        module: stripped,
+                        symbols: Vec::new(),
+                        alias: None,
+                        span: crate::frame_c::compiler::frame_ast::Span::new(
+                            span.start, span.end,
+                        ),
+                    });
+                }
+            }
             continue;
         }
         if let Segment::System {
@@ -555,7 +587,7 @@ pub fn compile_ast_based(
     let module_ast = FrameAst::Module(ModuleAst {
         name: String::new(),
         systems: system_asts.clone(),
-        imports: Vec::new(),
+        imports: module_imports.clone(),
         span: AstSpan::new(0, 0),
     });
     let arcanum = build_arcanum_from_frame_ast(&module_ast);
@@ -897,12 +929,17 @@ pub fn compile_ast_based(
             .find(|s| s.is_main())
             .map(|s| s.name.clone())
     };
+    // RFC-0022: ask the backend to translate `@@import` directives into
+    // its native form. Default impl returns empty (no emission); per-
+    // backend overrides translate per target.
+    let module_imports_emitted = backend.emit_module_imports(&module_imports);
     let code = match assembler::assemble(
         &source_map,
         &generated_systems,
         &system_params,
         config.target,
         &runtime_imports,
+        &module_imports_emitted,
         main_system.as_deref(),
     ) {
         Ok(output) => output,

@@ -62,6 +62,7 @@ pub fn assemble(
     system_params: &[(String, Vec<SystemParam>)],
     lang: TargetLanguage,
     runtime_imports: &[String],
+    module_imports: &[String],
     main_system: Option<&str>,
 ) -> Result<String, AssemblyError> {
     let source = &source_map.source;
@@ -74,6 +75,17 @@ pub fn assemble(
         output.push('\n');
     }
     if !runtime_imports.is_empty() {
+        output.push('\n');
+    }
+
+    // RFC-0022 — emit module-scope `@@import` translations after the
+    // runtime imports but before the user prolog. Each backend's
+    // `emit_module_imports` produces the native form.
+    for import in module_imports {
+        output.push_str(import);
+        output.push('\n');
+    }
+    if !module_imports.is_empty() {
         output.push('\n');
     }
 
@@ -769,7 +781,7 @@ mod tests {
                 },
             }],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], None).unwrap();
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], None).unwrap();
         assert_eq!(result, src);
     }
 
@@ -812,7 +824,7 @@ mod tests {
             ],
         );
         let generated = vec![("Foo".to_string(), "class Foo:\n  pass\n".to_string())];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], None).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], None).unwrap();
         assert_eq!(result, "prolog\nclass Foo:\n  pass\nepilogue\n");
     }
 
@@ -835,7 +847,7 @@ mod tests {
                 },
             ],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], None).unwrap();
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], None).unwrap();
         assert_eq!(result, "import os\n");
     }
 
@@ -995,7 +1007,7 @@ mod tests {
             ("Alpha".to_string(), "class Alpha: pass\n".to_string()),
             ("Beta".to_string(), "class Beta: pass\n".to_string()),
         ];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], None).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], None).unwrap();
         assert!(result.contains("prolog\n"));
         assert!(result.contains("class Alpha: pass\n"));
         assert!(result.contains("\nnative_between\n"));
@@ -1020,7 +1032,7 @@ mod tests {
                 visibility: None,
             }],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], None);
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], None);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("Foo"));
     }
@@ -1072,7 +1084,7 @@ mod tests {
             "MySystem".to_string(),
             "class MySystem:\n  pass\n".to_string(),
         )];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], None).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], None).unwrap();
         // RFC-0017 Phase A0: Python factory expansion uses `_create`.
         assert_eq!(result, "s = MySystem._create()\nclass MySystem:\n  pass\n");
     }
@@ -1115,6 +1127,7 @@ mod tests {
             &[],
             TargetLanguage::Python3,
             &runtime_imports,
+            &[],
             None,
         )
         .unwrap();

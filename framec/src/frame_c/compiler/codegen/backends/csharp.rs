@@ -660,6 +660,29 @@ impl LanguageBackend for CSharpBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — C#'s `using <namespace>` requires the
+        // imported file to declare its namespace. Phase 1 emits a
+        // comment marker; Phase 2 strict will emit `using` directives
+        // once symbol/namespace metadata is enumerated.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                Some(format!(
+                    "// RFC-0022 lax: import \"{}\" — Phase 2 strict will emit `using <namespace>`",
+                    imp.module
+                ))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         vec![
             "using System;".to_string(),

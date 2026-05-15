@@ -647,6 +647,26 @@ impl LanguageBackend for SwiftBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 — Swift treats every file in the same module as
+        // mutually visible (no per-file imports). No emission is
+        // needed when importer + importee are in the same module.
+        // A comment marker records each declaration for tooling.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                Some(format!("// RFC-0022: @@import \"{}\" — Swift module-local (no emission required)", imp.module))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         vec!["import Foundation".to_string()]
     }

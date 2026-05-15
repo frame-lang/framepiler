@@ -852,6 +852,38 @@ impl LanguageBackend for PythonBackend {
         vec!["from typing import Any, Optional, List, Dict, Callable".to_string()]
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 — Python pilot. Translate `@@import "path/to/x.fgd"`
+        // into `from .path.to.x import *`. Phase 1 is lax: the symbol
+        // list isn't resolved, so we emit `import *`. Strict mode
+        // (Phase 2) will enumerate the imported file's `@@system`
+        // names and emit `from .x import Counter, Helper`.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                // Strip the Frame extension (.fgd, .fpy, .frs, …).
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                // Translate path separators to Python's dotted module
+                // notation. Leading `./` and `../` are not yet
+                // supported (deferred to Phase 2's resolver); strip
+                // a leading `./` if present.
+                let normalized = stem.strip_prefix("./").unwrap_or(stem);
+                let module = normalized.replace('/', ".");
+                Some(format!("from .{} import *", module))
+            })
+            .collect()
+    }
+
     fn class_syntax(&self) -> ClassSyntax {
         ClassSyntax::python()
     }

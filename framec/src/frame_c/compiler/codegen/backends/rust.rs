@@ -675,6 +675,34 @@ impl LanguageBackend for RustBackend {
         vec![]
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — emit a wildcard `use crate::x::*;` per
+        // `@@import "path/to/x.fgd"`. Strict mode (Phase 2) would
+        // enumerate the imported file's `@@system` names and emit
+        // `use crate::x::{A, B};`.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                let stem = match path.rfind('.') {
+                    Some(idx) => &path[..idx],
+                    None => path,
+                };
+                let module_path = stem.trim_start_matches("./").replace('/', "::");
+                if module_path.is_empty() {
+                    return None;
+                }
+                Some(format!("use crate::{}::*;", module_path))
+            })
+            .collect()
+    }
+
     fn class_syntax(&self) -> ClassSyntax {
         ClassSyntax::rust()
     }

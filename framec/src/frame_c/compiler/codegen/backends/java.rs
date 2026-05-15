@@ -750,6 +750,31 @@ impl LanguageBackend for JavaBackend {
         }
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 Phase 1 lax — Java requires explicit per-class
+        // `import` directives with full package paths. Lax mode has
+        // no symbol or package metadata, so Phase 1 emits a comment
+        // marker. Phase 2 strict will enumerate the imported file's
+        // public classes + project package and emit
+        // `import <pkg>.<Class>;` per system.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                Some(format!(
+                    "// RFC-0022 lax: import \"{}\" — Phase 2 strict will emit per-class `import`",
+                    imp.module
+                ))
+            })
+            .collect()
+    }
+
     fn runtime_imports(&self) -> Vec<String> {
         vec!["import java.util.*;".to_string()]
     }

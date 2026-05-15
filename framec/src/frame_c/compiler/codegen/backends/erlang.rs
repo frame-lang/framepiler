@@ -395,6 +395,27 @@ impl LanguageBackend for ErlangBackend {
         vec![]
     }
 
+    fn emit_module_imports(
+        &self,
+        imports: &[crate::frame_c::compiler::frame_ast::Import],
+    ) -> Vec<String> {
+        // RFC-0022 — Erlang modules link via the OTP application's
+        // .app file and the BEAM module loader. There is no
+        // per-source-file import directive in Erlang syntax; cross-
+        // module calls already use `module:function/arity`. No
+        // emission needed beyond a comment marker for tooling.
+        imports
+            .iter()
+            .filter_map(|imp| {
+                let path = imp.module.as_str();
+                if path.is_empty() {
+                    return None;
+                }
+                Some(format!("%% RFC-0022: @@import \"{}\" — Erlang OTP linkage (no emission required)", imp.module))
+            })
+            .collect()
+    }
+
     fn class_syntax(&self) -> ClassSyntax {
         ClassSyntax::erlang()
     }

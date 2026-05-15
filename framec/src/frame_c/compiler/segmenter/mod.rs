@@ -65,6 +65,12 @@ pub enum PragmaKind {
     /// `@@[persist(<Format>)]` (takes Format). Body framework-
     /// generated.
     Load,
+    /// @@import "<path>" — RFC-0022. Module-scope directive declaring a
+    /// cross-file dependency. The path is the importer-relative path to
+    /// another Frame source file. The codegen emits the target's native
+    /// import form (`from .x import *` for Python, `preload(...)` for
+    /// GDScript, etc.).
+    Import,
     /// @@codegen { ... }
     Codegen,
     /// @@run-expect <pattern>
@@ -692,6 +698,10 @@ fn identify_pragma(bytes: &[u8], start: usize) -> (PragmaKind, Option<String>) {
         // pipeline E804 check surfaces a migration error.
         b"target" => PragmaKind::Other,
         b"codegen" => PragmaKind::Codegen,
+        // RFC-0022: bare `@@import "path"` — module-scope cross-file
+        // dependency. The path string is in `value` with quotes; the
+        // pipeline driver strips them before storing in ModuleAst.imports.
+        b"import" => PragmaKind::Import,
         b"system" => return (PragmaKind::Other, value), // @@system handled separately
         // RFC-0013 wave 1: bare `@@persist` migrated to `@@[persist]`.
         b"persist" => PragmaKind::Other,
