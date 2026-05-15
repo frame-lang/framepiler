@@ -1036,10 +1036,15 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
     code.push_str("    }\n");
     code.push_str("}\n\n");
 
-    // Generate FrameContext struct (call context for reentrancy)
+    // Generate FrameContext struct (call context for reentrancy).
+    // RFC-0020: `event` is `Rc<FrameEvent>` so the wrapper can pass
+    // `&Rc<FrameEvent>` to the kernel without aliasing through `self`
+    // (the original by-value form failed the borrow checker; the
+    // workaround cloned the event at kernel entry, silently dropping
+    // parameters per the shallow Clone impl above).
     code.push_str("#[allow(dead_code)]\n");
     code.push_str(&format!("struct {}FrameContext {{\n", system_name));
-    code.push_str(&format!("    event: {}FrameEvent,\n", system_name));
+    code.push_str(&format!("    event: std::rc::Rc<{}FrameEvent>,\n", system_name));
     code.push_str("    _return: Option<Box<dyn std::any::Any>>,\n");
     code.push_str("    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,\n");
     code.push_str("    _transitioned: bool,\n");
@@ -1047,7 +1052,7 @@ fn generate_rust_runtime_types(system: &SystemAst) -> String {
 
     // Generate FrameContext impl with new()
     code.push_str(&format!("impl {}FrameContext {{\n", system_name));
-    code.push_str(&format!("    fn new(event: {}FrameEvent, default_return: Option<Box<dyn std::any::Any>>) -> Self {{\n", system_name));
+    code.push_str(&format!("    fn new(event: std::rc::Rc<{}FrameEvent>, default_return: Option<Box<dyn std::any::Any>>) -> Self {{\n", system_name));
     code.push_str("        Self {\n");
     code.push_str("            event,\n");
     code.push_str("            _return: default_return,\n");

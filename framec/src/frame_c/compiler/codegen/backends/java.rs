@@ -12,6 +12,71 @@ pub struct JavaBackend;
 /// `asList(...)` is a known constructor param name. Used by the Java
 /// Constructor arm to strip user-arg-bound enter_args / state_args from
 /// the bare `Counter()` body — those are re-supplied by `__frame_init`.
+/// Rewrite member references in absorbed frame-init lines so they
+/// target a local `c` instead of the bare receiver / `this.X`.
+///
+/// The Java codegen emits two member-access styles in the
+/// constructor body:
+/// - **`this.X = Y;`** — domain assignments emitted by
+///   `constructor.rs`. After absorption into the static factory:
+///   `c.X = Y;`.
+/// - **Bare framework refs** — `__compartment`, `_context_stack`,
+///   `__next_compartment`, `__kernel(...)`, `__prepareEnter(...)`,
+///   etc. These have no `this.` prefix in member-method bodies but
+///   must be qualified with `c.` inside the static factory.
+///
+/// Word-boundary aware: only rewrites when the symbol is preceded
+/// by a non-word character (or start of line) AND followed by a
+/// non-word character. Avoids double-prefixing (`c.c.X`) by
+/// skipping symbols whose immediate prefix is already `c.`.
+fn rewrite_java_member_refs_for_factory(line: &str) -> String {
+    let after_this = line.replace("this.", "c.");
+    const MEMBERS: &[&str] = &[
+        "__compartment",
+        "_context_stack",
+        "__next_compartment",
+        "__kernel",
+        "__router",
+        "__prepareEnter",
+        "__prepareExit",
+        "__transition",
+        "__hsm_chain",
+    ];
+    let mut s = after_this;
+    for m in MEMBERS {
+        s = java_word_boundary_prefix_replace(&s, m, "c.");
+    }
+    s
+}
+
+fn java_word_boundary_prefix_replace(haystack: &str, needle: &str, prefix: &str) -> String {
+    let bytes = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    let pb = prefix.as_bytes();
+    let mut result = String::with_capacity(haystack.len() + 32);
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts_here = bytes[i..].starts_with(nb);
+        if starts_here {
+            let prev_is_word =
+                i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            let end = i + nb.len();
+            let next_is_word =
+                end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
+            let prev_is_prefix = i >= pb.len() && &bytes[i - pb.len()..i] == pb;
+            if !prev_is_word && !next_is_word && !prev_is_prefix {
+                result.push_str(prefix);
+                result.push_str(needle);
+                i = end;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
 fn java_strip_param_lists(text: &str, param_names: &[&str]) -> String {
     let needle = "new ArrayList<>(java.util.Arrays.asList(";
     let mut result = String::with_capacity(text.len());
@@ -280,8 +345,21 @@ impl LanguageBackend for JavaBackend {
                     } else if !rendered.ends_with('\n') {
                         rendered.push('\n');
                     }
-                    let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__process_transition_loop");
+                    // Filter lines that should run only during start-cascade:
+                    // the kernel call + the context-stack push/pop/peek that
+                    // surrounds it. The compartment-init line
+                    // (`__compartment = __prepareEnter(...)`) must still run
+                    // in the bare ctor so `@@!Foo()` produces a usable shell
+                    // (with empty-args compartment); when it mentions params
+                    // it goes to frame_init AND the stripped version stays
+                    // in the bare ctor (handled by the mentions_param branch
+                    // below). The `_context_stack = new ArrayList<>()`
+                    // initializer must stay in the bare ctor so event
+                    // dispatch later calls `_context_stack.add(...)`.
+                    let frame_init_only = rendered.contains("__kernel(")
+                        || rendered.contains("_context_stack.add(")
+                        || rendered.contains("_context_stack.remove(")
+                        || rendered.contains("_context_stack.get(");
                     if frame_init_only {
                         frame_init_lines.push(rendered);
                         continue;
@@ -323,22 +401,12 @@ impl LanguageBackend for JavaBackend {
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
 
-                // Emit `public void __frame_init(<params>)`
-                result.push('\n');
-                let frame_init_params = self.emit_params(params);
-                result.push_str(&format!(
-                    "{}public void __frame_init({}) {{\n",
-                    ctx.get_indent(),
-                    frame_init_params
-                ));
-                ctx.push_indent();
-                for line in &frame_init_lines {
-                    result.push_str(line);
-                }
-                ctx.pop_indent();
-                result.push_str(&format!("{}}}\n", ctx.get_indent()));
+                // RFC-0020: __frame_init member dropped — absorb body
+                // inline into the static __create factory below.
 
-                // Emit `public static Counter __create(<params>)` — factory
+                // Emit `public static Counter __create(<params>)` — factory.
+                // Absorb the frame_init body inline, rewriting bare
+                // member references and `this.` to target the local `c`.
                 result.push('\n');
                 let create_params = self.emit_params(params);
                 result.push_str(&format!(
@@ -354,12 +422,10 @@ impl LanguageBackend for JavaBackend {
                     class_name,
                     class_name
                 ));
-                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                result.push_str(&format!(
-                    "{}c.__frame_init({});\n",
-                    ctx.get_indent(),
-                    arg_pass.join(", ")
-                ));
+                for line in &frame_init_lines {
+                    let rewritten = rewrite_java_member_refs_for_factory(line);
+                    result.push_str(&rewritten);
+                }
                 result.push_str(&format!("{}return c;\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));

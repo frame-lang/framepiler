@@ -315,9 +315,15 @@ impl LanguageBackend for GDScriptBackend {
                 body,
                 super_call,
             } => {
-                // RFC-0017 Phase A4: split into bare `_init()` + `_frame_init`
-                // + static `_create` factory. Framework helpers keep the
-                // original single-`_init` emission.
+                // RFC-0020: two construction artifacts —
+                //   func _init()                        — bare framework; IS @@!Foo()
+                //   static func _create(<params>)       — factory + start-$>; IS @@Foo(args)
+                // The intermediate `_frame_init` is gone; its body is
+                // absorbed inline into `_create` (with `self.` → `c.`
+                // rewrite since `_create` is static).
+                //
+                // Framework helpers (FrameEvent / FrameContext /
+                // Compartment) keep the original single-`_init` emission.
                 let class_name = ctx
                     .system_name
                     .clone()
@@ -371,7 +377,7 @@ impl LanguageBackend for GDScriptBackend {
                         rendered.push('\n');
                     }
                     let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__process_transition_loop");
+                        || rendered.contains("__kernel");
                     if frame_init_only {
                         frame_init_lines.push(rendered);
                         continue;
@@ -401,25 +407,11 @@ impl LanguageBackend for GDScriptBackend {
                 }
                 ctx.pop_indent();
 
-                // Emit `func _frame_init(<params>):`
-                result.push('\n');
-                let frame_init_params = self.emit_params(params, false);
-                result.push_str(&format!(
-                    "{}func _frame_init({}):\n",
-                    ctx.get_indent(),
-                    frame_init_params
-                ));
-                ctx.push_indent();
-                if frame_init_lines.is_empty() {
-                    result.push_str(&format!("{}pass\n", ctx.get_indent()));
-                } else {
-                    for line in &frame_init_lines {
-                        result.push_str(line);
-                    }
-                }
-                ctx.pop_indent();
-
-                // Emit `static func _create(<params>)` — factory
+                // Emit `static func _create(<params>)` — factory +
+                // start-$>. Per RFC-0020 the body that used to live in
+                // `_frame_init` is absorbed inline here, with `self.`
+                // → `c.` rewrite since `_create` is static and the
+                // local var `c` is the newly-allocated instance.
                 result.push('\n');
                 let create_params = self.emit_params(params, false);
                 result.push_str(&format!(
@@ -433,12 +425,10 @@ impl LanguageBackend for GDScriptBackend {
                     ctx.get_indent(),
                     class_name
                 ));
-                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                result.push_str(&format!(
-                    "{}c._frame_init({})\n",
-                    ctx.get_indent(),
-                    arg_pass.join(", ")
-                ));
+                for line in &frame_init_lines {
+                    let rewritten = line.replace("self.", "c.");
+                    result.push_str(&rewritten);
+                }
                 result.push_str(&format!("{}return c\n", ctx.get_indent()));
                 ctx.pop_indent();
 

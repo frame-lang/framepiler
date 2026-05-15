@@ -94,57 +94,49 @@ while ($comp !== null) {
     }
 
     fn emit_route_to_state(&self, _system: &SystemAst) -> Option<CodegenNode> {
-        Some(CodegenNode::Method {
-            name: "__route_to_state".to_string(),
-            params: vec![
-                Param::new("state_name"),
-                Param::new("__e"),
-                Param::new("compartment"),
-            ],
-            return_type: None,
-            body: vec![CodegenNode::NativeBlock {
-                code: r#"$handler_name = "_state_" . $state_name;
-if (method_exists($this, $handler_name)) {
-    $this->$handler_name($__e, $compartment);
-}"#
-                .to_string(),
-                span: None,
-            }],
-            is_async: false,
-            is_static: false,
-            visibility: Visibility::Private,
-            decorators: vec![],
-        })
+        // RFC-0020: __router holds the dispatch table directly.
+        None
     }
 
     fn emit_process_transition_loop(
         &self,
         _system: &SystemAst,
-        event_class: &str,
+        _event_class: &str,
     ) -> Option<CodegenNode> {
+        // RFC-0020: drain loop is inlined into __kernel.
+        None
+    }
+
+    fn emit_kernel(&self, system: &SystemAst) -> Option<CodegenNode> {
+        // RFC-0020: __kernel dispatches one event then drains; 3-branch
+        // forward-event protocol matches the Python reference.
+        let event_class = format!("{}FrameEvent", system.name);
         Some(CodegenNode::Method {
-            name: "__process_transition_loop".to_string(),
-            params: vec![],
+            name: "__kernel".to_string(),
+            params: vec![Param::new("__e")],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
                 code: format!(
-                    r#"while ($this->__next_compartment !== null) {{
+                    r#"// Route event to current state.
+$this->__router($__e);
+// Drain any transitions queued by the handler.
+while ($this->__next_compartment !== null) {{
     $next_compartment = $this->__next_compartment;
     $this->__next_compartment = null;
     $exit_event = new {evt}("<$", $this->__compartment->exit_args);
-    $this->__route_to_state($this->__compartment->state, $exit_event, $this->__compartment);
+    $this->__router($exit_event);
     $this->__compartment = $next_compartment;
-    if ($next_compartment->forward_event === null) {{
+    $forward_event = $next_compartment->forward_event;
+    $next_compartment->forward_event = null;
+    if ($forward_event === null) {{
         $enter_event = new {evt}("$>", $this->__compartment->enter_args);
-        $this->__route_to_state($this->__compartment->state, $enter_event, $this->__compartment);
+        $this->__router($enter_event);
+    }} else if ($forward_event->_message === "$>") {{
+        $this->__router($forward_event);
     }} else {{
-        $forward_event = $next_compartment->forward_event;
-        $next_compartment->forward_event = null;
         $enter_event = new {evt}("$>", $this->__compartment->enter_args);
-        $this->__route_to_state($this->__compartment->state, $enter_event, $this->__compartment);
-        if ($forward_event->_message !== "$>") {{
-            $this->__router($forward_event);
-        }}
+        $this->__router($enter_event);
+        $this->__router($forward_event);
     }}
     foreach ($this->_context_stack as $ctx) {{
         $ctx->_transitioned = true;
@@ -161,31 +153,18 @@ if (method_exists($this, $handler_name)) {
         })
     }
 
-    fn emit_kernel(&self, _system: &SystemAst) -> Option<CodegenNode> {
-        Some(CodegenNode::Method {
-            name: "__kernel".to_string(),
-            params: vec![Param::new("__e")],
-            return_type: None,
-            body: vec![CodegenNode::NativeBlock {
-                code: "// Route event to current state\n$this->__router($__e);\n// Process any pending transition\n$this->__process_transition_loop();".to_string(),
-                span: None,
-            }],
-            is_async: false,
-            is_static: false,
-            visibility: Visibility::Private,
-            decorators: vec![],
-        })
-    }
-
     fn emit_router(&self, _system: &SystemAst) -> Option<CodegenNode> {
+        // RFC-0020: __router is the single dispatch primitive.
         Some(CodegenNode::Method {
             name: "__router".to_string(),
             params: vec![Param::new("__e")],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
-                code:
-                    "$this->__route_to_state($this->__compartment->state, $__e, $this->__compartment);"
-                        .to_string(),
+                code: r#"$handler_name = "_state_" . $this->__compartment->state;
+if (method_exists($this, $handler_name)) {
+    $this->$handler_name($__e, $this->__compartment);
+}"#
+                .to_string(),
                 span: None,
             }],
             is_async: false,

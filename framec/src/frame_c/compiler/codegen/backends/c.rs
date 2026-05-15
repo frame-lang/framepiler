@@ -69,15 +69,9 @@ impl LanguageBackend for CBackend {
                     "static void {}_prepareExit({}* self, {}_FrameVec* exit_args);\n",
                     name, name, name
                 ));
-                result.push_str(&format!(
-                    "static void {}_route_to_state({}* self, const char* state_name, {}_FrameEvent* __e, {}_Compartment* compartment);\n",
-                    name, name, name, name
-                ));
-                // RFC-0019: no enter/exit cascade — those helpers are gone.
-                result.push_str(&format!(
-                    "static void {}_process_transition_loop({}* self);\n",
-                    name, name
-                ));
+                // RFC-0020: __route_to_state inlined into __router;
+                // __process_transition_loop inlined into __kernel.
+                // No forward decls needed for either.
 
                 // Add forward declarations for state handler methods
                 // AND per-handler methods (`_s_<State>_hdl_<kind>_<event>`).
@@ -307,10 +301,14 @@ impl LanguageBackend for CBackend {
             }
 
             CodegenNode::Constructor { params, body, .. } => {
-                // RFC-0017 Phase A3: split the system constructor into:
-                //   Counter* Counter_new(void)                  — bare framework
-                //   void Counter_frame_init(Counter* self, ...) — user $> + cascade
-                //   Counter* Counter_create(...)                — factory
+                // RFC-0020: the C system constructor emits two artifacts
+                // (was three under RFC-0017):
+                //   Counter* Counter_new(void)         — bare framework; IS @@!Counter()
+                //   Counter* Counter_create(...)       — factory + start-$>; IS @@Counter(args)
+                //
+                // The intermediate `Counter_frame_init` that RFC-0017
+                // emitted is gone — its body is absorbed inline into
+                // `Counter_create` after the `Counter_new()` call.
                 //
                 // Call-site lowering:
                 //   - `@@Counter(7)` → `Counter_create(7)`
@@ -318,12 +316,12 @@ impl LanguageBackend for CBackend {
                 //
                 // Body classification by LINE (rendered text), since C's
                 // compartment setup is a multi-line NativeBlock:
-                //   - Lines containing cascade triggers → `__frame_init`
-                //     only (skipped in bare).
-                //   - Lines mentioning any ctor param name → `__frame_init`
+                //   - Lines containing cascade triggers (`__kernel(...)`,
+                //     `__fire_*_cascade`) → `_create` only (skipped in bare).
+                //   - Lines mentioning any ctor param name → `_create`
                 //     only (skipped in bare).
                 //   - Other lines → BOTH (bare gets framework setup;
-                //     `__frame_init` re-runs them with full args so it can
+                //     `_create` re-runs them with full args so it can
                 //     rebuild the compartment with the user's enter_args).
                 // The double-set of state_stack / compartment etc. is
                 // harmless — the second assignment replaces the first.
@@ -360,11 +358,10 @@ impl LanguageBackend for CBackend {
                 let is_cascade_line = |line: &str| {
                     line.contains("_fire_enter_cascade")
                         || line.contains("_fire_exit_cascade")
-                        || line.contains("_process_transition_loop")
-                        // RFC-0019: the start-state `$>` is dispatched via
-                        // `<sys>_router(self, __e)` inside `__frame_init`;
-                        // the bare allocator must not run it.
-                        || line.contains("_router(")
+                        // RFC-0020: the start-state `$>` is dispatched
+                        // via `<sys>_kernel(self, __e)`; the bare
+                        // allocator must not run it.
+                        || line.contains("_kernel(")
                 };
                 let mentions_param = |line: &str| {
                     param_names.iter().any(|p| {
@@ -394,26 +391,13 @@ impl LanguageBackend for CBackend {
                 result.push_str(&format!("{}return self;\n", body_indent));
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
 
-                // Emit `void Counter_frame_init(Counter* self, <params>)`
-                let frame_init_params = {
-                    let mut s = format!("{}* self", class_name);
-                    for p in params {
-                        let type_str = self.convert_type_to_c(&p.type_annotation, &class_name);
-                        s.push_str(&format!(", {} {}", type_str, p.name));
-                    }
-                    s
-                };
-                result.push('\n');
-                result.push_str(&format!(
-                    "{}void {}_frame_init({}) {{\n",
-                    ctx.get_indent(),
-                    class_name,
-                    frame_init_params
-                ));
-                result.push_str(&body_text);
-                result.push_str(&format!("{}}}\n", ctx.get_indent()));
-
-                // Emit `Counter* Counter_create(<params>)` — factory
+                // Emit `Counter* Counter_create(<params>)` — factory +
+                // start-$>. Per RFC-0020 the body that used to live
+                // in `Counter_frame_init` is absorbed inline here. C
+                // already uses `self->` throughout, so no rewrite is
+                // needed — the local var `self` is the
+                // newly-allocated instance, exactly what `body_text`
+                // expects.
                 let create_params = if params.is_empty() {
                     "void".to_string()
                 } else {
@@ -441,15 +425,7 @@ impl LanguageBackend for CBackend {
                     class_name,
                     class_name
                 ));
-                let arg_pass: Vec<String> = std::iter::once("self".to_string())
-                    .chain(params.iter().map(|p| p.name.clone()))
-                    .collect();
-                result.push_str(&format!(
-                    "{}{}_frame_init({});\n",
-                    ctx.get_indent(),
-                    class_name,
-                    arg_pass.join(", ")
-                ));
+                result.push_str(&body_text);
                 result.push_str(&format!("{}return self;\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));

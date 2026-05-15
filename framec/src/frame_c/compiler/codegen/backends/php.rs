@@ -219,8 +219,10 @@ impl LanguageBackend for PhpBackend {
                     } else if !rendered.ends_with('\n') {
                         rendered.push('\n');
                     }
-                    let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__process_transition_loop");
+                    // RFC-0020: scope to kernel call + context-stack mutation.
+                    let frame_init_only = rendered.contains("$this->__kernel(")
+                        || rendered.contains("$this->_context_stack[]")
+                        || rendered.contains("array_pop($this->_context_stack");
                     if frame_init_only {
                         frame_init_lines.push(rendered);
                         continue;

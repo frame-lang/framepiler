@@ -207,21 +207,25 @@ impl LanguageBackend for GoBackend {
             }
 
             CodegenNode::Constructor { params, body, .. } => {
-                // RFC-0017 Phase A2: split into three exported functions:
-                //   func NewCounter() *Counter             — bare framework
-                //   func (s *Counter) __frame_init(seed)   — user $> + cascade
-                //   func CreateCounter(seed) *Counter      — factory (two-step)
+                // RFC-0020: two artifacts — bare NewFoo() + CreateFoo()
+                // factory. The intermediate `__frame_init` member that
+                // RFC-0017 emitted is gone — its body is absorbed
+                // inline into `CreateFoo` with receiver `s.` rewritten
+                // to local `c.` (since the factory is a package-level
+                // function with no receiver).
                 //
                 // Call-site lowering:
                 //   - `@@Counter(7)` → `CreateCounter(7)`
                 //   - `@@!Counter()` → `NewCounter()`
                 //
                 // Body classification:
-                //   - Assignments mentioning a ctor param → `__frame_init`,
-                //     with a stripped version (param-list args replaced
-                //     with empty slice literal) emitted in `NewCounter()`.
-                //   - Method calls that fire the cascade → `__frame_init`.
-                //   - Other statements → `NewCounter()`.
+                //   - Lines that touch the kernel, set `__compartment`,
+                //     reference `_context_stack`, or mention any system
+                //     parameter go to `frame_init_lines` (absorbed into
+                //     the factory).
+                //   - Other statements stay in `NewFoo()` so
+                //     `@@!Foo()` produces a usable-but-not-entered
+                //     instance.
                 let class_name = system_name.clone();
                 let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
 
@@ -233,8 +237,15 @@ impl LanguageBackend for GoBackend {
                     if !rendered.ends_with('\n') && !rendered.is_empty() {
                         rendered.push('\n');
                     }
-                    let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__process_transition_loop");
+                    // Scope to kernel call + context-stack mutation.
+                    // The compartment-init line (`s.__compartment =
+                    // s.__prepareEnter(...)`) must run in the bare ctor
+                    // too so `@@!Foo()` shells are usable (with empty-args
+                    // compartment); when it mentions params the
+                    // mentions_param branch below handles the split.
+                    let frame_init_only = rendered.contains("__kernel(")
+                        || rendered.contains("_context_stack = append(")
+                        || rendered.contains("_context_stack = s._context_stack[:");
                     if frame_init_only {
                         frame_init_lines.push(rendered);
                         continue;
@@ -246,12 +257,13 @@ impl LanguageBackend for GoBackend {
                     });
                     if mentions_param {
                         frame_init_lines.push(rendered.clone());
-                        // RFC-0017: strip handles `[]any{seed}` →
-                        // empty in prepareEnter args. For plain
-                        // `s.field = seed` strip is a no-op; emitting
-                        // it into the no-arg bare ctor would refuse
-                        // to compile (`undefined: seed`). Skip when a
-                        // param ref survives.
+                        // RFC-0017 carry-over: a stripped version
+                        // (param-list args replaced with empty slice
+                        // literal) goes in NewFoo() too, so `@@!Foo()`
+                        // still ends up with a valid (empty-args)
+                        // compartment. Skip the stripped form if a
+                        // param ref survives (`s.field = seed` strip
+                        // is a no-op and would not compile).
                         let stripped = go_strip_param_lists(&rendered, &param_names);
                         let still_refs_param = param_names.iter().any(|p| {
                             stripped
@@ -283,23 +295,11 @@ impl LanguageBackend for GoBackend {
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
 
-                // Emit `func (s *Counter) __frame_init(<params>)`
-                result.push('\n');
-                let frame_init_params = self.emit_params(params);
-                result.push_str(&format!(
-                    "{}func (s *{}) __frame_init({}) {{\n",
-                    ctx.get_indent(),
-                    class_name,
-                    frame_init_params
-                ));
-                ctx.push_indent();
-                for line in &frame_init_lines {
-                    result.push_str(line);
-                }
-                ctx.pop_indent();
-                result.push_str(&format!("{}}}\n", ctx.get_indent()));
-
-                // Emit `func CreateCounter(<params>) *Counter` — factory
+                // Emit `func CreateCounter(<params>) *Counter` — factory.
+                // Absorb the frame_init body inline, rewriting receiver
+                // references from `s.` to `c.` (since the factory is
+                // a package-level function whose system instance is the
+                // local `c`).
                 result.push('\n');
                 let create_params = self.emit_params(params);
                 result.push_str(&format!(
@@ -311,12 +311,10 @@ impl LanguageBackend for GoBackend {
                 ));
                 ctx.push_indent();
                 result.push_str(&format!("{}c := New{}()\n", ctx.get_indent(), class_name));
-                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                result.push_str(&format!(
-                    "{}c.__frame_init({})\n",
-                    ctx.get_indent(),
-                    arg_pass.join(", ")
-                ));
+                for line in &frame_init_lines {
+                    let rewritten = rewrite_go_member_refs_for_factory(line);
+                    result.push_str(&rewritten);
+                }
                 result.push_str(&format!("{}return c\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
@@ -706,4 +704,34 @@ fn capitalize_first(s: &str) -> String {
         None => String::new(),
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
     }
+}
+
+/// Rewrite member references in absorbed frame-init lines so they
+/// target a local `c` instead of a receiver `s`.
+///
+/// The bare-ctor body lines are rendered against the `s` receiver
+/// (e.g. `s.__compartment = s.__prepareEnter(...)`,
+/// `s._context_stack = append(s._context_stack, __ctx)`). When moved
+/// into the package-level `CreateFoo` factory, every `s.` prefix
+/// must become `c.`. Word-boundary aware so identifiers ending in
+/// `s.` (rare) aren't touched.
+fn rewrite_go_member_refs_for_factory(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut result = String::with_capacity(line.len() + 16);
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b's'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'.'
+            && (i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'))
+        {
+            result.push_str("c.");
+            i += 2;
+            continue;
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
 }

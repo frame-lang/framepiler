@@ -244,8 +244,15 @@ impl LanguageBackend for SwiftBackend {
                 }
                 for stmt in body {
                     let rendered = self.emit(stmt, ctx);
-                    let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__process_transition_loop");
+                    // RFC-0020: scope to kernel call + context-stack
+                    // mutation. Compartment-init lines (`__compartment =
+                    // __prepareEnter(...)`) must still run in `init()` so
+                    // `@@!Foo()` shells are usable. Bare `_context_stack`
+                    // initialization stays in `init()`; only push/pop go
+                    // to `__frame_init`.
+                    let frame_init_only = rendered.contains("__kernel(")
+                        || rendered.contains("_context_stack.append(")
+                        || rendered.contains("_context_stack.removeLast(");
                     if frame_init_only {
                         frame_init_lines.push(rendered);
                         continue;

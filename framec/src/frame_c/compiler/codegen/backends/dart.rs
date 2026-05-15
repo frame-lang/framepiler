@@ -256,8 +256,13 @@ impl LanguageBackend for DartBackend {
                     } else if !rendered.ends_with('\n') {
                         rendered.push('\n');
                     }
-                    let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__process_transition_loop");
+                    // RFC-0020: scope to kernel call + context-stack
+                    // mutation. Compartment-init lines (`__compartment =
+                    // __prepareEnter(...)`) must still run in the bare
+                    // ctor so `@@!Foo()` shells are usable.
+                    let frame_init_only = rendered.contains("__kernel(")
+                        || rendered.contains("_context_stack.add(")
+                        || rendered.contains("_context_stack.removeLast(");
                     if frame_init_only {
                         frame_init_lines.push(rendered);
                         continue;

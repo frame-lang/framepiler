@@ -723,11 +723,52 @@ pub(crate) fn generate_state_handlers_via_arcanum(
     methods
 }
 
-/// Emit per-handler methods for Python. Mirrors the structure of
-/// `generate_rust_handler_methods` but with the Python-specific
-/// handler-body mode flag (`per_handler: true`), so Frame expansion
-/// targets `compartment.state_vars[…]` / `compartment.parent_compartment`
-/// etc. rather than the legacy `__sv_comp` / `self.__compartment` forms.
+/// Emit per-state dispatcher's per-handler methods for one backend.
+///
+/// For each state, this function produces:
+///   - One **synthesized `$>` method** if the state has state-vars
+///     but no explicit `$>` handler. Body: state-var init guards
+///     ONLY. No cascade-forward to a parent state is injected — see
+///     "Cascade-forward contract" below.
+///   - One **named handler method** per declared handler
+///     (`_s_<State>_hdl_<kind>_<event>(__e, compartment)`), with the
+///     body expanded by `frame_expansion::emit_handler_body_via_statements`
+///     under `ctx.per_handler = true` (state-var access targets
+///     `compartment.state_vars[…]`; `=> $^` targets
+///     `compartment.parent_compartment`).
+///
+/// # Cascade-forward contract (RFC-0019)
+///
+/// Pre-RFC-0019, framec emitted an enter-cascade that auto-fired
+/// `$>` on every ancestor in an HSM chain. RFC-0019 removed that
+/// auto-cascade: `$>` and `<$` are leaf-dispatched only. As a
+/// consequence, **HSM child states with parent state-vars must
+/// explicitly forward `$>` via `=> $^` in their Frame source** to
+/// initialize parent state-vars at construction time.
+///
+/// This function's synthesized `$>` method (lines below where
+/// `synthetic_enter` is built) deliberately does NOT inject the
+/// `=> $^` — that lowering is driven by the user's Frame source via
+/// `frame_expansion/forward.rs::expand_forward`. Auto-injecting it
+/// here would re-introduce the pre-RFC-0019 cascade and defeat the
+/// leaf-dispatch model.
+///
+/// Fixture authors writing HSM systems with state-vars must include
+/// an explicit:
+///
+/// ```frame
+/// $Child => $Parent {
+///     $.child_var: int = 10
+///
+///     $>() {
+///         => $^   // forward $> to $Parent so its state-var initializer runs
+///     }
+///     ...
+/// }
+/// ```
+///
+/// See `docs/codegen_pipeline.md` § "The cascade-forward contract"
+/// for the migration story.
 pub(crate) fn generate_per_handler_methods(
     lang: TargetLanguage,
     system_name: &str,

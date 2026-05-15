@@ -27,25 +27,19 @@ use crate::frame_c::compiler::frame_ast::SystemAst;
 
 pub(crate) struct CMachinery;
 
-/// Thin `__router` body — delegates to `__route_to_state` with the
-/// active compartment.
-fn c_router_dispatch(system: &SystemAst) -> String {
-    let sys = &system.name;
-    format!("{sys}_route_to_state(self, self->__compartment->state, __e, self->__compartment);")
-}
-
-/// Per-handler `__route_to_state` body. Routes by state name to the
-/// state's dispatcher with a specific compartment — used by cascade
-/// helpers in addition to the `__router` thin wrapper. See
-/// `docs/frame_runtime.md § "Dispatch Model"`.
-fn c_route_to_state_dispatch(system: &SystemAst) -> String {
+/// RFC-0020 `__router` body — the single dispatch primitive.
+/// Reads `self->__compartment->state` at call time and routes to the
+/// matching state dispatcher with the active compartment. The
+/// intermediate `__route_to_state` indirection that earlier codegen
+/// emitted is gone.
+fn c_router_inline_dispatch(system: &SystemAst) -> String {
     let sys = &system.name;
     let mut code = String::new();
     if let Some(ref machine) = system.machine {
         for (i, state) in machine.states.iter().enumerate() {
             let cond = if i == 0 { "if" } else { "} else if" };
             code.push_str(&format!(
-                "{} (strcmp(state_name, \"{}\") == 0) {{\n    {}_state_{}(self, __e, compartment);\n",
+                "{} (strcmp(self->__compartment->state, \"{}\") == 0) {{\n    {}_state_{}(self, __e, self->__compartment);\n",
                 cond, state.name, sys, state.name
             ));
         }
@@ -175,65 +169,76 @@ while (comp != NULL) {{
         })
     }
 
-    fn emit_route_to_state(&self, system: &SystemAst) -> Option<CodegenNode> {
-        let sys = &system.name;
-        // __route_to_state — cascade router. Same dispatch logic as
-        // __router but takes an explicit state name and compartment.
-        Some(CodegenNode::Method {
-            name: "__route_to_state".to_string(),
-            params: vec![
-                Param::new("state_name").with_type("const char*"),
-                Param::new("__e").with_type(&format!("{}_FrameEvent*", sys)),
-                Param::new("compartment").with_type(&format!("{}_Compartment*", sys)),
-            ],
-            return_type: None,
-            body: vec![CodegenNode::NativeBlock {
-                code: c_route_to_state_dispatch(system),
-                span: None,
-            }],
-            is_async: false,
-            is_static: false,
-            visibility: Visibility::Private,
-            decorators: vec![],
-        })
+    fn emit_route_to_state(&self, _system: &SystemAst) -> Option<CodegenNode> {
+        // RFC-0020: the dispatch table that __route_to_state used to
+        // hold is now inlined directly into __router. No separate
+        // __route_to_state function is emitted.
+        None
     }
 
     fn emit_process_transition_loop(
         &self,
-        system: &SystemAst,
+        _system: &SystemAst,
         _event_class: &str,
     ) -> Option<CodegenNode> {
+        // RFC-0020: the drain loop is inlined inside __kernel. No
+        // separate __process_transition_loop function is emitted.
+        None
+    }
+
+    fn emit_kernel(&self, system: &SystemAst) -> Option<CodegenNode> {
         let sys = &system.name;
+        // __kernel — dispatches an event then drains any transitions
+        // queued by the handler. Per RFC-0020 the drain loop is
+        // inlined here, and forward-event dispatch follows the
+        // three-branch protocol:
+        //   - forward_event NULL: synthesize a fresh $>
+        //   - forward_event is $>: dispatch the forward directly so
+        //     the destination receives the caller's original payload
+        //   - otherwise: synthesize $> first, then dispatch the forward
         Some(CodegenNode::Method {
-            name: "__process_transition_loop".to_string(),
-            params: vec![],
+            name: "__kernel".to_string(),
+            params: vec![Param::new("__e").with_type(&format!("{}_FrameEvent*", sys))],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
                 code: format!(
-                    r#"while (self->__next_compartment != NULL) {{
+                    r#"{sys}_router(self, __e);
+while (self->__next_compartment != NULL) {{
     {sys}_Compartment* next_compartment = self->__next_compartment;
     self->__next_compartment = NULL;
     // Exit the current (leaf) state
     {sys}_FrameEvent* __exit_event = {sys}_FrameEvent_new("<$", self->__compartment->exit_args, 0);
-    {sys}_route_to_state(self, self->__compartment->state, __exit_event, self->__compartment);
+    {sys}_router(self, __exit_event);
     {sys}_FrameEvent_destroy(__exit_event);
     {sys}_Compartment_unref(self->__compartment);
     self->__compartment = next_compartment;
-    // Enter the new (leaf) state — or the forwarded event
     if (next_compartment->forward_event == NULL) {{
+        // No forwarded event — synthesize a fresh $>
         {sys}_FrameEvent* __enter_event = {sys}_FrameEvent_new("$>", self->__compartment->enter_args, 0);
-        {sys}_route_to_state(self, self->__compartment->state, __enter_event, self->__compartment);
+        {sys}_router(self, __enter_event);
         {sys}_FrameEvent_destroy(__enter_event);
+    }} else if (strcmp(next_compartment->forward_event->_message, "$>") == 0) {{
+        // Forwarded event IS $> — dispatch directly so the
+        // destination's $> handler receives the caller's payload.
+        // The forward_event is borrowed (owned by the wrapper that
+        // queued the transition) — do NOT destroy it here.
+        {sys}_FrameEvent* forward_event = next_compartment->forward_event;
+        next_compartment->forward_event = NULL;
+        {sys}_router(self, forward_event);
     }} else {{
+        // Forwarded event is not $> — initialize the destination
+        // with a fresh $>, then dispatch the forward to it. The
+        // forward_event is borrowed; only the synthesized $> belongs
+        // to the kernel and is freed here.
         {sys}_FrameEvent* forward_event = next_compartment->forward_event;
         next_compartment->forward_event = NULL;
         {sys}_FrameEvent* __enter_event = {sys}_FrameEvent_new("$>", self->__compartment->enter_args, 0);
-        {sys}_route_to_state(self, self->__compartment->state, __enter_event, self->__compartment);
+        {sys}_router(self, __enter_event);
         {sys}_FrameEvent_destroy(__enter_event);
-        if (strcmp(forward_event->_message, "$>") != 0) {{
-            {sys}_router(self, forward_event);
-        }}
+        {sys}_router(self, forward_event);
     }}
+    // Mark every stacked context as having transitioned. Read by
+    // @@:self.X() guard so outer self-calls short-circuit.
     for (int __i = 0; __i < self->_context_stack->size; __i++) {{
         (({sys}_FrameContext*)self->_context_stack->items[__i])->_transitioned = 1;
     }}
@@ -249,34 +254,21 @@ while (comp != NULL) {{
         })
     }
 
-    fn emit_kernel(&self, system: &SystemAst) -> Option<CodegenNode> {
-        let sys = &system.name;
-        Some(CodegenNode::Method {
-            name: "__kernel".to_string(),
-            params: vec![Param::new("__e").with_type(&format!("{}_FrameEvent*", sys))],
-            return_type: None,
-            body: vec![CodegenNode::NativeBlock {
-                code: format!(
-                    "{sys}_router(self, __e);\n{sys}_process_transition_loop(self);",
-                    sys = sys
-                ),
-                span: None,
-            }],
-            is_async: false,
-            is_static: false,
-            visibility: Visibility::Private,
-            decorators: vec![],
-        })
-    }
-
     fn emit_router(&self, system: &SystemAst) -> Option<CodegenNode> {
         let sys = &system.name;
+        // __router — single dispatch primitive. Reads
+        // self->__compartment->state at call time and routes to the
+        // current state's dispatcher, passing self->__compartment so
+        // the dispatcher can reach state-args / state-vars / enter-args
+        // / exit-args. Same primitive used for wrapper events and for
+        // the synthesized <$ / $> events emitted inside __kernel's
+        // drain loop.
         Some(CodegenNode::Method {
             name: "__router".to_string(),
             params: vec![Param::new("__e").with_type(&format!("{}_FrameEvent*", sys))],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
-                code: c_router_dispatch(system),
+                code: c_router_inline_dispatch(system),
                 span: None,
             }],
             is_async: false,

@@ -225,10 +225,13 @@ this._context_stack.pop();"#,
                 s = system_name
             ),
             TargetLanguage::Rust => format!(
-                r#"let __frame_event = {s}FrameEvent::new("$>");
-let __ctx = {s}FrameContext::new(__frame_event, None);
+                // RFC-0020: __kernel takes &Rc<FrameEvent>; FrameContext
+                // holds an Rc-wrapped event. Wrap the synthesized $>
+                // before pushing the context and dispatching.
+                r#"let __e = std::rc::Rc::new({s}FrameEvent::new("$>"));
+let __ctx = {s}FrameContext::new(std::rc::Rc::clone(&__e), None);
 self._context_stack.push(__ctx);
-self.__kernel().await;
+self.__kernel(&__e).await;
 self._context_stack.pop();"#,
                 s = system_name
             ),

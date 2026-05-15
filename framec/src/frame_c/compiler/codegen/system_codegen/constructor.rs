@@ -1191,29 +1191,28 @@ pub(crate) fn generate_constructor(
                     r#"__e = {ec}("$>", self.__compartment.enter_args)
 __ctx = {sys}FrameContext(__e, None)
 self._context_stack.append(__ctx)
-self.__router(__e)
-self.__process_transition_loop()
+self.__kernel(__e)
 self._context_stack.pop()"#,
                     ec = event_class,
                     sys = system.name
                 ),
                 TargetLanguage::TypeScript | TargetLanguage::JavaScript => {
                     let _ = event_class;
+                    // RFC-0020: drain inlined into __kernel.
                     format!(
                         r#"const __e = new {sys}FrameEvent("$>", this.__compartment.enter_args);
 const __ctx = new {sys}FrameContext(__e, null);
 this._context_stack.push(__ctx);
-this.__router(__e);
-this.__process_transition_loop();
+this.__kernel(__e);
 this._context_stack.pop();"#,
                         sys = system.name
                     )
                 }
                 TargetLanguage::Rust => format!(
-                    r#"let __frame_event = {}::new("$>");
-let __ctx = {}FrameContext::new(__frame_event, None);
+                    r#"let __e = std::rc::Rc::new({}::new_with_params("$>", &self.__compartment.enter_args.clone()));
+let __ctx = {}FrameContext::new(std::rc::Rc::clone(&__e), None);
 self._context_stack.push(__ctx);
-self.__kernel();
+self.__kernel(&__e);
 self._context_stack.pop();"#,
                     event_class, system.name
                 ),
@@ -1223,8 +1222,7 @@ self._context_stack.pop();"#,
                         r#"{sys}_FrameEvent* __e = {sys}_FrameEvent_new("$>", self->__compartment->enter_args, 0);
 {sys}_FrameContext* __ctx = {sys}_FrameContext_new(__e, NULL);
 {sys}_FrameVec_push(self->_context_stack, __ctx);
-{sys}_router(self, __e);
-{sys}_process_transition_loop(self);
+{sys}_kernel(self, __e);
 {sys}_FrameContext* __init_ctx = ({sys}_FrameContext*){sys}_FrameVec_pop(self->_context_stack);
 {sys}_FrameContext_destroy(__init_ctx);
 {sys}_FrameEvent_destroy(__e);"#,
@@ -1232,114 +1230,121 @@ self._context_stack.pop();"#,
                     )
                 }
                 TargetLanguage::Cpp => format!(
+                    // RFC-0020: drain loop is inlined into __kernel; the
+                    // factory just fires the start $> through __kernel.
                     r#"{sys}FrameEvent __e("$>", __compartment->enter_args);
 {sys}FrameContext __ctx(std::move(__e));
 _context_stack.push_back(std::move(__ctx));
-__router(_context_stack.back()._event);
-__process_transition_loop();
+__kernel(_context_stack.back()._event);
 _context_stack.pop_back();"#,
                     sys = system.name
                 ),
                 TargetLanguage::Java => {
                     let _ = event_class;
+                    // RFC-0020: drain loop is inlined into __kernel; the
+                    // factory just fires the start $> through __kernel.
                     format!(
                         r#"{sys}FrameEvent __e = new {sys}FrameEvent("$>", __compartment.enter_args);
 {sys}FrameContext __ctx = new {sys}FrameContext(__e, null);
 _context_stack.add(__ctx);
-__router(__e);
-__process_transition_loop();
+__kernel(__e);
 _context_stack.remove(_context_stack.size() - 1);"#,
                         sys = system.name
                     )
                 }
                 TargetLanguage::CSharp => {
                     let _ = event_class;
+                    // RFC-0020: drain loop is inlined into __kernel; the
+                    // factory just fires the start $> through __kernel.
                     format!(
                         r#"{sys}FrameEvent __e = new {sys}FrameEvent("$>", __compartment.enter_args);
 {sys}FrameContext __ctx = new {sys}FrameContext(__e, null);
 _context_stack.Add(__ctx);
-__router(__e);
-__process_transition_loop();
+__kernel(__e);
 _context_stack.RemoveAt(_context_stack.Count - 1);"#,
                         sys = system.name
                     )
                 }
                 TargetLanguage::Go => {
                     let _ = event_class;
+                    // RFC-0020: drain loop is inlined into __kernel; the
+                    // factory just fires the start $> through __kernel.
                     format!(
                         r#"__e := {sys}FrameEvent{{_message: "$>", _parameters: s.__compartment.enterArgs}}
 __ctx := {sys}FrameContext{{_event: __e, _data: make(map[string]any)}}
 s._context_stack = append(s._context_stack, __ctx)
-s.__router(&s._context_stack[len(s._context_stack)-1]._event)
-s.__process_transition_loop()
+s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
 s._context_stack = s._context_stack[:len(s._context_stack)-1]"#,
                         sys = system.name
                     )
                 }
                 TargetLanguage::Kotlin => {
                     let _ = event_class;
+                    // RFC-0020: drain loop is inlined into __kernel; the
+                    // factory just fires the start $> through __kernel.
                     format!(
                         r#"val __e = {sys}FrameEvent("$>", __compartment.enter_args)
 val __ctx = {sys}FrameContext(__e, null)
 _context_stack.add(__ctx)
-__router(__e)
-__process_transition_loop()
+__kernel(__e)
 _context_stack.removeAt(_context_stack.size - 1)"#,
                         sys = system.name
                     )
                 }
                 TargetLanguage::Swift => {
                     let _ = event_class;
+                    // RFC-0020: drain loop is inlined into __kernel; the
+                    // factory just fires the start $> through __kernel.
                     format!(
                         r#"let __e = {sys}FrameEvent(message: "$>", parameters: __compartment.enter_args)
 let __ctx = {sys}FrameContext(event: __e)
 _context_stack.append(__ctx)
-__router(__e)
-__process_transition_loop()
+__kernel(__e)
 _context_stack.removeLast()"#,
                         sys = system.name
                     )
                 }
                 TargetLanguage::Php => {
                     let _ = event_class;
+                    // RFC-0020: drain inlined into __kernel.
                     format!(
                         r#"$__e = new {sys}FrameEvent("$>", $this->__compartment->enter_args);
 $__ctx = new {sys}FrameContext($__e, null);
 $this->_context_stack[] = $__ctx;
-$this->__router($__e);
-$this->__process_transition_loop();
+$this->__kernel($__e);
 array_pop($this->_context_stack);"#,
                         sys = system.name
                     )
                 }
                 TargetLanguage::Ruby => format!(
+                    // RFC-0020: drain inlined into __kernel.
                     r#"__e = {ec}.new("$>", @__compartment.enter_args)
 __ctx = {sys}FrameContext.new(__e, nil)
 @_context_stack.push(__ctx)
-__router(__e)
-__process_transition_loop
+__kernel(__e)
 @_context_stack.pop"#,
                     ec = event_class,
                     sys = system.name
                 ),
                 TargetLanguage::Lua => format!(
+                    // RFC-0020: drain inlined into __kernel.
                     r#"local __e = {ec}.new("$>", self.__compartment.enter_args)
 local __ctx = {sys}FrameContext.new(__e, nil)
 self._context_stack[#self._context_stack + 1] = __ctx
-self:__router(__e)
-self:__process_transition_loop()
+self:__kernel(__e)
 table.remove(self._context_stack)"#,
                     ec = event_class,
                     sys = system.name
                 ),
                 TargetLanguage::Dart => {
                     let _ = event_class;
+                    // RFC-0020: drain loop is inlined into __kernel; the
+                    // factory just fires the start $> through __kernel.
                     format!(
                         r#"final __e = {sys}FrameEvent("\$>", __compartment.enter_args);
 final __ctx = {sys}FrameContext(__e, null);
 _context_stack.add(__ctx);
-__router(__e);
-__process_transition_loop();
+__kernel(__e);
 _context_stack.removeLast();"#,
                         sys = system.name
                     )
@@ -1350,8 +1355,7 @@ _context_stack.removeLast();"#,
                         r#"var __e = {sys}FrameEvent.new("$>", self.__compartment.enter_args)
 var __ctx = {sys}FrameContext.new(__e, null)
 self._context_stack.append(__ctx)
-self.__router(__e)
-self.__process_transition_loop()
+self.__kernel(__e)
 self._context_stack.pop_back()"#,
                         sys = system.name
                     )

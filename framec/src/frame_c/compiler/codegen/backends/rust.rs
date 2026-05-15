@@ -205,15 +205,18 @@ impl LanguageBackend for RustBackend {
                 body,
                 super_call: _,
             } => {
-                // RFC-0017 (Arc A Phase A1): split the constructor into:
-                //   pub fn new() -> Self                    — bare framework
-                //   pub fn __frame_init(&mut self, <params>) — user $> + cascade
-                //   pub fn __create(<params>) -> Self        — factory (two-step)
+                // RFC-0020: two construction artifacts (was three under RFC-0017):
+                //   pub fn new() -> Self            — bare framework; IS @@!Foo()
+                //   pub fn __create(<params>) -> Self — factory + start-$>; IS @@Foo(args)
+                //
+                // The intermediate `__frame_init` method is gone; its
+                // body is absorbed into `__create` after the `Self::new()`
+                // call, with a `self.` → `c.` rewrite to retarget the
+                // local instance.
                 //
                 // Call-site lowering:
                 //   - `@@Counter(7)` → `Counter::__create(7)`
-                //   - `@@!Counter()` → `Counter::new()` (replaces the
-                //                    obsolete `__no_init`).
+                //   - `@@!Counter()` → `Counter::new()`
                 //
                 // Body classification:
                 //   - Field assignments whose value references a ctor
@@ -295,36 +298,10 @@ impl LanguageBackend for RustBackend {
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
 
-                // Emit `pub fn __frame_init(&mut self, <params>)`
-                result.push('\n');
-                let frame_init_params = self.emit_params(params, true);
-                result.push_str(&format!(
-                    "{}pub fn __frame_init({}) {{\n",
-                    ctx.get_indent(),
-                    frame_init_params
-                ));
-                ctx.push_indent();
-                for (field, value, _default) in &param_bound_fields {
-                    result.push_str(&format!(
-                        "{}self.{} = {};\n",
-                        ctx.get_indent(),
-                        field,
-                        value
-                    ));
-                }
-                for stmt in &cascade_stmts {
-                    let stmt_str = self.emit(stmt, ctx);
-                    result.push_str(&stmt_str);
-                    if self.needs_semicolon(stmt) {
-                        result.push_str(";\n");
-                    } else {
-                        result.push('\n');
-                    }
-                }
-                ctx.pop_indent();
-                result.push_str(&format!("{}}}\n", ctx.get_indent()));
-
-                // Emit `pub fn __create(<params>) -> Self` — factory
+                // Emit `pub fn __create(<params>) -> Self` — factory +
+                // start-$>. Per RFC-0020 the body that used to live in
+                // `__frame_init` is absorbed inline here, with `self.`
+                // → `c.` rewrite to retarget the local instance.
                 result.push('\n');
                 let create_params = self.emit_params(params, false);
                 result.push_str(&format!(
@@ -334,12 +311,24 @@ impl LanguageBackend for RustBackend {
                 ));
                 ctx.push_indent();
                 result.push_str(&format!("{}let mut c = Self::new();\n", ctx.get_indent()));
-                let arg_pass: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                result.push_str(&format!(
-                    "{}c.__frame_init({});\n",
-                    ctx.get_indent(),
-                    arg_pass.join(", ")
-                ));
+                for (field, value, _default) in &param_bound_fields {
+                    result.push_str(&format!(
+                        "{}c.{} = {};\n",
+                        ctx.get_indent(),
+                        field,
+                        value
+                    ));
+                }
+                for stmt in &cascade_stmts {
+                    let stmt_str = self.emit(stmt, ctx);
+                    let rewritten = stmt_str.replace("self.", "c.");
+                    result.push_str(&rewritten);
+                    if self.needs_semicolon(stmt) {
+                        result.push_str(";\n");
+                    } else {
+                        result.push('\n');
+                    }
+                }
                 result.push_str(&format!("{}c\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));

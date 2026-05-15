@@ -287,34 +287,33 @@ impl LanguageBackend for PythonBackend {
                 body,
                 super_call,
             } => {
-                // RFC-0017 (Arc A Phase A0): split the constructor into:
-                //   __init__(self)             — bare framework setup
-                //   _frame_init(self, <params>) — user-arg-bound + cascade
-                //   _create(cls, <params>)     — static factory (two-step)
+                // RFC-0020 (Python spec): the constructor splits into
+                // two artifacts (was three under RFC-0017):
+                //   __init__(self)           — bare framework setup; IS @@!Foo()
+                //   _create(cls, <params>)   — factory + start-$>; IS @@Foo(args)
                 //
-                // Single-underscore on `_create` / `_frame_init` avoids
-                // Python's double-underscore name-mangling so external
-                // callers (factory call sites) can reach `Counter._create`
+                // The intermediate `_frame_init` method that RFC-0017
+                // emitted is gone — its body is absorbed into `_create`.
+                //
+                // Single-underscore on `_create` avoids Python's
+                // double-underscore name-mangling so external callers
+                // (factory call sites) can reach `Counter._create`
                 // without the mangled `_Counter__create` form.
                 //
                 // Classification of body items:
                 //   - Statements containing `__fire_enter_cascade` or
-                //     `__process_transition_loop` → `_frame_init` only.
+                //     `__kernel` (the start-$> dispatch) → `_create` only.
                 //   - Statements that mention any constructor param by
                 //     name (typically the `__prepareEnter` call binding
-                //     enter/state args) → `_frame_init` (with full
-                //     args) + `__init__` (with the param-list arg
-                //     stripped to `[]` so the compartment is created
-                //     with empty enter_args until `_frame_init` runs).
+                //     enter/state args) → `_create` (with full args) +
+                //     `__init__` (with the param-list arg stripped to
+                //     `[]` so the compartment is created with empty
+                //     enter_args until `_create` runs).
                 //   - All other body items → `__init__` only.
                 //
                 // Call-site lowering:
                 //   - `@@Counter(7)` → `Counter._create(7)`
                 //   - `@@!Counter()` → `Counter()`
-                //
-                // The factory pattern unifies parameterized and zero-arg
-                // systems: `Counter._create()` always means "construct
-                // and run init". Bare `Counter()` always means "no init".
                 let mut result = String::new();
                 let class_name = ctx
                     .system_name
@@ -374,9 +373,9 @@ impl LanguageBackend for PythonBackend {
                 }
                 for stmt in body {
                     let rendered = self.emit(stmt, ctx);
-                    let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__process_transition_loop");
-                    if frame_init_only {
+                    let create_only = rendered.contains("__fire_enter_cascade")
+                        || rendered.contains("__kernel");
+                    if create_only {
                         frame_init_lines.push(rendered);
                         continue;
                     }
@@ -391,7 +390,7 @@ impl LanguageBackend for PythonBackend {
                         // `self.field = seed` and strip is a no-op —
                         // emitting the stripped form into the no-arg
                         // bare ctor would leave `seed` undefined.
-                        // Skip those; `_frame_init` owns them.
+                        // Skip those; `_create` owns them.
                         let stripped = python_strip_param_lists(&rendered, &param_names);
                         let still_refs_param = param_names
                             .iter()
@@ -420,28 +419,12 @@ impl LanguageBackend for PythonBackend {
                 }
                 ctx.pop_indent();
 
-                // Emit `def _frame_init(self, <params>):` — user-arg-bound
-                result.push('\n');
-                let frame_init_params = self.emit_params(params, true);
-                result.push_str(&format!(
-                    "{}def _frame_init({}):\n",
-                    ctx.get_indent(),
-                    frame_init_params
-                ));
-                ctx.push_indent();
-                if frame_init_lines.is_empty() {
-                    result.push_str(&format!("{}pass\n", ctx.get_indent()));
-                } else {
-                    for line in &frame_init_lines {
-                        result.push_str(line);
-                        if !line.ends_with('\n') {
-                            result.push('\n');
-                        }
-                    }
-                }
-                ctx.pop_indent();
-
-                // Emit `@classmethod def _create(cls, <params>):` — factory
+                // Emit `@classmethod def _create(cls, <params>):` —
+                // factory + start-$>. Per RFC-0020 the body that used
+                // to live in `_frame_init` is absorbed inline here. The
+                // textual `self.` → `c.` rewrite reframes those lines
+                // as classmethod-local — the local var `c` is the
+                // newly-allocated instance.
                 result.push('\n');
                 result.push_str(&format!("{}@classmethod\n", ctx.get_indent()));
                 let create_params = if params.is_empty() {
@@ -456,12 +439,15 @@ impl LanguageBackend for PythonBackend {
                 ));
                 ctx.push_indent();
                 result.push_str(&format!("{}c = cls()\n", ctx.get_indent()));
-                let arg_pass = param_names.join(", ");
-                result.push_str(&format!(
-                    "{}c._frame_init({})\n",
-                    ctx.get_indent(),
-                    arg_pass
-                ));
+                if !frame_init_lines.is_empty() {
+                    for line in &frame_init_lines {
+                        let rewritten = line.replace("self.", "c.");
+                        result.push_str(&rewritten);
+                        if !rewritten.ends_with('\n') {
+                            result.push('\n');
+                        }
+                    }
+                }
                 result.push_str(&format!("{}return c\n", ctx.get_indent()));
                 ctx.pop_indent();
 

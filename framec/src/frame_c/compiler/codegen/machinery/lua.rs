@@ -122,61 +122,49 @@ end"#
     }
 
     fn emit_route_to_state(&self, _system: &SystemAst) -> Option<CodegenNode> {
-        // __route_to_state — cascade router.
-        Some(CodegenNode::Method {
-            name: "__route_to_state".to_string(),
-            params: vec![
-                Param::new("state_name"),
-                Param::new("__e"),
-                Param::new("compartment"),
-            ],
-            return_type: None,
-            body: vec![CodegenNode::NativeBlock {
-                code: r#"local handler = self["_state_" .. state_name]
-if handler then
-    handler(self, __e, compartment)
-end"#
-                    .to_string(),
-                span: None,
-            }],
-            is_async: false,
-            is_static: false,
-            visibility: Visibility::Private,
-            decorators: vec![],
-        })
+        // RFC-0020: __router holds the dispatch table directly.
+        None
     }
 
     fn emit_process_transition_loop(
         &self,
         _system: &SystemAst,
-        event_class: &str,
+        _event_class: &str,
     ) -> Option<CodegenNode> {
-        // __process_transition_loop — drains pending transitions. RFC-0019:
-        // <$/$> are dispatched to the leaf (current/new) compartment only —
-        // ancestors run via an explicit `=> $^` forward, never a chain walk.
+        // RFC-0020: drain loop is inlined into __kernel.
+        None
+    }
+
+    fn emit_kernel(&self, system: &SystemAst) -> Option<CodegenNode> {
+        // RFC-0020: __kernel dispatches one event then drains; 3-branch
+        // forward-event protocol matches the Python reference.
+        let event_class = format!("{}FrameEvent", system.name);
         Some(CodegenNode::Method {
-            name: "__process_transition_loop".to_string(),
-            params: vec![],
+            name: "__kernel".to_string(),
+            params: vec![Param::new("__e")],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
                 code: format!(
-                    r#"while self.__next_compartment ~= nil do
+                    r#"-- Route event to current state.
+self:__router(__e)
+-- Drain any transitions queued by the handler.
+while self.__next_compartment ~= nil do
     local next_compartment = self.__next_compartment
     self.__next_compartment = nil
     local exit_event = {ec}.new("<$", self.__compartment.exit_args)
-    self:__route_to_state(self.__compartment.state, exit_event, self.__compartment)
+    self:__router(exit_event)
     self.__compartment = next_compartment
-    if next_compartment.forward_event == nil then
+    local forward_event = next_compartment.forward_event
+    next_compartment.forward_event = nil
+    if forward_event == nil then
         local enter_event = {ec}.new("$>", self.__compartment.enter_args)
-        self:__route_to_state(self.__compartment.state, enter_event, self.__compartment)
+        self:__router(enter_event)
+    elseif forward_event._message == "$>" then
+        self:__router(forward_event)
     else
-        local forward_event = next_compartment.forward_event
-        next_compartment.forward_event = nil
         local enter_event = {ec}.new("$>", self.__compartment.enter_args)
-        self:__route_to_state(self.__compartment.state, enter_event, self.__compartment)
-        if forward_event._message ~= "$>" then
-            self:__router(forward_event)
-        end
+        self:__router(enter_event)
+        self:__router(forward_event)
     end
     for _, ctx in ipairs(self._context_stack) do
         ctx._transitioned = true
@@ -193,31 +181,17 @@ end"#,
         })
     }
 
-    fn emit_kernel(&self, _system: &SystemAst) -> Option<CodegenNode> {
-        // __kernel — routes event then drains transitions.
-        Some(CodegenNode::Method {
-            name: "__kernel".to_string(),
-            params: vec![Param::new("__e")],
-            return_type: None,
-            body: vec![CodegenNode::NativeBlock {
-                code: "-- Route event to current state\nself:__router(__e)\n-- Process any pending transition\nself:__process_transition_loop()".to_string(),
-                span: None,
-            }],
-            is_async: false,
-            is_static: false,
-            visibility: Visibility::Private,
-            decorators: vec![],
-        })
-    }
-
     fn emit_router(&self, _system: &SystemAst) -> Option<CodegenNode> {
-        // __router — delegates to __route_to_state for the active compartment.
+        // RFC-0020: __router is the single dispatch primitive.
         Some(CodegenNode::Method {
             name: "__router".to_string(),
             params: vec![Param::new("__e")],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
-                code: "self:__route_to_state(self.__compartment.state, __e, self.__compartment)"
+                code: r#"local handler = self["_state_" .. self.__compartment.state]
+if handler then
+    handler(self, __e, self.__compartment)
+end"#
                     .to_string(),
                 span: None,
             }],

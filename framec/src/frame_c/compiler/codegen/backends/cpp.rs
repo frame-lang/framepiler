@@ -75,6 +75,76 @@ struct FrameTask<void> {
 /// identifier) — we don't want to clobber `returned`, string literals, or
 /// a `// return` comment. This walks lines, checks the trimmed prefix,
 /// and preserves indentation and trailing content (e.g. `return __result;`).
+/// Rewrite member references in absorbed frame-init lines so they
+/// target a local `c` instead of an implicit `this`.
+///
+/// The bare-ctor body lines use two member-access styles:
+///
+/// - **`this->X = Y;`** — emitted by `constructor.rs` for domain
+///   assignments. These become `c.X = Y;`.
+/// - **Bare references** — `__compartment`, `_context_stack`,
+///   `__kernel`, `__prepareEnter`, etc. The C++ codegen omits the
+///   `this->` prefix on these because they're called from member
+///   functions. After absorption into a static factory they must be
+///   qualified with `c.`.
+///
+/// Word-boundary aware: only rewrites when the symbol is preceded by
+/// a non-word character (or start of string) AND followed by a
+/// non-word character (or end of string). Avoids double-prefixing
+/// (`c.c.__compartment`) by skipping symbols whose immediate prefix
+/// is already `c.`.
+fn rewrite_cpp_member_refs_for_factory(line: &str) -> String {
+    let after_this = line.replace("this->", "c.");
+    const MEMBERS: &[&str] = &[
+        "__compartment",
+        "_context_stack",
+        "__next_compartment",
+        "__kernel",
+        "__router",
+        "__prepareEnter",
+        "__prepareExit",
+        "__transition",
+        "__hsm_chain",
+        "hsm_chain",
+    ];
+    let mut s = after_this;
+    for m in MEMBERS {
+        s = word_boundary_prefix_replace(&s, m, "c.");
+    }
+    s
+}
+
+/// Replace standalone occurrences of `needle` with `prefix + needle`,
+/// honoring word boundaries and skipping cases where `needle` is
+/// already preceded by `prefix` (avoids `c.c.X`).
+fn word_boundary_prefix_replace(haystack: &str, needle: &str, prefix: &str) -> String {
+    let bytes = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    let pb = prefix.as_bytes();
+    let mut result = String::with_capacity(haystack.len() + 32);
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts_here = bytes[i..].starts_with(nb);
+        if starts_here {
+            let prev_is_word =
+                i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            let end = i + nb.len();
+            let next_is_word =
+                end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_');
+            let prev_is_prefix = i >= pb.len() && &bytes[i - pb.len()..i] == pb;
+            if !prev_is_word && !next_is_word && !prev_is_prefix {
+                result.push_str(prefix);
+                result.push_str(needle);
+                i = end;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
 fn rewrite_return_to_co_return(body: &str) -> String {
     let mut out = String::with_capacity(body.len() + 64);
     for line in body.split_inclusive('\n') {
@@ -321,9 +391,12 @@ impl LanguageBackend for CppBackend {
                 body,
                 super_call,
             } => {
-                // RFC-0017 Phase A3: split into bare ctor + __frame_init
-                // member + static __create factory. Framework helper
-                // classes keep the original single-ctor emission.
+                // RFC-0020: two artifacts — bare ctor + static __create
+                // factory. The intermediate `__frame_init` member that
+                // RFC-0017 emitted is gone — its body is absorbed inline
+                // into `__create`. Framework helper classes
+                // (FrameEvent/FrameContext/Compartment) keep the
+                // original single-ctor emission below.
                 let class_name = ctx.system_name.clone().unwrap_or("Class".to_string());
                 let is_frame_helper = class_name.ends_with("FrameEvent")
                     || class_name.ends_with("FrameContext")
@@ -357,6 +430,21 @@ impl LanguageBackend for CppBackend {
                 }
 
                 // System class: classify body.
+                //
+                // Lines fall into two buckets:
+                // - `framework_lines` — run in the bare ctor (`Counter()`)
+                //   so `@@!Counter()` produces a usable-but-not-entered
+                //   instance.
+                // - `frame_init_lines` — run only in the factory
+                //   (`Counter::__create(...)`), AFTER constructing a
+                //   local `c` of type Counter. These include compartment
+                //   setup (`__prepareEnter`), domain-param assignments,
+                //   and the kernel call that fires the start $>.
+                //
+                // Lines that touch the kernel (`__kernel(...)`), set
+                // `__compartment`, or mention any system parameter go
+                // to `frame_init_lines`; everything else stays in the
+                // bare ctor.
                 let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
                 ctx.push_indent();
                 let mut framework_lines: Vec<String> = Vec::new();
@@ -373,8 +461,15 @@ impl LanguageBackend for CppBackend {
                     } else if !rendered.ends_with('\n') {
                         rendered.push('\n');
                     }
-                    let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__process_transition_loop");
+                    // Scope to kernel call + context-stack push/pop/peek.
+                    // The compartment-init line (`__compartment = __prepareEnter(...)`)
+                    // must run in the bare ctor too so `@@!Foo()` shells are
+                    // usable (with empty-args compartment); when it mentions
+                    // params, the mentions_param branch below handles the split.
+                    let frame_init_only = rendered.contains("__kernel(")
+                        || rendered.contains("_context_stack.push_back(")
+                        || rendered.contains("_context_stack.pop_back(")
+                        || rendered.contains("_context_stack.back(");
                     if frame_init_only {
                         frame_init_lines.push(rendered);
                         continue;
@@ -401,10 +496,10 @@ impl LanguageBackend for CppBackend {
                 // from system parameters: `const x: int = x` -> `: x(x)`)
                 // can only run in a constructor, so when one is present
                 // the bare ctor must take the system parameters too —
-                // `__create` then threads them through both the ctor and
-                // `__frame_init`. With no member-init list the bare ctor
-                // stays parameterless (a parameterless ctor is what the
-                // restore path's `make_shared<T>()` and `@@!T()` rely on).
+                // `__create` then threads them through the ctor. With
+                // no member-init list the bare ctor stays parameterless
+                // (a parameterless ctor is what the restore path's
+                // `make_shared<T>()` and `@@!T()` rely on).
                 let needs_ctor_params = super_call.is_some() && !params.is_empty();
                 let bare_ctor_params = if needs_ctor_params {
                     self.emit_params(params)
@@ -421,19 +516,6 @@ impl LanguageBackend for CppBackend {
                     init_list
                 );
                 for line in &framework_lines {
-                    result.push_str(line);
-                }
-                result.push_str(&format!("{}}}\n", ctx.get_indent()));
-
-                // Emit `void __frame_init(<params>)`
-                result.push('\n');
-                let frame_init_params = self.emit_params(params);
-                result.push_str(&format!(
-                    "{}void __frame_init({}) {{\n",
-                    ctx.get_indent(),
-                    frame_init_params
-                ));
-                for line in &frame_init_lines {
                     result.push_str(line);
                 }
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));
@@ -469,11 +551,17 @@ impl LanguageBackend for CppBackend {
                 } else {
                     result.push_str(&format!("{}{} c;\n", ctx.get_indent(), class_name));
                 }
-                result.push_str(&format!(
-                    "{}c.__frame_init({});\n",
-                    ctx.get_indent(),
-                    arg_pass.join(", ")
-                ));
+                // Absorb the frame_init body inline, rewriting
+                // member references so they target the local `c` instead
+                // of an implicit `this`. The bare-ctor body uses
+                // `this->X` for member writes and bare references
+                // (`__compartment`, `_context_stack`, `__kernel`, ...)
+                // for framework members. In a static factory `this` is
+                // not valid; each such reference must be qualified.
+                for line in &frame_init_lines {
+                    let rewritten = rewrite_cpp_member_refs_for_factory(line);
+                    result.push_str(&rewritten);
+                }
                 result.push_str(&format!("{}return c;\n", ctx.get_indent()));
                 ctx.pop_indent();
                 result.push_str(&format!("{}}}\n", ctx.get_indent()));

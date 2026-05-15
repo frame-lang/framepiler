@@ -337,15 +337,18 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
             // leaf (like an interface call), inside a FrameContext (so
             // @@:return / @@:data resolve). No enter cascade — an
             // ancestor's `$>` runs only if the leaf forwards it (=> $^).
+            //
+            // RFC-0020: event is Rc-wrapped so the kernel can take a
+            // borrow without aliasing through `self`. The drain loop
+            // is inlined into __kernel; the factory just calls it.
             let event_class = format!("{}FrameEvent", system.name);
             let context_class = format!("{}FrameContext", system.name);
             body.push(CodegenNode::NativeBlock {
                 code: format!(
-                    "let __frame_event = {}::new_with_params(\"$>\", &self.__compartment.enter_args.clone());\n\
-                     let __ctx = {}::new(__frame_event.clone(), None);\n\
+                    "let __e = std::rc::Rc::new({}::new_with_params(\"$>\", &self.__compartment.enter_args.clone()));\n\
+                     let __ctx = {}::new(std::rc::Rc::clone(&__e), None);\n\
                      self._context_stack.push(__ctx);\n\
-                     self.__router(&__frame_event);\n\
-                     self.__process_transition_loop();\n\
+                     self.__kernel(&__e);\n\
                      self._context_stack.pop();",
                     event_class, context_class
                 ),
@@ -683,8 +686,15 @@ pub(crate) fn generate_rust_interface_body(
 ) -> CodegenNode {
     let context_class = format!("{}FrameContext", system_name);
 
+    // RFC-0020: event is Rc-wrapped so the wrapper can pass an
+    // `&Rc<FrameEvent>` to the kernel without aliasing through `self`.
+    // The Rc::clone-ing the wrapper does is a refcount bump, not a
+    // deep clone — parameters survive the handoff.
     let mut code = if method.params.is_empty() {
-        format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name)
+        format!(
+            "let __e = std::rc::Rc::new({}::new(\"{}\"));\n",
+            event_class, method.name
+        )
     } else {
         // Type-direct boxing. The matching dispatch downcast pulls
         // the value back as the param's declared type. Storing as the
@@ -700,11 +710,12 @@ pub(crate) fn generate_rust_interface_body(
             "__e.parameters = vec![{}];\n",
             param_items.join(", ")
         ));
+        s.push_str("let __e = std::rc::Rc::new(__e);\n");
         s
     };
 
     code.push_str(&format!(
-        "let mut __ctx = {}::new(__e, None);\n",
+        "let mut __ctx = {}::new(std::rc::Rc::clone(&__e), None);\n",
         context_class
     ));
     if let Some(ref init_expr) = method.return_init {
@@ -719,7 +730,7 @@ pub(crate) fn generate_rust_interface_body(
         ));
     }
     code.push_str("self._context_stack.push(__ctx);\n");
-    code.push_str("self.__kernel();\n");
+    code.push_str("self.__kernel(&__e);\n");
 
     if let Some(ref rt) = method.return_type {
         let raw_type = type_to_string(rt);
