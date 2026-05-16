@@ -19,6 +19,45 @@ self-call guard divergence specifically, see
 
 ---
 
+## Quick-run from CLI
+
+```bash
+framec -l erlang foo.ferl > fleet_robot.erl
+erlc fleet_robot.erl                       # produces fleet_robot.beam
+escript driver.escript                     # runs your test
+```
+
+Three Erlang-specific layout rules to know up front:
+
+- **Module name = filename.** Erlang's compiler enforces
+  `-module(<name>).` matching `<name>.erl` exactly. framec emits the
+  module declaration from your `@@system <Name>` (snake-cased). Name
+  the output file accordingly — `fleet_robot.erl` for `@@system
+  FleetRobot`. If you keep numeric prefixes (e.g. `14_fleet_robot`),
+  strip them before writing the `.erl`; `erlc` rejects modules whose
+  names start with a digit.
+- **One `@@system` per `.ferl` file.** Erlang's one-module-per-file
+  rule maps directly. Multi-system Erlang is design skip `[k]` in the
+  capability matrix.
+- **Drivers live in a separate `.escript`.** Unlike most backends
+  where you can append a `main()` block to the same source, Erlang
+  drivers conventionally live in a sibling `.escript` that
+  `start_link()`s your system and exercises the interface. The matrix
+  harness uses sidecar `.escript` drivers for every Erlang test — see
+  `framec-test-env/tests/common/positive/.../*.escript` for examples.
+
+The escript shape is:
+
+```erlang
+#!/usr/bin/env escript
+main(_) ->
+    {ok, Pid} = fleet_robot:start_link(),
+    io:format("~p~n", [fleet_robot:report_location(Pid)]),
+    ok.
+```
+
+---
+
 ## Foundation: `gen_statem`
 
 A Frame system targeting Erlang generates a single `.erl` module that

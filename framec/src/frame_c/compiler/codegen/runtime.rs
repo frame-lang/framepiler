@@ -1288,16 +1288,19 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     let sys = &system.name;
     let mut code = String::new();
 
-    // FrameEvent class
+    // FrameEvent class. Fully-qualified `java.util.*` types: framec
+    // emits no `import java.util.*;` so the generated code stays
+    // self-contained (user prolog passthrough lands first; Java's
+    // strict "`package` before imports" rule survives Oceans Model).
     code.push_str(&format!("class {sys}FrameEvent {{\n"));
     code.push_str("    String _message;\n");
-    code.push_str("    ArrayList<Object> _parameters;\n");
+    code.push_str("    java.util.ArrayList<Object> _parameters;\n");
     code.push_str(&format!("\n    {sys}FrameEvent(String message) {{\n"));
     code.push_str("        this._message = message;\n");
-    code.push_str("        this._parameters = new ArrayList<>();\n");
+    code.push_str("        this._parameters = new java.util.ArrayList<>();\n");
     code.push_str("    }\n\n");
     code.push_str(&format!(
-        "    {sys}FrameEvent(String message, ArrayList<Object> parameters) {{\n"
+        "    {sys}FrameEvent(String message, java.util.ArrayList<Object> parameters) {{\n"
     ));
     code.push_str("        this._message = message;\n");
     code.push_str("        this._parameters = parameters;\n");
@@ -1308,14 +1311,14 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!("class {sys}FrameContext {{\n"));
     code.push_str(&format!("    {sys}FrameEvent _event;\n"));
     code.push_str("    Object _return;\n");
-    code.push_str("    HashMap<String, Object> _data;\n");
+    code.push_str("    java.util.HashMap<String, Object> _data;\n");
     code.push_str("    boolean _transitioned = false;\n");
     code.push_str(&format!(
         "\n    {sys}FrameContext({sys}FrameEvent event, Object defaultReturn) {{\n"
     ));
     code.push_str("        this._event = event;\n");
     code.push_str("        this._return = defaultReturn;\n");
-    code.push_str("        this._data = new HashMap<>();\n");
+    code.push_str("        this._data = new java.util.HashMap<>();\n");
     code.push_str("        this._transitioned = false;\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
@@ -1323,18 +1326,18 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     // Compartment class
     code.push_str(&format!("class {sys}Compartment {{\n"));
     code.push_str("    String state;\n");
-    code.push_str("    ArrayList<Object> state_args;\n");
-    code.push_str("    HashMap<String, Object> state_vars;\n");
-    code.push_str("    ArrayList<Object> enter_args;\n");
-    code.push_str("    ArrayList<Object> exit_args;\n");
+    code.push_str("    java.util.ArrayList<Object> state_args;\n");
+    code.push_str("    java.util.HashMap<String, Object> state_vars;\n");
+    code.push_str("    java.util.ArrayList<Object> enter_args;\n");
+    code.push_str("    java.util.ArrayList<Object> exit_args;\n");
     code.push_str(&format!("    {sys}FrameEvent forward_event;\n"));
     code.push_str(&format!("    {sys}Compartment parent_compartment;\n"));
     code.push_str(&format!("\n    {sys}Compartment(String state) {{\n"));
     code.push_str("        this.state = state;\n");
-    code.push_str("        this.state_args = new ArrayList<>();\n");
-    code.push_str("        this.state_vars = new HashMap<>();\n");
-    code.push_str("        this.enter_args = new ArrayList<>();\n");
-    code.push_str("        this.exit_args = new ArrayList<>();\n");
+    code.push_str("        this.state_args = new java.util.ArrayList<>();\n");
+    code.push_str("        this.state_vars = new java.util.HashMap<>();\n");
+    code.push_str("        this.enter_args = new java.util.ArrayList<>();\n");
+    code.push_str("        this.exit_args = new java.util.ArrayList<>();\n");
     code.push_str("        this.forward_event = null;\n");
     code.push_str("        this.parent_compartment = null;\n");
     code.push_str("    }\n\n");
@@ -1342,10 +1345,10 @@ pub fn generate_java_compartment_types(system: &SystemAst) -> String {
     code.push_str(&format!(
         "        {sys}Compartment c = new {sys}Compartment(this.state);\n"
     ));
-    code.push_str("        c.state_args = new ArrayList<>(this.state_args);\n");
-    code.push_str("        c.state_vars = new HashMap<>(this.state_vars);\n");
-    code.push_str("        c.enter_args = new ArrayList<>(this.enter_args);\n");
-    code.push_str("        c.exit_args = new ArrayList<>(this.exit_args);\n");
+    code.push_str("        c.state_args = new java.util.ArrayList<>(this.state_args);\n");
+    code.push_str("        c.state_vars = new java.util.HashMap<>(this.state_vars);\n");
+    code.push_str("        c.enter_args = new java.util.ArrayList<>(this.enter_args);\n");
+    code.push_str("        c.exit_args = new java.util.ArrayList<>(this.exit_args);\n");
     code.push_str("        c.forward_event = this.forward_event;\n");
     code.push_str("        c.parent_compartment = this.parent_compartment;\n");
     code.push_str("        return c;\n");

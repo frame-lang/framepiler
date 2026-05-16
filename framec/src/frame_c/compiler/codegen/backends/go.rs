@@ -623,27 +623,15 @@ impl LanguageBackend for GoBackend {
 
     fn emit_module_imports(
         &self,
-        imports: &[crate::frame_c::compiler::frame_ast::Import],
+        _imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 Phase 1 lax — Go modules forbid relative imports;
-        // a real Go `import "<modpath>/<pkg>"` requires the importer
-        // and importee to live in a Go module with a known module
-        // path. Phase 1 emits a comment marker; Phase 2 strict will
-        // accept a `--go-module-root <path>` option to resolve to
-        // proper module-relative imports.
-        imports
-            .iter()
-            .filter_map(|imp| {
-                let path = imp.module.as_str();
-                if path.is_empty() {
-                    return None;
-                }
-                Some(format!(
-                    "// RFC-0022 lax: import \"{}\" — Phase 2 strict will emit `import \"<modpath>/...\"`",
-                    imp.module
-                ))
-            })
-            .collect()
+        // RFC-0022.1: on Go `@@import` is a dependency declaration
+        // only — consumed by the pipeline for `--import-mode strict`
+        // validation (E821/E822) but emits nothing. Users write the
+        // native `package` / `import "<modpath>"` lines as Oceans
+        // Model pass-through outside `@@system` blocks; framec
+        // emits them verbatim.
+        vec![]
     }
 
     fn runtime_imports(&self) -> Vec<String> {

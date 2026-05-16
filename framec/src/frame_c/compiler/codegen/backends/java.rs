@@ -78,7 +78,7 @@ fn java_word_boundary_prefix_replace(haystack: &str, needle: &str, prefix: &str)
 }
 
 fn java_strip_param_lists(text: &str, param_names: &[&str]) -> String {
-    let needle = "new ArrayList<>(java.util.Arrays.asList(";
+    let needle = "new java.util.ArrayList<>(java.util.Arrays.asList(";
     let mut result = String::with_capacity(text.len());
     let bytes = text.as_bytes();
     let needle_bytes = needle.as_bytes();
@@ -110,7 +110,7 @@ fn java_strip_param_lists(text: &str, param_names: &[&str]) -> String {
                     .filter(|p| !p.is_empty())
                     .collect();
                 if !parts.is_empty() && parts.iter().all(|p| param_names.contains(p)) {
-                    result.push_str("new ArrayList<>()");
+                    result.push_str("new java.util.ArrayList<>()");
                     i = j + 2; // skip past both closing parens
                     continue;
                 }
@@ -634,17 +634,17 @@ impl LanguageBackend for JavaBackend {
 
             CodegenNode::Array(elements) => {
                 let elems: Vec<String> = elements.iter().map(|e| self.emit(e, ctx)).collect();
-                format!("Arrays.asList({})", elems.join(", "))
+                format!("java.util.Arrays.asList({})", elems.join(", "))
             }
 
             CodegenNode::Dict(pairs) => {
                 let pairs_str: Vec<String> = pairs
                     .iter()
                     .map(|(k, v)| {
-                        format!("Map.entry({}, {})", self.emit(k, ctx), self.emit(v, ctx))
+                        format!("java.util.Map.entry({}, {})", self.emit(k, ctx), self.emit(v, ctx))
                     })
                     .collect();
-                format!("Map.ofEntries({})", pairs_str.join(", "))
+                format!("java.util.Map.ofEntries({})", pairs_str.join(", "))
             }
 
             CodegenNode::Ternary {
@@ -752,41 +752,29 @@ impl LanguageBackend for JavaBackend {
 
     fn emit_module_imports(
         &self,
-        imports: &[crate::frame_c::compiler::frame_ast::Import],
+        _imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 — Java emits classes into the default (anonymous)
-        // package, so cross-file composition Just Works at compile
-        // time: every class in the same source set is automatically
-        // visible without an `import` directive. The peek-surfaced
-        // `@@system` names are emitted as a leading comment so the
-        // dependency is readable in the generated source. When the
-        // codegen later grows a `package` convention, this comment
-        // becomes the obvious anchor for `import pkg.System;` lines.
-        imports
-            .iter()
-            .filter_map(|imp| {
-                let path = imp.module.as_str();
-                if path.is_empty() {
-                    return None;
-                }
-                if imp.symbols.is_empty() {
-                    Some(format!(
-                        "// @@import \"{}\" — same-package visibility (no `import` needed)",
-                        imp.module
-                    ))
-                } else {
-                    Some(format!(
-                        "// @@import \"{}\" — provides: {} (default package; no `import` needed)",
-                        imp.module,
-                        imp.symbols.join(", ")
-                    ))
-                }
-            })
-            .collect()
+        // RFC-0022.1: on Java `@@import` is a dependency declaration
+        // only — consumed by the pipeline for `--import-mode strict`
+        // validation (E821/E822) but emits nothing. Users write the
+        // native `package` / `import` lines as Oceans Model
+        // pass-through outside `@@system` blocks; framec emits them
+        // verbatim.
+        vec![]
     }
 
     fn runtime_imports(&self) -> Vec<String> {
-        vec!["import java.util.*;".to_string()]
+        // No framec-injected import. Generated code uses
+        // fully-qualified `java.util.*` names so it stays
+        // self-contained: a Frame source file's user prolog (`package
+        // X;` + user imports + helper class declarations) is emitted
+        // verbatim via Oceans Model pass-through and lands first,
+        // without framec fighting the Java "`package` must precede
+        // imports, `import` must precede class declarations" rules.
+        // Users who write bare `HashMap` / `ArrayList` in handler
+        // bodies must add their own `import java.util.*;` to the
+        // file's prolog.
+        vec![]
     }
 
     fn class_syntax(&self) -> ClassSyntax {

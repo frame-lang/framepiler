@@ -20,6 +20,31 @@ only language-shape skip (`[j]`).
 
 ---
 
+## Quick-run from CLI
+
+```bash
+framec -l java foo.fjava > FleetRobot.java
+javac FleetRobot.java
+java FleetRobot   # or: java Main if you have a separate driver class
+```
+
+The output `.java` filename **must match** the framec-emitted public
+class name (which is your `@@system <Name>` name). framec emits
+`public class FleetRobot { ... }`, and `javac` rejects a `public class
+N` declared in a file not named `N.java`. Naming the output file
+`<SystemName>.java` is the simplest path.
+
+If a separate driver lives in the same `.fjava` as a Frame "Oceans
+Model" passthrough block (`class Main { ... }` after the `@@system`),
+`javac` compiles both into the same directory and `java Main` runs
+the driver. The matrix harness uses this convention.
+
+Per the "one public class per file" rule, exactly one `@@system` per
+`.fjava` (Java multi-system files are skip `[j]` in the capability
+matrix).
+
+---
+
 ## Foundation: public class with member methods
 
 A Frame system targeting Java generates a single `.java` file
@@ -258,6 +283,116 @@ Cross-system embedding requires the `Counter.java` file to live
 alongside `Embedding.java`, since each `@@system` is one Java
 class per file. The harness compiles both into the same
 classpath.
+
+---
+
+## Cross-file composition: `@@import` + native `package`
+
+Multi-file Frame projects targeting Java use RFC-0022's `@@import`
+together with native `package` and `import` lines written via Oceans
+Model pass-through. Each side has a job:
+
+- **`@@import "./other.fjava"`** — Frame-level dependency declaration.
+  framec parses it for `--import-mode strict` validation (verifies the
+  file exists and declares at least one `@@system`) but **emits
+  nothing** to the generated `.java` output. It does not translate to
+  a host `import` line.
+- **Native `package` / `import` lines** — your job. Write them in the
+  `.fjava` source outside any `@@system` block. framec passes them
+  through verbatim. The assembler places framec's own `import
+  java.util.*;` after your prolog and before the generated class, so
+  Java's "`package` must be first" rule is satisfied.
+
+This is RFC-0022.1's contract. The split exists because Java locates
+symbols by fully-qualified name, not file path — framec can't
+mechanically translate `@@import "./counter.fjava"` to `import
+com.example.counter.Counter;` without knowing the package, and rather
+than invent a Frame attribute to carry that name, the cleanest answer
+is "just write the native line."
+
+### Worked example
+
+`counter.fjava`:
+
+```frame
+@@[target("java")]
+
+package com.example.counter;
+
+@@system Counter {
+    interface:
+        bump()
+        get(): int
+    machine:
+        $Active {
+            bump()      { self.n = self.n + 1 }
+            get(): int  { @@:(self.n) }
+        }
+    domain:
+        n: int = 0
+}
+```
+
+Generates `Counter.java`:
+
+```java
+package com.example.counter;
+
+import java.util.*;
+
+public class Counter {
+    // ...
+}
+```
+
+`app.fjava`:
+
+```frame
+@@[target("java")]
+@@import "./counter.fjava"
+
+package com.example.app;
+
+import com.example.counter.Counter;
+
+@@system App {
+    interface:
+        run()
+    machine:
+        $Active {
+            run() { self.c.bump() }
+        }
+    domain:
+        c: Counter = @@Counter()
+}
+```
+
+Generates `App.java`:
+
+```java
+package com.example.app;
+
+import com.example.counter.Counter;
+
+import java.util.*;
+
+public class App {
+    private Counter c;
+    // ...
+}
+```
+
+Order in the generated file:
+
+1. Your `package com.example.app;` — first, as Java demands.
+2. Your `import com.example.counter.Counter;` — explicit, written by you.
+3. framec's `import java.util.*;` — auto-injected for generated
+   `HashMap` / `ArrayList` use.
+4. The generated `class App` — your `@@system App` lowered.
+
+Compile with the usual `javac com/example/counter/Counter.java
+com/example/app/App.java`; the directory layout matches the package
+declarations.
 
 ---
 

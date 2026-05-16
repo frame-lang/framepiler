@@ -31,7 +31,7 @@ impl MachineryGenerator for JavaMachinery {
     ) -> Option<CodegenNode> {
         // hsm_chain — instance method returning the topology table.
         let mut chain_method = String::from(
-            "private HashMap<String, ArrayList<String>> hsm_chain() {\n    HashMap<String, ArrayList<String>> m = new HashMap<>();\n",
+            "private java.util.HashMap<String, java.util.ArrayList<String>> hsm_chain() {\n    java.util.HashMap<String, java.util.ArrayList<String>> m = new java.util.HashMap<>();\n",
         );
         for (leaf, chain) in chains {
             let chain_str = chain
@@ -40,7 +40,7 @@ impl MachineryGenerator for JavaMachinery {
                 .collect::<Vec<_>>()
                 .join(", ");
             chain_method.push_str(&format!(
-                "    m.put(\"{}\", new ArrayList<>(java.util.Arrays.asList({})));\n",
+                "    m.put(\"{}\", new java.util.ArrayList<>(java.util.Arrays.asList({})));\n",
                 leaf, chain_str
             ));
         }
@@ -61,8 +61,8 @@ impl MachineryGenerator for JavaMachinery {
             name: "__prepareEnter".to_string(),
             params: vec![
                 Param::new("leaf").with_type("String"),
-                Param::new("state_args").with_type("ArrayList<Object>"),
-                Param::new("enter_args").with_type("ArrayList<Object>"),
+                Param::new("state_args").with_type("java.util.ArrayList<Object>"),
+                Param::new("enter_args").with_type("java.util.ArrayList<Object>"),
             ],
             return_type: Some(compartment_class.to_string()),
             body: vec![CodegenNode::NativeBlock {
@@ -70,8 +70,8 @@ impl MachineryGenerator for JavaMachinery {
                     r#"{0} comp = null;
 for (String name : hsm_chain().get(leaf)) {{
     {0} new_comp = new {0}(name);
-    new_comp.state_args = new ArrayList<>(state_args);
-    new_comp.enter_args = new ArrayList<>(enter_args);
+    new_comp.state_args = new java.util.ArrayList<>(state_args);
+    new_comp.enter_args = new java.util.ArrayList<>(enter_args);
     new_comp.parent_compartment = comp;
     comp = new_comp;
 }}
@@ -92,13 +92,13 @@ return comp;"#,
         let compartment_class = format!("{}Compartment", system.name);
         Some(CodegenNode::Method {
             name: "__prepareExit".to_string(),
-            params: vec![Param::new("exit_args").with_type("ArrayList<Object>")],
+            params: vec![Param::new("exit_args").with_type("java.util.ArrayList<Object>")],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
                 code: format!(
                     r#"{} comp = __compartment;
 while (comp != null) {{
-    comp.exit_args = new ArrayList<>(exit_args);
+    comp.exit_args = new java.util.ArrayList<>(exit_args);
     comp = comp.parent_compartment;
 }}"#,
                     compartment_class

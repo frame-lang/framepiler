@@ -20,6 +20,46 @@ type-system workarounds.
 
 ---
 
+## Quick-run from CLI
+
+```bash
+framec -l c foo.fc > fleet_robot.c
+cc fleet_robot.c -o fleet_robot
+./fleet_robot
+```
+
+Three C-specific reminders:
+
+- **Module-prefixed call convention.** C has no method syntax, so
+  framec emits free-standing functions named `<SystemName>_<event>`
+  taking the system pointer as the first parameter. Inside `main()`,
+  write `FleetRobot_report_location(r)`, not `r->report_location()`.
+  This is the single most common C-fixture mistake — Frame is
+  cross-target ergonomic on the source side, but the C-emitted call
+  surface is C-shaped.
+- **Explicit destroy.** framec emits a `<SystemName>_destroy(s)`
+  cleanup function. C has no destructors; call it before your
+  `main()` returns to free domain fields, the state stack, and the
+  system struct itself. The matrix harness always closes with a
+  destroy call.
+- **No built-in `str` type.** Frame `: str` parameters lower to
+  `const char*` in C. The matrix uses `sprintf` / `snprintf` against
+  fixed-size buffers for any string-building inside handler bodies;
+  there is no `String` class to lean on.
+
+Driver shape:
+
+```c
+int main(void) {
+    FleetRobot* r = FleetRobot_new();
+    FleetRobot_report_location(r);
+    FleetRobot_destroy(r);
+    return 0;
+}
+```
+
+---
+
 ## Foundation: pointer-based system handle, free-standing functions
 
 A Frame system targeting C generates one `.c` (and one `.h`) module

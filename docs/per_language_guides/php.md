@@ -18,6 +18,35 @@ fully spec-conformant; `async` is the only language-natural skip
 
 ---
 
+## Quick-run from CLI
+
+```bash
+framec -l php foo.fphp > foo.php
+php foo.php
+```
+
+Two PHP-specific gotchas to know up front:
+
+- **`<?php` is auto-emitted.** framec inserts `<?php` as the first
+  line of every generated `.php` file. Without it, the PHP interpreter
+  treats the file as plain HTML and echoes the source verbatim instead
+  of executing it. You don't need (and shouldn't add) a `<?php` to
+  your `.fphp` source — it would emit twice.
+- **Handler bodies must use `$param_name`, not bare `param_name`.**
+  This is the most common PHP fixture-authoring trip-up. Frame
+  interface and event parameters are passed through to handler bodies
+  unchanged, but PHP requires the `$` prefix on every variable
+  reference. If your interface declares `pickup(from_floor: int)`,
+  the handler body must write `$this->pickup = $from_floor;`, not
+  `$this->pickup = from_floor;`. The latter is a PHP parse error
+  (`syntax error, unexpected '='`) — *or* worse, treated as a bare
+  constant reference if a `define()` exists.
+
+Frame is intentionally unopinionated about your PHP handler body
+syntax (Oceans Model) — it will not insert `$` for you.
+
+---
+
 ## Foundation: class with `$this`-prefixed members
 
 A Frame system targeting PHP generates a single `.php` file

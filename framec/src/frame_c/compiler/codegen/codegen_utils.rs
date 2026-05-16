@@ -109,7 +109,7 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                     TargetLanguage::TypeScript
                     | TargetLanguage::JavaScript
                     | TargetLanguage::Dart => "[]".to_string(),
-                    TargetLanguage::Java => "new ArrayList<>()".to_string(),
+                    TargetLanguage::Java => "new java.util.ArrayList<>()".to_string(),
                     TargetLanguage::Kotlin => "mutableListOf()".to_string(),
                     TargetLanguage::Swift => "[]".to_string(),
                     TargetLanguage::CSharp => "new List<object>()".to_string(),
@@ -126,7 +126,7 @@ pub(crate) fn state_var_init_value(var_type: &Type, lang: TargetLanguage) -> Str
                     TargetLanguage::GDScript => "{}".to_string(),
                     TargetLanguage::Rust => "HashMap::new()".to_string(),
                     TargetLanguage::TypeScript | TargetLanguage::JavaScript => "{}".to_string(),
-                    TargetLanguage::Java => "new HashMap<>()".to_string(),
+                    TargetLanguage::Java => "new java.util.HashMap<>()".to_string(),
                     TargetLanguage::Kotlin => "mutableMapOf()".to_string(),
                     TargetLanguage::Swift => "[:]".to_string(),
                     TargetLanguage::CSharp => "new Dictionary<string, object>()".to_string(),

@@ -920,15 +920,15 @@ pub(super) fn expand_transition(
                                 })
                                 .collect();
                             if vals.is_empty() {
-                                "new ArrayList<>()".to_string()
+                                "new java.util.ArrayList<>()".to_string()
                             } else {
                                 format!(
-                                    "new ArrayList<>(java.util.Arrays.asList({}))",
+                                    "new java.util.ArrayList<>(java.util.Arrays.asList({}))",
                                     vals.join(", ")
                                 )
                             }
                         } else {
-                            "new ArrayList<>()".to_string()
+                            "new java.util.ArrayList<>()".to_string()
                         };
                         let enter_args_list = if let Some(ref enter) = enter_str {
                             let vals: Vec<&str> = enter
@@ -937,15 +937,15 @@ pub(super) fn expand_transition(
                                 .filter(|x| !x.is_empty())
                                 .collect();
                             if vals.is_empty() {
-                                "new ArrayList<>()".to_string()
+                                "new java.util.ArrayList<>()".to_string()
                             } else {
                                 format!(
-                                    "new ArrayList<>(java.util.Arrays.asList({}))",
+                                    "new java.util.ArrayList<>(java.util.Arrays.asList({}))",
                                     vals.join(", ")
                                 )
                             }
                         } else {
-                            "new ArrayList<>()".to_string()
+                            "new java.util.ArrayList<>()".to_string()
                         };
 
                         if let Some(ref exit) = exit_str {
@@ -956,7 +956,7 @@ pub(super) fn expand_transition(
                                 .collect();
                             if !vals.is_empty() {
                                 code.push_str(&format!(
-                                    "{}__prepareExit(new ArrayList<>(java.util.Arrays.asList({})));\n",
+                                    "{}__prepareExit(new java.util.ArrayList<>(java.util.Arrays.asList({})));\n",
                                     indent_str,
                                     vals.join(", ")
                                 ));

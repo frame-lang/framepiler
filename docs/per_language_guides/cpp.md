@@ -19,6 +19,43 @@ fully spec-conformant on every row.
 
 ---
 
+## Quick-run from CLI
+
+```bash
+framec -l cpp foo.fcpp > fleet_robot.cpp
+c++ -std=c++17 fleet_robot.cpp -o fleet_robot
+./fleet_robot
+```
+
+Two C++-specific calling-convention gotchas:
+
+- **`auto r = FleetRobot();` is a value, use `.` not `->`.** The
+  framec factory `@@FleetRobot()` lowers to a stack-allocated
+  `FleetRobot()` value, not a `new FleetRobot()` heap pointer. Member
+  calls use `r.report_location()`, not `r->report_location()`. RAII
+  handles cleanup — no destroy call.
+- **C++20 needed for async.** `async` interface methods lower to
+  `FrameTask<T>` (a coroutine wrapper) and require `-std=c++20`. The
+  synchronous interface methods work fine on C++17.
+
+For multi-system embedding, framec emits `std::shared_ptr<Sub>` for
+cross-system domain fields so child systems are heap-allocated with
+shared ownership — `parent.sub_->event()` (the `_` is framec's field
+suffix for owned sub-systems). The top-level system is still a
+stack value.
+
+Driver shape:
+
+```cpp
+int main() {
+    auto r = FleetRobot();
+    std::cout << r.report_location() << std::endl;
+    return 0;
+}
+```
+
+---
+
 ## Foundation: stack-allocated class with member methods
 
 A Frame system targeting C++ generates a single `.cpp` file (or

@@ -57,7 +57,7 @@ pub(crate) fn generate_fields(
     let stack_type = match syntax.language {
         TargetLanguage::Rust => format!("Vec<{}Compartment>", system.name),
         TargetLanguage::Cpp => format!("std::vector<std::shared_ptr<{}Compartment>>", system.name),
-        TargetLanguage::Java => format!("ArrayList<{}Compartment>", system.name),
+        TargetLanguage::Java => format!("java.util.ArrayList<{}Compartment>", system.name),
         TargetLanguage::Kotlin => format!("MutableList<{}Compartment>", system.name),
         TargetLanguage::Dart => format!("List<{}Compartment>", system.name),
         TargetLanguage::Swift => format!("[{}Compartment]", system.name),
@@ -134,7 +134,7 @@ pub(crate) fn generate_fields(
     let context_stack_type = match syntax.language {
         TargetLanguage::Rust => format!("Vec<{}FrameContext>", system.name),
         TargetLanguage::Cpp => format!("std::vector<{}FrameContext>", system.name),
-        TargetLanguage::Java => format!("ArrayList<{}FrameContext>", system.name),
+        TargetLanguage::Java => format!("java.util.ArrayList<{}FrameContext>", system.name),
         TargetLanguage::Kotlin => format!("MutableList<{}FrameContext>", system.name),
         TargetLanguage::Dart => format!("List<{}FrameContext>", system.name),
         TargetLanguage::Swift => format!("[{}FrameContext]", system.name),

@@ -184,6 +184,15 @@ language is specified by [RFC-0017](rfcs/rfc-0017.md); the design is in
 *(Earlier drafts called this "blank allocation"; the current name is
 "no-initialization".)*
 
+### Oceans Model
+
+Frame's principle that anything in a source file outside an `@@system` block —
+imports, package declarations, free functions, helper classes, comments — is
+emitted into the generated target file verbatim, in position. framec does not
+parse or rewrite this pass-through text; it knows only that the text is not
+Frame. The name evokes "islands of Frame in an ocean of native host code." See
+[framepiler design § Segmenter](framepiler_design.md).
+
 ### operation
 
 A non-[handler](#event-handler) method declared in a [system](#system)'s

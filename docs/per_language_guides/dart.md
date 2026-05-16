@@ -18,6 +18,38 @@ fully spec-conformant on every row.
 
 ---
 
+## Quick-run from CLI
+
+```bash
+framec -l dart foo.fdart > foo.dart
+dart run foo.dart
+```
+
+Dart import placement (Oceans Model gotcha): anything outside the
+`@@system` block is passed through verbatim at the position you
+wrote it. Dart requires `import 'dart:io';` (or any other `import`)
+to appear **before** any class declarations in the file. Put your
+imports at the very top of the `.fdart` source, above the `@@system`
+block:
+
+```frame
+import 'dart:io';
+
+@@system FleetRobot {
+    // ...
+}
+
+void main() {
+    final r = FleetRobot();
+    print(r.reportLocation());
+}
+```
+
+If you put imports after `@@system`, the Dart analyzer rejects them
+with `import directives must precede top-level declarations`.
+
+---
+
 ## Foundation: class with member methods
 
 A Frame system targeting Dart generates a single `.dart` file

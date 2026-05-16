@@ -59,7 +59,7 @@ fn init_collection_stack(
         // C++ vectors default-construct as empty; no init needed.
         TargetLanguage::Cpp => None,
         TargetLanguage::Java => Some(CodegenNode::NativeBlock {
-            code: format!("{} = new ArrayList<>();", field_name),
+            code: format!("{} = new java.util.ArrayList<>();", field_name),
             span: None,
         }),
         TargetLanguage::Kotlin => Some(CodegenNode::NativeBlock {
@@ -835,18 +835,18 @@ pub(crate) fn generate_constructor(
                         .map(|p| p.name.clone())
                         .collect();
                     let state_arg = if state_args_vec.is_empty() {
-                        "new ArrayList<>()".to_string()
+                        "new java.util.ArrayList<>()".to_string()
                     } else {
                         format!(
-                            "new ArrayList<>(java.util.Arrays.asList({}))",
+                            "new java.util.ArrayList<>(java.util.Arrays.asList({}))",
                             state_args_vec.join(", ")
                         )
                     };
                     let enter_arg = if enter_args_vec.is_empty() {
-                        "new ArrayList<>()".to_string()
+                        "new java.util.ArrayList<>()".to_string()
                     } else {
                         format!(
-                            "new ArrayList<>(java.util.Arrays.asList({}))",
+                            "new java.util.ArrayList<>(java.util.Arrays.asList({}))",
                             enter_args_vec.join(", ")
                         )
                     };

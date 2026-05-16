@@ -223,6 +223,89 @@ constraint analogous to Java's one-public-class rule.
 
 ---
 
+## Cross-file composition: `@@import` + native `namespace`
+
+Multi-file Frame projects targeting C# use RFC-0022's `@@import`
+together with native `namespace` and `using` lines written via Oceans
+Model pass-through. Each side has a job:
+
+- **`@@import "./other.fcs"`** — Frame-level dependency declaration.
+  framec parses it for `--import-mode strict` validation (verifies the
+  file exists and declares at least one `@@system`) but **emits
+  nothing** to the generated `.cs` output. It does not translate to
+  a host `using` line.
+- **Native `namespace` / `using` lines** — your job. Write them in
+  the `.fcs` source outside any `@@system` block. framec passes them
+  through verbatim.
+
+This is RFC-0022.1's contract. The split exists because C# locates
+symbols by namespace, not file path — framec can't mechanically
+translate `@@import "./counter.fcs"` to `using Example.Counter;`
+without knowing the namespace.
+
+### Worked example
+
+`counter.fcs`:
+
+```frame
+@@[target("csharp")]
+
+namespace Example.Counter
+{
+
+@@system Counter {
+    interface:
+        bump()
+        get(): int
+    machine:
+        $Active {
+            bump()      { self.n = self.n + 1 }
+            get(): int  { @@:(self.n) }
+        }
+    domain:
+        n: int = 0
+}
+
+}
+```
+
+`app.fcs`:
+
+```frame
+@@[target("csharp")]
+@@import "./counter.fcs"
+
+using Example.Counter;
+
+namespace Example.App
+{
+
+@@system App {
+    interface:
+        run()
+    machine:
+        $Active {
+            run() { self.c.bump() }
+        }
+    domain:
+        c: Counter = @@Counter()
+}
+
+}
+```
+
+The `namespace X { ... }` block-form wraps the `@@system` declaration;
+the opening `{` lands before the system in the prolog, the closing `}`
+in the epilog. framec passes both through verbatim. Inside the block,
+the generated `class App` lives in `Example.App`, and the importer's
+`using Example.Counter;` resolves the `Counter` reference.
+
+File-scoped namespaces (C# 10+, `namespace Example.App;` without
+braces) work the same way — write the line in your prolog, framec
+passes it through.
+
+---
+
 ## Comments and the Oceans Model
 
 Frame's "Oceans Model" applies to C# the same way it applies to

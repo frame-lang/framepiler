@@ -527,10 +527,10 @@ return __result;"#,
                     let param_items: Vec<String> = method.params.iter()
                         .map(|p| p.name.clone())
                         .collect();
-                    code.push_str(&format!("{} __e = new {}(\"{}\", new ArrayList<>(Arrays.asList({})));\n",
+                    code.push_str(&format!("{} __e = new {}(\"{}\", new java.util.ArrayList<>(java.util.Arrays.asList({})));\n",
                         event_class, event_class, method.name, param_items.join(", ")));
                 } else {
-                    code.push_str(&format!("{} __e = new {}(\"{}\", new ArrayList<>());\n", event_class, event_class, method.name));
+                    code.push_str(&format!("{} __e = new {}(\"{}\", new java.util.ArrayList<>());\n", event_class, event_class, method.name));
                 }
 
                 // Create context with default return. Per

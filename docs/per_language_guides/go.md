@@ -21,6 +21,52 @@ skip (`[g]`).
 
 ---
 
+## Quick-run from CLI
+
+```bash
+framec -l go foo.fgo > foo.go
+go run foo.go
+```
+
+`go run` accepts a single source file containing both `package main`
+and a `func main()`. Two Go-specific layout constraints follow from
+the Oceans Model:
+
+- **`package main` must come first.** Anything Frame passes through
+  outside `@@system` goes into the file at the position you wrote it.
+  Go demands `package <name>` as the first non-comment token, so any
+  `package main` declaration must appear before your `@@system` block
+  in the `.fgo` source.
+- **`import (...)` blocks must come before `func main`.** Same
+  reasoning — Go requires imports immediately after the package
+  declaration. Put them at the very top of the `.fgo` file.
+
+Pattern:
+
+```frame
+package main
+
+import (
+    "fmt"
+)
+
+@@system FleetRobot {
+    interface:
+        ReportLocation(): str
+    // ...
+}
+
+func main() {
+    r := NewFleetRobot()
+    fmt.Println(r.ReportLocation())
+}
+```
+
+If you put `package main` after `@@system`, the Go compiler will
+refuse the file with `expected 'package', found <token>`.
+
+---
+
 ## Foundation: pointer-receiver methods on a struct
 
 A Frame system targeting Go generates a single `.go` file
@@ -284,6 +330,96 @@ a single `.go` file with multiple struct/method-family definitions:
 Both `Producer` and `Consumer` end up in the same file under the
 declared package. Go has no per-file structural constraint on
 multi-struct definitions.
+
+---
+
+## Cross-file composition: `@@import` + native `package`
+
+Multi-file Frame projects targeting Go use RFC-0022's `@@import`
+together with native `package` and `import` lines written via Oceans
+Model pass-through. Each side has a job:
+
+- **`@@import "./other.fgo"`** — Frame-level dependency declaration.
+  framec parses it for `--import-mode strict` validation (verifies the
+  file exists and declares at least one `@@system`) but **emits
+  nothing** to the generated `.go` output. It does not translate to
+  a host `import "<modpath>"` line.
+- **Native `package` / `import` lines** — your job. Write them in
+  the `.fgo` source outside any `@@system` block, **before** the
+  `@@system` declaration. Go requires `package <name>` as the first
+  non-comment token in every file.
+
+This is RFC-0022.1's contract. The split exists because Go locates
+symbols by module path, not file path — framec can't mechanically
+translate `@@import "./counter.fgo"` to `import
+"github.com/example/counter"` without knowing the module path.
+
+### Worked example
+
+`counter.fgo`:
+
+```frame
+@@[target("go")]
+
+package counter
+
+@@system Counter {
+    interface:
+        bump()
+        get(): int
+    machine:
+        $Active {
+            bump()      { self.n = self.n + 1 }
+            get(): int  { @@:(self.n) }
+        }
+    domain:
+        n: int = 0
+}
+```
+
+`app.fgo`:
+
+```frame
+@@[target("go")]
+@@import "./counter.fgo"
+
+package app
+
+import "github.com/example/counter"
+
+@@system App {
+    interface:
+        run()
+    machine:
+        $Active {
+            run() { self.c.Bump() }
+        }
+    domain:
+        c: *counter.Counter = @@Counter()
+}
+```
+
+Generates `app.go`:
+
+```go
+package app
+
+import "github.com/example/counter"
+
+type AppFrameEvent struct { ... }
+// ...
+```
+
+Inside handler bodies, references to imported systems use Go's
+package-qualified form (`counter.NewCounter()`, `self.c.Bump()`).
+framec does not rewrite identifiers inside handler bodies; the
+package qualifier is your job, written in the same place you'd
+write it in any hand-authored Go.
+
+Standard Go module conventions apply: `go.mod` at the project root
+declares the module path; the `counter` package lives in a
+directory named `counter/` whose `.go` file declares `package
+counter`.
 
 ---
 

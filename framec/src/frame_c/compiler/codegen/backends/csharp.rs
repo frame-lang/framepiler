@@ -662,37 +662,15 @@ impl LanguageBackend for CSharpBackend {
 
     fn emit_module_imports(
         &self,
-        imports: &[crate::frame_c::compiler::frame_ast::Import],
+        _imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 — C# emits classes into the global namespace, so
-        // cross-file composition Just Works at compile time: every
-        // class in the same compilation unit is automatically visible
-        // without a `using` directive. The peek-surfaced `@@system`
-        // names are emitted as a leading comment so the dependency is
-        // readable in the generated source. When the codegen later
-        // grows a per-file `namespace` convention, this comment
-        // becomes the obvious anchor for `using` lines.
-        imports
-            .iter()
-            .filter_map(|imp| {
-                let path = imp.module.as_str();
-                if path.is_empty() {
-                    return None;
-                }
-                if imp.symbols.is_empty() {
-                    Some(format!(
-                        "// @@import \"{}\" — global namespace (no `using` needed)",
-                        imp.module
-                    ))
-                } else {
-                    Some(format!(
-                        "// @@import \"{}\" — provides: {} (global namespace; no `using` needed)",
-                        imp.module,
-                        imp.symbols.join(", ")
-                    ))
-                }
-            })
-            .collect()
+        // RFC-0022.1: on C# `@@import` is a dependency declaration
+        // only — consumed by the pipeline for `--import-mode strict`
+        // validation (E821/E822) but emits nothing. Users write the
+        // native `namespace` / `using` lines as Oceans Model
+        // pass-through outside `@@system` blocks; framec emits them
+        // verbatim.
+        vec![]
     }
 
     fn runtime_imports(&self) -> Vec<String> {

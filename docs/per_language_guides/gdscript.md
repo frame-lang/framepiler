@@ -22,6 +22,31 @@ model.
 
 ---
 
+## Quick-run from CLI
+
+Two commands to compile and run a single `.fgd` file via headless
+Godot:
+
+```bash
+framec foo.fgd > foo.gd
+godot --headless --path . --import       # one-time per project
+godot --headless --path . --script foo.gd
+```
+
+The `--import` step writes `.godot/global_script_class_cache.cfg`,
+which registers every `class_name X` in the project as a globally
+resolvable type. Without it, `App.new()` inside a generated
+`static func _create()` fails with `Identifier not found: App`. The
+cache persists across `--script` invocations — re-import only when
+you add or rename `class_name` declarations, or move files.
+
+Inside the editor, Godot does this import automatically on project
+open, so editor users never see the issue. The CLI workflow is what
+the matrix test harness uses; the two-command pattern is the same
+either way.
+
+---
+
 ## Foundation: every script runs inside Godot
 
 A Frame system targeting GDScript generates a single `.gd` script
