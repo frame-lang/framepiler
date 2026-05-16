@@ -383,6 +383,27 @@ prolog declares the appropriate `extends`.
 See `framec-test-env/docker/runners/gdscript_runner.sh` for
 the matrix-side mechanism.
 
+### Cross-file fixtures — pre-import is required
+
+Frame's RFC-0022 `@@import "other.fgd"` lowers to GDScript's
+`const X = preload("res://other.gd")` form. The generated
+factory bodies (`static func _create(): var c = SystemName.new()`)
+reference each system by its `class_name`, which Godot only
+registers as a global identifier *after* it has imported the
+project. For a CLI-only workflow without an editor pass, run a
+pre-import step before any `--script` invocation:
+
+```bash
+godot --headless --path . --import         # populate .godot/ cache
+godot --headless --path . --script smoke.gd
+```
+
+Without the import pass, `class_name App` is unknown inside the
+script's own `static func _create()` body and the run fails with
+`Identifier not found: App`. The matrix test harness already does
+the import step; this note is for ad-hoc CLI smoke harnesses
+exercising cross-file composition.
+
 ---
 
 ## Idiomatic patterns and common gotchas
