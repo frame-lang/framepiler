@@ -130,6 +130,7 @@ impl Cli {
             .arg(Arg::new("validate-native").long("validate-native").help("Enable strict/native validation (facade mode)").action(clap::ArgAction::SetTrue).global(true))
             .arg(Arg::new("validation-format").long("validation-format").help("Validation output format (compat)").num_args(1).global(true))
             .arg(Arg::new("emit-debug").long("emit-debug").help("Emit debug trailers: errors-json, frame-map, visitor-map (module), debug-manifest").action(clap::ArgAction::SetTrue).global(true))
+            .arg(Arg::new("import-mode").long("import-mode").help("RFC-0022 @@import resolution: 'lax' (default) silently degrades on missing files; 'strict' surfaces them as E821/E822").value_name("MODE").num_args(1).global(true))
             .get_matches();
 
         let mut has_subcommand = false;
@@ -266,6 +267,15 @@ impl Cli {
         let validate = matches.get_flag("validate") || matches.get_flag("validate-syntax");
         let validate_native = matches.get_flag("validate-native");
         let emit_debug = matches.get_flag("emit-debug");
+
+        // RFC-0022: `--import-mode strict` propagates via env var so
+        // `PipelineConfig::from_env` picks it up on every entry. Unknown
+        // values fall through to lax (default) — strict opt-in only.
+        if let Some(mode) = matches.get_one::<String>("import-mode") {
+            if mode.eq_ignore_ascii_case("strict") {
+                std::env::set_var("FRAME_STRICT_IMPORTS", "1");
+            }
+        }
 
         Cli {
             stdin_flag: stdin,

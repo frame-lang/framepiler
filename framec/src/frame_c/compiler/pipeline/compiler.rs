@@ -220,6 +220,10 @@ pub fn compile_ast_based(
     // before being attached to the ModuleAst. Phase 1 stores the raw
     // (quote-stripped) path; symbols + alias remain empty (lax mode).
     let mut module_imports: Vec<crate::frame_c::compiler::frame_ast::Import> = Vec::new();
+    // RFC-0022 strict-mode import errors collected during the segment
+    // walk. Surfaced as compile errors at the end of the pass so the
+    // user sees every unresolved import in one shot.
+    let mut strict_import_errors: Vec<CompileError> = Vec::new();
     let mut pending_main_attr_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
     // Vec (not Option) so multiple occurrences of the same lifecycle
     // pragma — `@@[create(a)]` followed by `@@[create(b)]` — all
@@ -311,10 +315,39 @@ pub fn compile_ast_based(
                     .trim_end_matches('"')
                     .to_string();
                 if !stripped.is_empty() {
-                    let symbols = peek_imported_system_names(
+                    let symbols = match peek_imported_system_names(
                         &stripped,
                         config.source_path.as_deref(),
-                    );
+                    ) {
+                        Ok(names) => {
+                            if names.is_empty() && config.strict_imports {
+                                strict_import_errors.push(CompileError::new(
+                                    "E822",
+                                    &format!(
+                                        "@@import \"{}\" — imported file declares no \
+                                         `@@system`. With --import-mode strict every \
+                                         import must surface at least one system.",
+                                        stripped
+                                    ),
+                                ));
+                            }
+                            names
+                        }
+                        Err(msg) => {
+                            if config.strict_imports {
+                                strict_import_errors.push(CompileError::new(
+                                    "E821",
+                                    &format!(
+                                        "@@import \"{}\" — {}. \
+                                         --import-mode strict requires every imported \
+                                         file to be readable.",
+                                        stripped, msg
+                                    ),
+                                ));
+                            }
+                            Vec::new()
+                        }
+                    };
                     module_imports.push(crate::frame_c::compiler::frame_ast::Import {
                         module: stripped,
                         symbols,
@@ -973,9 +1006,17 @@ pub fn compile_ast_based(
         eprintln!("[compile_ast_based] Generated {} bytes of code", code.len());
     }
 
+    // RFC-0022 strict-mode errors collected during import resolution
+    // surface here. They don't abort earlier passes (the rest of the
+    // module still compiles), so the user sees both the missing-import
+    // error AND any downstream issues in one shot.
     Ok(CompileResult {
-        code,
-        errors: vec![],
+        code: if strict_import_errors.is_empty() {
+            code
+        } else {
+            String::new()
+        },
+        errors: strict_import_errors,
         warnings: module_warnings,
         source_map: None,
     })
@@ -988,25 +1029,33 @@ pub fn compile_ast_based(
 /// or more `target` attributes is emitted only when at least one matches
 /// `current`. Unparseable target args are treated as non-matches (a future
 /// validator pass will surface them as a hard error).
-/// RFC-0022 Phase 1 lax peek. Resolve `import_path` relative to the
+/// Outcome of an `@@import` peek.
+///
+/// `Ok(names)` — the imported file was readable; the peek surfaced
+/// these `@@system` declarations (possibly empty, which strict mode
+/// treats as an E822 — nothing to import).
+///
+/// `Err(message)` — the imported file couldn't be read (missing,
+/// permission denied, IO error). Lax mode swallows this and treats
+/// it as `Ok(vec![])`; strict mode surfaces E821 with this message.
+type PeekResult = Result<Vec<String>, String>;
+
+/// RFC-0022 import peek. Resolve `import_path` relative to the
 /// importer's directory (or CWD when unknown), read the file, and pull
 /// out every `@@system <Name>` declaration. Returns the discovered
-/// system names in source order. Missing files / IO errors / unreadable
-/// content return an empty Vec — Phase 1 is lax: codegen's per-target
-/// hook falls back to filename-derived bindings when the peek finds
-/// nothing.
+/// system names in source order, or an error if the file is unreadable.
 ///
 /// This is a regex-grade scan, not a full parse — bracket-form
 /// attributes, line comments, and multi-line `@@system` blocks
 /// surrounding the declaration are all handled by anchoring on the
-/// `@@system` keyword and reading the next identifier. Phase 2 strict
-/// mode replaces this with the actual segmenter + parser pipeline run
-/// against the imported file, surfacing every exported symbol with
-/// type fidelity.
+/// `@@system` keyword and reading the next identifier. Strict mode
+/// (RFC-0022 `--import-mode strict`) surfaces unreadable files / empty
+/// imports as compile errors; lax mode treats them as empty and lets
+/// per-target hooks fall back to filename-derived bindings.
 fn peek_imported_system_names(
     import_path: &str,
     importer_path: Option<&std::path::Path>,
-) -> Vec<String> {
+) -> PeekResult {
     let import_buf = std::path::PathBuf::from(import_path);
     let resolved = if import_buf.is_absolute() {
         import_buf
@@ -1017,7 +1066,14 @@ fn peek_imported_system_names(
     };
     let content = match std::fs::read_to_string(&resolved) {
         Ok(s) => s,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            return Err(format!(
+                "cannot read imported file '{}' (resolved to {}): {}",
+                import_path,
+                resolved.display(),
+                e
+            ));
+        }
     };
     let mut names: Vec<String> = Vec::new();
     for line in content.lines() {
@@ -1066,7 +1122,7 @@ fn peek_imported_system_names(
             names.push(clean);
         }
     }
-    names
+    Ok(names)
 }
 
 fn filter_by_target_attribute(

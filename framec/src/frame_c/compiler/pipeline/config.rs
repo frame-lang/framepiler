@@ -88,6 +88,12 @@ pub struct PipelineConfig {
     /// const binding. `None` for stdin / in-memory sources; relative
     /// imports then fall back to CWD-relative resolution.
     pub source_path: Option<PathBuf>,
+    /// RFC-0022 `--import-mode strict`. When true, an `@@import "x.fgd"`
+    /// whose target file cannot be read or declares no `@@system`
+    /// surfaces as a compile error (E821 / E822). When false (default
+    /// Phase 1 lax behavior), missing or empty imports degrade silently
+    /// and the per-target hook falls back to filename-derived bindings.
+    pub strict_imports: bool,
 }
 
 impl PipelineConfig {
@@ -148,6 +154,12 @@ impl PipelineConfig {
 
         if std::env::var("FRAME_TRANSPILER_DEBUG").ok().as_deref() == Some("1") {
             config.debug = true;
+        }
+
+        // RFC-0022: `--import-mode strict` from the CLI sets
+        // FRAME_STRICT_IMPORTS=1. Pick it up here.
+        if std::env::var("FRAME_STRICT_IMPORTS").ok().as_deref() == Some("1") {
+            config.strict_imports = true;
         }
 
         config
