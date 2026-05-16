@@ -334,6 +334,47 @@ pub(super) fn erlang_process_body_lines_full(
         let mut out: Vec<String> = Vec::with_capacity(preprocessed.len());
         let mut case_depth: i32 = 0;
         let mut first_arm_pending: Vec<bool> = Vec::new();
+        // Inline-body arm split: detects an arm written as
+        // `<pattern> -> <body>` on one source line (e.g.
+        // `true -> ok` or `true -> -> $State;` which after
+        // transition lowering becomes
+        // `true -> frame_transition__(...),`). Splits into two
+        // lines so the CaseFrame logic — which keys on arm-header
+        // lines ending in ` ->` — can drive arm-boundary
+        // bookkeeping. Returns `Some((pattern, body))` when the
+        // line is an inline-body arm; `None` otherwise.
+        let split_inline_arm = |t: &str, depth: i32| -> Option<(String, String)> {
+            if depth <= 0 {
+                return None;
+            }
+            if t.starts_with("case ")
+                || t.starts_with("case(")
+                || t.starts_with(";")
+                || t.contains("({call, From},")
+            {
+                return None;
+            }
+            // Arm-arrow with content after. Skip lines that end at
+            // the arrow (already an arm header) — those are handled
+            // by the looks_like_arm_header branch below.
+            let arrow_pos = t.find(" -> ")?;
+            let body = t[arrow_pos + 4..].trim();
+            if body.is_empty() {
+                return None;
+            }
+            let pattern = t[..arrow_pos].trim();
+            // Pattern must not itself contain ` -> ` (avoid splitting
+            // inside an already-split or malformed line) and must
+            // not start with `case` (defensive).
+            if pattern.is_empty()
+                || pattern.contains(" -> ")
+                || pattern.starts_with("case ")
+                || pattern.starts_with("case(")
+            {
+                return None;
+            }
+            Some((pattern.to_string(), body.to_string()))
+        };
         for line in preprocessed.iter() {
             let t = line.trim();
             let is_case_open = (t.starts_with("case ") || t.starts_with("case("))
@@ -344,12 +385,7 @@ pub(super) fn erlang_process_body_lines_full(
                 && !t.starts_with("case ")
                 && !t.starts_with("case(")
                 && !t.starts_with(";")
-                && !t.contains("({call, From},")
-                // The framec-generated boolean form already has `true ->`
-                // as the first arm; leave it untouched. Subsequent
-                // boolean arms (`; false ->` / `; _ ->`) start with `;`
-                // so they're already filtered above.
-                && t != "true ->";
+                && !t.contains("({call, From},");
             if is_case_open {
                 out.push(line.clone());
                 case_depth += 1;
@@ -364,9 +400,34 @@ pub(super) fn erlang_process_body_lines_full(
                 out.push(line.clone());
                 continue;
             }
+            // Inline-body arm: `<pattern> -> <body>` on one line.
+            // Split into a header line + a body line so the
+            // CaseFrame logic below can detect the arm boundary.
+            if let Some((pattern, body)) = split_inline_arm(t, case_depth) {
+                let leading_ws_len = line.len() - line.trim_start().len();
+                let indent: String = line[..leading_ws_len].to_string();
+                let is_first = first_arm_pending.last().copied().unwrap_or(true);
+                let header = if is_first {
+                    if let Some(slot) = first_arm_pending.last_mut() {
+                        *slot = false;
+                    }
+                    format!("{}{} ->", indent, pattern)
+                } else {
+                    format!("{}; {} ->", indent, pattern)
+                };
+                let body_line = format!("{}    {}", indent, body);
+                out.push(header);
+                out.push(body_line);
+                continue;
+            }
             if looks_like_arm_header {
                 let is_first = first_arm_pending.last().copied().unwrap_or(true);
                 if is_first {
+                    // First arm of a case: emit unchanged (whether
+                    // `true ->`, `{tag, V} ->`, or any other pattern)
+                    // and mark this case's first-arm slot consumed so
+                    // subsequent arms get the `; ` prefix the body
+                    // processor's CaseFrame logic expects.
                     if let Some(slot) = first_arm_pending.last_mut() {
                         *slot = false;
                     }
