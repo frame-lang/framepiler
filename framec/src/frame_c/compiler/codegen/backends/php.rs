@@ -641,7 +641,12 @@ impl LanguageBackend for PhpBackend {
     }
 
     fn runtime_imports(&self) -> Vec<String> {
-        vec![] // PHP doesn't need imports for basic types
+        // PHP source files must begin with `<?php`, otherwise the PHP
+        // interpreter treats the file as plain HTML and echoes it
+        // verbatim instead of executing it. Emitted here at the
+        // runtime-imports slot so the assembler places it ahead of
+        // every other emitted line. (FRAMEC_BUGS.md Issue #9.)
+        vec!["<?php".to_string()]
     }
 
     fn class_syntax(&self) -> ClassSyntax {
