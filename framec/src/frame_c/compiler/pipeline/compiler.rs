@@ -224,6 +224,14 @@ pub fn compile_ast_based(
     // walk. Surfaced as compile errors at the end of the pass so the
     // user sees every unresolved import in one shot.
     let mut strict_import_errors: Vec<CompileError> = Vec::new();
+    // RFC-0022 + FRAMEC_BUGS.md Issue #8: imported `@@system` names
+    // that carry an `@@[save]` / `@@[load]` attribute (i.e. use the
+    // new persist contract). Merged into `NEW_CONTRACT_SYSTEMS` so the
+    // parent's domain-field restore codegen picks the instance-method
+    // shape (`Type.new()` + `inst.restore_state(bytes)`) instead of
+    // the legacy static-factory shape (`Type.restore_state(bytes)`)
+    // when the child lives in an imported file.
+    let mut imported_new_contract_names: Vec<String> = Vec::new();
     let mut pending_main_attr_span: Option<crate::frame_c::compiler::frame_ast::Span> = None;
     // Vec (not Option) so multiple occurrences of the same lifecycle
     // pragma — `@@[create(a)]` followed by `@@[create(b)]` — all
@@ -315,12 +323,12 @@ pub fn compile_ast_based(
                     .trim_end_matches('"')
                     .to_string();
                 if !stripped.is_empty() {
-                    let symbols = match peek_imported_system_names(
+                    let peek = match peek_imported_system_names(
                         &stripped,
                         config.source_path.as_deref(),
                     ) {
-                        Ok(names) => {
-                            if names.is_empty() && config.strict_imports {
+                        Ok(data) => {
+                            if data.names.is_empty() && config.strict_imports {
                                 strict_import_errors.push(CompileError::new(
                                     "E822",
                                     &format!(
@@ -331,7 +339,7 @@ pub fn compile_ast_based(
                                     ),
                                 ));
                             }
-                            names
+                            data
                         }
                         Err(msg) => {
                             if config.strict_imports {
@@ -345,12 +353,22 @@ pub fn compile_ast_based(
                                     ),
                                 ));
                             }
-                            Vec::new()
+                            PeekData::default()
                         }
                     };
+                    // Bug #8: imported sub-systems that use the new persist
+                    // contract need their names in the cross-system registry
+                    // so the parent's restore codegen emits `Type.new()` +
+                    // instance `restore_state(...)` instead of the legacy
+                    // static-factory call.
+                    for n in &peek.new_contract {
+                        if !imported_new_contract_names.iter().any(|x| x == n) {
+                            imported_new_contract_names.push(n.clone());
+                        }
+                    }
                     module_imports.push(crate::frame_c::compiler::frame_ast::Import {
                         module: stripped,
-                        symbols,
+                        symbols: peek.names,
                         alias: None,
                         span: crate::frame_c::compiler::frame_ast::Span::new(
                             span.start, span.end,
@@ -767,13 +785,19 @@ pub fn compile_ast_based(
     // RFC-0012 amendment: register which systems use the new persist
     // contract (have `@@[save]` / `@@[load]` ops) so nested-system
     // restore emission can pick the right shape (instance method vs
-    // legacy static factory).
+    // legacy static factory). RFC-0022 / FRAMEC_BUGS.md Issue #8:
+    // imported systems that carry the same attributes also belong in
+    // the registry — without them, a parent referencing an imported
+    // sub-system through `@@[persist]` emits the wrong restore form.
     {
-        let new_contract: std::collections::HashSet<String> = system_asts
+        let mut new_contract: std::collections::HashSet<String> = system_asts
             .iter()
             .filter(|s| s.uses_new_persist_contract())
             .map(|s| s.name.clone())
             .collect();
+        for n in &imported_new_contract_names {
+            new_contract.insert(n.clone());
+        }
         crate::frame_c::compiler::codegen::interface_gen::set_new_contract_systems(new_contract);
     }
 
@@ -1029,16 +1053,32 @@ pub fn compile_ast_based(
 /// or more `target` attributes is emitted only when at least one matches
 /// `current`. Unparseable target args are treated as non-matches (a future
 /// validator pass will surface them as a hard error).
+/// Data surfaced by an `@@import` peek.
+///
+/// `names` — every `@@system <Name>` declaration in source order.
+/// `new_contract` — the subset of `names` that carry an
+/// `@@[save(...)]` and/or `@@[load(...)]` attribute on the line(s)
+/// immediately preceding the system declaration. The persist
+/// codegen branches on this to pick the cross-file restore shape
+/// (instance method on the new contract, legacy static factory
+/// otherwise).
+#[derive(Debug, Default, Clone)]
+struct PeekData {
+    names: Vec<String>,
+    new_contract: Vec<String>,
+}
+
 /// Outcome of an `@@import` peek.
 ///
-/// `Ok(names)` — the imported file was readable; the peek surfaced
-/// these `@@system` declarations (possibly empty, which strict mode
-/// treats as an E822 — nothing to import).
+/// `Ok(data)` — the imported file was readable; `data.names` lists the
+/// surfaced systems (possibly empty, which strict mode treats as E822 —
+/// nothing to import).
 ///
 /// `Err(message)` — the imported file couldn't be read (missing,
 /// permission denied, IO error). Lax mode swallows this and treats
-/// it as `Ok(vec![])`; strict mode surfaces E821 with this message.
-type PeekResult = Result<Vec<String>, String>;
+/// it as `Ok(PeekData::default())`; strict mode surfaces E821 with
+/// this message.
+type PeekResult = Result<PeekData, String>;
 
 /// RFC-0022 import peek. Resolve `import_path` relative to the
 /// importer's directory (or CWD when unknown), read the file, and pull
@@ -1076,11 +1116,24 @@ fn peek_imported_system_names(
         }
     };
     let mut names: Vec<String> = Vec::new();
+    let mut new_contract: Vec<String> = Vec::new();
+    // RFC-0012 amendment: `@@[save(...)]` / `@@[load(...)]` attributes
+    // attach to the *next* `@@system` declaration. Track whether either
+    // has been seen since the last `@@system` consumption; if so, the
+    // next system is registered as new-contract.
+    let mut pending_save_or_load = false;
     for line in content.lines() {
         let trimmed = line.trim_start();
         // Skip comment lines so commented-out `@@system` declarations
         // don't pollute the peek.
         if trimmed.starts_with("//") || trimmed.starts_with('#') {
+            continue;
+        }
+        // Pre-system attribute detection: a bracket-form pragma that
+        // names `save` or `load` flips the pending flag. Match against
+        // the trimmed line because attributes may be wrapped in `@@[`.
+        if trimmed.starts_with("@@[save") || trimmed.starts_with("@@[load") {
+            pending_save_or_load = true;
             continue;
         }
         let rest = match trimmed.strip_prefix("@@system") {
@@ -1119,10 +1172,18 @@ fn peek_imported_system_names(
             continue;
         }
         if !names.iter().any(|n| n == &clean) {
-            names.push(clean);
+            names.push(clean.clone());
         }
+        // If `@@[save]` and/or `@@[load]` preceded this system, the
+        // system uses the new persist contract. Record it and reset
+        // the flag so attributes on the next system are tracked
+        // independently.
+        if pending_save_or_load && !new_contract.iter().any(|n| n == &clean) {
+            new_contract.push(clean);
+        }
+        pending_save_or_load = false;
     }
-    Ok(names)
+    Ok(PeekData { names, new_contract })
 }
 
 fn filter_by_target_attribute(
