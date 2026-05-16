@@ -705,10 +705,9 @@ impl LanguageBackend for TypeScriptBackend {
         &self,
         imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 Phase 1 lax — TS, like ESM JS, has no wildcard form
-        // that binds bare names. Phase 1 emits a side-effect import
-        // + comment marker. Phase 2 strict will emit
-        // `import { Counter } from "./x";` enumerating systems.
+        // RFC-0022 — emit `import { Counter, Helper } from "./x";` when
+        // the importer's peek surfaced `@@system` names. Falls back to
+        // side-effect import when the peek found nothing.
         imports
             .iter()
             .filter_map(|imp| {
@@ -725,11 +724,15 @@ impl LanguageBackend for TypeScriptBackend {
                 } else {
                     format!("./{}", stem)
                 };
-                Some(format!(
-                    "// RFC-0022 lax: import \"{src}\" — Phase 2 strict will bind symbols\nimport \"{normalized}\";",
-                    src = imp.module,
-                    normalized = normalized
-                ))
+                if imp.symbols.is_empty() {
+                    Some(format!("import \"{}\";", normalized))
+                } else {
+                    Some(format!(
+                        "import {{ {} }} from \"{}\";",
+                        imp.symbols.join(", "),
+                        normalized
+                    ))
+                }
             })
             .collect()
     }

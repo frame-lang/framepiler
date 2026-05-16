@@ -856,11 +856,11 @@ impl LanguageBackend for PythonBackend {
         &self,
         imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 — Python pilot. Translate `@@import "path/to/x.fgd"`
-        // into `from .path.to.x import *`. Phase 1 is lax: the symbol
-        // list isn't resolved, so we emit `import *`. Strict mode
-        // (Phase 2) will enumerate the imported file's `@@system`
-        // names and emit `from .x import Counter, Helper`.
+        // RFC-0022 — translate `@@import "path/to/x.fgd"` into
+        // `from .path.to.x import Counter, Helper` when the importer
+        // peeked the imported file's `@@system` names. Falls back to
+        // `from .x import *` when the peek found nothing (Phase 1 lax
+        // tolerance for missing files / unrecognized content).
         imports
             .iter()
             .filter_map(|imp| {
@@ -868,18 +868,21 @@ impl LanguageBackend for PythonBackend {
                 if path.is_empty() {
                     return None;
                 }
-                // Strip the Frame extension (.fgd, .fpy, .frs, …).
                 let stem = match path.rfind('.') {
                     Some(idx) => &path[..idx],
                     None => path,
                 };
-                // Translate path separators to Python's dotted module
-                // notation. Leading `./` and `../` are not yet
-                // supported (deferred to Phase 2's resolver); strip
-                // a leading `./` if present.
                 let normalized = stem.strip_prefix("./").unwrap_or(stem);
                 let module = normalized.replace('/', ".");
-                Some(format!("from .{} import *", module))
+                if imp.symbols.is_empty() {
+                    Some(format!("from .{} import *", module))
+                } else {
+                    Some(format!(
+                        "from .{} import {}",
+                        module,
+                        imp.symbols.join(", ")
+                    ))
+                }
             })
             .collect()
     }

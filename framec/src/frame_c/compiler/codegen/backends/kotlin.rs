@@ -774,27 +774,32 @@ impl LanguageBackend for KotlinBackend {
         &self,
         imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 Phase 1 lax — wildcard `import x.*` brings all
-        // top-level classes from the imported file into scope.
-        // Strict mode (Phase 2) will emit per-symbol imports.
-        imports
-            .iter()
-            .filter_map(|imp| {
-                let path = imp.module.as_str();
-                if path.is_empty() {
-                    return None;
+        // RFC-0022 — emit one `import x.Counter` per `@@system` name
+        // surfaced by the importer's peek; fall back to wildcard
+        // `import x.*` when the peek found nothing.
+        let mut out: Vec<String> = Vec::new();
+        for imp in imports {
+            let path = imp.module.as_str();
+            if path.is_empty() {
+                continue;
+            }
+            let stem = match path.rfind('.') {
+                Some(idx) => &path[..idx],
+                None => path,
+            };
+            let pkg = stem.trim_start_matches("./").replace('/', ".");
+            if pkg.is_empty() {
+                continue;
+            }
+            if imp.symbols.is_empty() {
+                out.push(format!("import {}.*", pkg));
+            } else {
+                for sym in &imp.symbols {
+                    out.push(format!("import {}.{}", pkg, sym));
                 }
-                let stem = match path.rfind('.') {
-                    Some(idx) => &path[..idx],
-                    None => path,
-                };
-                let pkg = stem.trim_start_matches("./").replace('/', ".");
-                if pkg.is_empty() {
-                    return None;
-                }
-                Some(format!("import {}.*", pkg))
-            })
-            .collect()
+            }
+        }
+        out
     }
 
     fn class_syntax(&self) -> ClassSyntax {

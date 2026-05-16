@@ -679,10 +679,10 @@ impl LanguageBackend for RustBackend {
         &self,
         imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 Phase 1 lax — emit a wildcard `use crate::x::*;` per
-        // `@@import "path/to/x.fgd"`. Strict mode (Phase 2) would
-        // enumerate the imported file's `@@system` names and emit
-        // `use crate::x::{A, B};`.
+        // RFC-0022 — emit `use crate::x::{Counter, Helper};` when the
+        // importer's peek surfaced `@@system` names; fall back to
+        // `use crate::x::*;` (Phase 1 lax behavior) when the peek
+        // found nothing.
         imports
             .iter()
             .filter_map(|imp| {
@@ -698,7 +698,15 @@ impl LanguageBackend for RustBackend {
                 if module_path.is_empty() {
                     return None;
                 }
-                Some(format!("use crate::{}::*;", module_path))
+                if imp.symbols.is_empty() {
+                    Some(format!("use crate::{}::*;", module_path))
+                } else {
+                    Some(format!(
+                        "use crate::{}::{{{}}};",
+                        module_path,
+                        imp.symbols.join(", ")
+                    ))
+                }
             })
             .collect()
     }

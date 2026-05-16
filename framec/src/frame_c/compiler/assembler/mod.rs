@@ -63,6 +63,7 @@ pub fn assemble(
     lang: TargetLanguage,
     runtime_imports: &[String],
     module_imports: &[String],
+    imported_system_names: &[String],
     main_system: Option<&str>,
 ) -> Result<String, AssemblyError> {
     let source = &source_map.source;
@@ -104,10 +105,18 @@ pub fn assemble(
         .map(|(name, code)| (name.as_str(), code.as_str()))
         .collect();
 
-    let defined_system_names: HashSet<String> = generated_systems
+    // The post-pass resolver accepts both systems defined in this file
+    // AND systems brought in via `@@import` (peek-surfaced names).
+    // Imported systems lack local `system_params` entries, so the
+    // resolver skips default-arg substitution for them and passes the
+    // call arguments through verbatim.
+    let mut defined_system_names: HashSet<String> = generated_systems
         .iter()
         .map(|(name, _)| name.clone())
         .collect();
+    for sym in imported_system_names {
+        defined_system_names.insert(sym.clone());
+    }
 
     // Build name → declared-params lookup for call-site resolution
     let params_by_name: HashMap<&str, &[SystemParam]> = system_params
@@ -803,7 +812,7 @@ mod tests {
                 },
             }],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], None).unwrap();
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
         assert_eq!(result, src);
     }
 
@@ -846,7 +855,7 @@ mod tests {
             ],
         );
         let generated = vec![("Foo".to_string(), "class Foo:\n  pass\n".to_string())];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], None).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
         assert_eq!(result, "prolog\nclass Foo:\n  pass\nepilogue\n");
     }
 
@@ -869,7 +878,7 @@ mod tests {
                 },
             ],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], None).unwrap();
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
         assert_eq!(result, "import os\n");
     }
 
@@ -1029,7 +1038,7 @@ mod tests {
             ("Alpha".to_string(), "class Alpha: pass\n".to_string()),
             ("Beta".to_string(), "class Beta: pass\n".to_string()),
         ];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], None).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
         assert!(result.contains("prolog\n"));
         assert!(result.contains("class Alpha: pass\n"));
         assert!(result.contains("\nnative_between\n"));
@@ -1054,7 +1063,7 @@ mod tests {
                 visibility: None,
             }],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], None);
+        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], &[], None);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("Foo"));
     }
@@ -1106,7 +1115,7 @@ mod tests {
             "MySystem".to_string(),
             "class MySystem:\n  pass\n".to_string(),
         )];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], None).unwrap();
+        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
         // RFC-0017 Phase A0: Python factory expansion uses `_create`.
         assert_eq!(result, "s = MySystem._create()\nclass MySystem:\n  pass\n");
     }
@@ -1149,6 +1158,7 @@ mod tests {
             &[],
             TargetLanguage::Python3,
             &runtime_imports,
+            &[],
             &[],
             None,
         )

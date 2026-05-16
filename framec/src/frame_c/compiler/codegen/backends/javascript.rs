@@ -677,11 +677,12 @@ impl LanguageBackend for JavaScriptBackend {
         &self,
         imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 Phase 1 lax — ESM does NOT support a wildcard form
-        // that binds bare names (`import * as X` requires `X.Counter`
-        // access). Phase 1 emits the file as a side-effect import so
-        // the module loads, plus a comment marker. Phase 2 strict will
-        // emit `import { Counter } from "./x.js";` enumerating systems.
+        // RFC-0022 — emit `import { Counter, Helper } from "./x.js";`
+        // when the importer's peek surfaced `@@system` names. ESM has
+        // no wildcard form that binds bare names, so when the peek
+        // found nothing we fall back to a side-effect import (the
+        // module's globals are still touched even if no name is bound
+        // into the importer's scope).
         imports
             .iter()
             .filter_map(|imp| {
@@ -698,11 +699,15 @@ impl LanguageBackend for JavaScriptBackend {
                 } else {
                     format!("./{}", stem)
                 };
-                Some(format!(
-                    "// RFC-0022 lax: import \"{src}\" — Phase 2 strict will bind symbols\nimport \"{normalized}.js\";",
-                    src = imp.module,
-                    normalized = normalized
-                ))
+                if imp.symbols.is_empty() {
+                    Some(format!("import \"{}.js\";", normalized))
+                } else {
+                    Some(format!(
+                        "import {{ {} }} from \"{}.js\";",
+                        imp.symbols.join(", "),
+                        normalized
+                    ))
+                }
             })
             .collect()
     }

@@ -754,12 +754,14 @@ impl LanguageBackend for JavaBackend {
         &self,
         imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 Phase 1 lax — Java requires explicit per-class
-        // `import` directives with full package paths. Lax mode has
-        // no symbol or package metadata, so Phase 1 emits a comment
-        // marker. Phase 2 strict will enumerate the imported file's
-        // public classes + project package and emit
-        // `import <pkg>.<Class>;` per system.
+        // RFC-0022 — Java emits classes into the default (anonymous)
+        // package, so cross-file composition Just Works at compile
+        // time: every class in the same source set is automatically
+        // visible without an `import` directive. The peek-surfaced
+        // `@@system` names are emitted as a leading comment so the
+        // dependency is readable in the generated source. When the
+        // codegen later grows a `package` convention, this comment
+        // becomes the obvious anchor for `import pkg.System;` lines.
         imports
             .iter()
             .filter_map(|imp| {
@@ -767,10 +769,18 @@ impl LanguageBackend for JavaBackend {
                 if path.is_empty() {
                     return None;
                 }
-                Some(format!(
-                    "// RFC-0022 lax: import \"{}\" — Phase 2 strict will emit per-class `import`",
-                    imp.module
-                ))
+                if imp.symbols.is_empty() {
+                    Some(format!(
+                        "// @@import \"{}\" — same-package visibility (no `import` needed)",
+                        imp.module
+                    ))
+                } else {
+                    Some(format!(
+                        "// @@import \"{}\" — provides: {} (default package; no `import` needed)",
+                        imp.module,
+                        imp.symbols.join(", ")
+                    ))
+                }
             })
             .collect()
     }

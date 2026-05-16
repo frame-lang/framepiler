@@ -664,10 +664,14 @@ impl LanguageBackend for CSharpBackend {
         &self,
         imports: &[crate::frame_c::compiler::frame_ast::Import],
     ) -> Vec<String> {
-        // RFC-0022 Phase 1 lax — C#'s `using <namespace>` requires the
-        // imported file to declare its namespace. Phase 1 emits a
-        // comment marker; Phase 2 strict will emit `using` directives
-        // once symbol/namespace metadata is enumerated.
+        // RFC-0022 — C# emits classes into the global namespace, so
+        // cross-file composition Just Works at compile time: every
+        // class in the same compilation unit is automatically visible
+        // without a `using` directive. The peek-surfaced `@@system`
+        // names are emitted as a leading comment so the dependency is
+        // readable in the generated source. When the codegen later
+        // grows a per-file `namespace` convention, this comment
+        // becomes the obvious anchor for `using` lines.
         imports
             .iter()
             .filter_map(|imp| {
@@ -675,10 +679,18 @@ impl LanguageBackend for CSharpBackend {
                 if path.is_empty() {
                     return None;
                 }
-                Some(format!(
-                    "// RFC-0022 lax: import \"{}\" — Phase 2 strict will emit `using <namespace>`",
-                    imp.module
-                ))
+                if imp.symbols.is_empty() {
+                    Some(format!(
+                        "// @@import \"{}\" — global namespace (no `using` needed)",
+                        imp.module
+                    ))
+                } else {
+                    Some(format!(
+                        "// @@import \"{}\" — provides: {} (global namespace; no `using` needed)",
+                        imp.module,
+                        imp.symbols.join(", ")
+                    ))
+                }
             })
             .collect()
     }

@@ -941,6 +941,13 @@ pub fn compile_ast_based(
     // its native form. Default impl returns empty (no emission); per-
     // backend overrides translate per target.
     let module_imports_emitted = backend.emit_module_imports(&module_imports);
+    // Imported `@@system` names — surfaced by the Phase 1 peek. The
+    // assembler accepts these as resolvable targets for `@@SystemName()`
+    // call sites in handler bodies and module-scope native code.
+    let imported_system_names: Vec<String> = module_imports
+        .iter()
+        .flat_map(|imp| imp.symbols.iter().cloned())
+        .collect();
     let code = match assembler::assemble(
         &source_map,
         &generated_systems,
@@ -948,6 +955,7 @@ pub fn compile_ast_based(
         config.target,
         &runtime_imports,
         &module_imports_emitted,
+        &imported_system_names,
         main_system.as_deref(),
     ) {
         Ok(output) => output,
