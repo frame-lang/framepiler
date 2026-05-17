@@ -193,6 +193,14 @@ parse or rewrite this pass-through text; it knows only that the text is not
 Frame. The name evokes "islands of Frame in an ocean of native host code." See
 [framepiler design § Segmenter](framepiler_design.md).
 
+**Calibration.** The Oceans Model is a pragmatic decomposition — the
+transpiler touches `@@system` blocks and passes through everything else
+verbatim. It is architectural humility, not a theoretical breakthrough. Avoid
+framing it as a paradigm shift in writing or in conversation. The open
+question of whether it can be elevated to a calculus (with a preservation
+theorem and pre-backend normalization passes) is captured in
+[RFC-0026](rfcs/rfc-0026.md) as an exploration thread, not a commitment.
+
 ### operation
 
 A non-[handler](#event-handler) method declared in a [system](#system)'s
