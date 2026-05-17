@@ -220,12 +220,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "downcast-rs"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -279,7 +273,6 @@ dependencies = [
  "clap",
  "colored",
  "convert_case",
- "downcast-rs",
  "exitcode",
  "indoc",
  "petgraph",

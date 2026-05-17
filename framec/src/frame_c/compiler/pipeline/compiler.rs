@@ -946,7 +946,7 @@ pub fn compile_ast_based(
 
         // Runtime classes (language-specific, per-system)
         if matches!(config.target, TargetLanguage::Rust) {
-            let compartment_types = generate_rust_compartment_types(system_ast);
+            let compartment_types = generate_rust_compartment_types(system_ast, Some(&arcanum));
             if !compartment_types.is_empty() {
                 system_code.push_str(&compartment_types);
             }

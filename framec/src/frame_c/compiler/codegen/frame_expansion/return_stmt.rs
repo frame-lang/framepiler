@@ -113,6 +113,8 @@ pub(super) fn expand_return_call(
                     &indent_str,
                     &expanded_expr,
                     &ctx.current_return_type,
+                    &ctx.system_name,
+                    &ctx.event_name,
                 ),
                 TargetLanguage::Cpp => {
                     let wrapped = cpp_wrap_string_literal(&expanded_expr);

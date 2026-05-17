@@ -65,7 +65,9 @@ pub(super) fn context_return_read_typed(
     lang: TargetLanguage,
     frame_type: &str,
     system_name: &str,
+    event_name: &str,
 ) -> String {
+    let _ = event_name; // unused on non-Rust targets
     match lang {
         TargetLanguage::Python3 | TargetLanguage::GDScript => {
             "self._context_stack[-1]._return".to_string()
@@ -92,7 +94,11 @@ pub(super) fn context_return_read_typed(
             }
         }
         TargetLanguage::Rust => {
-            super::super::rust_system::rust_context_return_read_typed(frame_type)
+            super::super::rust_system::rust_context_return_read_typed(
+                frame_type,
+                system_name,
+                event_name,
+            )
         }
         TargetLanguage::Cpp => {
             format!(

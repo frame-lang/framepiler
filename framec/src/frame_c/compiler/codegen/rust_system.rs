@@ -343,9 +343,14 @@ fn generate_rust_constructor(system: &SystemAst) -> CodegenNode {
             // is inlined into __kernel; the factory just calls it.
             let event_class = format!("{}FrameEvent", system.name);
             let context_class = format!("{}FrameContext", system.name);
+            // RFC-0025 Track B.1: construct the FrameEnter variant
+            // directly, carrying enter_args as Vec<String> (lifecycle
+            // args round-trip through persist as strings, so we keep
+            // the stringly path for these — only user-facing event
+            // parameters are typed).
             body.push(CodegenNode::NativeBlock {
                 code: format!(
-                    "let __e = std::rc::Rc::new({}::new_with_params(\"$>\", &self.__compartment.enter_args.clone()));\n\
+                    "let __e = std::rc::Rc::new({}::FrameEnter {{ args: self.__compartment.enter_args.clone() }});\n\
                      let __ctx = {}::new(std::rc::Rc::clone(&__e), None);\n\
                      self._context_stack.push(__ctx);\n\
                      self.__kernel(&__e);\n\
@@ -419,10 +424,12 @@ pub(crate) fn generate_rust_factory_alias(system: &SystemAst, factory_name: &str
 
 /// Generate Rust runtime machinery: `__kernel`, `__router`, `__transition`.
 
-/// Generate Rust state dispatch — match on event message, extract
-/// typed parameters from context stack via `Box<dyn Any>` downcasting.
+/// Generate Rust state dispatch — match on the FrameEvent enum
+/// variant (RFC-0025 Track B.1). User-facing events destructure
+/// typed fields; lifecycle (`$>`/`$<`) variants carry `Vec<String>`
+/// args parsed via `.parse::<T>()` (preserves persist round-trip).
 pub(crate) fn generate_rust_state_dispatch(
-    _system_name: &str,
+    system_name: &str,
     state_name: &str,
     handlers: &std::collections::HashMap<String, HandlerEntry>,
     state_vars: &[StateVarAst],
@@ -431,41 +438,44 @@ pub(crate) fn generate_rust_state_dispatch(
     is_start_state: bool,
 ) -> String {
     let mut code = String::new();
-    code.push_str("match __e.message.as_str() {\n");
+    let event_class = format!("{}FrameEvent", system_name);
+    code.push_str("match __e {\n");
 
     let mut sorted_handlers: Vec<_> = handlers.iter().collect();
     sorted_handlers.sort_by_key(|(event, _)| *event);
 
-    // Only the lifecycle `$>` key signals an explicit enter handler. A user
-    // interface method named `enter` is a regular event — see
-    // bug_enter_exit_method_collision for why the old aliasing was wrong.
     let _has_enter_handler = handlers.contains_key("$>");
     let _needs_state_var_init = !state_vars.is_empty();
 
     for (event, handler) in sorted_handlers {
-        // Wire message and per-handler method are keyed only off the sigil
-        // lifecycle events. A user-defined `enter` / `exit` falls through to
-        // the default arm and dispatches under its own name.
-        let message = match event.as_str() {
-            "$>" => "$>",
-            "$<" => "<$",
-            _ => event.as_str(),
-        };
-
         let handler_method = handler_method_name(state_name, handler);
-
         let is_lifecycle = event == "$>" || event == "$<";
-        if !handler.params.is_empty() && is_lifecycle {
-            if is_start_state {
+
+        // ----- Lifecycle events ($>, $<) — variants carry Vec<String> args -----
+        if is_lifecycle {
+            let variant = if event == "$>" { "FrameEnter" } else { "FrameExit" };
+            if handler.params.is_empty() {
                 code.push_str(&format!(
-                    "    \"{}\" => {{ self.{}(__e); }}\n",
-                    message, handler_method
+                    "    {}::{} {{ .. }} => {{ self.{}(__e); }}\n",
+                    event_class, variant, handler_method
                 ));
                 continue;
             }
-            code.push_str(&format!("    \"{}\" => {{\n", message));
+            if is_start_state {
+                // Start state's lifecycle handler binds params from
+                // `self.__sys_<name>` in the body preamble; dispatcher
+                // just calls without args.
+                code.push_str(&format!(
+                    "    {}::{} {{ .. }} => {{ self.{}(__e); }}\n",
+                    event_class, variant, handler_method
+                ));
+                continue;
+            }
+            code.push_str(&format!(
+                "    {}::{} {{ args }} => {{\n",
+                event_class, variant
+            ));
             for (idx, param) in handler.params.iter().enumerate() {
-                // Normalize Frame type keywords to Rust ones.
                 let raw_type = param.symbol_type.as_deref().unwrap_or("String");
                 let param_type = match raw_type {
                     "int" => "i64",
@@ -473,19 +483,16 @@ pub(crate) fn generate_rust_state_dispatch(
                     "str" | "string" => "String",
                     other => other,
                 };
-                // Lifecycle events ($>, $<) carry their args via the
-                // compartment's `enter_args: Vec<String>` (so persist
-                // round-trip works). The dispatcher must therefore
-                // downcast to `String` first, then parse to the
-                // declared receiver type.
+                // Lifecycle args are stringified (persist contract);
+                // dispatch parses to the declared receiver type.
                 let extraction = if param_type == "String" {
                     format!(
-                        "        let {}: String = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();\n",
+                        "        let {}: String = args.get({}).cloned().unwrap_or_default();\n",
                         param.name, idx
                     )
                 } else {
                     format!(
-                        "        let {}: {} = __e.parameters.get({}).and_then(|v| v.downcast_ref::<String>()).and_then(|s| s.parse::<{}>().ok()).unwrap_or_default();\n",
+                        "        let {}: {} = args.get({}).and_then(|s| s.parse::<{}>().ok()).unwrap_or_default();\n",
                         param.name, param_type, idx, param_type
                     )
                 };
@@ -501,43 +508,68 @@ pub(crate) fn generate_rust_state_dispatch(
             continue;
         }
 
-        if !handler.params.is_empty() {
-            code.push_str(&format!("    \"{}\" => {{\n", message));
-            code.push_str(
-                "        let __ctx_event = &self._context_stack.last().unwrap().event;\n",
-            );
-            for (idx, param) in handler.params.iter().enumerate() {
-                // Normalize Frame type keywords to the Rust target type.
-                // The typed `Box<dyn Any>` boxing in the interface push
-                // records the raw value, so the downcast type must match
-                // the user-declared Rust type exactly.
-                let raw_type = param.symbol_type.as_deref().unwrap_or("String");
+        // ----- User-facing events — typed variant destructure -----
+        // All variants are struct-shaped (RFC-0025 Track B.1) so
+        // we use `{ .. }` to ignore fields when the handler doesn't
+        // declare params (e.g. same event name dispatched in
+        // different states with different param shapes).
+        let variant = super::runtime::pascal_case_variant(event);
+        if handler.params.is_empty() {
+            code.push_str(&format!(
+                "    {}::{} {{ .. }} => {{ self.{}(__e); }}\n",
+                event_class, variant, handler_method
+            ));
+            continue;
+        }
+        // Destructure variant fields; clone Strings, deref Copy types.
+        // Trailing `, ..` ignores any fields the variant has beyond
+        // what the handler declares (cf. same event name with
+        // different param shapes across states — the enum variant
+        // carries the union; each handler binds only what it cares
+        // about).
+        let field_binds: Vec<String> = handler
+            .params
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        code.push_str(&format!(
+            "    {}::{} {{ {}, .. }} => {{\n",
+            event_class,
+            variant,
+            field_binds.join(", ")
+        ));
+        let arg_exprs: Vec<String> = handler
+            .params
+            .iter()
+            .map(|p| {
+                let raw_type = p.symbol_type.as_deref().unwrap_or("String");
                 let param_type = match raw_type {
                     "int" => "i64",
                     "float" => "f64",
                     "str" | "string" => "String",
                     other => other,
                 };
-                let extraction = format!(
-                    "        let {}: {} = __ctx_event.parameters.get({}).and_then(|v| v.downcast_ref::<{}>()).cloned().unwrap_or_default();\n",
-                    param.name, param_type, idx, param_type
-                );
-                code.push_str(&extraction);
-            }
-            let param_names: Vec<_> = handler.params.iter().map(|p| p.name.clone()).collect();
-            code.push_str(&format!(
-                "        self.{}(__e, {});\n",
-                handler_method,
-                param_names.join(", ")
-            ));
-            code.push_str("    }\n");
-            continue;
-        }
-
+                // Heuristic: Copy types deref via `*`, non-Copy (String,
+                // Vec, custom) clone via `.clone()`. We treat
+                // String/Vec/HashMap as non-Copy explicitly; everything
+                // else (i32, i64, f64, bool, usize, u32, ...) is Copy.
+                let is_non_copy = matches!(param_type, "String")
+                    || param_type.starts_with("Vec<")
+                    || param_type.starts_with("HashMap<")
+                    || param_type.starts_with("std::collections::HashMap");
+                if is_non_copy {
+                    format!("{}.clone()", p.name)
+                } else {
+                    format!("*{}", p.name)
+                }
+            })
+            .collect();
         code.push_str(&format!(
-            "    \"{}\" => {{ self.{}(__e); }}\n",
-            message, handler_method
+            "        self.{}(__e, {});\n",
+            handler_method,
+            arg_exprs.join(", ")
         ));
+        code.push_str("    }\n");
     }
 
     if default_forward {
@@ -686,47 +718,54 @@ pub(crate) fn generate_rust_interface_body(
 ) -> CodegenNode {
     let context_class = format!("{}FrameContext", system_name);
 
-    // RFC-0020: event is Rc-wrapped so the wrapper can pass an
-    // `&Rc<FrameEvent>` to the kernel without aliasing through `self`.
-    // The Rc::clone-ing the wrapper does is a refcount bump, not a
-    // deep clone — parameters survive the handoff.
+    // RFC-0025 Track B.1: construct the FrameEvent enum variant
+    // directly with typed fields. No more Box<dyn Any> packing —
+    // the dispatcher destructures the variant and passes typed
+    // values straight to the handler.
+    //
+    // RFC-0020 preserved: event is still Rc-wrapped so the wrapper
+    // can pass `&Rc<FrameEvent>` to the kernel without aliasing
+    // through `self`. With the typed enum, the Rc::clone is a
+    // refcount bump and the inner enum derives Clone trivially.
+    let variant = super::runtime::pascal_case_variant(&method.name);
+    // RFC-0025 Track B.1: all variants are struct-shaped (even
+    // no-param events emit `{}`) so dispatch + name() can use
+    // `{ .. }` uniformly. Construct accordingly.
     let mut code = if method.params.is_empty() {
         format!(
-            "let __e = std::rc::Rc::new({}::new(\"{}\"));\n",
-            event_class, method.name
+            "let __e = std::rc::Rc::new({}::{} {{}});\n",
+            event_class, variant
         )
     } else {
-        // Type-direct boxing. The matching dispatch downcast pulls
-        // the value back as the param's declared type. Storing as the
-        // raw value (not a `.to_string()` round-trip) is required for
-        // compound types like `Vec<T>` that don't implement `Display`.
-        let param_items: Vec<String> = method
+        let field_inits: Vec<String> = method
             .params
             .iter()
-            .map(|p| format!("Box::new({}.clone()) as Box<dyn std::any::Any>", p.name))
+            .map(|p| format!("{}: {}.clone()", p.name, p.name))
             .collect();
-        let mut s = format!("let mut __e = {}::new(\"{}\");\n", event_class, method.name);
-        s.push_str(&format!(
-            "__e.parameters = vec![{}];\n",
-            param_items.join(", ")
-        ));
-        s.push_str("let __e = std::rc::Rc::new(__e);\n");
-        s
+        format!(
+            "let __e = std::rc::Rc::new({}::{} {{ {} }});\n",
+            event_class,
+            variant,
+            field_inits.join(", ")
+        )
     };
 
     code.push_str(&format!(
         "let mut __ctx = {}::new(std::rc::Rc::clone(&__e), None);\n",
         context_class
     ));
+    let return_enum = format!("{}FrameReturn", system_name);
     if let Some(ref init_expr) = method.return_init {
         let wrapped = if init_expr.trim().starts_with('"') && init_expr.trim().ends_with('"') {
             format!("String::from({})", init_expr.trim())
         } else {
             init_expr.clone()
         };
+        // RFC-0025 Track B.2: default return wrapped in the typed
+        // variant for this interface method.
         code.push_str(&format!(
-            "__ctx._return = Some(Box::new({}) as Box<dyn std::any::Any>);\n",
-            wrapped
+            "__ctx._return = Some({}::{}({}));\n",
+            return_enum, variant, wrapped
         ));
     }
     code.push_str("self._context_stack.push(__ctx);\n");
@@ -734,7 +773,7 @@ pub(crate) fn generate_rust_interface_body(
 
     if let Some(ref rt) = method.return_type {
         let raw_type = type_to_string(rt);
-        let return_type = match raw_type.as_str() {
+        let _return_type = match raw_type.as_str() {
             "str" | "string" => "String".to_string(),
             "int" => "i64".to_string(),
             "float" => "f64".to_string(),
@@ -742,14 +781,25 @@ pub(crate) fn generate_rust_interface_body(
             "Any" => "String".to_string(),
             other => other.to_string(),
         };
+        // RFC-0025 Track B.2: pattern-match the typed variant the
+        // interface handler emitted, OR the `_Lifecycle` escape-hatch
+        // variant a lifecycle handler may have written (downcast to
+        // this method's declared return type).
+        let rust_ty = match raw_type.as_str() {
+            "int" => "i64".to_string(),
+            "float" => "f64".to_string(),
+            "bool" => "bool".to_string(),
+            "str" | "string" | "Any" => "String".to_string(),
+            other => other.to_string(),
+        };
         code.push_str(&format!(
             r#"let __ctx = self._context_stack.pop().unwrap();
-if let Some(ret) = __ctx._return {{
-    *ret.downcast::<{}>().unwrap()
-}} else {{
-    Default::default()
+match __ctx._return {{
+    Some({}::{}(v)) => v,
+    Some({}::_Lifecycle(v)) => v.downcast_ref::<{}>().cloned().unwrap_or_default(),
+    _ => Default::default(),
 }}"#,
-            return_type
+            return_enum, variant, return_enum, rust_ty
         ));
     } else {
         code.push_str("self._context_stack.pop();");
@@ -1055,48 +1105,76 @@ pub(crate) fn rust_expand_state_var_write(
     )
 }
 
-/// Rust return-value boxing — wraps expression in Box<dyn Any>, handles
-/// string literal conversion (&str → String) and integer/float literal
-/// casts (i32 → i64, f32 → f64) to match the interface method's declared
-/// Rust return type.
+/// Rust return-value emit (RFC-0025 Track B.2) — wraps the
+/// expression in the typed `<System>FrameReturn::<EventVariant>(value)`
+/// constructor. Still handles string-literal conversion (`&str` →
+/// `String`) and numeric-literal casts (i32 → i64, f32 → f64) so
+/// the variant payload matches the declared Rust return type.
 pub(crate) fn rust_expand_box_return(
     indent_str: &str,
     expanded_expr: &str,
     return_type: &Option<String>,
+    system_name: &str,
+    event_name: &str,
 ) -> String {
-    let boxed_expr = rust_wrap_for_boxing(expanded_expr, return_type);
+    let payload_expr = rust_wrap_for_boxing(expanded_expr, return_type);
+    let return_val = build_return_val_expr(system_name, event_name, &payload_expr);
     format!(
-        "{}let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n\
+        "{}let __return_val = {};\n\
          {}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}",
-        indent_str, boxed_expr, indent_str
+        indent_str, return_val, indent_str
     )
 }
 
-/// Rust return-value boxing (no leading indent on first line — used in
+/// Rust return-value emit (no leading indent on first line — used in
 /// ReturnCall/ContextReturnExpr where the caller provides the indent).
 pub(crate) fn rust_expand_box_return_bare(
     indent_str: &str,
     expanded_expr: &str,
     return_type: &Option<String>,
+    system_name: &str,
+    event_name: &str,
 ) -> String {
-    let boxed_expr = rust_wrap_for_boxing(expanded_expr, return_type);
+    let payload_expr = rust_wrap_for_boxing(expanded_expr, return_type);
+    let return_val = build_return_val_expr(system_name, event_name, &payload_expr);
     format!(
-        "let __return_val = Box::new({}) as Box<dyn std::any::Any>;\n\
+        "let __return_val = {};\n\
          {}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(__return_val); }}",
-        boxed_expr, indent_str
+        return_val, indent_str
     )
 }
 
-/// Rust context data write — wraps in Box<dyn Any>, handles string literals.
+/// Shared builder for the return-value construction expression.
+/// Interface handlers (event_name is a real method name) emit the
+/// typed variant; lifecycle handlers ($> / $<) fall back to the
+/// `_Lifecycle` escape-hatch variant carrying `Rc<dyn Any>`.
+fn build_return_val_expr(system_name: &str, event_name: &str, payload_expr: &str) -> String {
+    if event_name == "$>" || event_name == "$<" {
+        format!(
+            "{}FrameReturn::_Lifecycle(std::rc::Rc::new({}))",
+            system_name, payload_expr
+        )
+    } else {
+        let variant = super::runtime::pascal_case_variant(event_name);
+        format!("{}FrameReturn::{}({})", system_name, variant, payload_expr)
+    }
+}
+
+/// `@@:data[key] = expr` write — RFC-0025 Track B.3: wraps the
+/// value in `<System>FrameValue::Str(...)`. Today framec emits
+/// String-typed writes only (matching the historical
+/// always-String shape); typed writes (Int/Float/Bool) are a
+/// future enhancement.
 pub(crate) fn rust_expand_context_data_write(
     indent_str: &str,
     key: &str,
     expanded_expr: &str,
+    system_name: &str,
 ) -> String {
-    let boxed_expr = rust_wrap_string_literal(expanded_expr);
+    let str_expr = rust_wrap_string_literal(expanded_expr);
     format!(
-        "{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._data.insert(\"{}\".to_string(), Box::new({}) as Box<dyn std::any::Any>); }}",
-        indent_str, key, boxed_expr
+        "{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._data.insert(\"{}\".to_string(), {}FrameValue::Str({})); }}",
+        indent_str, key, system_name, str_expr
     )
 }
 
@@ -1146,9 +1224,11 @@ pub(crate) fn rust_self_ref() -> &'static str {
     "self"
 }
 
-/// `@@:event` — event message access
+/// `@@:event` — event message access. RFC-0025 Track B.1: the
+/// FrameEvent is now an enum (no .message field); the per-system
+/// `name()` impl returns the Frame source spelling of the event.
 pub(crate) fn rust_event_message() -> String {
-    "__e.message.clone()".to_string()
+    "__e.name().to_string()".to_string()
 }
 
 /// `@@:params[key]` — context parameter access.
@@ -1158,12 +1238,19 @@ pub(crate) fn rust_context_param(key: &str) -> String {
     key.to_string()
 }
 
-/// `@@:data[key]` read — context data access with downcast
-pub(crate) fn rust_context_data_get(key: &str) -> String {
+/// `@@:data[key]` read — RFC-0025 Track B.3: pattern-match the
+/// `<System>FrameValue::Str(s)` variant. Today framec always emits
+/// String-typed reads (matching the pre-B.3 hardcoded String
+/// downcast); supporting other value types at read sites is a
+/// future enhancement that would thread the declared type
+/// through here.
+pub(crate) fn rust_context_data_get(key: &str, system_name: &str) -> String {
     format!(
-        "self._context_stack.last().and_then(|ctx| ctx._data.get(\"{}\"))\
-         .and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default()",
-        key
+        "(match self._context_stack.last().and_then(|ctx| ctx._data.get(\"{}\")) {{ \
+            Some({}FrameValue::Str(s)) => s.clone(), \
+            _ => Default::default(), \
+        }})",
+        key, system_name
     )
 }
 
@@ -1172,35 +1259,60 @@ pub(crate) fn rust_context_return_read() -> String {
     "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())".to_string()
 }
 
-/// `@@:return` read with a declared return type — downcasts the
-/// boxed `Any` to the Frame type's native Rust representation
-/// (`rust_wrap_for_boxing` puts `int`→`i64`, `float`→`f64`,
-/// `str`→`String` into the box) so the read is usable as an rvalue
-/// in expressions and as a typed arg to a self-call. Falls back to
-/// the untyped `Option<&Box>` form for types whose boxed shape
-/// isn't pinned (a user-declared struct may not be `Clone+Default`,
-/// which `.cloned().unwrap_or_default()` would require).
-pub(crate) fn rust_context_return_read_typed(frame_type: &str) -> String {
-    let base = "self._context_stack.last().and_then(|ctx| ctx._return.as_ref())";
-    match frame_type {
-        "int" => format!(
-            "({}.and_then(|b| b.downcast_ref::<i64>()).copied().unwrap_or(0))",
-            base
-        ),
-        "float" => format!(
-            "({}.and_then(|b| b.downcast_ref::<f64>()).copied().unwrap_or(0.0))",
-            base
-        ),
-        "bool" => format!(
-            "({}.and_then(|b| b.downcast_ref::<bool>()).copied().unwrap_or(false))",
-            base
-        ),
-        "str" | "string" | "String" | "Any" => format!(
-            "({}.and_then(|b| b.downcast_ref::<String>()).cloned().unwrap_or_default())",
-            base
-        ),
-        _ => base.to_string(),
+/// `@@:return` read with a declared return type — RFC-0025 Track B.2:
+/// pattern-matches the typed `<System>FrameReturn::<Variant>(value)`
+/// the handler emitted. framec knows which handler is currently
+/// executing (from HandlerContext.event_name), so the variant is
+/// statically known at every read site — the wildcard arm is true
+/// compile-time-unreachable when dispatch routes correctly. Falls
+/// back to default (`0`, `false`, empty `String`) only if the slot
+/// is somehow `None` (e.g., handler hasn't written yet on first
+/// access — historically the boxed form returned `unwrap_or_default`
+/// in this case; we preserve the behavior).
+pub(crate) fn rust_context_return_read_typed(
+    frame_type: &str,
+    system_name: &str,
+    event_name: &str,
+) -> String {
+    let return_enum = format!("{}FrameReturn", system_name);
+    let default_expr = match frame_type {
+        "int" => "0i64",
+        "float" => "0.0f64",
+        "bool" => "false",
+        _ => "Default::default()",
+    };
+    // Map the Frame return type to the Rust type for the _Lifecycle
+    // downcast arm (lifecycle handlers wrote via Rc<dyn Any>).
+    let rust_ty = match frame_type {
+        "int" => "i64",
+        "float" => "f64",
+        "bool" => "bool",
+        "str" | "string" | "String" | "Any" => "String",
+        other => other,
+    };
+    if event_name == "$>" || event_name == "$<" {
+        // Lifecycle handler reading @@:return — the value came from
+        // either the interface method's default-init (typed variant)
+        // or a prior lifecycle write (_Lifecycle). Downcast for the
+        // latter; for typed variants we have no static knowledge of
+        // which one, so we conservatively fall through to default.
+        return format!(
+            "(match self._context_stack.last().and_then(|ctx| ctx._return.as_ref()) {{ \
+                Some({}::_Lifecycle(v)) => v.downcast_ref::<{}>().cloned().unwrap_or({}), \
+                _ => {}, \
+            }})",
+            return_enum, rust_ty, default_expr, default_expr
+        );
     }
+    let variant = super::runtime::pascal_case_variant(event_name);
+    format!(
+        "(match self._context_stack.last().and_then(|ctx| ctx._return.as_ref()) {{ \
+            Some({}::{}(v)) => v.clone(), \
+            Some({}::_Lifecycle(v)) => v.downcast_ref::<{}>().cloned().unwrap_or({}), \
+            _ => {}, \
+        }})",
+        return_enum, variant, return_enum, rust_ty, default_expr, default_expr
+    )
 }
 
 /// `@@:system.state` — current state name

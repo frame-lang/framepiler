@@ -1209,7 +1209,7 @@ this._context_stack.pop();"#,
                     )
                 }
                 TargetLanguage::Rust => format!(
-                    r#"let __e = std::rc::Rc::new({}::new_with_params("$>", &self.__compartment.enter_args.clone()));
+                    r#"let __e = std::rc::Rc::new({}::FrameEnter {{ args: self.__compartment.enter_args.clone() }});
 let __ctx = {}FrameContext::new(std::rc::Rc::clone(&__e), None);
 self._context_stack.push(__ctx);
 self.__kernel(&__e);

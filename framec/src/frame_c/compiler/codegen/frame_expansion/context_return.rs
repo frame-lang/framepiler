@@ -73,6 +73,8 @@ pub(super) fn expand_context_return(
                         &indent_str,
                         &expanded_expr,
                         &ctx.current_return_type,
+                        &ctx.system_name,
+                        &ctx.event_name,
                     ),
                     TargetLanguage::Cpp => {
                         let wrapped = cpp_wrap_string_literal(&expanded_expr);
@@ -153,7 +155,7 @@ pub(super) fn expand_context_return(
                 // Dynamic-typed targets (Python, JS, Ruby, Lua, PHP,
                 // Dart, GDScript) need no cast.
                 let rt = ctx.current_return_type.as_deref().unwrap_or("");
-                context_return_read_typed(lang, rt, &ctx.system_name)
+                context_return_read_typed(lang, rt, &ctx.system_name, &ctx.event_name)
             }
 }
 
@@ -250,6 +252,8 @@ pub(super) fn expand_context_return_expr(
                     &indent_str,
                     &expanded_expr,
                     &ctx.current_return_type,
+                    &ctx.system_name,
+                    &ctx.event_name,
                 ),
                 TargetLanguage::Cpp => {
                     let wrapped = cpp_wrap_string_literal(&expanded_expr);

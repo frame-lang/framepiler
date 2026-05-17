@@ -212,9 +212,17 @@ mod tests {
             TargetLanguage::Rust,
             &ctx,
         );
+        // RFC-0025 Track B.2: `@@:(42)` emits the typed
+        // `<System>FrameReturn::<Variant>(42)` constructor — no
+        // `Box::new` and no `String::from` wrapping.
         assert!(
-            result.contains("Box::new(42)"),
-            "Rust @@:(42) should NOT wrap with String::from, got: {}",
+            result.contains("FrameReturn::"),
+            "Rust @@:(42) should construct the typed return variant, got: {}",
+            result
+        );
+        assert!(
+            result.contains("(42)"),
+            "Integer literal should pass through unwrapped, got: {}",
             result
         );
         assert!(

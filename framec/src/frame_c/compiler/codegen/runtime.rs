@@ -12,6 +12,28 @@ use super::codegen_utils::{expression_to_string, state_var_init_value, type_to_s
 use crate::frame_c::compiler::frame_ast::{Expression, SystemAst, Type};
 use crate::frame_c::visitors::TargetLanguage;
 
+/// Convert a Frame snake_case identifier to a PascalCase variant name
+/// for use in the per-system FrameEvent enum (RFC-0025 Track B.1).
+/// Examples: `bool_return` → `BoolReturn`, `tick` → `Tick`,
+/// `get_status` → `GetStatus`. Exported pub(crate) so siblings
+/// (rust_system.rs, system_codegen/*.rs, machinery/rust.rs) emit
+/// matching variant names at construction and dispatch sites.
+pub(crate) fn pascal_case_variant(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = true;
+    for c in s.chars() {
+        if c == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(c.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Map a Frame `Type` to a Rust-native type spelling for use inside
 /// generated structs (e.g. the per-state `XContext`). Mirrors the
 /// conversions in `RustBackend::convert_type`, but lives here so that
@@ -60,8 +82,11 @@ fn frame_type_to_rust_default(t: &Type) -> String {
 /// - Compartment struct with state, state_vars, forward_event fields
 /// - Context structs for states with state variables (for typed push/pop)
 /// - StateContext enum for typed state variable storage
-pub fn generate_rust_compartment_types(system: &SystemAst) -> String {
-    generate_rust_runtime_types(system)
+pub fn generate_rust_compartment_types(
+    system: &SystemAst,
+    arcanum: Option<&crate::frame_c::compiler::arcanum::Arcanum>,
+) -> String {
+    generate_rust_runtime_types(system, arcanum)
 }
 
 /// Generate FrameEvent class for Python/TypeScript
@@ -997,62 +1022,267 @@ return c"#,
 /// - FooFrameEvent struct with message field
 /// - FooCompartment struct with state and state_vars fields
 /// - Context structs for states with state variables (for typed push/pop)
-fn generate_rust_runtime_types(system: &SystemAst) -> String {
+fn generate_rust_runtime_types(
+    system: &SystemAst,
+    arcanum: Option<&crate::frame_c::compiler::arcanum::Arcanum>,
+) -> String {
     let system_name = &system.name;
     let mut code = String::new();
 
-    // Generate FrameEvent struct (lean routing object - message + parameters only)
-    // Parameters use Box<dyn Any> for typed storage with downcasting
+    // Build the effective event set: union of `system.interface`,
+    // every (non-lifecycle) handler in `system.machine.states`, AND
+    // every handler tracked by arcanum (when available).
+    //
+    // The arcanum walk is the critical piece for `@@[target(...)]`
+    // attribute filtering — `filter_by_target_attribute` retains
+    // only matching methods/handlers in the AST, but arcanum was
+    // built BEFORE the filter ran, so it still has the
+    // target-filtered handlers. The state dispatcher walks arcanum
+    // (not the filtered AST), so the enum must enumerate the same
+    // set or arcanum-emitted dispatch arms reference variants that
+    // don't exist.
+    let mut effective_events: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for method in &system.interface {
+        seen.insert(method.name.clone());
+        let fields: Vec<(String, String)> = method
+            .params
+            .iter()
+            .map(|p| (p.name.clone(), frame_type_to_rust_type(&p.param_type)))
+            .collect();
+        effective_events.push((method.name.clone(), fields));
+    }
+    if let Some(ref machine) = system.machine {
+        for state in &machine.states {
+            for handler in &state.handlers {
+                // Skip lifecycle events — they get FrameEnter/FrameExit
+                // variants below, not per-method variants.
+                if handler.event == "$>" || handler.event == "$<" {
+                    continue;
+                }
+                if seen.insert(handler.event.clone()) {
+                    let fields: Vec<(String, String)> = handler
+                        .params
+                        .iter()
+                        .map(|p| (p.name.clone(), frame_type_to_rust_type(&p.param_type)))
+                        .collect();
+                    effective_events.push((handler.event.clone(), fields));
+                }
+            }
+        }
+    }
+    if let Some(arc) = arcanum {
+        for state_entry in arc.get_enhanced_states(system_name) {
+            for (_event_key, handler_entry) in &state_entry.handlers {
+                if handler_entry.event == "$>" || handler_entry.event == "$<" {
+                    continue;
+                }
+                if seen.insert(handler_entry.event.clone()) {
+                    // Map FrameSymbol's symbol_type (String) to Rust type.
+                    let fields: Vec<(String, String)> = handler_entry
+                        .params
+                        .iter()
+                        .map(|p| {
+                            let ty = p
+                                .symbol_type
+                                .as_deref()
+                                .map(|s| match s {
+                                    "int" => "i64".to_string(),
+                                    "float" => "f64".to_string(),
+                                    "str" | "string" => "String".to_string(),
+                                    "bool" => "bool".to_string(),
+                                    other => other.to_string(),
+                                })
+                                .unwrap_or_else(|| "String".to_string());
+                            (p.name.clone(), ty)
+                        })
+                        .collect();
+                    effective_events.push((handler_entry.event.clone(), fields));
+                }
+            }
+        }
+    }
+
+    // Generate FrameEvent enum (RFC-0025 Track B.1).
+    //
+    // One variant per effective interface event, carrying that
+    // event's typed parameters as named fields. Plus two lifecycle
+    // variants (FrameEnter / FrameExit) that carry their args as
+    // `Vec<String>` — lifecycle args round-trip through persist as
+    // strings, so we keep the stringly path for those; user-facing
+    // event parameters are now fully typed, eliminating the
+    // Box<dyn Any> downcast lies that the old struct+Vec<Box<dyn Any>>
+    // shape required.
+    code.push_str("#[derive(Clone, Debug)]\n");
+    code.push_str("#[allow(dead_code, non_camel_case_types)]\n");
+    code.push_str(&format!("enum {}FrameEvent {{\n", system_name));
+    for (event_name, fields) in &effective_events {
+        let variant = pascal_case_variant(event_name);
+        // Always emit struct-style variants (even for no-param events
+        // emit `Tick {}` rather than `Tick`) so dispatch and the name()
+        // method can consistently use the `{ .. }` pattern. This
+        // matters when the same event name is declared with params in
+        // one state and without in another (Frame allows it; the
+        // no-param handler ignores the carried fields).
+        let field_strs: Vec<String> = fields
+            .iter()
+            .map(|(n, ty)| format!("{}: {}", n, ty))
+            .collect();
+        code.push_str(&format!("    {} {{ {} }},\n", variant, field_strs.join(", ")));
+    }
+    // Lifecycle event variants — carry Vec<String> args, parsed at
+    // dispatch via .parse::<T>(). Names chosen to not collide with
+    // any reasonable Frame interface method name (PascalCase
+    // `FrameEnter` / `FrameExit` would only collide with user
+    // methods literally named `frame_enter` / `frame_exit`).
+    code.push_str("    FrameEnter { args: Vec<String> },\n");
+    code.push_str("    FrameExit { args: Vec<String> },\n");
+    code.push_str("}\n\n");
+
+    // Build return-type lookup keyed by event name, merging
+    // system.interface, machine.state.handlers, AND arcanum
+    // handlers (when present). Arcanum captures target-filtered
+    // entries that AST walks miss (see effective_events comment).
+    let mut return_types: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for method in &system.interface {
+        if let Some(ref rt) = method.return_type {
+            return_types.insert(method.name.clone(), frame_type_to_rust_type(rt));
+        }
+    }
+    if let Some(ref machine) = system.machine {
+        for state in &machine.states {
+            for handler in &state.handlers {
+                if handler.event == "$>" || handler.event == "$<" {
+                    continue;
+                }
+                if let Some(ref rt) = handler.return_type {
+                    return_types
+                        .entry(handler.event.clone())
+                        .or_insert_with(|| frame_type_to_rust_type(rt));
+                }
+            }
+        }
+    }
+    if let Some(arc) = arcanum {
+        for state_entry in arc.get_enhanced_states(system_name) {
+            for (_event_key, handler_entry) in &state_entry.handlers {
+                if handler_entry.event == "$>" || handler_entry.event == "$<" {
+                    continue;
+                }
+                if let Some(ref rt) = handler_entry.return_type {
+                    return_types
+                        .entry(handler_entry.event.clone())
+                        .or_insert_with(|| match rt.as_str() {
+                            "int" => "i64".to_string(),
+                            "float" => "f64".to_string(),
+                            "str" | "string" => "String".to_string(),
+                            "bool" => "bool".to_string(),
+                            other => other.to_string(),
+                        });
+                }
+            }
+        }
+    }
+
+    // Generate FrameReturn enum (RFC-0025 Track B.2).
+    //
+    // One variant per interface method with a non-void return type,
+    // carrying the declared return value as a single positional
+    // payload. Replaces the old `Option<Box<dyn Any>>` _return slot
+    // with type discipline at every interface-method @@:return write
+    // site.
+    //
+    // The `_Lifecycle(Rc<dyn std::any::Any>)` variant is the typed-
+    // dispatch escape hatch: lifecycle handlers ($>/$<) can also
+    // write `@@:return` (for the in-flight interface method that
+    // triggered the transition), but at codegen time framec doesn't
+    // statically know which interface method that is. We keep these
+    // specific writes type-erased and unwrap at the interface read.
+    code.push_str("#[derive(Clone)]\n");
+    code.push_str("#[allow(dead_code, non_camel_case_types)]\n");
+    code.push_str(&format!("enum {}FrameReturn {{\n", system_name));
+    let mut return_event_names: Vec<&String> = return_types.keys().collect();
+    return_event_names.sort();
+    for event_name in &return_event_names {
+        let variant = pascal_case_variant(event_name);
+        let return_ty = &return_types[*event_name];
+        code.push_str(&format!("    {}({}),\n", variant, return_ty));
+    }
+    code.push_str("    _Lifecycle(std::rc::Rc<dyn std::any::Any>),\n");
+    code.push_str("}\n\n");
+
+    // Generate name() method — Frame source spelling of the event,
+    // returned by `@@:event` reads. User events: the interface method
+    // name verbatim. Lifecycle: `$>` / `<$` per Frame syntax
+    // (note: `$<` is the event KEY, `<$` is the message spelling —
+    // historical asymmetry preserved for caller compatibility).
     code.push_str("#[allow(dead_code)]\n");
-    code.push_str(&format!("struct {}FrameEvent {{\n", system_name));
-    code.push_str("    message: String,\n");
-    code.push_str("    parameters: Vec<Box<dyn std::any::Any>>,\n");
-    code.push_str("}\n\n");
-
-    // Generate Clone impl manually since Box<dyn Any> doesn't implement Clone
-    // For forward_event we only need message, parameters are empty for lifecycle events
-    code.push_str(&format!("impl Clone for {}FrameEvent {{\n", system_name));
-    code.push_str("    fn clone(&self) -> Self {\n");
-    code.push_str("        Self {\n");
-    code.push_str("            message: self.message.clone(),\n");
-    code.push_str("            parameters: Vec::new(),\n");
-    code.push_str("        }\n");
-    code.push_str("    }\n");
-    code.push_str("}\n\n");
-
-    // Generate FrameEvent impl with new() and new_with_params()
     code.push_str(&format!("impl {}FrameEvent {{\n", system_name));
-    code.push_str("    fn new(message: &str) -> Self {\n");
-    code.push_str("        Self {\n");
-    code.push_str("            message: message.to_string(),\n");
-    code.push_str("            parameters: Vec::new(),\n");
+    code.push_str("    fn name(&self) -> &'static str {\n");
+    code.push_str("        match self {\n");
+    for (event_name, _fields) in &effective_events {
+        let variant = pascal_case_variant(event_name);
+        // Always use `{ .. }` since all variants are struct-shaped.
+        code.push_str(&format!(
+            "            {}FrameEvent::{} {{ .. }} => \"{}\",\n",
+            system_name, variant, event_name
+        ));
+    }
+    code.push_str(&format!(
+        "            {}FrameEvent::FrameEnter {{ .. }} => \"$>\",\n",
+        system_name
+    ));
+    code.push_str(&format!(
+        "            {}FrameEvent::FrameExit {{ .. }} => \"<$\",\n",
+        system_name
+    ));
     code.push_str("        }\n");
     code.push_str("    }\n");
-    code.push_str("    fn new_with_params(message: &str, params: &[String]) -> Self {\n");
-    code.push_str("        Self {\n");
-    code.push_str("            message: message.to_string(),\n");
-    code.push_str("            parameters: params.iter().map(|v| Box::new(v.clone()) as Box<dyn std::any::Any>).collect(),\n");
-    code.push_str("        }\n");
-    code.push_str("    }\n");
+    code.push_str("}\n\n");
+
+    // Generate FrameValue enum (RFC-0025 Track B.3).
+    //
+    // Closed value enum for the call-scoped `@@:data` map. This is
+    // the *one* place runtime variance is genuinely needed — keys
+    // are dynamic and types are determined at the assignment site.
+    // The 6 variants cover the Frame v4 base type set; List and
+    // Dict recurse for nested values.
+    code.push_str("#[derive(Clone, Debug)]\n");
+    code.push_str("#[allow(dead_code)]\n");
+    code.push_str(&format!("enum {}FrameValue {{\n", system_name));
+    code.push_str("    Int(i64),\n");
+    code.push_str("    Float(f64),\n");
+    code.push_str("    Bool(bool),\n");
+    code.push_str("    Str(String),\n");
+    code.push_str("    List(Vec<Self>),\n");
+    code.push_str("    Dict(std::collections::HashMap<String, Self>),\n");
     code.push_str("}\n\n");
 
     // Generate FrameContext struct (call context for reentrancy).
     // RFC-0020: `event` is `Rc<FrameEvent>` so the wrapper can pass
-    // `&Rc<FrameEvent>` to the kernel without aliasing through `self`
-    // (the original by-value form failed the borrow checker; the
-    // workaround cloned the event at kernel entry, silently dropping
-    // parameters per the shallow Clone impl above).
+    // `&Rc<FrameEvent>` to the kernel without aliasing through `self`.
+    // RFC-0025 Track B.2: `_return` is `Option<<System>FrameReturn>`
+    // (typed enum) instead of `Option<Box<dyn Any>>`.
+    // RFC-0025 Track B.3: `_data` is `HashMap<String, <System>FrameValue>`
+    // (value enum) instead of `HashMap<String, Box<dyn Any>>`.
     code.push_str("#[allow(dead_code)]\n");
     code.push_str(&format!("struct {}FrameContext {{\n", system_name));
     code.push_str(&format!("    event: std::rc::Rc<{}FrameEvent>,\n", system_name));
-    code.push_str("    _return: Option<Box<dyn std::any::Any>>,\n");
-    code.push_str("    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,\n");
+    code.push_str(&format!("    _return: Option<{}FrameReturn>,\n", system_name));
+    code.push_str(&format!(
+        "    _data: std::collections::HashMap<String, {}FrameValue>,\n",
+        system_name
+    ));
     code.push_str("    _transitioned: bool,\n");
     code.push_str("}\n\n");
 
     // Generate FrameContext impl with new()
     code.push_str(&format!("impl {}FrameContext {{\n", system_name));
-    code.push_str(&format!("    fn new(event: std::rc::Rc<{}FrameEvent>, default_return: Option<Box<dyn std::any::Any>>) -> Self {{\n", system_name));
+    code.push_str(&format!(
+        "    fn new(event: std::rc::Rc<{}FrameEvent>, default_return: Option<{}FrameReturn>) -> Self {{\n",
+        system_name, system_name
+    ));
     code.push_str("        Self {\n");
     code.push_str("            event,\n");
     code.push_str("            _return: default_return,\n");

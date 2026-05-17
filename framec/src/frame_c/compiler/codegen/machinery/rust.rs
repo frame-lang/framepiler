@@ -173,19 +173,21 @@ while self.__next_compartment.is_some() {{
     let next_compartment = self.__next_compartment.take().unwrap();
     // Exit the current (leaf) state.
     let exit_args = self.__compartment.exit_args.clone();
-    let exit_event = std::rc::Rc::new({evt}::new_with_params("<$", &exit_args));
+    let exit_event = std::rc::Rc::new({evt}::FrameExit {{ args: exit_args }});
     self.__router(&exit_event);
     // Switch to the new compartment.
     self.__compartment = next_compartment;
-    // Three-branch forward-event handling.
+    // Three-branch forward-event handling (RFC-0025 Track B.1: forward
+    // event is matched on enum variant; $> recognition is now a
+    // structural match, not a string compare).
     match self.__compartment.forward_event.take() {{
         None => {{
             // No forwarded event — synthesize a fresh $>.
             let enter_args = self.__compartment.enter_args.clone();
-            let enter_event = std::rc::Rc::new({evt}::new_with_params("$>", &enter_args));
+            let enter_event = std::rc::Rc::new({evt}::FrameEnter {{ args: enter_args }});
             self.__router(&enter_event);
         }}
-        Some(fwd) if fwd.message == "$>" => {{
+        Some(fwd) if matches!(fwd, {evt}::FrameEnter {{ .. }}) => {{
             // Forwarded event IS $> — dispatch directly so the
             // destination's $> handler receives the caller's payload.
             let fwd_rc = std::rc::Rc::new(fwd);
@@ -195,7 +197,7 @@ while self.__next_compartment.is_some() {{
             // Forwarded event is not $> — initialize the destination
             // with a fresh $>, then dispatch the forward.
             let enter_args = self.__compartment.enter_args.clone();
-            let enter_event = std::rc::Rc::new({evt}::new_with_params("$>", &enter_args));
+            let enter_event = std::rc::Rc::new({evt}::FrameEnter {{ args: enter_args }});
             self.__router(&enter_event);
             let fwd_rc = std::rc::Rc::new(fwd);
             self.__router(&fwd_rc);

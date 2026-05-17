@@ -106,7 +106,9 @@ pub(super) fn expand_context_data(
                     )
                 }
                 TargetLanguage::C => format!("{}_DATA(self, \"{}\")", ctx.system_name, key),
-                TargetLanguage::Rust => super::super::rust_system::rust_context_data_get(&key),
+                TargetLanguage::Rust => {
+                    super::super::rust_system::rust_context_data_get(&key, &ctx.system_name)
+                }
                 TargetLanguage::Cpp => format!("_context_stack.back()._data[\"{}\"]", key),
                 TargetLanguage::Java => format!(
                     "_context_stack.get(_context_stack.size() - 1)._data.get(\"{}\")",
@@ -172,7 +174,7 @@ pub(super) fn expand_context_data_assign(
                 TargetLanguage::TypeScript | TargetLanguage::Dart | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._data[\"{}\"] = {};", indent_str, key, expanded_expr),
                 TargetLanguage::C => format!("{}{}_DATA_SET(self, \"{}\", {});", indent_str, ctx.system_name, key, expanded_expr),
                 TargetLanguage::Rust => super::super::rust_system::rust_expand_context_data_write(
-                    &indent_str, &key, &expanded_expr,
+                    &indent_str, &key, &expanded_expr, &ctx.system_name,
                 ),
                 TargetLanguage::Cpp => format!("{}_context_stack.back()._data[\"{}\"] = {};", indent_str, key, expanded_expr),
                 TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._data.put(\"{}\", {});", indent_str, key, expanded_expr),
