@@ -333,26 +333,20 @@ multi-struct definitions.
 
 ---
 
-## Cross-file composition: `@@import` + native `package`
+## Cross-file composition: native `package` + `import`
 
-Multi-file Frame projects targeting Go use RFC-0022's `@@import`
-together with native `package` and `import` lines written via Oceans
-Model pass-through. Each side has a job:
+Multi-file Frame projects targeting Go rely entirely on Go's
+native `package` + `import` system, written as
+[Oceans Model](../glossary.md#oceans-model) pass-through. Frame
+has no special cross-file directive (per
+[RFC-0024](../rfcs/rfc-0024.md)); you write the same `package` +
+`import` lines you'd write in any hand-authored Go file.
 
-- **`@@import "./other.fgo"`** — Frame-level dependency declaration.
-  framec parses it for `--import-mode strict` validation (verifies the
-  file exists and declares at least one `@@system`) but **emits
-  nothing** to the generated `.go` output. It does not translate to
-  a host `import "<modpath>"` line.
-- **Native `package` / `import` lines** — your job. Write them in
-  the `.fgo` source outside any `@@system` block, **before** the
-  `@@system` declaration. Go requires `package <name>` as the first
-  non-comment token in every file.
-
-This is RFC-0022.1's contract. The split exists because Go locates
-symbols by module path, not file path — framec can't mechanically
-translate `@@import "./counter.fgo"` to `import
-"github.com/example/counter"` without knowing the module path.
+framec lowers `@@SystemName()` references using the literal name
+from source. For cross-package references you write the
+package-qualified form yourself (`counter.NewCounter()` in the
+handler body); framec doesn't rewrite identifiers inside handler
+bodies. If you forgot the `import`, `go build` will catch it.
 
 ### Worked example
 
@@ -381,7 +375,6 @@ package counter
 
 ```frame
 @@[target("go")]
-@@import "./counter.fgo"
 
 package app
 

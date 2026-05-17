@@ -204,6 +204,37 @@ pub fn compile_ast_based(
                     });
                 }
             }
+            // RFC-0024: @@import removed entirely. Cross-file
+            // dependencies are expressed in the target language's
+            // native syntax (`from .x import Y` for Python, `use
+            // crate::x::Y;` for Rust, `const Y = preload(...)` for
+            // GDScript, etc.) written as Oceans Model pass-through.
+            if trimmed.starts_with("@@import") {
+                let after = &trimmed[8..];
+                let next = after.chars().next();
+                let is_import_directive = match next {
+                    None => true,
+                    Some(c) => c.is_whitespace() || c == '"',
+                };
+                if is_import_directive {
+                    return Ok(CompileResult {
+                        code: String::new(),
+                        errors: vec![CompileError::new(
+                            "E823",
+                            "`@@import \"<path>\"` is no longer accepted (RFC-0024). \
+                             Write the target language's native import syntax outside \
+                             any `@@system` block instead — `from .other import X` for \
+                             Python, `use crate::other::X;` for Rust, `const X = \
+                             preload(\"res://other.gd\")` for GDScript, `#include \
+                             \"other.h\"` for C/C++, etc. framec passes the line \
+                             through unchanged (Oceans Model). See RFC-0024 for the \
+                             full per-target migration table.",
+                        )],
+                        warnings: vec![],
+                        source_map: None,
+                    });
+                }
+            }
         }
     }
 

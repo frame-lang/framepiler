@@ -223,25 +223,20 @@ constraint analogous to Java's one-public-class rule.
 
 ---
 
-## Cross-file composition: `@@import` + native `namespace`
+## Cross-file composition: native `namespace` + `using`
 
-Multi-file Frame projects targeting C# use RFC-0022's `@@import`
-together with native `namespace` and `using` lines written via Oceans
-Model pass-through. Each side has a job:
+Multi-file Frame projects targeting C# rely entirely on C#'s
+native `namespace` and `using` system, written as
+[Oceans Model](../glossary.md#oceans-model) pass-through. Frame
+has no special cross-file directive (per
+[RFC-0024](../rfcs/rfc-0024.md)); you write the same lines you'd
+write in any hand-authored C# project.
 
-- **`@@import "./other.fcs"`** — Frame-level dependency declaration.
-  framec parses it for `--import-mode strict` validation (verifies the
-  file exists and declares at least one `@@system`) but **emits
-  nothing** to the generated `.cs` output. It does not translate to
-  a host `using` line.
-- **Native `namespace` / `using` lines** — your job. Write them in
-  the `.fcs` source outside any `@@system` block. framec passes them
-  through verbatim.
-
-This is RFC-0022.1's contract. The split exists because C# locates
-symbols by namespace, not file path — framec can't mechanically
-translate `@@import "./counter.fcs"` to `using Example.Counter;`
-without knowing the namespace.
+framec lowers `@@SystemName()` references using the literal name
+from source — `@@Counter()` becomes `Counter._create()`
+regardless of whether `Counter` is declared in this file or
+imported. The host compiler resolves the name; if you forgot the
+`using` line, the C# compiler will catch it.
 
 ### Worked example
 
@@ -273,7 +268,6 @@ namespace Example.Counter
 
 ```frame
 @@[target("csharp")]
-@@import "./counter.fcs"
 
 using Example.Counter;
 

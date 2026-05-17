@@ -286,29 +286,20 @@ classpath.
 
 ---
 
-## Cross-file composition: `@@import` + native `package`
+## Cross-file composition: native `package` + `import`
 
-Multi-file Frame projects targeting Java use RFC-0022's `@@import`
-together with native `package` and `import` lines written via Oceans
-Model pass-through. Each side has a job:
+Multi-file Frame projects targeting Java rely entirely on Java's
+native package + import system, written as
+[Oceans Model](../glossary.md#oceans-model) pass-through. Frame has
+no special cross-file directive (per [RFC-0024](../rfcs/rfc-0024.md));
+you write the same `package` and `import` lines you'd write in any
+hand-authored Java project.
 
-- **`@@import "./other.fjava"`** — Frame-level dependency declaration.
-  framec parses it for `--import-mode strict` validation (verifies the
-  file exists and declares at least one `@@system`) but **emits
-  nothing** to the generated `.java` output. It does not translate to
-  a host `import` line.
-- **Native `package` / `import` lines** — your job. Write them in the
-  `.fjava` source outside any `@@system` block. framec passes them
-  through verbatim. The assembler places framec's own `import
-  java.util.*;` after your prolog and before the generated class, so
-  Java's "`package` must be first" rule is satisfied.
-
-This is RFC-0022.1's contract. The split exists because Java locates
-symbols by fully-qualified name, not file path — framec can't
-mechanically translate `@@import "./counter.fjava"` to `import
-com.example.counter.Counter;` without knowing the package, and rather
-than invent a Frame attribute to carry that name, the cleanest answer
-is "just write the native line."
+framec lowers `@@SystemName()` references using the literal name
+from source — `@@Counter()` becomes `Counter._create()` regardless
+of whether `Counter` is declared in this file or imported. The host
+compiler resolves the name at compile time; if you forgot to import
+`Counter`, `javac` will catch it.
 
 ### Worked example
 
@@ -338,8 +329,6 @@ Generates `Counter.java`:
 ```java
 package com.example.counter;
 
-import java.util.*;
-
 public class Counter {
     // ...
 }
@@ -349,7 +338,6 @@ public class Counter {
 
 ```frame
 @@[target("java")]
-@@import "./counter.fjava"
 
 package com.example.app;
 
@@ -374,21 +362,11 @@ package com.example.app;
 
 import com.example.counter.Counter;
 
-import java.util.*;
-
 public class App {
     private Counter c;
     // ...
 }
 ```
-
-Order in the generated file:
-
-1. Your `package com.example.app;` — first, as Java demands.
-2. Your `import com.example.counter.Counter;` — explicit, written by you.
-3. framec's `import java.util.*;` — auto-injected for generated
-   `HashMap` / `ArrayList` use.
-4. The generated `class App` — your `@@system App` lowered.
 
 Compile with the usual `javac com/example/counter/Counter.java
 com/example/app/App.java`; the directory layout matches the package
