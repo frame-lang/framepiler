@@ -20,7 +20,7 @@ cargo build
 ### Running Tests
 
 ```bash
-# Unit tests (in this repo)
+# Unit tests + in-tree snapshot tests (in this repo)
 cargo test
 
 # Integration tests (17 languages, in separate repo)
@@ -29,6 +29,35 @@ cd /path/to/framec-test-env/docker
 make test              # All languages
 make test-python       # Single language
 ```
+
+### Snapshot tests (RFC-0027)
+
+The `framec/tests/` directory holds per-backend snapshot tests
+that capture the framec-emitted target code for a curated
+fixture corpus. When you intentionally change codegen, snapshots
+diff and tests fail — the diff is the code review artifact, not
+a test failure to suppress.
+
+**Re-bless workflow** when an intentional codegen change is made:
+
+```bash
+cargo install cargo-insta   # one-time
+cargo test                  # see snapshot diffs
+cargo insta review          # interactive accept/reject UI
+git add framec/tests/snapshots/ && git commit
+```
+
+The diff'd `.snap` files belong in the same PR as the codegen
+change — they're the reviewer's window into what user-visible
+output actually changed.
+
+**Adding a snapshot fixture** (when an existing one doesn't
+exercise the codegen surface you changed): add a new `.frm`
+under `framec/tests/fixtures/`, reference it via
+`compile_fixture("<name>", "<target>")` in a new test, run
+`cargo test`, bless the new snapshot. Keep fixtures small —
+the goal is reviewable diffs, not exhaustive coverage (the
+external matrix at `framec-test-env` covers that).
 
 ### Code Quality
 

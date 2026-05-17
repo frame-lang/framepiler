@@ -1,0 +1,175 @@
+---
+source: framec/tests/python_snapshots.rs
+expression: "compile_fixture(\"03_persist\", \"python_3\")"
+---
+from typing import Any, Optional, List, Dict, Callable
+
+class CounterFrameEvent:
+    def __init__(self, message: str, parameters):
+        self._message = message
+        self._parameters = parameters
+
+
+class CounterFrameContext:
+    def __init__(self, event: CounterFrameEvent, default_return):
+        self.event = event
+        self._return = default_return
+        self._data = {}
+        self._transitioned = False
+
+
+class CounterCompartment:
+    def __init__(self, state: str, parent_compartment = None):
+        self.state = state
+        self.state_args = []
+        self.state_vars = {}
+        self.enter_args = []
+        self.exit_args = []
+        self.forward_event = None
+        self.parent_compartment = parent_compartment
+
+    def copy(self) -> 'CounterCompartment':
+        c = CounterCompartment(self.state, self.parent_compartment)
+        c.state_args = self.state_args.copy()
+        c.state_vars = self.state_vars.copy()
+        c.enter_args = self.enter_args.copy()
+        c.exit_args = self.exit_args.copy()
+        c.forward_event = self.forward_event
+        return c
+
+
+class Counter:
+    def __init__(self):
+        self._state_stack = []
+        self._context_stack = []
+        self.count = 0
+        self.__compartment = self.__prepareEnter("Counting", [], [])
+        self.__next_compartment = None
+
+    @classmethod
+    def _create(cls):
+        c = cls()
+        __e = CounterFrameEvent("$>", c.__compartment.enter_args)
+        __ctx = CounterFrameContext(__e, None)
+        c._context_stack.append(__ctx)
+        c.__kernel(__e)
+        c._context_stack.pop()
+        return c
+
+    _HSM_CHAIN = {
+        "Counting": ["Counting"],
+    }
+    def __prepareEnter(self, leaf, state_args, enter_args):
+        comp = None
+        for name in self._HSM_CHAIN[leaf]:
+            new_comp = CounterCompartment(name)
+            new_comp.state_args = list(state_args)
+            new_comp.enter_args = list(enter_args)
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        return comp
+
+    def __prepareExit(self, exit_args):
+        comp = self.__compartment
+        while comp is not None:
+            comp.exit_args = list(exit_args)
+            comp = comp.parent_compartment
+
+    def __kernel(self, __e):
+        # Route event to current state
+        self.__router(__e)
+        # Drain any transitions queued by the handler
+        while self.__next_compartment is not None:
+            next_compartment = self.__next_compartment
+            self.__next_compartment = None
+            # Exit the current (leaf) state
+            self.__router(CounterFrameEvent("<$", self.__compartment.exit_args))
+            # Switch to the new compartment
+            self.__compartment = next_compartment
+            if next_compartment.forward_event is None:
+                # No forwarded event — synthesize a fresh $>
+                self.__router(CounterFrameEvent("$>", self.__compartment.enter_args))
+            else:
+                if next_compartment.forward_event._message == "$>":
+                    # Forwarded event IS $> — dispatch directly so the
+                    # destination's $> receives the caller's payload
+                    self.__router(next_compartment.forward_event)
+                else:
+                    # Forwarded event is not $> — initialize the destination
+                    # with a fresh $>, then dispatch the forward to it
+                    self.__router(CounterFrameEvent("$>", self.__compartment.enter_args))
+                    self.__router(next_compartment.forward_event)
+            next_compartment.forward_event = None
+            # Mark all stacked contexts as transitioned
+            for ctx in self._context_stack:
+                ctx._transitioned = True
+
+    def __router(self, __e):
+        if self.__compartment.state == "Counting":
+            self._state_Counting(__e, self.__compartment)
+
+    def __transition(self, next_compartment):
+        self.__next_compartment = next_compartment
+
+    def increment(self, by: i32):
+        __e = CounterFrameEvent("increment", [by])
+        __ctx = CounterFrameContext(__e, None)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop()._return
+
+    def value(self) -> i32:
+        __e = CounterFrameEvent("value", [])
+        __ctx = CounterFrameContext(__e, None)
+        __ctx._return = 0
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop()._return
+
+    def _state_Counting(self, __e, compartment):
+        if __e._message == "increment":
+            self._s_Counting_hdl_user_increment(__e, compartment)
+            return
+        if __e._message == "value":
+            self._s_Counting_hdl_user_value(__e, compartment)
+            return
+
+    def _s_Counting_hdl_user_increment(self, __e, compartment):
+        by = __e._parameters[0]
+        self.count = self.count + by
+
+    def _s_Counting_hdl_user_value(self, __e, compartment):
+        self._context_stack[-1]._return = self.count
+
+    def snapshot(self) -> bytes:
+        if self._context_stack:
+            raise RuntimeError("E700: system not quiescent")
+        import json
+        def _ser_comp(c):
+            if c is None:
+                return None
+            return {"state": c.state, "state_args": list(c.state_args), "state_vars": dict(c.state_vars), "enter_args": list(c.enter_args), "exit_args": list(c.exit_args), "parent_compartment": _ser_comp(c.parent_compartment)}
+        state_data = {"_compartment": _ser_comp(self.__compartment), "_state_stack": [_ser_comp(c) for c in self._state_stack]}
+        state_data["count"] = self.count
+        return json.dumps(state_data).encode("utf-8")
+
+    def restore(self, data: bytes):
+        _blob = data
+        import json
+        _raw = _blob.decode("utf-8") if isinstance(_blob, (bytes, bytearray)) else _blob
+        _parsed = json.loads(_raw)
+        def _deser_comp(d):
+            if d is None:
+                return None
+            comp = CounterCompartment(d["state"])
+            comp.state_args = list(d.get("state_args", []))
+            comp.state_vars = dict(d.get("state_vars", {}))
+            comp.enter_args = list(d.get("enter_args", []))
+            comp.exit_args = list(d.get("exit_args", []))
+            comp.parent_compartment = _deser_comp(d.get("parent_compartment"))
+            return comp
+        self.__compartment = _deser_comp(_parsed["_compartment"])
+        self.__next_compartment = None
+        self._state_stack = [_deser_comp(c) for c in _parsed.get("_state_stack", [])]
+        self._context_stack = []
+        self.count = _parsed.get("count")

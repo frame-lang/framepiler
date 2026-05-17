@@ -39,6 +39,11 @@ tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"
+# RFC-0027: in-tree snapshot tests per backend. `insta` snapshots
+# the framec-emitted target code for a small curated fixture
+# corpus; changes show up as reviewable diffs in PRs. Re-bless
+# via `cargo insta review` after intentional codegen changes.
+insta = "1"
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
