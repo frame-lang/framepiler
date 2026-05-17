@@ -1,0 +1,273 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"dart\")"
+---
+class MiniHsmFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    MiniHsmFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class MiniHsmFrameContext {
+    late MiniHsmFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    MiniHsmFrameContext(MiniHsmFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class MiniHsmCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    MiniHsmCompartment? parent_compartment;
+
+    MiniHsmCompartment(String state, [MiniHsmCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    MiniHsmCompartment copy() {
+        final c = MiniHsmCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class MiniHsm {
+    late List<MiniHsmCompartment> _state_stack;
+    late MiniHsmCompartment __compartment;
+    MiniHsmCompartment? __next_compartment;
+    late List<MiniHsmFrameContext> _context_stack;
+    i32 awakes = 0;
+    i32 sleeps = 0;
+    String last = "";
+
+    MiniHsm() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Live", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init() {
+        final __e = MiniHsmFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = MiniHsmFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static MiniHsm _create() {
+        final c = MiniHsm();
+        c._frame_init();
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Live": ["Live"],
+            "Awake": ["Live", "Awake"],
+            "Asleep": ["Live", "Asleep"],
+        };
+    }
+    MiniHsmCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        MiniHsmCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = MiniHsmCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        MiniHsmCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(MiniHsmFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = MiniHsmFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = MiniHsmFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = MiniHsmFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(MiniHsmFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Live":
+                _state_Live(__e, __compartment);
+                break;
+            case "Awake":
+                _state_Awake(__e, __compartment);
+                break;
+            case "Asleep":
+                _state_Asleep(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(MiniHsmCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void wake() {
+        final __e = MiniHsmFrameEvent("wake", []);
+        final __ctx = MiniHsmFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void sleep() {
+        final __e = MiniHsmFrameEvent("sleep", []);
+        final __ctx = MiniHsmFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void signal() {
+        final __e = MiniHsmFrameEvent("signal", []);
+        final __ctx = MiniHsmFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void _state_Live(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message == "signal") {
+            this._s_Live_hdl_user_signal(__e, compartment);
+            return;
+        }
+        if (__e._message == "sleep") {
+            this._s_Live_hdl_user_sleep(__e, compartment);
+            return;
+        }
+        if (__e._message == "wake") {
+            this._s_Live_hdl_user_wake(__e, compartment);
+            return;
+        }
+    }
+
+    void _state_Awake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message == "\$>") {
+            this._s_Awake_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message == "signal") {
+            this._s_Awake_hdl_user_signal(__e, compartment);
+            return;
+        }
+    }
+
+    void _state_Asleep(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message == "\$>") {
+            this._s_Asleep_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message == "signal") {
+            this._s_Asleep_hdl_user_signal(__e, compartment);
+            return;
+        }
+        if (__e._message == "wake") {
+            this._s_Asleep_hdl_user_wake(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Live_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    void _s_Live_hdl_user_sleep(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    void _s_Live_hdl_user_wake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    void _s_Awake_hdl_frame_enter(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.awakes = self.awakes + 1
+    }
+
+    void _s_Awake_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.last = "awake"
+        this._state_Live(__e, compartment.parent_compartment!);
+    }
+
+    void _s_Asleep_hdl_frame_enter(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.sleeps = self.sleeps + 1
+    }
+
+    void _s_Asleep_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.last = "asleep"
+        this._state_Live(__e, compartment.parent_compartment!);
+    }
+
+    void _s_Asleep_hdl_user_wake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        final __compartment = this.__prepareEnter("Awake", [], []);
+        this.__transition(__compartment);
+        return;
+    }
+}

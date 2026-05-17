@@ -1,0 +1,260 @@
+---
+source: framec/tests/swift_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"swift\")"
+---
+import Foundation
+
+class MiniHsmFrameEvent {
+    var _message: String
+    var _parameters: [Any]
+
+    init(message: String, parameters: [Any] = []) {
+        self._message = message
+        self._parameters = parameters
+    }
+}
+
+class MiniHsmFrameContext {
+    var _event: MiniHsmFrameEvent
+    var _return: Any?
+    var _data: [String: Any] = [:]
+    var _transitioned: Bool = false
+
+    init(event: MiniHsmFrameEvent, defaultReturn: Any? = nil) {
+        self._event = event
+        self._return = defaultReturn
+    }
+}
+
+class MiniHsmCompartment {
+    var state: String
+    var state_args: [Any] = []
+    var state_vars: [String: Any] = [:]
+    var enter_args: [Any] = []
+    var exit_args: [Any] = []
+    var forward_event: MiniHsmFrameEvent?
+    var parent_compartment: MiniHsmCompartment?
+
+    init(state: String) {
+        self.state = state
+    }
+
+    func copy() -> MiniHsmCompartment {
+        let c = MiniHsmCompartment(state: self.state)
+        c.state_args = self.state_args
+        c.state_vars = self.state_vars
+        c.enter_args = self.enter_args
+        c.exit_args = self.exit_args
+        c.forward_event = self.forward_event
+        c.parent_compartment = self.parent_compartment
+        return c
+    }
+}
+
+public class MiniHsm {
+    private var _state_stack: [MiniHsmCompartment] = []
+    private var __compartment: MiniHsmCompartment
+    private var __next_compartment: MiniHsmCompartment? = nil
+    private var _context_stack: [MiniHsmFrameContext] = []
+    public var awakes: Int = 0
+    public var sleeps: Int = 0
+    public var last: String = ""
+
+    init() {
+        _state_stack = []
+        _context_stack = []
+        self.__compartment = MiniHsm.__prepareEnter("Live", [], [])
+        self.__next_compartment = nil
+    }
+
+    func __frame_init() {
+        let __e = MiniHsmFrameEvent(message: "$>", parameters: __compartment.enter_args)
+        let __ctx = MiniHsmFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(__e)
+        _context_stack.removeLast()
+    }
+
+    static func __create() -> MiniHsm {
+        let c = MiniHsm()
+        c.__frame_init()
+        return c
+    }
+
+    private static func hsm_chain() -> [String: [String]] {
+        return [
+            "Live": ["Live"],
+            "Awake": ["Live", "Awake"],
+            "Asleep": ["Live", "Asleep"],
+        ]
+    }
+    private static func __prepareEnter(_ leaf: String, _ state_args: [Any], _ enter_args: [Any]) -> MiniHsmCompartment {
+        var comp: MiniHsmCompartment? = nil
+        for name in MiniHsm.hsm_chain()[leaf]! {
+            let new_comp = MiniHsmCompartment(state: name)
+            new_comp.state_args = state_args
+            new_comp.enter_args = enter_args
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!
+    }
+    private func __prepareExit(_ exit_args: [Any]) {
+        var comp: MiniHsmCompartment? = __compartment
+        while comp != nil {
+            comp!.exit_args = exit_args
+            comp = comp!.parent_compartment
+        }
+    }
+
+    private func __kernel(_ __e: MiniHsmFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while __next_compartment != nil {
+            let next_compartment: MiniHsmCompartment = __next_compartment!
+            __next_compartment = nil
+            // Exit the current (leaf) state.
+            let exit_event = MiniHsmFrameEvent(message: "<$", parameters: __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            let forward_event: MiniHsmFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = nil
+            if forward_event == nil {
+                // No forwarded event — synthesize a fresh $>.
+                let enter_event = MiniHsmFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+            } else if forward_event!._message == "$>" {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event!)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                let enter_event = MiniHsmFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event!)
+            }
+            for ctx in _context_stack {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private func __router(_ __e: MiniHsmFrameEvent) {
+        if __compartment.state == "Live" {
+            _state_Live(__e, __compartment)
+        } else if __compartment.state == "Awake" {
+            _state_Awake(__e, __compartment)
+        } else if __compartment.state == "Asleep" {
+            _state_Asleep(__e, __compartment)
+        }
+    }
+
+    private func __transition(_ next: MiniHsmCompartment) {
+        __next_compartment = next
+    }
+
+    public func wake() {
+        let __e = MiniHsmFrameEvent(message: "wake", parameters: [])
+        let __ctx = MiniHsmFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    public func sleep() {
+        let __e = MiniHsmFrameEvent(message: "sleep", parameters: [])
+        let __ctx = MiniHsmFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    public func signal() {
+        let __e = MiniHsmFrameEvent(message: "signal", parameters: [])
+        let __ctx = MiniHsmFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    private func _state_Live(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+        if __e._message == "signal" {
+            self._s_Live_hdl_user_signal(__e, compartment)
+            return
+        }
+        if __e._message == "sleep" {
+            self._s_Live_hdl_user_sleep(__e, compartment)
+            return
+        }
+        if __e._message == "wake" {
+            self._s_Live_hdl_user_wake(__e, compartment)
+            return
+        }
+    }
+
+    private func _state_Awake(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+        if __e._message == "$>" {
+            self._s_Awake_hdl_frame_enter(__e, compartment)
+            return
+        }
+        if __e._message == "signal" {
+            self._s_Awake_hdl_user_signal(__e, compartment)
+            return
+        }
+    }
+
+    private func _state_Asleep(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+        if __e._message == "$>" {
+            self._s_Asleep_hdl_frame_enter(__e, compartment)
+            return
+        }
+        if __e._message == "signal" {
+            self._s_Asleep_hdl_user_signal(__e, compartment)
+            return
+        }
+        if __e._message == "wake" {
+            self._s_Asleep_hdl_user_wake(__e, compartment)
+            return
+        }
+    }
+
+    private func _s_Live_hdl_user_signal(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+
+    }
+
+    private func _s_Live_hdl_user_sleep(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+
+    }
+
+    private func _s_Live_hdl_user_wake(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+
+    }
+
+    private func _s_Awake_hdl_frame_enter(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+        self.awakes = self.awakes + 1
+    }
+
+    private func _s_Awake_hdl_user_signal(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+        self.last = "awake"
+        _state_Live(__e, compartment.parent_compartment!)
+    }
+
+    private func _s_Asleep_hdl_frame_enter(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+        self.sleeps = self.sleeps + 1
+    }
+
+    private func _s_Asleep_hdl_user_signal(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+        self.last = "asleep"
+        _state_Live(__e, compartment.parent_compartment!)
+    }
+
+    private func _s_Asleep_hdl_user_wake(_ __e: MiniHsmFrameEvent, _ compartment: MiniHsmCompartment) {
+        let __compartment = MiniHsm.__prepareEnter("Awake", [], [])
+        __transition(__compartment)
+        return
+    }
+}

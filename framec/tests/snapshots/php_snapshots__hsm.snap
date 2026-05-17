@@ -1,0 +1,260 @@
+---
+source: framec/tests/php_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"php\")"
+---
+<?php
+
+class MiniHsmFrameEvent {
+    public $_message;
+    public $_parameters;
+
+    public function __construct($message, $parameters = null) {
+        $this->_message = $message;
+        $this->_parameters = $parameters ?? [];
+    }
+}
+
+
+class MiniHsmFrameContext {
+    public $_event;
+    public $_return;
+    public $_data;
+    public $_transitioned;
+
+    public function __construct($event, $defaultReturn = null) {
+        $this->_event = $event;
+        $this->_return = $defaultReturn;
+        $this->_data = [];
+        $this->_transitioned = false;
+    }
+}
+
+
+class MiniHsmCompartment {
+    public $state;
+    public $state_args;
+    public $state_vars;
+    public $enter_args;
+    public $exit_args;
+    public $forward_event;
+    public $parent_compartment;
+
+    public function __construct($state, $parent_compartment = null) {
+        $this->state = $state;
+        $this->state_args = [];
+        $this->state_vars = [];
+        $this->enter_args = [];
+        $this->exit_args = [];
+        $this->forward_event = null;
+        $this->parent_compartment = $parent_compartment;
+    }
+
+    public function copy() {
+        $c = new MiniHsmCompartment($this->state, $this->parent_compartment);
+        $c->state_args = $this->state_args;
+        $c->state_vars = $this->state_vars;
+        $c->enter_args = $this->enter_args;
+        $c->exit_args = $this->exit_args;
+        $c->forward_event = $this->forward_event;
+        return $c;
+    }
+}
+
+
+class MiniHsm {
+    private $_state_stack;
+    private $__compartment;
+    private $__next_compartment;
+    private $_context_stack;
+    public $awakes = 0;
+    public $sleeps = 0;
+    public $last = "";
+
+    public function __construct() {
+        $this->_state_stack = [];
+        $this->_context_stack = [];
+        $this->__compartment = $this->__prepareEnter("Live", [], []);
+        $this->__next_compartment = null;
+    }
+
+    public function _frame_init(): void {
+        $__e = new MiniHsmFrameEvent("$>", $this->__compartment->enter_args);
+        $__ctx = new MiniHsmFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        array_pop($this->_context_stack);
+    }
+
+    public static function _create(): self {
+        $c = new self();
+        $c->_frame_init();
+        return $c;
+    }
+
+    public function hsm_chain() {
+        return [
+            "Live" => ["Live"],
+            "Awake" => ["Live", "Awake"],
+            "Asleep" => ["Live", "Asleep"],
+        ];
+    }
+    private function __prepareEnter($leaf, $state_args, $enter_args) {
+        $comp = null;
+        foreach ($this->hsm_chain()[$leaf] as $name) {
+            $new_comp = new MiniHsmCompartment($name);
+            $new_comp->state_args = $state_args;
+            $new_comp->enter_args = $enter_args;
+            $new_comp->parent_compartment = $comp;
+            $comp = $new_comp;
+        }
+        return $comp;
+    }
+
+    private function __prepareExit($exit_args) {
+        $comp = $this->__compartment;
+        while ($comp !== null) {
+            $comp->exit_args = $exit_args;
+            $comp = $comp->parent_compartment;
+        }
+    }
+
+    private function __kernel($__e) {
+        // Route event to current state.
+        $this->__router($__e);
+        // Drain any transitions queued by the handler.
+        while ($this->__next_compartment !== null) {
+            $next_compartment = $this->__next_compartment;
+            $this->__next_compartment = null;
+            $exit_event = new MiniHsmFrameEvent("<$", $this->__compartment->exit_args);
+            $this->__router($exit_event);
+            $this->__compartment = $next_compartment;
+            $forward_event = $next_compartment->forward_event;
+            $next_compartment->forward_event = null;
+            if ($forward_event === null) {
+                $enter_event = new MiniHsmFrameEvent("$>", $this->__compartment->enter_args);
+                $this->__router($enter_event);
+            } else if ($forward_event->_message === "$>") {
+                $this->__router($forward_event);
+            } else {
+                $enter_event = new MiniHsmFrameEvent("$>", $this->__compartment->enter_args);
+                $this->__router($enter_event);
+                $this->__router($forward_event);
+            }
+            foreach ($this->_context_stack as $ctx) {
+                $ctx->_transitioned = true;
+            }
+        }
+    }
+
+    private function __router($__e) {
+        $handler_name = "_state_" . $this->__compartment->state;
+        if (method_exists($this, $handler_name)) {
+            $this->$handler_name($__e, $this->__compartment);
+        }
+    }
+
+    private function __transition($next_compartment) {
+        $this->__next_compartment = $next_compartment;
+    }
+
+    public function wake() {
+        $__e = new MiniHsmFrameEvent("wake", []);
+        $__ctx = new MiniHsmFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function sleep() {
+        $__e = new MiniHsmFrameEvent("sleep", []);
+        $__ctx = new MiniHsmFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function signal() {
+        $__e = new MiniHsmFrameEvent("signal", []);
+        $__ctx = new MiniHsmFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    private function _state_Live($__e, $compartment) {
+        if ($__e->_message == "signal") {
+            $this->_s_Live_hdl_user_signal($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "sleep") {
+            $this->_s_Live_hdl_user_sleep($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "wake") {
+            $this->_s_Live_hdl_user_wake($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _state_Awake($__e, $compartment) {
+        if ($__e->_message == "$>") {
+            $this->_s_Awake_hdl_frame_enter($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "signal") {
+            $this->_s_Awake_hdl_user_signal($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _state_Asleep($__e, $compartment) {
+        if ($__e->_message == "$>") {
+            $this->_s_Asleep_hdl_frame_enter($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "signal") {
+            $this->_s_Asleep_hdl_user_signal($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "wake") {
+            $this->_s_Asleep_hdl_user_wake($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _s_Live_hdl_user_signal($__e, $compartment) {
+
+    }
+
+    private function _s_Live_hdl_user_sleep($__e, $compartment) {
+
+    }
+
+    private function _s_Live_hdl_user_wake($__e, $compartment) {
+
+    }
+
+    private function _s_Awake_hdl_frame_enter($__e, $compartment) {
+        self.awakes = self.awakes + 1
+    }
+
+    private function _s_Awake_hdl_user_signal($__e, $compartment) {
+        self.last = "awake"
+        $this->_state_Live($__e, $compartment->parent_compartment);
+    }
+
+    private function _s_Asleep_hdl_frame_enter($__e, $compartment) {
+        self.sleeps = self.sleeps + 1
+    }
+
+    private function _s_Asleep_hdl_user_signal($__e, $compartment) {
+        self.last = "asleep"
+        $this->_state_Live($__e, $compartment->parent_compartment);
+    }
+
+    private function _s_Asleep_hdl_user_wake($__e, $compartment) {
+        $__compartment = $this->__prepareEnter("Awake", [], []);
+        $this->__transition($__compartment);
+        return;
+    }
+}

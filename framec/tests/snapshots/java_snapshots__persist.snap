@@ -1,0 +1,250 @@
+---
+source: framec/tests/java_snapshots.rs
+expression: "compile_fixture(\"03_persist\", \"java\")"
+---
+class CounterFrameEvent {
+    String _message;
+    java.util.ArrayList<Object> _parameters;
+
+    CounterFrameEvent(String message) {
+        this._message = message;
+        this._parameters = new java.util.ArrayList<>();
+    }
+
+    CounterFrameEvent(String message, java.util.ArrayList<Object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class CounterFrameContext {
+    CounterFrameEvent _event;
+    Object _return;
+    java.util.HashMap<String, Object> _data;
+    boolean _transitioned = false;
+
+    CounterFrameContext(CounterFrameEvent event, Object defaultReturn) {
+        this._event = event;
+        this._return = defaultReturn;
+        this._data = new java.util.HashMap<>();
+        this._transitioned = false;
+    }
+}
+
+class CounterCompartment {
+    String state;
+    java.util.ArrayList<Object> state_args;
+    java.util.HashMap<String, Object> state_vars;
+    java.util.ArrayList<Object> enter_args;
+    java.util.ArrayList<Object> exit_args;
+    CounterFrameEvent forward_event;
+    CounterCompartment parent_compartment;
+
+    CounterCompartment(String state) {
+        this.state = state;
+        this.state_args = new java.util.ArrayList<>();
+        this.state_vars = new java.util.HashMap<>();
+        this.enter_args = new java.util.ArrayList<>();
+        this.exit_args = new java.util.ArrayList<>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    CounterCompartment copy() {
+        CounterCompartment c = new CounterCompartment(this.state);
+        c.state_args = new java.util.ArrayList<>(this.state_args);
+        c.state_vars = new java.util.HashMap<>(this.state_vars);
+        c.enter_args = new java.util.ArrayList<>(this.enter_args);
+        c.exit_args = new java.util.ArrayList<>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class Counter {
+    private java.util.ArrayList<CounterCompartment> _state_stack;
+    private CounterCompartment __compartment;
+    private CounterCompartment __next_compartment;
+    private java.util.ArrayList<CounterFrameContext> _context_stack;
+    public int count = 0;
+
+    public Counter() {
+        _state_stack = new java.util.ArrayList<>();
+        _context_stack = new java.util.ArrayList<>();
+        this.__compartment = __prepareEnter("Counting", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        this.__next_compartment = null;
+    }
+
+    public static Counter __create() {
+        Counter c = new Counter();
+        CounterFrameEvent __e = new CounterFrameEvent("$>", c.__compartment.enter_args);
+        CounterFrameContext __ctx = new CounterFrameContext(__e, null);
+        c._context_stack.add(__ctx);
+        c.__kernel(__e);
+        c._context_stack.remove(c._context_stack.size() - 1);
+        return c;
+    }
+
+    private java.util.HashMap<String, java.util.ArrayList<String>> hsm_chain() {
+        java.util.HashMap<String, java.util.ArrayList<String>> m = new java.util.HashMap<>();
+        m.put("Counting", new java.util.ArrayList<>(java.util.Arrays.asList("Counting")));
+        return m;
+    }
+    private CounterCompartment __prepareEnter(String leaf, java.util.ArrayList<Object> state_args, java.util.ArrayList<Object> enter_args) {
+        CounterCompartment comp = null;
+        for (String name : hsm_chain().get(leaf)) {
+            CounterCompartment new_comp = new CounterCompartment(name);
+            new_comp.state_args = new java.util.ArrayList<>(state_args);
+            new_comp.enter_args = new java.util.ArrayList<>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    private void __prepareExit(java.util.ArrayList<Object> exit_args) {
+        CounterCompartment comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new java.util.ArrayList<>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(CounterFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            CounterCompartment next_compartment = __next_compartment;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            CounterFrameEvent exit_event = new CounterFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            CounterFrameEvent forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                CounterFrameEvent enter_event = new CounterFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message.equals("$>")) {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                CounterFrameEvent enter_event = new CounterFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (CounterFrameContext ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(CounterFrameEvent __e) {
+        if (__compartment.state.equals("Counting")) {
+            _state_Counting(__e, __compartment);
+        }
+    }
+
+    private void __transition(CounterCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void increment(int by) {
+        CounterFrameEvent __e = new CounterFrameEvent("increment", new java.util.ArrayList<>(java.util.Arrays.asList(by)));
+        CounterFrameContext __ctx = new CounterFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public int value() {
+        CounterFrameEvent __e = new CounterFrameEvent("value", new java.util.ArrayList<>());
+        CounterFrameContext __ctx = new CounterFrameContext(__e, 0);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        int __result = (int) _context_stack.get(_context_stack.size() - 1)._return;
+        _context_stack.remove(_context_stack.size() - 1);
+        return __result;
+    }
+
+    private void _state_Counting(CounterFrameEvent __e, CounterCompartment compartment) {
+        if (__e._message.equals("increment")) {
+            this._s_Counting_hdl_user_increment(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("value")) {
+            this._s_Counting_hdl_user_value(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Counting_hdl_user_increment(CounterFrameEvent __e, CounterCompartment compartment) {
+        int by = ((Number) __e._parameters.get(0)).intValue();
+        self.count = self.count + by
+    }
+
+    private void _s_Counting_hdl_user_value(CounterFrameEvent __e, CounterCompartment compartment) {
+        _context_stack.get(_context_stack.size() - 1)._return = self.count;
+    }
+
+    private Object __serComp(CounterCompartment comp) {
+        if (comp == null) return null;
+        var j = new java.util.LinkedHashMap<String, Object>();
+        j.put("state", comp.state);
+        j.put("state_vars", new java.util.LinkedHashMap<>(comp.state_vars));
+        j.put("state_args", new java.util.ArrayList<>(comp.state_args));
+        j.put("enter_args", new java.util.ArrayList<>(comp.enter_args));
+        j.put("parent", __serComp(comp.parent_compartment));
+        return j;
+    }
+
+    private static CounterCompartment __deserComp(com.fasterxml.jackson.databind.JsonNode node, com.fasterxml.jackson.databind.ObjectMapper mapper) {
+        if (node == null || node.isNull()) return null;
+        var c = new CounterCompartment(node.get("state").asText());
+        if (node.has("state_vars")) {
+            var fields = node.get("state_vars").fields();
+            while (fields.hasNext()) {
+                var e = fields.next();
+                c.state_vars.put(e.getKey(), mapper.convertValue(e.getValue(), Object.class));
+            }
+        }
+        var __sa = node.has("state_args") ? node.get("state_args") : null;
+        var __ea = node.has("enter_args") ? node.get("enter_args") : null;
+        if (__sa != null) for (var n : __sa) c.state_args.add(mapper.convertValue(n, Object.class));
+        if (__ea != null) for (var n : __ea) c.enter_args.add(mapper.convertValue(n, Object.class));
+        if (node.has("parent") && !node.get("parent").isNull()) c.parent_compartment = __deserComp(node.get("parent"), mapper);
+        return c;
+    }
+
+    public String snapshot() {
+        if (!_context_stack.isEmpty()) throw new RuntimeException("E700: system not quiescent");
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var __j = new java.util.LinkedHashMap<String, Object>();
+        __j.put("_compartment", __serComp(__compartment));
+        var __stack = new java.util.ArrayList<Object>();
+        for (var c : _state_stack) __stack.add(__serComp(c));
+        __j.put("_state_stack", __stack);
+        __j.put("count", count);
+        try { return mapper.writeValueAsString(__j); } catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    public void restore(String json) {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode __j;
+        try { __j = mapper.readTree(json); } catch (Exception e) { throw new RuntimeException(e); }
+        this.__compartment = __deserComp(__j.get("_compartment"), mapper);
+        if (__j.has("_state_stack")) {
+            this._state_stack = new java.util.ArrayList<>();
+            for (var __sc : __j.get("_state_stack")) this._state_stack.add(__deserComp(__sc, mapper));
+        }
+        if (__j.has("count")) this.count = mapper.convertValue(__j.get("count"), new com.fasterxml.jackson.core.type.TypeReference<Integer>(){});
+    }
+}

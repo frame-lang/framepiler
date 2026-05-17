@@ -1,0 +1,259 @@
+---
+source: framec/tests/lua_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"lua\")"
+---
+local MiniHsmFrameEvent = {}
+MiniHsmFrameEvent.__index = MiniHsmFrameEvent
+
+function MiniHsmFrameEvent.new(message, parameters)
+    local self = setmetatable({}, MiniHsmFrameEvent)
+    self._message = message
+    self._parameters = parameters or {}
+    return self
+end
+
+
+local MiniHsmFrameContext = {}
+MiniHsmFrameContext.__index = MiniHsmFrameContext
+
+function MiniHsmFrameContext.new(event, default_return)
+    local self = setmetatable({}, MiniHsmFrameContext)
+    self._event = event
+    self._return = default_return
+    self._data = {}
+    self._transitioned = false
+    return self
+end
+
+
+local MiniHsmCompartment = {}
+MiniHsmCompartment.__index = MiniHsmCompartment
+
+function MiniHsmCompartment.new(state, parent_compartment)
+    local self = setmetatable({}, MiniHsmCompartment)
+    self.state = state
+    self.state_args = {}
+    self.state_vars = {}
+    self.enter_args = {}
+    self.exit_args = {}
+    self.forward_event = nil
+    self.parent_compartment = parent_compartment
+    return self
+end
+
+function MiniHsmCompartment:copy()
+    local c = MiniHsmCompartment.new(self.state, self.parent_compartment)
+    c.state_args = {}
+    for k, v in pairs(self.state_args) do c.state_args[k] = v end
+    c.state_vars = {}
+    for k, v in pairs(self.state_vars) do c.state_vars[k] = v end
+    c.enter_args = {}
+    for k, v in pairs(self.enter_args) do c.enter_args[k] = v end
+    c.exit_args = {}
+    for k, v in pairs(self.exit_args) do c.exit_args[k] = v end
+    c.forward_event = self.forward_event
+    return c
+end
+
+
+local MiniHsm = {}
+MiniHsm.__index = MiniHsm
+
+function MiniHsm.new()
+    local self = setmetatable({}, MiniHsm)
+    self._state_stack = {}
+    self._context_stack = {}
+    self.awakes = 0
+    self.sleeps = 0
+    self.last = ""
+    self.__compartment = self:__prepareEnter("Live", nil, nil)
+    self.__next_compartment = nil
+    return self
+end
+
+function MiniHsm:_frame_init()
+    local __e = MiniHsmFrameEvent.new("$>", self.__compartment.enter_args)
+    local __ctx = MiniHsmFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    table.remove(self._context_stack)
+end
+
+function MiniHsm._create()
+    local c = MiniHsm.new()
+    c:_frame_init()
+    return c
+end
+
+function MiniHsm:hsm_chain()
+    local t = {}
+    t["Live"] = {"Live"}
+    t["Awake"] = {"Live", "Awake"}
+    t["Asleep"] = {"Live", "Asleep"}
+    return t
+end
+function MiniHsm:__prepareEnter(leaf, state_args, enter_args)
+    state_args = state_args or {}
+    enter_args = enter_args or {}
+    local comp = nil
+    local chain = self:hsm_chain()[leaf]
+    for i = 1, #chain do
+        local new_comp = MiniHsmCompartment.new(chain[i])
+        new_comp.state_args = {}
+        for j = 1, #state_args do new_comp.state_args[j] = state_args[j] end
+        new_comp.enter_args = {}
+        for j = 1, #enter_args do new_comp.enter_args[j] = enter_args[j] end
+        new_comp.parent_compartment = comp
+        comp = new_comp
+    end
+    return comp
+end
+
+function MiniHsm:__prepareExit(exit_args)
+    local comp = self.__compartment
+    while comp ~= nil do
+        comp.exit_args = {}
+        for j = 1, #exit_args do comp.exit_args[j] = exit_args[j] end
+        comp = comp.parent_compartment
+    end
+end
+
+function MiniHsm:__kernel(__e)
+    -- Route event to current state.
+    self:__router(__e)
+    -- Drain any transitions queued by the handler.
+    while self.__next_compartment ~= nil do
+        local next_compartment = self.__next_compartment
+        self.__next_compartment = nil
+        local exit_event = MiniHsmFrameEvent.new("<$", self.__compartment.exit_args)
+        self:__router(exit_event)
+        self.__compartment = next_compartment
+        local forward_event = next_compartment.forward_event
+        next_compartment.forward_event = nil
+        if forward_event == nil then
+            local enter_event = MiniHsmFrameEvent.new("$>", self.__compartment.enter_args)
+            self:__router(enter_event)
+        elseif forward_event._message == "$>" then
+            self:__router(forward_event)
+        else
+            local enter_event = MiniHsmFrameEvent.new("$>", self.__compartment.enter_args)
+            self:__router(enter_event)
+            self:__router(forward_event)
+        end
+        for _, ctx in ipairs(self._context_stack) do
+            ctx._transitioned = true
+        end
+    end
+end
+
+function MiniHsm:__router(__e)
+    local handler = self["_state_" .. self.__compartment.state]
+    if handler then
+        handler(self, __e, self.__compartment)
+    end
+end
+
+function MiniHsm:__transition(next_compartment)
+    self.__next_compartment = next_compartment
+end
+
+function MiniHsm:wake()
+    local __e = MiniHsmFrameEvent.new("wake", {})
+    local __ctx = MiniHsmFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function MiniHsm:sleep()
+    local __e = MiniHsmFrameEvent.new("sleep", {})
+    local __ctx = MiniHsmFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function MiniHsm:signal()
+    local __e = MiniHsmFrameEvent.new("signal", {})
+    local __ctx = MiniHsmFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function MiniHsm:_state_Live(__e, compartment)
+    if __e._message == "signal" then
+        self:_s_Live_hdl_user_signal(__e, compartment)
+        return
+    end
+    if __e._message == "sleep" then
+        self:_s_Live_hdl_user_sleep(__e, compartment)
+        return
+    end
+    if __e._message == "wake" then
+        self:_s_Live_hdl_user_wake(__e, compartment)
+        return
+    end
+end
+
+function MiniHsm:_state_Awake(__e, compartment)
+    if __e._message == "$>" then
+        self:_s_Awake_hdl_frame_enter(__e, compartment)
+        return
+    end
+    if __e._message == "signal" then
+        self:_s_Awake_hdl_user_signal(__e, compartment)
+        return
+    end
+end
+
+function MiniHsm:_state_Asleep(__e, compartment)
+    if __e._message == "$>" then
+        self:_s_Asleep_hdl_frame_enter(__e, compartment)
+        return
+    end
+    if __e._message == "signal" then
+        self:_s_Asleep_hdl_user_signal(__e, compartment)
+        return
+    end
+    if __e._message == "wake" then
+        self:_s_Asleep_hdl_user_wake(__e, compartment)
+        return
+    end
+end
+
+function MiniHsm:_s_Live_hdl_user_signal(__e, compartment)
+
+end
+
+function MiniHsm:_s_Live_hdl_user_sleep(__e, compartment)
+
+end
+
+function MiniHsm:_s_Live_hdl_user_wake(__e, compartment)
+
+end
+
+function MiniHsm:_s_Awake_hdl_frame_enter(__e, compartment)
+    self.awakes = self.awakes + 1
+end
+
+function MiniHsm:_s_Awake_hdl_user_signal(__e, compartment)
+    self.last = "awake"
+    self:_state_Live(__e, compartment.parent_compartment)
+end
+
+function MiniHsm:_s_Asleep_hdl_frame_enter(__e, compartment)
+    self.sleeps = self.sleeps + 1
+end
+
+function MiniHsm:_s_Asleep_hdl_user_signal(__e, compartment)
+    self.last = "asleep"
+    self:_state_Live(__e, compartment.parent_compartment)
+end
+
+function MiniHsm:_s_Asleep_hdl_user_wake(__e, compartment)
+    local __compartment = self:__prepareEnter("Awake", nil, nil)
+    self:__transition(__compartment)
+    return
+end

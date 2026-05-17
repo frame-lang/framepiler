@@ -1,0 +1,251 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"03_persist\", \"go\")"
+---
+type CounterFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type CounterFrameContext struct {
+    _event  CounterFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type CounterCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *CounterFrameEvent
+    parentCompartment *CounterCompartment
+}
+
+func newCounterCompartment(state string) *CounterCompartment {
+    return &CounterCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *CounterCompartment) copy() *CounterCompartment {
+    nc := &CounterCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type Counter struct {
+    _state_stack []*CounterCompartment
+    __compartment *CounterCompartment
+    __next_compartment *CounterCompartment
+    _context_stack []CounterFrameContext
+    count int
+}
+
+func NewCounter() *Counter {
+    s := &Counter{}
+    s._state_stack = make([]*CounterCompartment, 0)
+    s._context_stack = make([]CounterFrameContext, 0)
+    s.count = 0
+    s.__compartment = s.__prepareEnter("Counting", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateCounter() *Counter {
+    c := NewCounter()
+    __e := CounterFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := CounterFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *Counter) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Counting": {"Counting"},
+    }
+}
+func (s *Counter) __prepareEnter(leaf string, state_args []any, enter_args []any) *CounterCompartment {
+    var comp *CounterCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newCounterCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *Counter) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *Counter) __kernel(__e *CounterFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &CounterFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &CounterFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &CounterFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *Counter) __router(__e *CounterFrameEvent) {
+    switch s.__compartment.state {
+    case "Counting":
+        s._state_Counting(__e, s.__compartment)
+    }
+}
+
+func (s *Counter) __transition(next *CounterCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *Counter) Increment(by int) {
+    __e := CounterFrameEvent{_message: "increment", _parameters: []any{by}}
+    __ctx := CounterFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *Counter) Value() int {
+    __e := CounterFrameEvent{_message: "value", _parameters: []any{}}
+    __ctx := CounterFrameContext{_event: __e, _return: 0, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    var __result int
+    if __rv := s._context_stack[len(s._context_stack)-1]._return; __rv != nil { __result = __rv.(int) }
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+    return __result
+}
+
+func (s *Counter) _state_Counting(__e *CounterFrameEvent, compartment *CounterCompartment) {
+    if __e._message == "increment" {
+        s._s_Counting_hdl_user_increment(__e, compartment)
+        return
+    }
+    if __e._message == "value" {
+        s._s_Counting_hdl_user_value(__e, compartment)
+        return
+    }
+}
+
+func (s *Counter) _s_Counting_hdl_user_increment(__e *CounterFrameEvent, compartment *CounterCompartment) {
+    by := __e._parameters[0].(int)
+    _ = by
+    {
+    self.count = self.count + by
+    }
+}
+
+func (s *Counter) _s_Counting_hdl_user_value(__e *CounterFrameEvent, compartment *CounterCompartment) {
+    {
+    s._context_stack[len(s._context_stack)-1]._return = s.count
+    }
+}
+
+func (s *Counter) Snapshot() string {
+    if len(s._context_stack) > 0 { panic("E700: system not quiescent") }
+    var serializeComp func(c *CounterCompartment) interface{}
+    serializeComp = func(c *CounterCompartment) interface{} {
+        if c == nil { return nil }
+        return map[string]interface{}{
+            "state": c.state,
+            "state_args": c.stateArgs,
+            "state_vars": c.stateVars,
+            "enter_args": c.enterArgs,
+            "exit_args": c.exitArgs,
+            "forward_event": c.forwardEvent,
+            "parent_compartment": serializeComp(c.parentCompartment),
+        }
+    }
+    data := map[string]interface{}{
+        "_compartment": serializeComp(s.__compartment),
+        "_state_stack": func() []interface{} {
+            var arr []interface{}
+            for _, c := range s._state_stack { arr = append(arr, serializeComp(c)) }
+            return arr
+        }(),
+        "count": s.count,
+    }
+    jsonBytes, _ := json.Marshal(data)
+    return string(jsonBytes)
+}
+
+func (s *Counter) Restore(jsonStr string) {
+    var _parsed map[string]interface{}
+    json.Unmarshal([]byte(jsonStr), &_parsed)
+    var deserializeComp func(d interface{}) *CounterCompartment
+    deserializeComp = func(d interface{}) *CounterCompartment {
+        if d == nil { return nil }
+        m := d.(map[string]interface{})
+        comp := newCounterCompartment(m["state"].(string))
+        normalizeNum := func(v interface{}) interface{} {
+            if f, ok := v.(float64); ok && f == float64(int(f)) { return int(f) }
+            return v
+        }
+        if sv, ok := m["state_vars"].(map[string]interface{}); ok { for k, v := range sv { comp.stateVars[k] = normalizeNum(v) } }
+        if sa, ok := m["state_args"].([]interface{}); ok { for _, v := range sa { comp.stateArgs = append(comp.stateArgs, normalizeNum(v)) } }
+        if ea, ok := m["enter_args"].([]interface{}); ok { for _, v := range ea { comp.enterArgs = append(comp.enterArgs, normalizeNum(v)) } }
+        if xa, ok := m["exit_args"].([]interface{}); ok { for _, v := range xa { comp.exitArgs = append(comp.exitArgs, normalizeNum(v)) } }
+        // forward_event is typically nil in persisted state
+        comp.parentCompartment = deserializeComp(m["parent_compartment"])
+        return comp
+    }
+    s.__compartment = deserializeComp(_parsed["_compartment"])
+    s.__next_compartment = nil
+    if stack, ok := _parsed["_state_stack"].([]interface{}); ok {
+        s._state_stack = make([]*CounterCompartment, 0, len(stack))
+        for _, c := range stack { s._state_stack = append(s._state_stack, deserializeComp(c)) }
+    }
+    s.count = func() int { var __typed int; if __raw, err := json.Marshal(_parsed["count"]); err == nil { json.Unmarshal(__raw, &__typed) }; return __typed }()
+}

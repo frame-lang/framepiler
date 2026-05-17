@@ -1,0 +1,268 @@
+---
+source: framec/tests/java_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"java\")"
+---
+class MiniHsmFrameEvent {
+    String _message;
+    java.util.ArrayList<Object> _parameters;
+
+    MiniHsmFrameEvent(String message) {
+        this._message = message;
+        this._parameters = new java.util.ArrayList<>();
+    }
+
+    MiniHsmFrameEvent(String message, java.util.ArrayList<Object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class MiniHsmFrameContext {
+    MiniHsmFrameEvent _event;
+    Object _return;
+    java.util.HashMap<String, Object> _data;
+    boolean _transitioned = false;
+
+    MiniHsmFrameContext(MiniHsmFrameEvent event, Object defaultReturn) {
+        this._event = event;
+        this._return = defaultReturn;
+        this._data = new java.util.HashMap<>();
+        this._transitioned = false;
+    }
+}
+
+class MiniHsmCompartment {
+    String state;
+    java.util.ArrayList<Object> state_args;
+    java.util.HashMap<String, Object> state_vars;
+    java.util.ArrayList<Object> enter_args;
+    java.util.ArrayList<Object> exit_args;
+    MiniHsmFrameEvent forward_event;
+    MiniHsmCompartment parent_compartment;
+
+    MiniHsmCompartment(String state) {
+        this.state = state;
+        this.state_args = new java.util.ArrayList<>();
+        this.state_vars = new java.util.HashMap<>();
+        this.enter_args = new java.util.ArrayList<>();
+        this.exit_args = new java.util.ArrayList<>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    MiniHsmCompartment copy() {
+        MiniHsmCompartment c = new MiniHsmCompartment(this.state);
+        c.state_args = new java.util.ArrayList<>(this.state_args);
+        c.state_vars = new java.util.HashMap<>(this.state_vars);
+        c.enter_args = new java.util.ArrayList<>(this.enter_args);
+        c.exit_args = new java.util.ArrayList<>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class MiniHsm {
+    private java.util.ArrayList<MiniHsmCompartment> _state_stack;
+    private MiniHsmCompartment __compartment;
+    private MiniHsmCompartment __next_compartment;
+    private java.util.ArrayList<MiniHsmFrameContext> _context_stack;
+    public int awakes = 0;
+    public int sleeps = 0;
+    public String last = "";
+
+    public MiniHsm() {
+        _state_stack = new java.util.ArrayList<>();
+        _context_stack = new java.util.ArrayList<>();
+        this.__compartment = __prepareEnter("Live", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        this.__next_compartment = null;
+    }
+
+    public static MiniHsm __create() {
+        MiniHsm c = new MiniHsm();
+        MiniHsmFrameEvent __e = new MiniHsmFrameEvent("$>", c.__compartment.enter_args);
+        MiniHsmFrameContext __ctx = new MiniHsmFrameContext(__e, null);
+        c._context_stack.add(__ctx);
+        c.__kernel(__e);
+        c._context_stack.remove(c._context_stack.size() - 1);
+        return c;
+    }
+
+    private java.util.HashMap<String, java.util.ArrayList<String>> hsm_chain() {
+        java.util.HashMap<String, java.util.ArrayList<String>> m = new java.util.HashMap<>();
+        m.put("Live", new java.util.ArrayList<>(java.util.Arrays.asList("Live")));
+        m.put("Awake", new java.util.ArrayList<>(java.util.Arrays.asList("Live", "Awake")));
+        m.put("Asleep", new java.util.ArrayList<>(java.util.Arrays.asList("Live", "Asleep")));
+        return m;
+    }
+    private MiniHsmCompartment __prepareEnter(String leaf, java.util.ArrayList<Object> state_args, java.util.ArrayList<Object> enter_args) {
+        MiniHsmCompartment comp = null;
+        for (String name : hsm_chain().get(leaf)) {
+            MiniHsmCompartment new_comp = new MiniHsmCompartment(name);
+            new_comp.state_args = new java.util.ArrayList<>(state_args);
+            new_comp.enter_args = new java.util.ArrayList<>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    private void __prepareExit(java.util.ArrayList<Object> exit_args) {
+        MiniHsmCompartment comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new java.util.ArrayList<>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(MiniHsmFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            MiniHsmCompartment next_compartment = __next_compartment;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            MiniHsmFrameEvent exit_event = new MiniHsmFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            MiniHsmFrameEvent forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                MiniHsmFrameEvent enter_event = new MiniHsmFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message.equals("$>")) {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                MiniHsmFrameEvent enter_event = new MiniHsmFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (MiniHsmFrameContext ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(MiniHsmFrameEvent __e) {
+        if (__compartment.state.equals("Live")) {
+            _state_Live(__e, __compartment);
+        } else if (__compartment.state.equals("Awake")) {
+            _state_Awake(__e, __compartment);
+        } else if (__compartment.state.equals("Asleep")) {
+            _state_Asleep(__e, __compartment);
+        }
+    }
+
+    private void __transition(MiniHsmCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void wake() {
+        MiniHsmFrameEvent __e = new MiniHsmFrameEvent("wake", new java.util.ArrayList<>());
+        MiniHsmFrameContext __ctx = new MiniHsmFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void sleep() {
+        MiniHsmFrameEvent __e = new MiniHsmFrameEvent("sleep", new java.util.ArrayList<>());
+        MiniHsmFrameContext __ctx = new MiniHsmFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void signal() {
+        MiniHsmFrameEvent __e = new MiniHsmFrameEvent("signal", new java.util.ArrayList<>());
+        MiniHsmFrameContext __ctx = new MiniHsmFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    private void _state_Live(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message.equals("signal")) {
+            this._s_Live_hdl_user_signal(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("sleep")) {
+            this._s_Live_hdl_user_sleep(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("wake")) {
+            this._s_Live_hdl_user_wake(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Awake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message.equals("$>")) {
+            this._s_Awake_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("signal")) {
+            this._s_Awake_hdl_user_signal(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Asleep(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message.equals("$>")) {
+            this._s_Asleep_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("signal")) {
+            this._s_Asleep_hdl_user_signal(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("wake")) {
+            this._s_Asleep_hdl_user_wake(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Live_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    private void _s_Live_hdl_user_sleep(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    private void _s_Live_hdl_user_wake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    private void _s_Awake_hdl_frame_enter(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.awakes = self.awakes + 1
+    }
+
+    private void _s_Awake_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.last = "awake"
+        _state_Live(__e, compartment.parent_compartment);
+    }
+
+    private void _s_Asleep_hdl_frame_enter(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.sleeps = self.sleeps + 1
+    }
+
+    private void _s_Asleep_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.last = "asleep"
+        _state_Live(__e, compartment.parent_compartment);
+    }
+
+    private void _s_Asleep_hdl_user_wake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        MiniHsmCompartment __compartment = __prepareEnter("Awake", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        __transition(__compartment);
+        return;
+    }
+}

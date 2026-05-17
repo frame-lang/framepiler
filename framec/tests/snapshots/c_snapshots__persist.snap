@@ -1,0 +1,702 @@
+---
+source: framec/tests/c_snapshots.rs
+expression: "compile_fixture(\"03_persist\", \"c\")"
+---
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+// ============================================================================
+// Counter_FrameDict - String-keyed dictionary
+// ============================================================================
+
+typedef struct Counter_FrameDictEntry {
+    char* key;
+    void* value;
+    struct Counter_FrameDictEntry* next;
+} Counter_FrameDictEntry;
+
+typedef struct {
+    Counter_FrameDictEntry** buckets;
+    int bucket_count;
+    int size;
+} Counter_FrameDict;
+
+static unsigned int Counter_hash_string(const char* str) {
+    unsigned int hash = 5381;
+    int c;
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c;
+    }
+    return hash;
+}
+
+static Counter_FrameDict* Counter_FrameDict_new(void) {
+    Counter_FrameDict* d = malloc(sizeof(Counter_FrameDict));
+    d->bucket_count = 16;
+    d->buckets = calloc(d->bucket_count, sizeof(Counter_FrameDictEntry*));
+    d->size = 0;
+    return d;
+}
+
+static void Counter_FrameDict_set(Counter_FrameDict* d, const char* key, void* value) {
+    unsigned int idx = Counter_hash_string(key) % d->bucket_count;
+    Counter_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            entry->value = value;
+            return;
+        }
+        entry = entry->next;
+    }
+    Counter_FrameDictEntry* new_entry = malloc(sizeof(Counter_FrameDictEntry));
+    new_entry->key = strdup(key);
+    new_entry->value = value;
+    new_entry->next = d->buckets[idx];
+    d->buckets[idx] = new_entry;
+    d->size++;
+}
+
+static void* Counter_FrameDict_get(Counter_FrameDict* d, const char* key) {
+    unsigned int idx = Counter_hash_string(key) % d->bucket_count;
+    Counter_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            return entry->value;
+        }
+        entry = entry->next;
+    }
+    return NULL;
+}
+
+static int Counter_FrameDict_has(Counter_FrameDict* d, const char* key) {
+    unsigned int idx = Counter_hash_string(key) % d->bucket_count;
+    Counter_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            return 1;
+        }
+        entry = entry->next;
+    }
+    return 0;
+}
+
+static Counter_FrameDict* Counter_FrameDict_copy(Counter_FrameDict* src) {
+    Counter_FrameDict* dst = Counter_FrameDict_new();
+    for (int i = 0; i < src->bucket_count; i++) {
+        Counter_FrameDictEntry* entry = src->buckets[i];
+        while (entry) {
+            Counter_FrameDict_set(dst, entry->key, entry->value);
+            entry = entry->next;
+        }
+    }
+    return dst;
+}
+
+static void Counter_FrameDict_destroy(Counter_FrameDict* d) {
+    for (int i = 0; i < d->bucket_count; i++) {
+        Counter_FrameDictEntry* entry = d->buckets[i];
+        while (entry) {
+            Counter_FrameDictEntry* next = entry->next;
+            free(entry->key);
+            free(entry);
+            entry = next;
+        }
+    }
+    free(d->buckets);
+    free(d);
+}
+
+// ============================================================================
+// Counter_FrameVec - Dynamic array
+// ============================================================================
+
+typedef struct {
+    void** items;
+    int size;
+    int capacity;
+} Counter_FrameVec;
+
+static Counter_FrameVec* Counter_FrameVec_new(void) {
+    Counter_FrameVec* v = malloc(sizeof(Counter_FrameVec));
+    v->capacity = 8;
+    v->size = 0;
+    v->items = malloc(sizeof(void*) * v->capacity);
+    return v;
+}
+
+static void Counter_FrameVec_push(Counter_FrameVec* v, void* item) {
+    if (v->size >= v->capacity) {
+        v->capacity *= 2;
+        v->items = realloc(v->items, sizeof(void*) * v->capacity);
+    }
+    v->items[v->size++] = item;
+}
+
+static void* Counter_FrameVec_pop(Counter_FrameVec* v) {
+    if (v->size == 0) return NULL;
+    return v->items[--v->size];
+}
+
+static void* Counter_FrameVec_last(Counter_FrameVec* v) {
+    if (v->size == 0) return NULL;
+    return v->items[v->size - 1];
+}
+
+static void* Counter_FrameVec_get(Counter_FrameVec* v, int index) {
+    if (index < 0 || index >= v->size) return NULL;
+    return v->items[index];
+}
+
+static int Counter_FrameVec_size(Counter_FrameVec* v) {
+    return v->size;
+}
+
+static void Counter_FrameVec_destroy(Counter_FrameVec* v) {
+    if (!v) return;
+    free(v->items);
+    free(v);
+}
+
+static Counter_FrameVec* Counter_FrameVec_copy(Counter_FrameVec* src) {
+    if (!src) return NULL;
+    Counter_FrameVec* v = Counter_FrameVec_new();
+    for (int i = 0; i < src->size; i++) {
+        Counter_FrameVec_push(v, src->items[i]);
+    }
+    return v;
+}
+
+// ============================================================================
+// Counter_pack_double / Counter_unpack_double — bit-pun doubles through void*
+// ============================================================================
+
+static inline void* Counter_pack_double(double v) {
+    void* p = 0;
+    memcpy(&p, &v, sizeof(double));
+    return p;
+}
+
+static inline double Counter_unpack_double(void* p) {
+    double d;
+    memcpy(&d, &p, sizeof(double));
+    return d;
+}
+
+// ============================================================================
+// Counter_persist_pack_*  /  Counter_persist_unpack_*  — persist dispatcher
+// ============================================================================
+
+static cJSON* Counter_persist_pack_int(void* v);
+static cJSON* Counter_persist_pack_double(void* v);
+static cJSON* Counter_persist_pack_str(void* v);
+static cJSON* Counter_persist_pack_bool(void* v);
+static cJSON* Counter_persist_pack_list(void* v);
+static cJSON* Counter_persist_pack_dict(void* v);
+static void* Counter_persist_unpack_int(cJSON* j);
+static void* Counter_persist_unpack_double(cJSON* j);
+static void* Counter_persist_unpack_str(cJSON* j);
+static void* Counter_persist_unpack_bool(cJSON* j);
+static void* Counter_persist_unpack_list(cJSON* j);
+static void* Counter_persist_unpack_dict(cJSON* j);
+
+static cJSON* Counter_persist_pack_int(void* v) { return cJSON_CreateNumber((double)(intptr_t)v); }
+static void* Counter_persist_unpack_int(cJSON* j) { return (void*)(intptr_t)(int)(j ? j->valuedouble : 0); }
+
+static cJSON* Counter_persist_pack_double(void* v) { return cJSON_CreateNumber(Counter_unpack_double(v)); }
+static void* Counter_persist_unpack_double(cJSON* j) { return Counter_pack_double(j ? j->valuedouble : 0.0); }
+
+static cJSON* Counter_persist_pack_str(void* v) { return cJSON_CreateString(v ? (const char*)v : ""); }
+static void* Counter_persist_unpack_str(cJSON* j) { const char* s = (j && j->valuestring) ? j->valuestring : ""; return (void*)strdup(s); }
+
+static cJSON* Counter_persist_pack_bool(void* v) { return cJSON_CreateBool((intptr_t)v != 0); }
+static void* Counter_persist_unpack_bool(cJSON* j) { return (void*)(intptr_t)(j && cJSON_IsTrue(j) ? 1 : 0); }
+
+static cJSON* Counter_persist_pack_list(void* v) {
+    Counter_FrameVec* vec = (Counter_FrameVec*)v;
+    cJSON* arr = cJSON_CreateArray();
+    if (vec) {
+        for (int __i = 0; __i < vec->size; __i++) {
+            cJSON_AddItemToArray(arr, Counter_persist_pack_int(vec->items[__i]));
+        }
+    }
+    return arr;
+}
+static void* Counter_persist_unpack_list(cJSON* j) {
+    if (!cJSON_IsArray(j)) return NULL;
+    Counter_FrameVec* vec = Counter_FrameVec_new();
+    cJSON* __child;
+    cJSON_ArrayForEach(__child, j) {
+        Counter_FrameVec_push(vec, Counter_persist_unpack_int(__child));
+    }
+    return vec;
+}
+
+static cJSON* Counter_persist_pack_dict(void* v) {
+    Counter_FrameDict* d = (Counter_FrameDict*)v;
+    cJSON* obj = cJSON_CreateObject();
+    if (d) {
+        for (int __i = 0; __i < d->bucket_count; __i++) {
+            Counter_FrameDictEntry* __e = d->buckets[__i];
+            while (__e) {
+                cJSON_AddItemToObject(obj, __e->key, Counter_persist_pack_int(__e->value));
+                __e = __e->next;
+            }
+        }
+    }
+    return obj;
+}
+static void* Counter_persist_unpack_dict(cJSON* j) {
+    if (!cJSON_IsObject(j)) return NULL;
+    Counter_FrameDict* d = Counter_FrameDict_new();
+    cJSON* __child;
+    cJSON_ArrayForEach(__child, j) {
+        Counter_FrameDict_set(d, __child->string, Counter_persist_unpack_int(__child));
+    }
+    return d;
+}
+
+static cJSON* Counter_persist_pack_field_int(void* p) { return cJSON_CreateNumber((double)*(int*)p); }
+static void Counter_persist_unpack_field_int(cJSON* j, void* p) { *(int*)p = (int)(j ? j->valuedouble : 0); }
+static cJSON* Counter_persist_pack_field_double(void* p) { return cJSON_CreateNumber(*(double*)p); }
+static void Counter_persist_unpack_field_double(cJSON* j, void* p) { *(double*)p = j ? j->valuedouble : 0.0; }
+static cJSON* Counter_persist_pack_field_bool(void* p) { return cJSON_CreateBool(*(bool*)p); }
+static void Counter_persist_unpack_field_bool(cJSON* j, void* p) { *(bool*)p = (bool)(j && cJSON_IsTrue(j)); }
+static cJSON* Counter_persist_pack_field_str(void* p) { const char* s = *(const char**)p; return cJSON_CreateString(s ? s : ""); }
+static void Counter_persist_unpack_field_str(cJSON* j, void* p) { const char* s = (j && j->valuestring) ? j->valuestring : ""; *(char**)p = strdup(s); }
+static cJSON* Counter_persist_pack_field_list(void* p) { return Counter_persist_pack_list(*(Counter_FrameVec**)p); }
+static void Counter_persist_unpack_field_list(cJSON* j, void* p) { *(Counter_FrameVec**)p = (Counter_FrameVec*)Counter_persist_unpack_list(j); }
+static cJSON* Counter_persist_pack_field_dict(void* p) { return Counter_persist_pack_dict(*(Counter_FrameDict**)p); }
+static void Counter_persist_unpack_field_dict(cJSON* j, void* p) { *(Counter_FrameDict**)p = (Counter_FrameDict*)Counter_persist_unpack_dict(j); }
+
+// ============================================================================
+// Counter_FrameEvent - Event routing object
+// ============================================================================
+
+typedef struct {
+    const char* _message;
+    Counter_FrameVec* _parameters;
+    int _owns_parameters;
+} Counter_FrameEvent;
+
+static Counter_FrameEvent* Counter_FrameEvent_new(const char* message, Counter_FrameVec* parameters, int owns_parameters) {
+    Counter_FrameEvent* e = malloc(sizeof(Counter_FrameEvent));
+    e->_message = message;
+    e->_parameters = parameters;
+    e->_owns_parameters = owns_parameters;
+    return e;
+}
+
+static void Counter_FrameEvent_destroy(Counter_FrameEvent* e) {
+    if (e->_owns_parameters && e->_parameters) Counter_FrameVec_destroy(e->_parameters);
+    free(e);
+}
+
+// ============================================================================
+// Counter_FrameContext - Interface call context
+// ============================================================================
+
+typedef struct {
+    Counter_FrameEvent* event;
+    void* _return;
+    Counter_FrameDict* _data;
+    int _transitioned;
+} Counter_FrameContext;
+
+static Counter_FrameContext* Counter_FrameContext_new(Counter_FrameEvent* event, void* default_return) {
+    Counter_FrameContext* ctx = malloc(sizeof(Counter_FrameContext));
+    ctx->event = event;
+    ctx->_return = default_return;
+    ctx->_data = Counter_FrameDict_new();
+    ctx->_transitioned = 0;
+    return ctx;
+}
+
+static void Counter_FrameContext_destroy(Counter_FrameContext* ctx) {
+    Counter_FrameDict_destroy(ctx->_data);
+    free(ctx);
+}
+
+// ============================================================================
+// Counter_Compartment - State closure
+// ============================================================================
+
+typedef struct Counter_Compartment {
+    const char* state;
+    Counter_FrameVec* state_args;
+    Counter_FrameDict* state_vars;
+    Counter_FrameVec* enter_args;
+    Counter_FrameVec* exit_args;
+    Counter_FrameEvent* forward_event;
+    struct Counter_Compartment* parent_compartment;
+    int _ref_count;
+} Counter_Compartment;
+
+static Counter_Compartment* Counter_Compartment_new(const char* state) {
+    Counter_Compartment* c = malloc(sizeof(Counter_Compartment));
+    c->state = state;
+    c->state_args = Counter_FrameVec_new();
+    c->state_vars = Counter_FrameDict_new();
+    c->enter_args = Counter_FrameVec_new();
+    c->exit_args = Counter_FrameVec_new();
+    c->forward_event = NULL;
+    c->parent_compartment = NULL;
+    c->_ref_count = 1;
+    return c;
+}
+
+static Counter_Compartment* Counter_Compartment_ref(Counter_Compartment* c) {
+    if (c) c->_ref_count++;
+    return c;
+}
+
+static void Counter_Compartment_unref(Counter_Compartment* c);
+static void Counter_Compartment_unref(Counter_Compartment* c) {
+    if (c == NULL) return;
+    c->_ref_count--;
+    if (c->_ref_count <= 0) {
+        Counter_Compartment_unref(c->parent_compartment);
+        Counter_FrameVec_destroy(c->state_args);
+        Counter_FrameDict_destroy(c->state_vars);
+        Counter_FrameVec_destroy(c->enter_args);
+        Counter_FrameVec_destroy(c->exit_args);
+        free(c);
+    }
+}
+
+static Counter_Compartment* Counter_Compartment_copy(Counter_Compartment* src) {
+    Counter_Compartment* c = malloc(sizeof(Counter_Compartment));
+    c->state = src->state;
+    c->state_args = Counter_FrameVec_copy(src->state_args);
+    c->state_vars = Counter_FrameDict_copy(src->state_vars);
+    c->enter_args = Counter_FrameVec_copy(src->enter_args);
+    c->exit_args = Counter_FrameVec_copy(src->exit_args);
+    c->forward_event = src->forward_event;  // Shallow copy OK
+    c->parent_compartment = src->parent_compartment;
+    return c;
+}
+
+static void Counter_Compartment_destroy(Counter_Compartment* c) {
+    Counter_FrameVec_destroy(c->state_args);
+    Counter_FrameDict_destroy(c->state_vars);
+    Counter_FrameVec_destroy(c->enter_args);
+    Counter_FrameVec_destroy(c->exit_args);
+    free(c);
+}
+
+// Helper macros for context access
+#define Counter_CTX(self) ((Counter_FrameContext*)Counter_FrameVec_last((self)->_context_stack))
+#define Counter_PARAM(self, key) Counter_FrameDict_get(Counter_CTX(self)->event->_parameters, key)
+#define Counter_RETURN(self) Counter_CTX(self)->_return
+#define Counter_DATA(self, key) Counter_FrameDict_get(Counter_CTX(self)->_data, key)
+#define Counter_DATA_SET(self, key, val) Counter_FrameDict_set(Counter_CTX(self)->_data, key, val)
+
+// Forward declarations
+typedef struct Counter Counter;
+static void Counter_kernel(Counter* self, Counter_FrameEvent* __e);
+static void Counter_router(Counter* self, Counter_FrameEvent* __e);
+static void Counter_transition(Counter* self, Counter_Compartment* next);
+static int Counter_hsm_chain(Counter* self, const char* leaf, const char*** out_chain);
+static Counter_Compartment* Counter_prepareEnter(Counter* self, const char* leaf, Counter_FrameVec* state_args, Counter_FrameVec* enter_args);
+static void Counter_prepareExit(Counter* self, Counter_FrameVec* exit_args);
+static void Counter_state_Counting(Counter* self, Counter_FrameEvent* __e, Counter_Compartment* compartment);
+static void Counter_s_Counting_hdl_user_increment(Counter* self, Counter_FrameEvent* __e, Counter_Compartment* compartment);
+static void Counter_s_Counting_hdl_user_value(Counter* self, Counter_FrameEvent* __e, Counter_Compartment* compartment);
+void Counter_increment (Counter* self, i32 by);
+i32 Counter_value (Counter* self);
+char* Counter_snapshot (Counter* self);
+void Counter_restore (Counter* self, const char* json);
+
+struct Counter {
+    Counter_FrameVec* _state_stack;
+    Counter_Compartment* __compartment;
+    Counter_Compartment* __next_compartment;
+    Counter_FrameVec* _context_stack;
+    i32 count;
+};
+
+Counter* Counter_new(void) {
+    Counter* self = calloc(1, sizeof(Counter));
+    self->_state_stack = Counter_FrameVec_new();
+    self->_context_stack = Counter_FrameVec_new();
+    self->count = 0;
+    Counter_FrameVec* __sa = NULL;
+    Counter_FrameVec* __ea = NULL;
+    self->__compartment = Counter_prepareEnter(self, "Counting", __sa, __ea);
+    self->__next_compartment = NULL;
+    Counter_FrameEvent* __e = Counter_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+    Counter_FrameContext* __ctx = Counter_FrameContext_new(__e, NULL);
+    Counter_FrameVec_push(self->_context_stack, __ctx);
+    Counter_FrameContext* __init_ctx = (Counter_FrameContext*)Counter_FrameVec_pop(self->_context_stack);
+    Counter_FrameContext_destroy(__init_ctx);
+    Counter_FrameEvent_destroy(__e);
+    return self;
+}
+
+Counter* Counter_create(void) {
+    Counter* self = Counter_new();
+    self->_state_stack = Counter_FrameVec_new();
+    self->_context_stack = Counter_FrameVec_new();
+    self->count = 0;
+    Counter_FrameVec* __sa = NULL;
+    Counter_FrameVec* __ea = NULL;
+    self->__compartment = Counter_prepareEnter(self, "Counting", __sa, __ea);
+    self->__next_compartment = NULL;
+    Counter_FrameEvent* __e = Counter_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+    Counter_FrameContext* __ctx = Counter_FrameContext_new(__e, NULL);
+    Counter_FrameVec_push(self->_context_stack, __ctx);
+    Counter_kernel(self, __e);
+    Counter_FrameContext* __init_ctx = (Counter_FrameContext*)Counter_FrameVec_pop(self->_context_stack);
+    Counter_FrameContext_destroy(__init_ctx);
+    Counter_FrameEvent_destroy(__e);
+    return self;
+}
+
+static int Counter_hsm_chain(Counter* self, const char* leaf, const char*** out_chain) {
+    if (false) { (void)0; }
+        else if (strcmp(leaf, "Counting") == 0) {
+            static const char* __chain[] = { "Counting" };
+            *out_chain = __chain;
+            return 1;
+        }
+        *out_chain = NULL;
+        return 0;
+}
+
+static Counter_Compartment* Counter_prepareEnter(Counter* self, const char* leaf, Counter_FrameVec* state_args, Counter_FrameVec* enter_args) {
+    const char** chain = NULL;
+    int n = Counter_hsm_chain(self, leaf, &chain);
+    Counter_Compartment* comp = NULL;
+    for (int i = 0; i < n; i++) {
+        Counter_Compartment* nc = Counter_Compartment_new(chain[i]);
+        if (state_args) {
+            for (int j = 0; j < state_args->size; j++) Counter_FrameVec_push(nc->state_args, state_args->items[j]);
+        }
+        if (enter_args) {
+            for (int j = 0; j < enter_args->size; j++) Counter_FrameVec_push(nc->enter_args, enter_args->items[j]);
+        }
+        nc->parent_compartment = comp;  // adopts ref
+        comp = nc;
+    }
+    return comp;
+}
+
+static void Counter_prepareExit(Counter* self, Counter_FrameVec* exit_args) {
+    Counter_Compartment* comp = self->__compartment;
+    while (comp != NULL) {
+        // Clear any prior exit_args before copying the new ones in.
+        while (comp->exit_args->size > 0) comp->exit_args->size--;
+        if (exit_args) {
+            for (int j = 0; j < exit_args->size; j++) Counter_FrameVec_push(comp->exit_args, exit_args->items[j]);
+        }
+        comp = comp->parent_compartment;
+    }
+}
+
+static void Counter_kernel(Counter* self, Counter_FrameEvent* __e) {
+    Counter_router(self, __e);
+    while (self->__next_compartment != NULL) {
+        Counter_Compartment* next_compartment = self->__next_compartment;
+        self->__next_compartment = NULL;
+        // Exit the current (leaf) state
+        Counter_FrameEvent* __exit_event = Counter_FrameEvent_new("<$", self->__compartment->exit_args, 0);
+        Counter_router(self, __exit_event);
+        Counter_FrameEvent_destroy(__exit_event);
+        Counter_Compartment_unref(self->__compartment);
+        self->__compartment = next_compartment;
+        if (next_compartment->forward_event == NULL) {
+            // No forwarded event — synthesize a fresh $>
+            Counter_FrameEvent* __enter_event = Counter_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+            Counter_router(self, __enter_event);
+            Counter_FrameEvent_destroy(__enter_event);
+        } else if (strcmp(next_compartment->forward_event->_message, "$>") == 0) {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            // The forward_event is borrowed (owned by the wrapper that
+            // queued the transition) — do NOT destroy it here.
+            Counter_FrameEvent* forward_event = next_compartment->forward_event;
+            next_compartment->forward_event = NULL;
+            Counter_router(self, forward_event);
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward to it. The
+            // forward_event is borrowed; only the synthesized $> belongs
+            // to the kernel and is freed here.
+            Counter_FrameEvent* forward_event = next_compartment->forward_event;
+            next_compartment->forward_event = NULL;
+            Counter_FrameEvent* __enter_event = Counter_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+            Counter_router(self, __enter_event);
+            Counter_FrameEvent_destroy(__enter_event);
+            Counter_router(self, forward_event);
+        }
+        // Mark every stacked context as having transitioned. Read by
+        // @@:self.X() guard so outer self-calls short-circuit.
+        for (int __i = 0; __i < self->_context_stack->size; __i++) {
+            ((Counter_FrameContext*)self->_context_stack->items[__i])->_transitioned = 1;
+        }
+    }
+}
+
+static void Counter_router(Counter* self, Counter_FrameEvent* __e) {
+    if (strcmp(self->__compartment->state, "Counting") == 0) {
+        Counter_state_Counting(self, __e, self->__compartment);
+    }
+}
+
+static void Counter_transition(Counter* self, Counter_Compartment* next_compartment) {
+    self->__next_compartment = next_compartment;
+}
+
+void Counter_destroy(Counter* self) {
+    // Unref current compartment (may free if not on stack)
+    if (self->__compartment) Counter_Compartment_unref(self->__compartment);
+    if (self->__next_compartment) Counter_Compartment_unref(self->__next_compartment);
+    // Unref all state stack entries
+    if (self->_state_stack) {
+        for (int __i = 0; __i < self->_state_stack->size; __i++) {
+            Counter_Compartment_unref((Counter_Compartment*)self->_state_stack->items[__i]);
+        }
+        Counter_FrameVec_destroy(self->_state_stack);
+    }
+    if (self->_context_stack) Counter_FrameVec_destroy(self->_context_stack);
+    free(self);
+}
+
+void Counter_increment(Counter* self, i32 by) {
+    Counter_FrameVec* __params = Counter_FrameVec_new();
+    Counter_FrameVec_push(__params, (void*)(intptr_t)by);
+    Counter_FrameEvent* __e = Counter_FrameEvent_new("increment", __params, 1);
+    Counter_FrameContext* __ctx = Counter_FrameContext_new(__e, NULL);
+    Counter_FrameVec_push(self->_context_stack, __ctx);
+    Counter_kernel(self, __e);
+    Counter_FrameContext* __result_ctx = (Counter_FrameContext*)Counter_FrameVec_pop(self->_context_stack);
+    Counter_FrameContext_destroy(__result_ctx);
+    Counter_FrameEvent_destroy(__e);
+}
+
+i32 Counter_value(Counter* self) {
+    Counter_FrameEvent* __e = Counter_FrameEvent_new("value", NULL, 0);
+    Counter_FrameContext* __ctx = Counter_FrameContext_new(__e, NULL);
+    __ctx->_return = (void*)(intptr_t)(0);
+    Counter_FrameVec_push(self->_context_stack, __ctx);
+    Counter_kernel(self, __e);
+    Counter_FrameContext* __result_ctx = (Counter_FrameContext*)Counter_FrameVec_pop(self->_context_stack);
+    i32 __result = (i32)__result_ctx->_return;
+    Counter_FrameContext_destroy(__result_ctx);
+    Counter_FrameEvent_destroy(__e);
+    return __result;
+}
+
+static void Counter_state_Counting(Counter* self, Counter_FrameEvent* __e, Counter_Compartment* compartment) {
+    if (strcmp(__e->_message, "increment") == 0) {
+        Counter_s_Counting_hdl_user_increment(self, __e, compartment);
+        return;
+    }
+    if (strcmp(__e->_message, "value") == 0) {
+        Counter_s_Counting_hdl_user_value(self, __e, compartment);
+        return;
+    }
+}
+
+static void Counter_s_Counting_hdl_user_increment(Counter* self, Counter_FrameEvent* __e, Counter_Compartment* compartment) {
+    int by = (int)(intptr_t)Counter_FrameVec_get(__e->_parameters, 0);
+    (void)by;
+    self.count = self.count + by
+}
+
+static void Counter_s_Counting_hdl_user_value(Counter* self, Counter_FrameEvent* __e, Counter_Compartment* compartment) {
+    Counter_CTX(self)->_return = (void*)(intptr_t)(self.count);
+}
+
+static cJSON* Counter_serialize_compartment(Counter_Compartment* comp) {
+    if (!comp) return cJSON_CreateNull();
+    cJSON* obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "state", comp->state);
+    cJSON* vars = cJSON_CreateObject();
+    Counter_FrameDict* sv = comp->state_vars;
+    if (sv) {
+        for (int i = 0; i < sv->bucket_count; i++) {
+            Counter_FrameDictEntry* entry = sv->buckets[i];
+            while (entry) {
+                cJSON_AddNumberToObject(vars, entry->key, (double)(intptr_t)entry->value);
+                entry = entry->next;
+            }
+        }
+    }
+    cJSON_AddItemToObject(obj, "state_vars", vars);
+    cJSON* sa = cJSON_CreateArray();
+    if (comp->state_args) {
+    }
+    cJSON_AddItemToObject(obj, "state_args", sa);
+    cJSON* ea = cJSON_CreateArray();
+    if (comp->enter_args) {
+    }
+    cJSON_AddItemToObject(obj, "enter_args", ea);
+    cJSON_AddItemToObject(obj, "parent_compartment", Counter_serialize_compartment(comp->parent_compartment));
+    return obj;
+}
+
+static Counter_Compartment* Counter_deserialize_compartment(cJSON* data) {
+    if (!data || cJSON_IsNull(data)) return NULL;
+    cJSON* state_item = cJSON_GetObjectItem(data, "state");
+    Counter_Compartment* comp = Counter_Compartment_new(strdup(state_item->valuestring));
+    cJSON* vars = cJSON_GetObjectItem(data, "state_vars");
+    if (vars) {
+        cJSON* var_item;
+        cJSON_ArrayForEach(var_item, vars) {
+            Counter_FrameDict_set(comp->state_vars, var_item->string, (void*)(intptr_t)(int)var_item->valuedouble);
+        }
+    }
+    cJSON* sa = cJSON_GetObjectItem(data, "state_args");
+    if (sa) {
+    }
+    cJSON* ea = cJSON_GetObjectItem(data, "enter_args");
+    if (ea) {
+    }
+    cJSON* parent = cJSON_GetObjectItem(data, "parent_compartment");
+    comp->parent_compartment = Counter_deserialize_compartment(parent);
+    return comp;
+}
+
+char* Counter_snapshot(Counter* self) {
+    if (Counter_FrameVec_size(self->_context_stack) > 0) { fprintf(stderr, "E700: system not quiescent\n"); abort(); }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddItemToObject(root, "_compartment", Counter_serialize_compartment(self->__compartment));
+    cJSON* stack_arr = cJSON_CreateArray();
+    for (int i = 0; i < Counter_FrameVec_size(self->_state_stack); i++) {
+        Counter_Compartment* comp = (Counter_Compartment*)Counter_FrameVec_get(self->_state_stack, i);
+        cJSON_AddItemToArray(stack_arr, Counter_serialize_compartment(comp));
+    }
+    cJSON_AddItemToObject(root, "_state_stack", stack_arr);
+    cJSON_AddItemToObject(root, "count", Counter_persist_pack_field_int((void*)&self->count));
+    char* json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return json;
+}
+
+void Counter_restore(Counter* self, const char* json) {
+    cJSON* root = cJSON_Parse(json);
+    if (!root) return;
+
+    self->__next_compartment = NULL;
+
+    cJSON* comp_data = cJSON_GetObjectItem(root, "_compartment");
+    self->__compartment = Counter_deserialize_compartment(comp_data);
+
+    cJSON* stack_arr = cJSON_GetObjectItem(root, "_state_stack");
+    if (stack_arr) {
+        cJSON* stack_item;
+        cJSON_ArrayForEach(stack_item, stack_arr) {
+            Counter_Compartment* comp = Counter_deserialize_compartment(stack_item);
+            if (comp) {
+                Counter_FrameVec_push(self->_state_stack, comp);
+            }
+        }
+    }
+
+    Counter_persist_unpack_field_int(cJSON_GetObjectItem(root, "count"), (void*)&self->count);
+
+    cJSON_Delete(root);
+}

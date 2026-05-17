@@ -1,0 +1,241 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"03_persist\", \"dart\")"
+---
+class CounterFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    CounterFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class CounterFrameContext {
+    late CounterFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    CounterFrameContext(CounterFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class CounterCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    CounterCompartment? parent_compartment;
+
+    CounterCompartment(String state, [CounterCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    CounterCompartment copy() {
+        final c = CounterCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class Counter {
+    late List<CounterCompartment> _state_stack;
+    late CounterCompartment __compartment;
+    CounterCompartment? __next_compartment;
+    late List<CounterFrameContext> _context_stack;
+    i32 count = 0;
+
+    Counter() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Counting", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init() {
+        final __e = CounterFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = CounterFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static Counter _create() {
+        final c = Counter();
+        c._frame_init();
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Counting": ["Counting"],
+        };
+    }
+    CounterCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        CounterCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = CounterCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        CounterCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(CounterFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = CounterFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = CounterFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = CounterFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(CounterFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Counting":
+                _state_Counting(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(CounterCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void increment(i32 by) {
+        final __e = CounterFrameEvent("increment", [by]);
+        final __ctx = CounterFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    i32 value() {
+        final __e = CounterFrameEvent("value", []);
+        final __ctx = CounterFrameContext(__e, null);
+        __ctx._return = 0;
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        return _context_stack.removeLast()._return;
+    }
+
+    void _state_Counting(CounterFrameEvent __e, CounterCompartment compartment) {
+        if (__e._message == "increment") {
+            this._s_Counting_hdl_user_increment(__e, compartment);
+            return;
+        }
+        if (__e._message == "value") {
+            this._s_Counting_hdl_user_value(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Counting_hdl_user_increment(CounterFrameEvent __e, CounterCompartment compartment) {
+        final by = __e._parameters[0];
+        self.count = self.count + by
+    }
+
+    void _s_Counting_hdl_user_value(CounterFrameEvent __e, CounterCompartment compartment) {
+        this._context_stack[this._context_stack.length - 1]._return = self.count;
+    }
+
+    String snapshot() {
+        if (_context_stack.isNotEmpty) throw Exception("E700: system not quiescent");
+        Map<String, dynamic>? serializeComp(CounterCompartment? comp) {
+            if (comp == null) return null;
+            return {
+                'state': comp.state,
+                'state_args': List<dynamic>.from(comp.state_args),
+                'state_vars': Map<String, dynamic>.from(comp.state_vars),
+                'enter_args': List<dynamic>.from(comp.enter_args),
+                'exit_args': List<dynamic>.from(comp.exit_args),
+                'forward_event': comp.forward_event,
+                'parent_compartment': serializeComp(comp.parent_compartment),
+            };
+        }
+        return jsonEncode({
+            '_compartment': serializeComp(this.__compartment),
+            '_state_stack': this._state_stack.map((c) => serializeComp(c)).toList(),
+            'count': this.count,
+        });
+    }
+
+    void restore(String json) {
+        CounterCompartment? deserializeComp(dynamic data) {
+            if (data == null || data is! Map) return null;
+            final comp = CounterCompartment(data['state'] as String);
+            comp.state_vars = Map<String, dynamic>.from(data['state_vars'] ?? {});
+            final __saRaw = (data['state_args'] as List?) ?? <dynamic>[];
+            final __eaRaw = (data['enter_args'] as List?) ?? <dynamic>[];
+            comp.exit_args = List<dynamic>.from(data['exit_args'] ?? <dynamic>[]);
+            comp.state_args.addAll(__saRaw);
+            comp.enter_args.addAll(__eaRaw);
+            comp.forward_event = data['forward_event'];
+            comp.parent_compartment = deserializeComp(data['parent_compartment']);
+            return comp;
+        }
+        final _parsed = jsonDecode(json) as Map<String, dynamic>;
+        this.__compartment = deserializeComp(_parsed['_compartment'])!;
+        this.__next_compartment = null;
+        this._state_stack = (_parsed['_state_stack'] as List?)?.map((c) => deserializeComp(c)!).toList() ?? <CounterCompartment>[];
+        this.count = _parsed['count'] as i32;
+    }
+}

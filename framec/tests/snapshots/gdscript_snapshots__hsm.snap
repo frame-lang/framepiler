@@ -1,0 +1,218 @@
+---
+source: framec/tests/gdscript_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"gdscript\")"
+---
+class MiniHsmFrameEvent:
+    var _message
+    var _parameters
+
+    func _init(message: String, parameters):
+        self._message = message
+        self._parameters = parameters
+
+
+class MiniHsmFrameContext:
+    var event
+    var _return
+    var _data
+    var _transitioned
+
+    func _init(event: MiniHsmFrameEvent, default_return):
+        self.event = event
+        self._return = default_return
+        self._data = {}
+        self._transitioned = false
+
+
+class MiniHsmCompartment:
+    var state
+    var state_args
+    var state_vars
+    var enter_args
+    var exit_args
+    var forward_event
+    var parent_compartment
+
+    func _init(state: String, parent_compartment = null):
+        self.state = state
+        self.state_args = []
+        self.state_vars = {}
+        self.enter_args = []
+        self.exit_args = []
+        self.forward_event = null
+        self.parent_compartment = parent_compartment
+
+    func copy() -> MiniHsmCompartment:
+        var c = MiniHsmCompartment.new(self.state, self.parent_compartment)
+        c.state_args = self.state_args.duplicate()
+        c.state_vars = self.state_vars.duplicate()
+        c.enter_args = self.enter_args.duplicate()
+        c.exit_args = self.exit_args.duplicate()
+        c.forward_event = self.forward_event
+        return c
+
+
+class MiniHsm:
+    var _state_stack
+    var __compartment
+    var __next_compartment
+    var _context_stack
+    var awakes = 0
+    var sleeps = 0
+    var last = ""
+
+    func _init():
+        self._state_stack = []
+        self._context_stack = []
+        self.__compartment = self.__prepareEnter("Live", [], [])
+        self.__next_compartment = null
+
+    static func _create():
+        var c = MiniHsm.new()
+        var __e = MiniHsmFrameEvent.new("$>", c.__compartment.enter_args)
+        var __ctx = MiniHsmFrameContext.new(__e, null)
+        c._context_stack.append(__ctx)
+        c.__kernel(__e)
+        c._context_stack.pop_back()
+        return c
+
+    func hsm_chain() -> Dictionary:
+        return {
+            "Live": ["Live"],
+            "Awake": ["Live", "Awake"],
+            "Asleep": ["Live", "Asleep"],
+        }
+    func __prepareEnter(leaf, state_args, enter_args):
+        var comp = null
+        for name in self.hsm_chain()[leaf]:
+            var new_comp = MiniHsmCompartment.new(name)
+            new_comp.state_args = state_args.duplicate()
+            new_comp.enter_args = enter_args.duplicate()
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        return comp
+
+    func __prepareExit(exit_args):
+        var comp = self.__compartment
+        while comp != null:
+            comp.exit_args = exit_args.duplicate()
+            comp = comp.parent_compartment
+
+    func __kernel(__e):
+        # Route event to current state
+        self.__router(__e)
+        # Drain any transitions queued by the handler
+        while self.__next_compartment != null:
+            var next_compartment = self.__next_compartment
+            self.__next_compartment = null
+            # Exit the current (leaf) state
+            self.__router(MiniHsmFrameEvent.new("<$", self.__compartment.exit_args))
+            # Switch to the new compartment
+            self.__compartment = next_compartment
+            if next_compartment.forward_event == null:
+                # No forwarded event — synthesize a fresh $>
+                self.__router(MiniHsmFrameEvent.new("$>", self.__compartment.enter_args))
+            else:
+                if next_compartment.forward_event._message == "$>":
+                    # Forwarded event IS $> — dispatch directly so the
+                    # destination's $> receives the caller's payload
+                    self.__router(next_compartment.forward_event)
+                else:
+                    # Forwarded event is not $> — initialize the destination
+                    # with a fresh $>, then dispatch the forward to it
+                    self.__router(MiniHsmFrameEvent.new("$>", self.__compartment.enter_args))
+                    self.__router(next_compartment.forward_event)
+            next_compartment.forward_event = null
+            # Mark all stacked contexts as transitioned
+            for ctx in self._context_stack:
+                ctx._transitioned = true
+
+    func __router(__e):
+        if self.__compartment.state == "Live":
+            self._state_Live(__e, self.__compartment)
+        elif self.__compartment.state == "Awake":
+            self._state_Awake(__e, self.__compartment)
+        elif self.__compartment.state == "Asleep":
+            self._state_Asleep(__e, self.__compartment)
+
+    func __transition(next_compartment):
+        self.__next_compartment = next_compartment
+
+    func wake():
+        var __e = MiniHsmFrameEvent.new("wake", [])
+        var __ctx = MiniHsmFrameContext.new(__e, null)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop_back()._return
+
+    func sleep():
+        var __e = MiniHsmFrameEvent.new("sleep", [])
+        var __ctx = MiniHsmFrameContext.new(__e, null)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop_back()._return
+
+    func signal():
+        var __e = MiniHsmFrameEvent.new("signal", [])
+        var __ctx = MiniHsmFrameContext.new(__e, null)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop_back()._return
+
+    func _state_Live(__e, compartment):
+        if __e._message == "signal":
+            self._s_Live_hdl_user_signal(__e, compartment)
+            return
+        if __e._message == "sleep":
+            self._s_Live_hdl_user_sleep(__e, compartment)
+            return
+        if __e._message == "wake":
+            self._s_Live_hdl_user_wake(__e, compartment)
+            return
+
+    func _state_Awake(__e, compartment):
+        if __e._message == "$>":
+            self._s_Awake_hdl_frame_enter(__e, compartment)
+            return
+        if __e._message == "signal":
+            self._s_Awake_hdl_user_signal(__e, compartment)
+            return
+
+    func _state_Asleep(__e, compartment):
+        if __e._message == "$>":
+            self._s_Asleep_hdl_frame_enter(__e, compartment)
+            return
+        if __e._message == "signal":
+            self._s_Asleep_hdl_user_signal(__e, compartment)
+            return
+        if __e._message == "wake":
+            self._s_Asleep_hdl_user_wake(__e, compartment)
+            return
+
+    func _s_Live_hdl_user_signal(__e, compartment):
+        pass
+
+    func _s_Live_hdl_user_sleep(__e, compartment):
+        pass
+
+    func _s_Live_hdl_user_wake(__e, compartment):
+        pass
+
+    func _s_Awake_hdl_frame_enter(__e, compartment):
+        self.awakes = self.awakes + 1
+
+    func _s_Awake_hdl_user_signal(__e, compartment):
+        self.last = "awake"
+        self._state_Live(__e, compartment.parent_compartment)
+
+    func _s_Asleep_hdl_frame_enter(__e, compartment):
+        self.sleeps = self.sleeps + 1
+
+    func _s_Asleep_hdl_user_signal(__e, compartment):
+        self.last = "asleep"
+        self._state_Live(__e, compartment.parent_compartment)
+
+    func _s_Asleep_hdl_user_wake(__e, compartment):
+        var __compartment = self.__prepareEnter("Awake", [], [])
+        self.__transition(__compartment)
+        return

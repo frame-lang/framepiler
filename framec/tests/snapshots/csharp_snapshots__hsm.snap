@@ -1,0 +1,276 @@
+---
+source: framec/tests/csharp_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"csharp\")"
+---
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+class MiniHsmFrameEvent {
+    public string _message;
+    public List<object> _parameters;
+
+    public MiniHsmFrameEvent(string message) {
+        this._message = message;
+        this._parameters = new List<object>();
+    }
+
+    public MiniHsmFrameEvent(string message, List<object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class MiniHsmFrameContext {
+    public MiniHsmFrameEvent _event;
+    public object? _return;
+    public Dictionary<string, object> _data;
+    public bool _transitioned = false;
+
+    public MiniHsmFrameContext(MiniHsmFrameEvent ev, object? defaultReturn = null) {
+        this._event = ev;
+        this._return = defaultReturn;
+        this._data = new Dictionary<string, object>();
+        this._transitioned = false;
+    }
+}
+
+class MiniHsmCompartment {
+    public string state;
+    public List<object> state_args;
+    public Dictionary<string, object> state_vars;
+    public List<object> enter_args;
+    public List<object> exit_args;
+    public MiniHsmFrameEvent? forward_event;
+    public MiniHsmCompartment? parent_compartment;
+
+    public MiniHsmCompartment(string state) {
+        this.state = state;
+        this.state_args = new List<object>();
+        this.state_vars = new Dictionary<string, object>();
+        this.enter_args = new List<object>();
+        this.exit_args = new List<object>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    public MiniHsmCompartment Copy() {
+        MiniHsmCompartment c = new MiniHsmCompartment(this.state);
+        c.state_args = new List<object>(this.state_args);
+        c.state_vars = new Dictionary<string, object>(this.state_vars);
+        c.enter_args = new List<object>(this.enter_args);
+        c.exit_args = new List<object>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class MiniHsm {
+    private List<MiniHsmCompartment> _state_stack;
+    private MiniHsmCompartment __compartment;
+    private MiniHsmCompartment? __next_compartment;
+    private List<MiniHsmFrameContext> _context_stack;
+    public int awakes = 0;
+    public int sleeps = 0;
+    public string last = "";
+
+    public MiniHsm() {
+        _state_stack = new List<MiniHsmCompartment>();
+        _context_stack = new List<MiniHsmFrameContext>();
+        this.__compartment = __prepareEnter("Live", new List<object>(), new List<object>());
+        this.__next_compartment = null;
+    }
+
+    public void __frame_init() {
+        MiniHsmFrameEvent __e = new MiniHsmFrameEvent("$>", __compartment.enter_args);
+        MiniHsmFrameContext __ctx = new MiniHsmFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(__e);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public static MiniHsm __create() {
+        MiniHsm c = new MiniHsm();
+        c.__frame_init();
+        return c;
+    }
+
+    private Dictionary<string, List<string>> hsm_chain() {
+        return new Dictionary<string, List<string>> {
+            { "Live", new List<string> { "Live" } },
+            { "Awake", new List<string> { "Live", "Awake" } },
+            { "Asleep", new List<string> { "Live", "Asleep" } },
+        };
+    }
+    private MiniHsmCompartment __prepareEnter(string leaf, List<object> state_args, List<object> enter_args) {
+        MiniHsmCompartment? comp = null;
+        foreach (string name in hsm_chain()[leaf]) {
+            MiniHsmCompartment new_comp = new MiniHsmCompartment(name);
+            new_comp.state_args = new List<object>(state_args);
+            new_comp.enter_args = new List<object>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    private void __prepareExit(List<object> exit_args) {
+        MiniHsmCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new List<object>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(MiniHsmFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            MiniHsmCompartment next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            MiniHsmFrameEvent exit_event = new MiniHsmFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            MiniHsmFrameEvent? forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                MiniHsmFrameEvent enter_event = new MiniHsmFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                MiniHsmFrameEvent enter_event = new MiniHsmFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            foreach (var ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(MiniHsmFrameEvent __e) {
+        if (__compartment.state == "Live") {
+            _state_Live(__e, __compartment);
+        } else if (__compartment.state == "Awake") {
+            _state_Awake(__e, __compartment);
+        } else if (__compartment.state == "Asleep") {
+            _state_Asleep(__e, __compartment);
+        }
+    }
+
+    private void __transition(MiniHsmCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void wake() {
+        MiniHsmFrameEvent __e = new MiniHsmFrameEvent("wake", new List<object>());
+        MiniHsmFrameContext __ctx = new MiniHsmFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public void sleep() {
+        MiniHsmFrameEvent __e = new MiniHsmFrameEvent("sleep", new List<object>());
+        MiniHsmFrameContext __ctx = new MiniHsmFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public void signal() {
+        MiniHsmFrameEvent __e = new MiniHsmFrameEvent("signal", new List<object>());
+        MiniHsmFrameContext __ctx = new MiniHsmFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    private void _state_Live(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message == "signal") {
+            this._s_Live_hdl_user_signal(__e, compartment);
+            return;
+        }
+        if (__e._message == "sleep") {
+            this._s_Live_hdl_user_sleep(__e, compartment);
+            return;
+        }
+        if (__e._message == "wake") {
+            this._s_Live_hdl_user_wake(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Awake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message == "$>") {
+            this._s_Awake_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message == "signal") {
+            this._s_Awake_hdl_user_signal(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Asleep(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        if (__e._message == "$>") {
+            this._s_Asleep_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message == "signal") {
+            this._s_Asleep_hdl_user_signal(__e, compartment);
+            return;
+        }
+        if (__e._message == "wake") {
+            this._s_Asleep_hdl_user_wake(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Live_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    private void _s_Live_hdl_user_sleep(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    private void _s_Live_hdl_user_wake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+
+    }
+
+    private void _s_Awake_hdl_frame_enter(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.awakes = self.awakes + 1
+    }
+
+    private void _s_Awake_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.last = "awake"
+        _state_Live(__e, compartment.parent_compartment);
+    }
+
+    private void _s_Asleep_hdl_frame_enter(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.sleeps = self.sleeps + 1
+    }
+
+    private void _s_Asleep_hdl_user_signal(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        self.last = "asleep"
+        _state_Live(__e, compartment.parent_compartment);
+    }
+
+    private void _s_Asleep_hdl_user_wake(MiniHsmFrameEvent __e, MiniHsmCompartment compartment) {
+        { MiniHsmCompartment __next = __prepareEnter("Awake", new List<object>(), new List<object>());
+        __transition(__next); }
+        return;
+    }
+}

@@ -1,0 +1,153 @@
+---
+source: framec/tests/erlang_snapshots.rs
+expression: "compile_fixture(\"03_persist\", \"erlang\")"
+---
+-module(counter).
+-behaviour(gen_statem).
+-export([start_link/0, frame_init/1, create/0, increment/2, value/1]).
+-export([callback_mode/0, init/1]).
+-export([snapshot/1, restore/1]).
+-export([counting/3]).
+-record(data, {
+    count = 0,
+    frame_stack = [],
+    frame_current_state = counting,
+    frame_enter_args = [],
+    frame_exit_args = [],
+    frame_state_args = [],
+    frame_context_stack = [],
+    frame_return_val = undefined,
+    frame_skip_enter__ = false
+}).
+
+
+
+
+start_link() ->
+    gen_statem:start_link(?MODULE, [], []).
+
+frame_init(Pid) ->
+    gen_statem:call(Pid, {frame_init, []}).
+
+create() ->
+    {ok, Pid} = start_link(),
+    frame_init(Pid),
+    Pid.
+
+increment(Pid, By) ->
+    gen_statem:call(Pid, {increment, By}).
+
+value(Pid) ->
+    gen_statem:call(Pid, value).
+
+callback_mode() -> [state_functions, state_enter].
+
+init([]) ->
+    {ok, counting, #data{frame_skip_enter__ = true}}.
+
+counting(enter, _OldState, #data{frame_skip_enter__ = true} = Data) ->
+    {keep_state, Data#data{frame_skip_enter__ = false}};
+counting({call, From}, {frame_init, []}, Data) ->
+    Data1 = Data#data{frame_skip_enter__ = false},
+    {repeat_state, Data1, [{reply, From, ok}]};
+counting(enter, _OldState, Data) ->
+    {keep_state, Data};
+counting({call, From}, __Event = {increment, By}, Data) ->
+    Data1 = Data#data{count = Data#data.count + By},
+    {keep_state, Data1, [{reply, From, ok}]};
+counting({call, From}, __Event = value, Data) ->
+    __ReturnVal_1 = Data#data.count,
+    {keep_state, Data, [{reply, From, __ReturnVal_1}]};
+counting(state_timeout, {frame_enter_transition, Target}, Data) ->
+    {next_state, Target, Data};
+counting({call, From}, _Event, Data) ->
+    {keep_state, Data, [{reply, From, ok}]};
+counting(_EventType, _Event, Data) ->
+    {keep_state, Data}.
+
+frame_arg_at__(_, []) -> undefined;
+frame_arg_at__(N, _) when N < 1 -> undefined;
+frame_arg_at__(1, [H | _]) -> H;
+frame_arg_at__(N, L) when length(L) >= N -> lists:nth(N, L);
+frame_arg_at__(_, _) -> undefined.
+
+frame_transition__(TargetState, Data, ExitArgs, EnterArgs, StateArgs, From, ReplyVal) ->
+    Data1 = Data#data{frame_exit_args = ExitArgs},
+    Data2 = frame_exit_dispatch__(Data1),
+    Data3 = Data2#data{frame_enter_args = EnterArgs, frame_state_args = StateArgs, frame_current_state = TargetState},
+    {next_state, TargetState, Data3, [{reply, From, ReplyVal}]}.
+
+frame_forward_transition__(TargetState, ForwardEvent, Data, ExitArgs, EnterArgs, StateArgs, From) ->
+    Data1 = Data#data{frame_exit_args = ExitArgs},
+    Data2 = frame_exit_dispatch__(Data1),
+    Data3 = Data2#data{frame_enter_args = EnterArgs, frame_state_args = StateArgs, frame_current_state = TargetState},
+    {next_state, TargetState, Data3, [{next_event, {call, From}, ForwardEvent}]}.
+
+frame_unwrap_forward__({keep_state, D, Actions}) -> {D, undefined, frame_extract_reply__(Actions)};
+frame_unwrap_forward__({keep_state, D}) -> {D, undefined, ok};
+frame_unwrap_forward__({next_state, NS, D, Actions}) -> {D, NS, frame_extract_reply__(Actions)};
+frame_unwrap_forward__({next_state, NS, D}) -> {D, NS, ok}.
+
+frame_extract_reply__([{reply, _From, V} | _]) -> V;
+frame_extract_reply__([_ | Rest]) -> frame_extract_reply__(Rest);
+frame_extract_reply__([]) -> ok.
+
+frame_exit_dispatch__(Data) ->
+    case Data#data.frame_current_state of
+        _ -> Data
+    end.
+
+frame_dispatch__(EventName, Args, Data) ->
+    Ctx = #{return_val => undefined, data => #{}},
+    Data1 = Data#data{frame_context_stack = [Ctx | Data#data.frame_context_stack]},
+    Msg = case Args of
+        [] -> EventName;
+        _ -> list_to_tuple([EventName | Args])
+    end,
+    State = Data1#data.frame_current_state,
+    FakeFrom = {self(), make_ref()},
+    Result = ?MODULE:State({call, FakeFrom}, Msg, Data1),
+    case Result of
+        {keep_state, Data2, Actions} ->
+            RetVal = case [V || {reply, _, V} <- Actions] of
+                [V | _] -> V;
+                [] -> undefined
+            end,
+            Data3 = Data2#data{frame_context_stack = tl(Data2#data.frame_context_stack)},
+            {Data3, RetVal};
+        {keep_state, Data2} ->
+            Data3 = Data2#data{frame_context_stack = tl(Data2#data.frame_context_stack)},
+            {Data3, undefined};
+        {next_state, NewState, Data2, Actions} ->
+            RetVal = case [V || {reply, _, V} <- Actions] of
+                [V | _] -> V;
+                [] -> undefined
+            end,
+            Data3 = Data2#data{frame_context_stack = tl(Data2#data.frame_context_stack), frame_current_state = NewState},
+            {Data3, RetVal};
+        {next_state, NewState, Data2} ->
+            Data3 = Data2#data{frame_context_stack = tl(Data2#data.frame_context_stack), frame_current_state = NewState},
+            {Data3, undefined}
+    end.
+
+snapshot(Pid) ->
+    {State, Data} = sys:get_state(Pid),
+    Persisted = #{
+        count => Data#data.count,
+        frame_stack => Data#data.frame_stack,
+        frame_state_args => Data#data.frame_state_args,
+        frame_enter_args => Data#data.frame_enter_args
+    },
+    term_to_binary({State, Persisted}).
+
+restore(Bin) ->
+    {State, Persisted} = binary_to_term(Bin, [safe]),
+    Data = #data{
+        count = maps:get(count, Persisted, undefined),
+        frame_stack = maps:get(frame_stack, Persisted, []),
+        frame_state_args = maps:get(frame_state_args, Persisted, []),
+        frame_enter_args = maps:get(frame_enter_args, Persisted, [])
+    },
+    {ok, Pid} = gen_statem:start_link(?MODULE, [], []),
+    sys:replace_state(Pid, fun(_) -> {State, Data} end),
+    {ok, Pid}.

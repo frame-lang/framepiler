@@ -1,0 +1,268 @@
+---
+source: framec/tests/cpp_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"cpp\")"
+---
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <any>
+#include <memory>
+#include <functional>
+
+class MiniHsmFrameEvent {
+public:
+    std::string _message;
+    std::vector<std::any> _parameters;
+
+    MiniHsmFrameEvent(const std::string& message, std::vector<std::any> params = {})
+        : _message(message), _parameters(std::move(params)) {}
+};
+
+class MiniHsmFrameContext {
+public:
+    MiniHsmFrameEvent _event;
+    std::any _return;
+    std::unordered_map<std::string, std::any> _data;
+    bool _transitioned = false;
+
+    MiniHsmFrameContext(MiniHsmFrameEvent event, std::any default_return = {})
+        : _event(std::move(event)), _return(std::move(default_return)) {}
+};
+
+class MiniHsmCompartment {
+public:
+    std::string state;
+    std::vector<std::any> state_args;
+    std::unordered_map<std::string, std::any> state_vars;
+    std::vector<std::any> enter_args;
+    std::vector<std::any> exit_args;
+    std::unique_ptr<MiniHsmFrameEvent> forward_event;
+    std::shared_ptr<MiniHsmCompartment> parent_compartment;
+
+    explicit MiniHsmCompartment(const std::string& state) : state(state) {}
+};
+
+class MiniHsm {
+private:
+    std::vector<std::shared_ptr<MiniHsmCompartment>> _state_stack;
+    std::shared_ptr<MiniHsmCompartment> __compartment;
+    std::shared_ptr<MiniHsmCompartment> __next_compartment;
+    std::vector<MiniHsmFrameContext> _context_stack;
+
+    std::shared_ptr<MiniHsmCompartment> __prepareEnter(const std::string& leaf, std::vector<std::any> state_args, std::vector<std::any> enter_args) {
+        std::shared_ptr<MiniHsmCompartment> comp = nullptr;
+        auto chain_table = hsm_chain();
+        for (const auto& name : chain_table[leaf]) {
+            auto new_comp = std::make_shared<MiniHsmCompartment>(name);
+            new_comp->state_args = state_args;
+            new_comp->enter_args = enter_args;
+            new_comp->parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+
+    }
+
+    void __prepareExit(std::vector<std::any> exit_args) {
+        std::shared_ptr<MiniHsmCompartment> comp = __compartment;
+        while (comp) {
+            comp->exit_args = exit_args;
+            comp = comp->parent_compartment;
+        }
+
+    }
+
+    void __kernel(MiniHsmFrameEvent& __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment) {
+            auto next_compartment = std::move(__next_compartment);
+            // Exit the current (leaf) state.
+            MiniHsmFrameEvent __exit_event("<$", __compartment->exit_args);
+            __router(__exit_event);
+            // Switch to the new compartment.
+            __compartment = std::move(next_compartment);
+            // Three-branch forward-event handling.
+            if (!__compartment->forward_event) {
+                // No forwarded event — synthesize a fresh $>.
+                MiniHsmFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+            } else if (__compartment->forward_event->_message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                auto forward_event = std::move(__compartment->forward_event);
+                __router(*forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                auto forward_event = std::move(__compartment->forward_event);
+                MiniHsmFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+                __router(*forward_event);
+            }
+            for (auto& ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+
+    }
+
+    void __router(MiniHsmFrameEvent& __e) {
+        if (__compartment->state == "Live") {
+            _state_Live(__e, __compartment);
+        } else if (__compartment->state == "Awake") {
+            _state_Awake(__e, __compartment);
+        } else if (__compartment->state == "Asleep") {
+            _state_Asleep(__e, __compartment);
+        }
+
+    }
+
+    void __transition(std::shared_ptr<MiniHsmCompartment> next) {
+        __next_compartment = next;
+
+    }
+
+    void _state_Live(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+        if (__e._message == "signal") {
+            this->_s_Live_hdl_user_signal(__e, compartment);
+            return;
+        }
+        if (__e._message == "sleep") {
+            this->_s_Live_hdl_user_sleep(__e, compartment);
+            return;
+        }
+        if (__e._message == "wake") {
+            this->_s_Live_hdl_user_wake(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _state_Awake(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+        if (__e._message == "$>") {
+            this->_s_Awake_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message == "signal") {
+            this->_s_Awake_hdl_user_signal(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _state_Asleep(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+        if (__e._message == "$>") {
+            this->_s_Asleep_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message == "signal") {
+            this->_s_Asleep_hdl_user_signal(__e, compartment);
+            return;
+        }
+        if (__e._message == "wake") {
+            this->_s_Asleep_hdl_user_wake(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _s_Live_hdl_user_signal(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+
+
+    }
+
+    void _s_Live_hdl_user_sleep(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+
+
+    }
+
+    void _s_Live_hdl_user_wake(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+
+
+    }
+
+    void _s_Awake_hdl_frame_enter(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+        self.awakes = self.awakes + 1
+
+    }
+
+    void _s_Awake_hdl_user_signal(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+        self.last = "awake"
+        _state_Live(__e, compartment->parent_compartment);
+
+    }
+
+    void _s_Asleep_hdl_frame_enter(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+        self.sleeps = self.sleeps + 1
+
+    }
+
+    void _s_Asleep_hdl_user_signal(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+        self.last = "asleep"
+        _state_Live(__e, compartment->parent_compartment);
+
+    }
+
+    void _s_Asleep_hdl_user_wake(MiniHsmFrameEvent& __e, std::shared_ptr<MiniHsmCompartment> compartment) {
+        auto __next = __prepareEnter("Awake", std::vector<std::any>{}, std::vector<std::any>{});
+        __transition(std::move(__next));
+        return;
+
+    }
+
+public:
+    i32 awakes = 0;
+    i32 sleeps = 0;
+    String last = "";
+
+    MiniHsm() {
+        __compartment = __prepareEnter("Live", std::vector<std::any>{}, std::vector<std::any>{});
+    }
+
+    static MiniHsm __create() {
+        MiniHsm c;
+        MiniHsmFrameEvent __e("$>", c.__compartment->enter_args);
+        MiniHsmFrameContext __ctx(std::move(__e));
+        c._context_stack.push_back(std::move(__ctx));
+        c.__kernel(c._context_stack.back()._event);
+        c._context_stack.pop_back();
+        return c;
+    }
+
+    std::unordered_map<std::string, std::vector<std::string>> hsm_chain() {
+        return {
+            {"Live", {"Live"} },
+            {"Awake", {"Live", "Awake"} },
+            {"Asleep", {"Live", "Asleep"} },
+        };
+    }
+
+    void wake() {
+        MiniHsmFrameEvent __e("wake");
+        MiniHsmFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    void sleep() {
+        MiniHsmFrameEvent __e("sleep");
+        MiniHsmFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    void signal() {
+        MiniHsmFrameEvent __e("signal");
+        MiniHsmFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+};

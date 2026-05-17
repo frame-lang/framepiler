@@ -1,0 +1,268 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"02_hsm\", \"go\")"
+---
+type MiniHsmFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type MiniHsmFrameContext struct {
+    _event  MiniHsmFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type MiniHsmCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *MiniHsmFrameEvent
+    parentCompartment *MiniHsmCompartment
+}
+
+func newMiniHsmCompartment(state string) *MiniHsmCompartment {
+    return &MiniHsmCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *MiniHsmCompartment) copy() *MiniHsmCompartment {
+    nc := &MiniHsmCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type MiniHsm struct {
+    _state_stack []*MiniHsmCompartment
+    __compartment *MiniHsmCompartment
+    __next_compartment *MiniHsmCompartment
+    _context_stack []MiniHsmFrameContext
+    awakes int
+    sleeps int
+    last string
+}
+
+func NewMiniHsm() *MiniHsm {
+    s := &MiniHsm{}
+    s._state_stack = make([]*MiniHsmCompartment, 0)
+    s._context_stack = make([]MiniHsmFrameContext, 0)
+    s.awakes = 0
+    s.sleeps = 0
+    s.last = ""
+    s.__compartment = s.__prepareEnter("Live", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateMiniHsm() *MiniHsm {
+    c := NewMiniHsm()
+    __e := MiniHsmFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := MiniHsmFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *MiniHsm) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Live": {"Live"},
+        "Awake": {"Live", "Awake"},
+        "Asleep": {"Live", "Asleep"},
+    }
+}
+func (s *MiniHsm) __prepareEnter(leaf string, state_args []any, enter_args []any) *MiniHsmCompartment {
+    var comp *MiniHsmCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newMiniHsmCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *MiniHsm) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *MiniHsm) __kernel(__e *MiniHsmFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &MiniHsmFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &MiniHsmFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &MiniHsmFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *MiniHsm) __router(__e *MiniHsmFrameEvent) {
+    switch s.__compartment.state {
+    case "Live":
+        s._state_Live(__e, s.__compartment)
+    case "Awake":
+        s._state_Awake(__e, s.__compartment)
+    case "Asleep":
+        s._state_Asleep(__e, s.__compartment)
+    }
+}
+
+func (s *MiniHsm) __transition(next *MiniHsmCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *MiniHsm) Wake() {
+    __e := MiniHsmFrameEvent{_message: "wake", _parameters: []any{}}
+    __ctx := MiniHsmFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *MiniHsm) Sleep() {
+    __e := MiniHsmFrameEvent{_message: "sleep", _parameters: []any{}}
+    __ctx := MiniHsmFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *MiniHsm) Signal() {
+    __e := MiniHsmFrameEvent{_message: "signal", _parameters: []any{}}
+    __ctx := MiniHsmFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *MiniHsm) _state_Live(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+    if __e._message == "signal" {
+        s._s_Live_hdl_user_signal(__e, compartment)
+        return
+    }
+    if __e._message == "sleep" {
+        s._s_Live_hdl_user_sleep(__e, compartment)
+        return
+    }
+    if __e._message == "wake" {
+        s._s_Live_hdl_user_wake(__e, compartment)
+        return
+    }
+}
+
+func (s *MiniHsm) _state_Awake(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+    if __e._message == "$>" {
+        s._s_Awake_hdl_frame_enter(__e, compartment)
+        return
+    }
+    if __e._message == "signal" {
+        s._s_Awake_hdl_user_signal(__e, compartment)
+        return
+    }
+}
+
+func (s *MiniHsm) _state_Asleep(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+    if __e._message == "$>" {
+        s._s_Asleep_hdl_frame_enter(__e, compartment)
+        return
+    }
+    if __e._message == "signal" {
+        s._s_Asleep_hdl_user_signal(__e, compartment)
+        return
+    }
+    if __e._message == "wake" {
+        s._s_Asleep_hdl_user_wake(__e, compartment)
+        return
+    }
+}
+
+func (s *MiniHsm) _s_Live_hdl_user_signal(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+}
+
+func (s *MiniHsm) _s_Live_hdl_user_sleep(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+}
+
+func (s *MiniHsm) _s_Live_hdl_user_wake(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+}
+
+func (s *MiniHsm) _s_Awake_hdl_frame_enter(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+    {
+    self.awakes = self.awakes + 1
+    }
+}
+
+func (s *MiniHsm) _s_Awake_hdl_user_signal(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+    {
+    self.last = "awake"
+    s._state_Live(__e, compartment.parentCompartment)
+    }
+}
+
+func (s *MiniHsm) _s_Asleep_hdl_frame_enter(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+    {
+    self.sleeps = self.sleeps + 1
+    }
+}
+
+func (s *MiniHsm) _s_Asleep_hdl_user_signal(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+    {
+    self.last = "asleep"
+    s._state_Live(__e, compartment.parentCompartment)
+    }
+}
+
+func (s *MiniHsm) _s_Asleep_hdl_user_wake(__e *MiniHsmFrameEvent, compartment *MiniHsmCompartment) {
+    {
+    __compartment := s.__prepareEnter("Awake", []any{}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}

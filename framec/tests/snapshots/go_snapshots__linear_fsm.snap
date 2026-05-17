@@ -1,0 +1,226 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"01_linear_fsm\", \"go\")"
+---
+type LinearFsmFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type LinearFsmFrameContext struct {
+    _event  LinearFsmFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type LinearFsmCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *LinearFsmFrameEvent
+    parentCompartment *LinearFsmCompartment
+}
+
+func newLinearFsmCompartment(state string) *LinearFsmCompartment {
+    return &LinearFsmCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *LinearFsmCompartment) copy() *LinearFsmCompartment {
+    nc := &LinearFsmCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type LinearFsm struct {
+    _state_stack []*LinearFsmCompartment
+    __compartment *LinearFsmCompartment
+    __next_compartment *LinearFsmCompartment
+    _context_stack []LinearFsmFrameContext
+    total int
+}
+
+func NewLinearFsm() *LinearFsm {
+    s := &LinearFsm{}
+    s._state_stack = make([]*LinearFsmCompartment, 0)
+    s._context_stack = make([]LinearFsmFrameContext, 0)
+    s.total = 0
+    s.__compartment = s.__prepareEnter("Idle", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateLinearFsm() *LinearFsm {
+    c := NewLinearFsm()
+    __e := LinearFsmFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := LinearFsmFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *LinearFsm) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Idle": {"Idle"},
+        "Active": {"Active"},
+        "Done": {"Done"},
+    }
+}
+func (s *LinearFsm) __prepareEnter(leaf string, state_args []any, enter_args []any) *LinearFsmCompartment {
+    var comp *LinearFsmCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newLinearFsmCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *LinearFsm) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *LinearFsm) __kernel(__e *LinearFsmFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &LinearFsmFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &LinearFsmFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &LinearFsmFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *LinearFsm) __router(__e *LinearFsmFrameEvent) {
+    switch s.__compartment.state {
+    case "Idle":
+        s._state_Idle(__e, s.__compartment)
+    case "Active":
+        s._state_Active(__e, s.__compartment)
+    case "Done":
+        s._state_Done(__e, s.__compartment)
+    }
+}
+
+func (s *LinearFsm) __transition(next *LinearFsmCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *LinearFsm) Start() {
+    __e := LinearFsmFrameEvent{_message: "start", _parameters: []any{}}
+    __ctx := LinearFsmFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *LinearFsm) Progress(amount int) {
+    __e := LinearFsmFrameEvent{_message: "progress", _parameters: []any{amount}}
+    __ctx := LinearFsmFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *LinearFsm) Finish() {
+    __e := LinearFsmFrameEvent{_message: "finish", _parameters: []any{}}
+    __ctx := LinearFsmFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *LinearFsm) _state_Idle(__e *LinearFsmFrameEvent, compartment *LinearFsmCompartment) {
+    if __e._message == "start" {
+        s._s_Idle_hdl_user_start(__e, compartment)
+        return
+    }
+}
+
+func (s *LinearFsm) _state_Active(__e *LinearFsmFrameEvent, compartment *LinearFsmCompartment) {
+    if __e._message == "finish" {
+        s._s_Active_hdl_user_finish(__e, compartment)
+        return
+    }
+    if __e._message == "progress" {
+        s._s_Active_hdl_user_progress(__e, compartment)
+        return
+    }
+}
+
+func (s *LinearFsm) _state_Done(__e *LinearFsmFrameEvent, compartment *LinearFsmCompartment) {
+}
+
+func (s *LinearFsm) _s_Idle_hdl_user_start(__e *LinearFsmFrameEvent, compartment *LinearFsmCompartment) {
+    {
+    __compartment := s.__prepareEnter("Active", []any{}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}
+
+func (s *LinearFsm) _s_Active_hdl_user_finish(__e *LinearFsmFrameEvent, compartment *LinearFsmCompartment) {
+    {
+    __compartment := s.__prepareEnter("Done", []any{}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}
+
+func (s *LinearFsm) _s_Active_hdl_user_progress(__e *LinearFsmFrameEvent, compartment *LinearFsmCompartment) {
+    amount := __e._parameters[0].(int)
+    _ = amount
+    {
+    // self mutation exercised below via domain field
+    self.total = self.total + amount
+    }
+}
