@@ -541,11 +541,13 @@ pub fn get_backend(lang: TargetLanguage) -> Box<dyn LanguageBackend> {
         TargetLanguage::Lua => Box::new(lua::LuaBackend),
         TargetLanguage::Dart => Box::new(dart::DartBackend),
         TargetLanguage::GDScript => Box::new(gdscript::GDScriptBackend),
-        // Non-V4 targets have no backend — panic early with a clear message.
-        // No _ => arm: compiler enforces new TargetLanguage variants are added here.
+        // Non-V4 targets have no backend — this is a programming error in the
+        // caller: Graphviz routes through the legacy visitor path, not the V4
+        // backend factory. If a new TargetLanguage variant is added, the
+        // compiler will force a new match arm here.
         TargetLanguage::Graphviz => {
-            panic!(
-                "No V4 backend for {:?} — this target does not support V4 code generation",
+            unreachable!(
+                "E953: no V4 backend for {:?} — Graphviz uses the legacy visitor path; this factory should not be called for it",
                 lang
             )
         }

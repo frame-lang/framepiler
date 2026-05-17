@@ -381,7 +381,10 @@ pub(super) fn emit_actions_and_operations(
                             };
                             let new_var = format!("Data{}", data_bind_counter);
                             let method_snake = to_snake_case(iface);
-                            let call_start = l.find(&pattern).unwrap() + pattern.len();
+                            let call_start = l
+                                .find(&pattern)
+                                .expect("contains(&pattern) checked one branch up")
+                                + pattern.len();
                             let call_end = l.rfind(')').unwrap_or(l.len());
                             let args = l[call_start..call_end].trim();
                             let args_list = if args.is_empty() {

@@ -793,7 +793,7 @@ pub(crate) fn generate_rust_interface_body(
             other => other.to_string(),
         };
         code.push_str(&format!(
-            r#"let __ctx = self._context_stack.pop().unwrap();
+            r#"let __ctx = self._context_stack.pop().expect("invariant: handler must have pushed a context before reading return");
 match __ctx._return {{
     Some({}::{}(v)) => v,
     Some({}::_Lifecycle(v)) => v.downcast_ref::<{}>().cloned().unwrap_or_default(),
@@ -979,7 +979,10 @@ pub(crate) fn rust_expand_transition(
                     // the parent chain in case a higher ancestor has
                     // params.
                     parent_chain_var =
-                        format!("{}.as_mut().unwrap().parent_compartment", parent_chain_var);
+                        format!(
+                        "{}.as_mut().expect(\"invariant: HSM ancestor chain checked by validator\").parent_compartment",
+                        parent_chain_var,
+                    );
                     continue;
                 }
                 code.push_str(&format!(
@@ -1001,7 +1004,10 @@ pub(crate) fn rust_expand_transition(
                 code.push_str(&format!("{}        }}\n", indent_str));
                 code.push_str(&format!("{}    }}\n", indent_str));
                 parent_chain_var =
-                    format!("{}.as_mut().unwrap().parent_compartment", parent_chain_var);
+                    format!(
+                        "{}.as_mut().expect(\"invariant: HSM ancestor chain checked by validator\").parent_compartment",
+                        parent_chain_var,
+                    );
             }
 
             code.push_str(&format!("{}}}\n", indent_str));
@@ -1068,7 +1074,7 @@ pub(crate) fn rust_expand_state_var_read(ctx: &HandlerContext, var_name: &str) -
     let suffix = if is_copy { "" } else { ".clone()" };
     format!(
         "{{ let mut __sv_comp = &self.__compartment; while __sv_comp.state != \"{}\" \
-         {{ __sv_comp = __sv_comp.parent_compartment.as_ref().unwrap(); }} \
+         {{ __sv_comp = __sv_comp.parent_compartment.as_ref().expect(\"invariant: state-var target found in ancestor chain\"); }} \
          match &__sv_comp.state_context {{ {}StateContext::{}(ctx) => ctx.{}{}, _ => unreachable!() }} }}",
         ctx.state_name, ctx.system_name, ctx.state_name, var_name, suffix
     )
@@ -1391,7 +1397,7 @@ pub(crate) fn rust_pop_exit_arg(indent: &str, value: &str) -> String {
 /// Pop: stack pop
 pub(crate) fn rust_pop_stack(indent: &str) -> String {
     format!(
-        "{}let mut __popped = self._state_stack.pop().unwrap();\n",
+        "{}let mut __popped = self._state_stack.pop().expect(\"invariant: pop$ must follow push$\");\n",
         indent
     )
 }

@@ -199,7 +199,7 @@ impl RustBodyCloserFsm {
         self.__router(__e);
         // Drain any transitions queued by the handler.
         while self.__next_compartment.is_some() {
-            let next_compartment = self.__next_compartment.take().unwrap();
+            let next_compartment = self.__next_compartment.take().expect("invariant: while-loop guard checked is_some()");
             // Exit the current (leaf) state.
             let exit_args = self.__compartment.exit_args.clone();
             let exit_event = std::rc::Rc::new(RustBodyCloserFsmFrameEvent::FrameExit { args: exit_args });

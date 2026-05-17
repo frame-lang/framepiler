@@ -161,7 +161,7 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
     let mut restore_body = String::new();
     restore_body.push_str(&format!("let __json_str: &str = &{};\n", load_param_name));
     restore_body
-        .push_str("let data: serde_json::Value = serde_json::from_str(__json_str).unwrap();\n");
+        .push_str("let data: serde_json::Value = serde_json::from_str(__json_str).expect(\"E950: persist load — input is not valid JSON\");\n");
 
     restore_body.push_str(&format!(
         "fn deserialize_state_context(state: &str, data: &serde_json::Value) -> {}StateContext {{\n",
@@ -211,7 +211,7 @@ pub(crate) fn generate_rust_persistence_methods(system: &SystemAst) -> Vec<Codeg
         "fn deserialize_comp(data: &serde_json::Value) -> {}Compartment {{\n",
         system.name
     ));
-    restore_body.push_str("    let state = data[\"state\"].as_str().unwrap();\n");
+    restore_body.push_str("    let state = data[\"state\"].as_str().expect(\"E951: persist load — compartment missing string \\\"state\\\" field\");\n");
     restore_body.push_str(&format!(
         "    let mut comp = {}Compartment::new(state);\n",
         system.name
@@ -386,7 +386,7 @@ fn rust_json_extract(var_name: &str, _var_type: &Type) -> String {
 
 fn rust_json_extract_unwrap(var_name: &str, _var_type: &Type) -> String {
     format!(
-        "serde_json::from_value(data[\"{}\"].clone()).unwrap()",
-        var_name
+        "serde_json::from_value(data[\"{}\"].clone()).unwrap_or_else(|e| panic!(\"E952: persist load — field {} failed to deserialize: {{}}\", e))",
+        var_name, var_name
     )
 }

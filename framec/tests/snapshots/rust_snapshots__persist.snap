@@ -167,7 +167,7 @@ impl Counter {
         self.__router(__e);
         // Drain any transitions queued by the handler.
         while self.__next_compartment.is_some() {
-            let next_compartment = self.__next_compartment.take().unwrap();
+            let next_compartment = self.__next_compartment.take().expect("invariant: while-loop guard checked is_some()");
             // Exit the current (leaf) state.
             let exit_args = self.__compartment.exit_args.clone();
             let exit_event = std::rc::Rc::new(CounterFrameEvent::FrameExit { args: exit_args });
@@ -232,7 +232,7 @@ impl Counter {
         __ctx._return = Some(CounterFrameReturn::Value(0));
         self._context_stack.push(__ctx);
         self.__kernel(&__e);
-        let __ctx = self._context_stack.pop().unwrap();
+        let __ctx = self._context_stack.pop().expect("invariant: handler must have pushed a context before reading return");
         match __ctx._return {
             Some(CounterFrameReturn::Value(v)) => v,
             Some(CounterFrameReturn::_Lifecycle(v)) => v.downcast_ref::<i32>().cloned().unwrap_or_default(),
@@ -291,7 +291,7 @@ impl Counter {
 
     pub fn restore(&mut self, json: String) {
         let __json_str: &str = &json;
-        let data: serde_json::Value = serde_json::from_str(__json_str).unwrap();
+        let data: serde_json::Value = serde_json::from_str(__json_str).expect("E950: persist load — input is not valid JSON");
         fn deserialize_state_context(state: &str, data: &serde_json::Value) -> CounterStateContext {
             match state {
                 "Counting" => CounterStateContext::Counting,
@@ -299,7 +299,7 @@ impl Counter {
             }
         }
         fn deserialize_comp(data: &serde_json::Value) -> CounterCompartment {
-            let state = data["state"].as_str().unwrap();
+            let state = data["state"].as_str().expect("E951: persist load — compartment missing string \"state\" field");
             let mut comp = CounterCompartment::new(state);
             let ctx_data = &data["state_context"];
             if !ctx_data.is_null() {
@@ -320,6 +320,6 @@ impl Counter {
         self._context_stack = vec![];
         self.__compartment = compartment;
         self.__next_compartment = None;
-        self.count = serde_json::from_value(data["count"].clone()).unwrap();
+        self.count = serde_json::from_value(data["count"].clone()).unwrap_or_else(|e| panic!("E952: persist load — field count failed to deserialize: {}", e));
     }
 }

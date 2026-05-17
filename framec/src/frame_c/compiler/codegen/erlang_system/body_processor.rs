@@ -478,7 +478,13 @@ pub(super) fn erlang_process_body_lines_full(
                 // Strip trailing terminator for analysis, preserve to re-attach.
                 let trail_start = raw
                     .rfind(|c: char| c != ',' && c != ';' && !c.is_whitespace())
-                    .map(|p| p + raw[p..].chars().next().unwrap().len_utf8())
+                    .map(|p| {
+                        p + raw[p..]
+                            .chars()
+                            .next()
+                            .expect("invariant: rfind returned a valid byte index, so a char must start there")
+                            .len_utf8()
+                    })
                     .unwrap_or(raw.len());
                 let analyze = raw[..trail_start].to_string();
                 let trailing = raw[trail_start..].to_string();

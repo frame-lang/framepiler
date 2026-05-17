@@ -49,7 +49,9 @@ pub(super) fn expand_context_return(
                 {
                     e.as_str()
                 } else {
-                    let eq_pos = trimmed.find('=').unwrap();
+                    let eq_pos = trimmed
+                        .find('=')
+                        .expect("is_assignment closure verified contains('=') above");
                     trimmed[eq_pos + 1..].trim().trim_end_matches(';').trim()
                 };
                 let expanded_expr = paren_wrap_if_multiline(&expand_expression(expr, lang, ctx));

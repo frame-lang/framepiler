@@ -400,7 +400,7 @@ pub(crate) fn generate_constructor(
             // Skip if the domain field's init already references this param
             // (avoids double assignment, which breaks final/readonly/const)
             let field_init = matching_field
-                .unwrap()
+                .expect("Some: is_none() handled in the continue branch above")
                 .initializer_text
                 .as_deref()
                 .unwrap_or("");

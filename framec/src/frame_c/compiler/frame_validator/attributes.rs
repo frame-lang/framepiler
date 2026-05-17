@@ -465,7 +465,7 @@ impl FrameValidator {
                 return false;
             }
             let mut chars = s.chars();
-            let first = chars.next().unwrap();
+            let first = chars.next().expect("non-empty: is_empty() checked above");
             if !(first.is_ascii_alphabetic() || first == '_') {
                 return false;
             }

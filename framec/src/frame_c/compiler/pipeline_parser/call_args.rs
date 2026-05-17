@@ -559,7 +559,10 @@ fn resolve_named(
     // group. We also check the group: a `$(x=10)` arg can only target
     // a declared state param named `x`, etc.
     for arg in parsed {
-        let name = arg.name.as_deref().unwrap();
+        let name = arg
+            .name
+            .as_deref()
+            .expect("resolve_named: caller guarantees all args have names (same precondition as the loop above)");
         let declared = sys_params.iter().find(|p| p.name == name);
         match declared {
             None => {

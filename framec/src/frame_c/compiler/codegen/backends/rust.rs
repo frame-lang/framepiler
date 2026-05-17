@@ -640,7 +640,10 @@ impl LanguageBackend for RustBackend {
             }
 
             CodegenNode::StateContext { state_name } => {
-                format!("self._state_context.get(\"{}\").unwrap()", state_name)
+                format!(
+                    "self._state_context.get(\"{}\").expect(\"invariant: state context populated on entry to {}\")",
+                    state_name, state_name
+                )
             }
 
             CodegenNode::SendEvent { event, args } => {

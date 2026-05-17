@@ -293,8 +293,9 @@ pub fn scan_native_regions<S: SyntaxSkipper>(
             // If the string contains interpolation expressions, scan
             // them for Frame constructs while skipping string content.
             _ if skipper.string_interp_regions(bytes, i, end).is_some() => {
-                let (str_end, interp_regions) =
-                    skipper.string_interp_regions(bytes, i, end).unwrap();
+                let (str_end, interp_regions) = skipper
+                    .string_interp_regions(bytes, i, end)
+                    .expect("match guard verified is_some() one line above");
                 if interp_regions.is_empty() {
                     // No interpolation regions — skip entire string
                     i = str_end;
