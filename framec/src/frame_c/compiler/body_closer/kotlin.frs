@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Dogfooded body closer — Kotlin language brace matcher.
 // Kotlin has the same syntax as Java for strings, chars, and comments,

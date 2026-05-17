@@ -1,8 +1,8 @@
 
-// Output Block Lexer â Frame state machine.
+// Output Block Lexer — Frame state machine.
 //
 // EXHAUSTIVE tokenizer: every byte of input maps to exactly one token.
-// No gaps â the parser can reconstruct complete output from the token stream.
+// No gaps — the parser can reconstruct complete output from the token stream.
 //
 // Token kinds:
 //   1=IF, 2=ELSEIF, 3=ELSE, 4=WHILE, 5=FOR,
@@ -11,49 +11,57 @@
 //
 // Invariant: sum of (token_end - token_start) == input length.
 
+#[derive(Clone, Debug)]
+#[allow(dead_code, non_camel_case_types)]
+enum OutputBlockLexerFsmFrameEvent {
+    DoLex {  },
+    FrameEnter { args: Vec<String> },
+    FrameExit { args: Vec<String> },
+}
+
+#[derive(Clone)]
+#[allow(dead_code, non_camel_case_types)]
+enum OutputBlockLexerFsmFrameReturn {
+    _Lifecycle(std::rc::Rc<dyn std::any::Any>),
+}
+
 #[allow(dead_code)]
-struct OutputBlockLexerFsmFrameEvent {
-    message: String,
-    parameters: std::collections::HashMap<String, Box<dyn std::any::Any>>,
-}
-
-impl Clone for OutputBlockLexerFsmFrameEvent {
-    fn clone(&self) -> Self {
-        Self {
-            message: self.message.clone(),
-            parameters: std::collections::HashMap::new(),
-        }
-    }
-}
-
 impl OutputBlockLexerFsmFrameEvent {
-    fn new(message: &str) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: std::collections::HashMap::new(),
+    fn name(&self) -> &'static str {
+        match self {
+            OutputBlockLexerFsmFrameEvent::DoLex { .. } => "do_lex",
+            OutputBlockLexerFsmFrameEvent::FrameEnter { .. } => "$>",
+            OutputBlockLexerFsmFrameEvent::FrameExit { .. } => "<$",
         }
     }
-    fn new_with_params(message: &str, params: &std::collections::HashMap<String, String>) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: params.iter().map(|(k, v)| (k.clone(), Box::new(v.clone()) as Box<dyn std::any::Any>)).collect(),
-        }
-    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum OutputBlockLexerFsmFrameValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    List(Vec<Self>),
+    Dict(std::collections::HashMap<String, Self>),
 }
 
 #[allow(dead_code)]
 struct OutputBlockLexerFsmFrameContext {
-    event: OutputBlockLexerFsmFrameEvent,
-    _return: Option<Box<dyn std::any::Any>>,
-    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    event: std::rc::Rc<OutputBlockLexerFsmFrameEvent>,
+    _return: Option<OutputBlockLexerFsmFrameReturn>,
+    _data: std::collections::HashMap<String, OutputBlockLexerFsmFrameValue>,
+    _transitioned: bool,
 }
 
 impl OutputBlockLexerFsmFrameContext {
-    fn new(event: OutputBlockLexerFsmFrameEvent, default_return: Option<Box<dyn std::any::Any>>) -> Self {
+    fn new(event: std::rc::Rc<OutputBlockLexerFsmFrameEvent>, default_return: Option<OutputBlockLexerFsmFrameReturn>) -> Self {
         Self {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -76,8 +84,8 @@ impl Default for OutputBlockLexerFsmStateContext {
 struct OutputBlockLexerFsmCompartment {
     state: String,
     state_context: OutputBlockLexerFsmStateContext,
-    enter_args: std::collections::HashMap<String, String>,
-    exit_args: std::collections::HashMap<String, String>,
+    enter_args: Vec<String>,
+    exit_args: Vec<String>,
     forward_event: Option<OutputBlockLexerFsmFrameEvent>,
     parent_compartment: Option<Box<OutputBlockLexerFsmCompartment>>,
 }
@@ -92,8 +100,8 @@ impl OutputBlockLexerFsmCompartment {
         Self {
             state: state.to_string(),
             state_context,
-            enter_args: std::collections::HashMap::new(),
-            exit_args: std::collections::HashMap::new(),
+            enter_args: Vec::new(),
+            exit_args: Vec::new(),
             forward_event: None,
             parent_compartment: None,
         }
@@ -118,9 +126,9 @@ pub struct OutputBlockLexerFsm {
 #[allow(non_snake_case)]
 impl OutputBlockLexerFsm {
     pub fn new() -> Self {
-        let mut this = Self {
-            _state_stack: vec![],
-            _context_stack: vec![],
+        Self {
+            _state_stack: Vec::new(),
+            _context_stack: Vec::new(),
             bytes: Vec::new(),
             end: 0,
             comment_char: 0,
@@ -130,52 +138,100 @@ impl OutputBlockLexerFsm {
             token_ends: Vec::new(),
             __compartment: OutputBlockLexerFsmCompartment::new("Init"),
             __next_compartment: None,
-        };
-        let __frame_event = OutputBlockLexerFsmFrameEvent::new("$>");
-        let __ctx = OutputBlockLexerFsmFrameContext::new(__frame_event, None);
-        this._context_stack.push(__ctx);
-        this.__kernel();
-        this._context_stack.pop();
-        this
+        }
     }
 
-    fn __kernel(&mut self) {
-        // Clone event from context stack (needed for borrow checker)
-        let __e = self._context_stack.last().unwrap().event.clone();
-        // Route event to current state
-        self.__router(&__e);
-        // Process any pending transition
+    pub fn __create() -> Self {
+        let mut c = Self::new();
+        c.__compartment = c.__prepareEnter("Init", vec![]);
+        let __e = std::rc::Rc::new(OutputBlockLexerFsmFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = OutputBlockLexerFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c._context_stack.push(__ctx);
+        c.__kernel(&__e);
+        c._context_stack.pop();
+        c
+    }
+
+    fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
+        match leaf {
+            "Init" => &["Init"],
+            "Scanning" => &["Scanning"],
+            _ => &[],
+        }
+    }
+
+    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> OutputBlockLexerFsmCompartment {
+        let chain = self.__hsm_chain(leaf);
+        let mut comp: Option<OutputBlockLexerFsmCompartment> = None;
+        for name in chain.iter() {
+            let mut new_comp = OutputBlockLexerFsmCompartment::new(name);
+            new_comp.enter_args = enter_args.clone();
+            if let Some(parent) = comp.take() {
+                new_comp.parent_compartment = Some(Box::new(parent));
+            }
+            comp = Some(new_comp);
+        }
+        comp.expect("chain must contain at least the leaf state")
+    }
+
+    fn __prepareExit(&mut self, exit_args: Vec<String>) {
+        self.__compartment.exit_args = exit_args.clone();
+        let mut cursor = self.__compartment.parent_compartment.as_deref_mut();
+        while let Some(c) = cursor {
+            c.exit_args = exit_args.clone();
+            cursor = c.parent_compartment.as_deref_mut();
+        }
+    }
+
+    fn __kernel(&mut self, __e: &std::rc::Rc<OutputBlockLexerFsmFrameEvent>) {
+        // Route event to current state.
+        self.__router(__e);
+        // Drain any transitions queued by the handler.
         while self.__next_compartment.is_some() {
             let next_compartment = self.__next_compartment.take().unwrap();
-            // Exit current state (with exit_args from current compartment)
-            let exit_event = OutputBlockLexerFsmFrameEvent::new_with_params("<$", &self.__compartment.exit_args);
+            // Exit the current (leaf) state.
+            let exit_args = self.__compartment.exit_args.clone();
+            let exit_event = std::rc::Rc::new(OutputBlockLexerFsmFrameEvent::FrameExit { args: exit_args });
             self.__router(&exit_event);
-            // Switch to new compartment
+            // Switch to the new compartment.
             self.__compartment = next_compartment;
-            // Enter new state (or forward event)
-            if self.__compartment.forward_event.is_none() {
-                let enter_event = OutputBlockLexerFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-                self.__router(&enter_event);
-            } else {
-                // Forward event to new state
-                let forward_event = self.__compartment.forward_event.take().unwrap();
-                if forward_event.message == "$>" {
-                    // Forwarding enter event - just send it
-                    self.__router(&forward_event);
-                } else {
-                    // Forwarding other event - send $> first, then forward
-                    let enter_event = OutputBlockLexerFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
+            // Three-branch forward-event handling (RFC-0025 Track B.1: forward
+            // event is matched on enum variant; $> recognition is now a
+            // structural match, not a string compare).
+            match self.__compartment.forward_event.take() {
+                None => {
+                    // No forwarded event — synthesize a fresh $>.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(OutputBlockLexerFsmFrameEvent::FrameEnter { args: enter_args });
                     self.__router(&enter_event);
-                    self.__router(&forward_event);
                 }
+                Some(fwd) if matches!(fwd, OutputBlockLexerFsmFrameEvent::FrameEnter { .. }) => {
+                    // Forwarded event IS $> — dispatch directly so the
+                    // destination's $> handler receives the caller's payload.
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+                Some(fwd) => {
+                    // Forwarded event is not $> — initialize the destination
+                    // with a fresh $>, then dispatch the forward.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(OutputBlockLexerFsmFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+            }
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
             }
         }
     }
 
-    fn __router(&mut self, __e: &OutputBlockLexerFsmFrameEvent) {
+    fn __router(&mut self, __e: &std::rc::Rc<OutputBlockLexerFsmFrameEvent>) {
+        let __ev: &OutputBlockLexerFsmFrameEvent = &**__e;
         match self.__compartment.state.as_str() {
-            "Init" => self._state_Init(__e),
-            "Scanning" => self._state_Scanning(__e),
+            "Init" => self._state_Init(__ev),
+            "Scanning" => self._state_Scanning(__ev),
             _ => {}
         }
     }
@@ -184,52 +240,35 @@ impl OutputBlockLexerFsm {
         self.__next_compartment = Some(next_compartment);
     }
 
-    fn __push_transition(&mut self, new_compartment: OutputBlockLexerFsmCompartment) {
-        // Exit current state (old compartment still in place for routing)
-        let exit_event = OutputBlockLexerFsmFrameEvent::new_with_params("<$", &self.__compartment.exit_args);
-        self.__router(&exit_event);
-        // Swap: old compartment moves to stack, new takes its place
-        let old = std::mem::replace(&mut self.__compartment, new_compartment);
-        self._state_stack.push(old);
-        // Enter new state (or forward event) — matches kernel logic
-        if self.__compartment.forward_event.is_none() {
-            let enter_event = OutputBlockLexerFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-            self.__router(&enter_event);
-        } else {
-            let forward_event = self.__compartment.forward_event.take().unwrap();
-            if forward_event.message == "$>" {
-                self.__router(&forward_event);
-            } else {
-                let enter_event = OutputBlockLexerFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-                self.__router(&enter_event);
-                self.__router(&forward_event);
-            }
-        }
-    }
-
     pub fn do_lex(&mut self) {
-        let mut __e = OutputBlockLexerFsmFrameEvent::new("do_lex");
-        let mut __ctx = OutputBlockLexerFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(OutputBlockLexerFsmFrameEvent::DoLex {});
+        let mut __ctx = OutputBlockLexerFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
-    fn _state_Scanning(&mut self, __e: &OutputBlockLexerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_Scanning_enter(__e); }
-            _ => {}
-        }
-    }
-
     fn _state_Init(&mut self, __e: &OutputBlockLexerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "do_lex" => { self._s_Init_do_lex(__e); }
+        match __e {
+            OutputBlockLexerFsmFrameEvent::DoLex { .. } => { self._s_Init_hdl_user_do_lex(__e); }
             _ => {}
         }
     }
 
-    fn _s_Scanning_enter(&mut self, __e: &OutputBlockLexerFsmFrameEvent) {
+    fn _state_Scanning(&mut self, __e: &OutputBlockLexerFsmFrameEvent) {
+        match __e {
+            OutputBlockLexerFsmFrameEvent::FrameEnter { .. } => { self._s_Scanning_hdl_frame_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _s_Init_hdl_user_do_lex(&mut self, __e: &OutputBlockLexerFsmFrameEvent) {
+        let mut __compartment = self.__prepareEnter("Scanning", vec![]);
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Scanning_hdl_frame_enter(&mut self, __e: &OutputBlockLexerFsmFrameEvent) {
         let bytes = &self.bytes;
         let n = self.end;
         let mut i: usize = 0;
@@ -337,12 +376,5 @@ impl OutputBlockLexerFsm {
         if text_start >= 0 {
             self.token_kinds.push(11); self.token_starts.push(text_start as usize); self.token_ends.push(n);
         }
-    }
-
-    fn _s_Init_do_lex(&mut self, __e: &OutputBlockLexerFsmFrameEvent) {
-        let mut __compartment = OutputBlockLexerFsmCompartment::new("Scanning");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
     }
 }

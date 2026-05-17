@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Erlang scope scanner — detects `fun(...) -> ... end` closures.
 //

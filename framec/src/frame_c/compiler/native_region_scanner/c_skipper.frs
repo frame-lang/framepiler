@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // C language syntax skipper — Frame-generated state machine.
 // Delegates to shared helpers from unified.rs for all scanning logic.

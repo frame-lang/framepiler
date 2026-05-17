@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Dogfooded body closer — JavaScript language brace matcher.
 // JavaScript has identical syntax to TypeScript for brace/string/comment matching.

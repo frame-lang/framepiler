@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Dogfooded body closer — Go language brace matcher.
 // Go has the same syntax as Java for braces, double-quoted strings,

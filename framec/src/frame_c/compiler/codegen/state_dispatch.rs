@@ -428,7 +428,26 @@ pub(super) fn emit_handler_return_init(
                 )
             }
         }
-        TargetLanguage::Rust => format!("{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some(Box::new({}) as Box<dyn std::any::Any>); }}\n", indent, init_expr),
+        TargetLanguage::Rust => {
+            // RFC-0025 Track B.2: handler default-return inits the
+            // typed `<System>FrameReturn::<Variant>(value)` variant.
+            // Use _Lifecycle escape hatch for $> / $< handlers.
+            let payload = if handler.event == "$>" || handler.event == "$<" {
+                format!(
+                    "{}FrameReturn::_Lifecycle(std::rc::Rc::new({}))",
+                    system_name, init_expr
+                )
+            } else {
+                let variant = crate::frame_c::compiler::codegen::runtime::pascal_case_variant(
+                    &handler.event,
+                );
+                format!("{}FrameReturn::{}({})", system_name, variant, init_expr)
+            };
+            format!(
+                "{}if let Some(ctx) = self._context_stack.last_mut() {{ ctx._return = Some({}); }}\n",
+                indent, payload
+            )
+        }
         TargetLanguage::Cpp => format!("{}_context_stack.back()._return = std::any({});\n", indent, init_expr),
         TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._return = {};\n", indent, init_expr),
         TargetLanguage::Kotlin => format!("{}_context_stack[_context_stack.size - 1]._return = {}\n", indent, init_expr),

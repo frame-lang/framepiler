@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Dogfooded body closer — Java language brace matcher.
 // Java has the same syntax as C for strings, chars, and comments.

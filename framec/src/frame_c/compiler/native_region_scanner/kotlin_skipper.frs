@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Kotlin syntax skipper — Frame-generated state machine.
 // Delegates to shared helpers; adds Kotlin raw strings """..."""

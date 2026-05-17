@@ -33,46 +33,52 @@
 //   line_is_blank, next_line_start, read_line_text, line_starts_with,
 //   strip_extends_prefix
 
+#[derive(Clone, Debug)]
+#[allow(dead_code, non_camel_case_types)]
+enum GDScriptMultiSysAssemblerFsmFrameEvent {
+    WrapInner { name: String },
+    FrameEnter { args: Vec<String> },
+    FrameExit { args: Vec<String> },
+}
+
+#[derive(Clone)]
+#[allow(dead_code, non_camel_case_types)]
+enum GDScriptMultiSysAssemblerFsmFrameReturn {
+    _Lifecycle(std::rc::Rc<dyn std::any::Any>),
+}
+
 #[allow(dead_code)]
-struct GDScriptMultiSysAssemblerFsmFrameEvent {
-    message: String,
-    parameters: Vec<Box<dyn std::any::Any>>,
-}
-
-impl Clone for GDScriptMultiSysAssemblerFsmFrameEvent {
-    fn clone(&self) -> Self {
-        Self {
-            message: self.message.clone(),
-            parameters: Vec::new(),
-        }
-    }
-}
-
 impl GDScriptMultiSysAssemblerFsmFrameEvent {
-    fn new(message: &str) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: Vec::new(),
+    fn name(&self) -> &'static str {
+        match self {
+            GDScriptMultiSysAssemblerFsmFrameEvent::WrapInner { .. } => "wrap_inner",
+            GDScriptMultiSysAssemblerFsmFrameEvent::FrameEnter { .. } => "$>",
+            GDScriptMultiSysAssemblerFsmFrameEvent::FrameExit { .. } => "<$",
         }
     }
-    fn new_with_params(message: &str, params: &[String]) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: params.iter().map(|v| Box::new(v.clone()) as Box<dyn std::any::Any>).collect(),
-        }
-    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum GDScriptMultiSysAssemblerFsmFrameValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    List(Vec<Self>),
+    Dict(std::collections::HashMap<String, Self>),
 }
 
 #[allow(dead_code)]
 struct GDScriptMultiSysAssemblerFsmFrameContext {
-    event: GDScriptMultiSysAssemblerFsmFrameEvent,
-    _return: Option<Box<dyn std::any::Any>>,
-    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    event: std::rc::Rc<GDScriptMultiSysAssemblerFsmFrameEvent>,
+    _return: Option<GDScriptMultiSysAssemblerFsmFrameReturn>,
+    _data: std::collections::HashMap<String, GDScriptMultiSysAssemblerFsmFrameValue>,
     _transitioned: bool,
 }
 
 impl GDScriptMultiSysAssemblerFsmFrameContext {
-    fn new(event: GDScriptMultiSysAssemblerFsmFrameEvent, default_return: Option<Box<dyn std::any::Any>>) -> Self {
+    fn new(event: std::rc::Rc<GDScriptMultiSysAssemblerFsmFrameEvent>, default_return: Option<GDScriptMultiSysAssemblerFsmFrameReturn>) -> Self {
         Self {
             event,
             _return: default_return,
@@ -143,7 +149,7 @@ pub struct GDScriptMultiSysAssemblerFsm {
 #[allow(non_snake_case)]
 impl GDScriptMultiSysAssemblerFsm {
     pub fn new() -> Self {
-        let mut this = Self {
+        Self {
             _state_stack: Vec::new(),
             _context_stack: Vec::new(),
             bytes: Vec::new(),
@@ -152,15 +158,18 @@ impl GDScriptMultiSysAssemblerFsm {
             out: String::new(),
             __compartment: GDScriptMultiSysAssemblerFsmCompartment::new("Init"),
             __next_compartment: None,
-        };
-        this.__compartment = this.__prepareEnter("Init", vec![]);
-        let __frame_event = GDScriptMultiSysAssemblerFsmFrameEvent::new_with_params("$>", &this.__compartment.enter_args);
-        let __ctx = GDScriptMultiSysAssemblerFsmFrameContext::new(__frame_event, None);
-        this._context_stack.push(__ctx);
-        this.__fire_enter_cascade();
-        this.__process_transition_loop();
-        this._context_stack.pop();
-        this
+        }
+    }
+
+    pub fn __create() -> Self {
+        let mut c = Self::new();
+        c.__compartment = c.__prepareEnter("Init", vec![]);
+        let __e = std::rc::Rc::new(GDScriptMultiSysAssemblerFsmFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = GDScriptMultiSysAssemblerFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c._context_stack.push(__ctx);
+        c.__kernel(&__e);
+        c._context_stack.pop();
+        c
     }
 
     fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
@@ -196,79 +205,57 @@ impl GDScriptMultiSysAssemblerFsm {
         }
     }
 
-    fn __route_to_state(&mut self, state_name: &str, __e: &GDScriptMultiSysAssemblerFsmFrameEvent) {
-        match state_name {
-            "Init" => self._state_Init(__e),
-            "SkipLeading" => self._state_SkipLeading(__e),
-            "ReadExtends" => self._state_ReadExtends(__e),
-            "IndentBody" => self._state_IndentBody(__e),
-            _ => {}
-        }
-    }
-
-    fn __fire_exit_cascade(&mut self) {
-        let mut layers: Vec<(String, Vec<String>)> = Vec::new();
-        {
-            let mut cursor = Some(&self.__compartment);
-            while let Some(c) = cursor {
-                layers.push((c.state.clone(), c.exit_args.clone()));
-                cursor = c.parent_compartment.as_deref();
-            }
-        }
-        for (state_name, args) in &layers {
-            let exit_event = GDScriptMultiSysAssemblerFsmFrameEvent::new_with_params("<$", args);
-            self.__route_to_state(state_name, &exit_event);
-        }
-    }
-
-    fn __fire_enter_cascade(&mut self) {
-        let mut layers: Vec<(String, Vec<String>)> = Vec::new();
-        {
-            let mut cursor = Some(&self.__compartment);
-            while let Some(c) = cursor {
-                layers.push((c.state.clone(), c.enter_args.clone()));
-                cursor = c.parent_compartment.as_deref();
-            }
-        }
-        for (state_name, args) in layers.iter().rev() {
-            let enter_event = GDScriptMultiSysAssemblerFsmFrameEvent::new_with_params("$>", args);
-            self.__route_to_state(state_name, &enter_event);
-        }
-    }
-
-    fn __process_transition_loop(&mut self) {
+    fn __kernel(&mut self, __e: &std::rc::Rc<GDScriptMultiSysAssemblerFsmFrameEvent>) {
+        // Route event to current state.
+        self.__router(__e);
+        // Drain any transitions queued by the handler.
         while self.__next_compartment.is_some() {
             let next_compartment = self.__next_compartment.take().unwrap();
-            self.__fire_exit_cascade();
+            // Exit the current (leaf) state.
+            let exit_args = self.__compartment.exit_args.clone();
+            let exit_event = std::rc::Rc::new(GDScriptMultiSysAssemblerFsmFrameEvent::FrameExit { args: exit_args });
+            self.__router(&exit_event);
+            // Switch to the new compartment.
             self.__compartment = next_compartment;
-            if self.__compartment.forward_event.is_none() {
-                self.__fire_enter_cascade();
-            } else {
-                let forward_event = self.__compartment.forward_event.take().unwrap();
-                self.__fire_enter_cascade();
-                if forward_event.message != "$>" {
-                    self.__router(&forward_event);
+            // Three-branch forward-event handling (RFC-0025 Track B.1: forward
+            // event is matched on enum variant; $> recognition is now a
+            // structural match, not a string compare).
+            match self.__compartment.forward_event.take() {
+                None => {
+                    // No forwarded event — synthesize a fresh $>.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(GDScriptMultiSysAssemblerFsmFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                }
+                Some(fwd) if matches!(fwd, GDScriptMultiSysAssemblerFsmFrameEvent::FrameEnter { .. }) => {
+                    // Forwarded event IS $> — dispatch directly so the
+                    // destination's $> handler receives the caller's payload.
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+                Some(fwd) => {
+                    // Forwarded event is not $> — initialize the destination
+                    // with a fresh $>, then dispatch the forward.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(GDScriptMultiSysAssemblerFsmFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
                 }
             }
-            let _ = GDScriptMultiSysAssemblerFsmFrameEvent::new("$>");  // satisfy unused-import / type checks
             for ctx in self._context_stack.iter_mut() {
                 ctx._transitioned = true;
             }
         }
     }
 
-    fn __kernel(&mut self) {
-        let __e = self._context_stack.last().unwrap().event.clone();
-        self.__router(&__e);
-        self.__process_transition_loop();
-    }
-
-    fn __router(&mut self, __e: &GDScriptMultiSysAssemblerFsmFrameEvent) {
+    fn __router(&mut self, __e: &std::rc::Rc<GDScriptMultiSysAssemblerFsmFrameEvent>) {
+        let __ev: &GDScriptMultiSysAssemblerFsmFrameEvent = &**__e;
         match self.__compartment.state.as_str() {
-            "Init" => self._state_Init(__e),
-            "SkipLeading" => self._state_SkipLeading(__e),
-            "ReadExtends" => self._state_ReadExtends(__e),
-            "IndentBody" => self._state_IndentBody(__e),
+            "Init" => self._state_Init(__ev),
+            "SkipLeading" => self._state_SkipLeading(__ev),
+            "ReadExtends" => self._state_ReadExtends(__ev),
+            "IndentBody" => self._state_IndentBody(__ev),
             _ => {}
         }
     }
@@ -278,20 +265,17 @@ impl GDScriptMultiSysAssemblerFsm {
     }
 
     pub fn wrap_inner(&mut self, name: String) {
-        let mut __e = GDScriptMultiSysAssemblerFsmFrameEvent::new("wrap_inner");
-        __e.parameters = vec![Box::new(name.clone()) as Box<dyn std::any::Any>];
-        let mut __ctx = GDScriptMultiSysAssemblerFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(GDScriptMultiSysAssemblerFsmFrameEvent::WrapInner { name: name.clone() });
+        let mut __ctx = GDScriptMultiSysAssemblerFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
     fn _state_Init(&mut self, __e: &GDScriptMultiSysAssemblerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "wrap_inner" => {
-                let __ctx_event = &self._context_stack.last().unwrap().event;
-                let name: String = __ctx_event.parameters.get(0).and_then(|v| v.downcast_ref::<String>()).cloned().unwrap_or_default();
-                self._s_Init_hdl_user_wrap_inner(__e, name);
+        match __e {
+            GDScriptMultiSysAssemblerFsmFrameEvent::WrapInner { name, .. } => {
+                self._s_Init_hdl_user_wrap_inner(__e, name.clone());
             }
             _ => {}
         }
@@ -301,8 +285,8 @@ impl GDScriptMultiSysAssemblerFsm {
     // codegen often emits a blank line before `extends`; the
     // wrapped output should start at the actual content.
     fn _state_SkipLeading(&mut self, __e: &GDScriptMultiSysAssemblerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_SkipLeading_hdl_frame_enter(__e); }
+        match __e {
+            GDScriptMultiSysAssemblerFsmFrameEvent::FrameEnter { .. } => { self._s_SkipLeading_hdl_frame_enter(__e); }
             _ => {}
         }
     }
@@ -312,8 +296,8 @@ impl GDScriptMultiSysAssemblerFsm {
     // module-scope path that reaches this FSM). Emit the wrapper
     // header, then skip any blanks before the body.
     fn _state_ReadExtends(&mut self, __e: &GDScriptMultiSysAssemblerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_ReadExtends_hdl_frame_enter(__e); }
+        match __e {
+            GDScriptMultiSysAssemblerFsmFrameEvent::FrameEnter { .. } => { self._s_ReadExtends_hdl_frame_enter(__e); }
             _ => {}
         }
     }
@@ -323,8 +307,8 @@ impl GDScriptMultiSysAssemblerFsm {
     // verbatim — the assembler relies on visual blank-line
     // separators to keep diffs readable.
     fn _state_IndentBody(&mut self, __e: &GDScriptMultiSysAssemblerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_IndentBody_hdl_frame_enter(__e); }
+        match __e {
+            GDScriptMultiSysAssemblerFsmFrameEvent::FrameEnter { .. } => { self._s_IndentBody_hdl_frame_enter(__e); }
             _ => {}
         }
     }

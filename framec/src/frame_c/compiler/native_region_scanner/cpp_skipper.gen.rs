@@ -1,5 +1,5 @@
 
-// C++ syntax skipper â Frame-generated state machine.
+// C++ syntax skipper — Frame-generated state machine.
 // Delegates to shared helpers; adds C++ raw strings R"delim(...)delim"
 //
 // Helpers used:
@@ -7,49 +7,63 @@
 //   find_line_end_c_like, balanced_paren_end_c_like
 // Inline: R"delim(...)delim" raw strings (checked before skip_simple_string)
 
+#[derive(Clone, Debug)]
+#[allow(dead_code, non_camel_case_types)]
+enum CppSyntaxSkipperFsmFrameEvent {
+    DoSkipComment {  },
+    DoSkipString {  },
+    DoFindLineEnd {  },
+    DoBalancedParenEnd {  },
+    FrameEnter { args: Vec<String> },
+    FrameExit { args: Vec<String> },
+}
+
+#[derive(Clone)]
+#[allow(dead_code, non_camel_case_types)]
+enum CppSyntaxSkipperFsmFrameReturn {
+    _Lifecycle(std::rc::Rc<dyn std::any::Any>),
+}
+
 #[allow(dead_code)]
-struct CppSyntaxSkipperFsmFrameEvent {
-    message: String,
-    parameters: std::collections::HashMap<String, Box<dyn std::any::Any>>,
-}
-
-impl Clone for CppSyntaxSkipperFsmFrameEvent {
-    fn clone(&self) -> Self {
-        Self {
-            message: self.message.clone(),
-            parameters: std::collections::HashMap::new(),
-        }
-    }
-}
-
 impl CppSyntaxSkipperFsmFrameEvent {
-    fn new(message: &str) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: std::collections::HashMap::new(),
+    fn name(&self) -> &'static str {
+        match self {
+            CppSyntaxSkipperFsmFrameEvent::DoSkipComment { .. } => "do_skip_comment",
+            CppSyntaxSkipperFsmFrameEvent::DoSkipString { .. } => "do_skip_string",
+            CppSyntaxSkipperFsmFrameEvent::DoFindLineEnd { .. } => "do_find_line_end",
+            CppSyntaxSkipperFsmFrameEvent::DoBalancedParenEnd { .. } => "do_balanced_paren_end",
+            CppSyntaxSkipperFsmFrameEvent::FrameEnter { .. } => "$>",
+            CppSyntaxSkipperFsmFrameEvent::FrameExit { .. } => "<$",
         }
     }
-    fn new_with_params(message: &str, params: &std::collections::HashMap<String, String>) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: params.iter().map(|(k, v)| (k.clone(), Box::new(v.clone()) as Box<dyn std::any::Any>)).collect(),
-        }
-    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum CppSyntaxSkipperFsmFrameValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    List(Vec<Self>),
+    Dict(std::collections::HashMap<String, Self>),
 }
 
 #[allow(dead_code)]
 struct CppSyntaxSkipperFsmFrameContext {
-    event: CppSyntaxSkipperFsmFrameEvent,
-    _return: Option<Box<dyn std::any::Any>>,
-    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    event: std::rc::Rc<CppSyntaxSkipperFsmFrameEvent>,
+    _return: Option<CppSyntaxSkipperFsmFrameReturn>,
+    _data: std::collections::HashMap<String, CppSyntaxSkipperFsmFrameValue>,
+    _transitioned: bool,
 }
 
 impl CppSyntaxSkipperFsmFrameContext {
-    fn new(event: CppSyntaxSkipperFsmFrameEvent, default_return: Option<Box<dyn std::any::Any>>) -> Self {
+    fn new(event: std::rc::Rc<CppSyntaxSkipperFsmFrameEvent>, default_return: Option<CppSyntaxSkipperFsmFrameReturn>) -> Self {
         Self {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -75,8 +89,8 @@ impl Default for CppSyntaxSkipperFsmStateContext {
 struct CppSyntaxSkipperFsmCompartment {
     state: String,
     state_context: CppSyntaxSkipperFsmStateContext,
-    enter_args: std::collections::HashMap<String, String>,
-    exit_args: std::collections::HashMap<String, String>,
+    enter_args: Vec<String>,
+    exit_args: Vec<String>,
     forward_event: Option<CppSyntaxSkipperFsmFrameEvent>,
     parent_compartment: Option<Box<CppSyntaxSkipperFsmCompartment>>,
 }
@@ -94,8 +108,8 @@ impl CppSyntaxSkipperFsmCompartment {
         Self {
             state: state.to_string(),
             state_context,
-            enter_args: std::collections::HashMap::new(),
-            exit_args: std::collections::HashMap::new(),
+            enter_args: Vec::new(),
+            exit_args: Vec::new(),
             forward_event: None,
             parent_compartment: None,
         }
@@ -118,9 +132,9 @@ pub struct CppSyntaxSkipperFsm {
 #[allow(non_snake_case)]
 impl CppSyntaxSkipperFsm {
     pub fn new() -> Self {
-        let mut this = Self {
-            _state_stack: vec![],
-            _context_stack: vec![],
+        Self {
+            _state_stack: Vec::new(),
+            _context_stack: Vec::new(),
             bytes: Vec::new(),
             pos: 0,
             end: 0,
@@ -128,55 +142,106 @@ impl CppSyntaxSkipperFsm {
             success: 1,
             __compartment: CppSyntaxSkipperFsmCompartment::new("Init"),
             __next_compartment: None,
-        };
-        let __frame_event = CppSyntaxSkipperFsmFrameEvent::new("$>");
-        let __ctx = CppSyntaxSkipperFsmFrameContext::new(__frame_event, None);
-        this._context_stack.push(__ctx);
-        this.__kernel();
-        this._context_stack.pop();
-        this
+        }
     }
 
-    fn __kernel(&mut self) {
-        // Clone event from context stack (needed for borrow checker)
-        let __e = self._context_stack.last().unwrap().event.clone();
-        // Route event to current state
-        self.__router(&__e);
-        // Process any pending transition
+    pub fn __create() -> Self {
+        let mut c = Self::new();
+        c.__compartment = c.__prepareEnter("Init", vec![]);
+        let __e = std::rc::Rc::new(CppSyntaxSkipperFsmFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = CppSyntaxSkipperFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c._context_stack.push(__ctx);
+        c.__kernel(&__e);
+        c._context_stack.pop();
+        c
+    }
+
+    fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
+        match leaf {
+            "Init" => &["Init"],
+            "SkipComment" => &["SkipComment"],
+            "SkipString" => &["SkipString"],
+            "FindLineEnd" => &["FindLineEnd"],
+            "BalancedParenEnd" => &["BalancedParenEnd"],
+            _ => &[],
+        }
+    }
+
+    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> CppSyntaxSkipperFsmCompartment {
+        let chain = self.__hsm_chain(leaf);
+        let mut comp: Option<CppSyntaxSkipperFsmCompartment> = None;
+        for name in chain.iter() {
+            let mut new_comp = CppSyntaxSkipperFsmCompartment::new(name);
+            new_comp.enter_args = enter_args.clone();
+            if let Some(parent) = comp.take() {
+                new_comp.parent_compartment = Some(Box::new(parent));
+            }
+            comp = Some(new_comp);
+        }
+        comp.expect("chain must contain at least the leaf state")
+    }
+
+    fn __prepareExit(&mut self, exit_args: Vec<String>) {
+        self.__compartment.exit_args = exit_args.clone();
+        let mut cursor = self.__compartment.parent_compartment.as_deref_mut();
+        while let Some(c) = cursor {
+            c.exit_args = exit_args.clone();
+            cursor = c.parent_compartment.as_deref_mut();
+        }
+    }
+
+    fn __kernel(&mut self, __e: &std::rc::Rc<CppSyntaxSkipperFsmFrameEvent>) {
+        // Route event to current state.
+        self.__router(__e);
+        // Drain any transitions queued by the handler.
         while self.__next_compartment.is_some() {
             let next_compartment = self.__next_compartment.take().unwrap();
-            // Exit current state (with exit_args from current compartment)
-            let exit_event = CppSyntaxSkipperFsmFrameEvent::new_with_params("<$", &self.__compartment.exit_args);
+            // Exit the current (leaf) state.
+            let exit_args = self.__compartment.exit_args.clone();
+            let exit_event = std::rc::Rc::new(CppSyntaxSkipperFsmFrameEvent::FrameExit { args: exit_args });
             self.__router(&exit_event);
-            // Switch to new compartment
+            // Switch to the new compartment.
             self.__compartment = next_compartment;
-            // Enter new state (or forward event)
-            if self.__compartment.forward_event.is_none() {
-                let enter_event = CppSyntaxSkipperFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-                self.__router(&enter_event);
-            } else {
-                // Forward event to new state
-                let forward_event = self.__compartment.forward_event.take().unwrap();
-                if forward_event.message == "$>" {
-                    // Forwarding enter event - just send it
-                    self.__router(&forward_event);
-                } else {
-                    // Forwarding other event - send $> first, then forward
-                    let enter_event = CppSyntaxSkipperFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
+            // Three-branch forward-event handling (RFC-0025 Track B.1: forward
+            // event is matched on enum variant; $> recognition is now a
+            // structural match, not a string compare).
+            match self.__compartment.forward_event.take() {
+                None => {
+                    // No forwarded event — synthesize a fresh $>.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(CppSyntaxSkipperFsmFrameEvent::FrameEnter { args: enter_args });
                     self.__router(&enter_event);
-                    self.__router(&forward_event);
                 }
+                Some(fwd) if matches!(fwd, CppSyntaxSkipperFsmFrameEvent::FrameEnter { .. }) => {
+                    // Forwarded event IS $> — dispatch directly so the
+                    // destination's $> handler receives the caller's payload.
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+                Some(fwd) => {
+                    // Forwarded event is not $> — initialize the destination
+                    // with a fresh $>, then dispatch the forward.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(CppSyntaxSkipperFsmFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+            }
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
             }
         }
     }
 
-    fn __router(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+    fn __router(&mut self, __e: &std::rc::Rc<CppSyntaxSkipperFsmFrameEvent>) {
+        let __ev: &CppSyntaxSkipperFsmFrameEvent = &**__e;
         match self.__compartment.state.as_str() {
-            "Init" => self._state_Init(__e),
-            "SkipComment" => self._state_SkipComment(__e),
-            "SkipString" => self._state_SkipString(__e),
-            "FindLineEnd" => self._state_FindLineEnd(__e),
-            "BalancedParenEnd" => self._state_BalancedParenEnd(__e),
+            "Init" => self._state_Init(__ev),
+            "SkipComment" => self._state_SkipComment(__ev),
+            "SkipString" => self._state_SkipString(__ev),
+            "FindLineEnd" => self._state_FindLineEnd(__ev),
+            "BalancedParenEnd" => self._state_BalancedParenEnd(__ev),
             _ => {}
         }
     }
@@ -185,100 +250,101 @@ impl CppSyntaxSkipperFsm {
         self.__next_compartment = Some(next_compartment);
     }
 
-    fn __push_transition(&mut self, new_compartment: CppSyntaxSkipperFsmCompartment) {
-        // Exit current state (old compartment still in place for routing)
-        let exit_event = CppSyntaxSkipperFsmFrameEvent::new_with_params("<$", &self.__compartment.exit_args);
-        self.__router(&exit_event);
-        // Swap: old compartment moves to stack, new takes its place
-        let old = std::mem::replace(&mut self.__compartment, new_compartment);
-        self._state_stack.push(old);
-        // Enter new state (or forward event) — matches kernel logic
-        if self.__compartment.forward_event.is_none() {
-            let enter_event = CppSyntaxSkipperFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-            self.__router(&enter_event);
-        } else {
-            let forward_event = self.__compartment.forward_event.take().unwrap();
-            if forward_event.message == "$>" {
-                self.__router(&forward_event);
-            } else {
-                let enter_event = CppSyntaxSkipperFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-                self.__router(&enter_event);
-                self.__router(&forward_event);
-            }
-        }
-    }
-
     pub fn do_skip_comment(&mut self) {
-        let mut __e = CppSyntaxSkipperFsmFrameEvent::new("do_skip_comment");
-        let mut __ctx = CppSyntaxSkipperFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(CppSyntaxSkipperFsmFrameEvent::DoSkipComment {});
+        let mut __ctx = CppSyntaxSkipperFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
     pub fn do_skip_string(&mut self) {
-        let mut __e = CppSyntaxSkipperFsmFrameEvent::new("do_skip_string");
-        let mut __ctx = CppSyntaxSkipperFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(CppSyntaxSkipperFsmFrameEvent::DoSkipString {});
+        let mut __ctx = CppSyntaxSkipperFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
     pub fn do_find_line_end(&mut self) {
-        let mut __e = CppSyntaxSkipperFsmFrameEvent::new("do_find_line_end");
-        let mut __ctx = CppSyntaxSkipperFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(CppSyntaxSkipperFsmFrameEvent::DoFindLineEnd {});
+        let mut __ctx = CppSyntaxSkipperFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
     pub fn do_balanced_paren_end(&mut self) {
-        let mut __e = CppSyntaxSkipperFsmFrameEvent::new("do_balanced_paren_end");
-        let mut __ctx = CppSyntaxSkipperFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(CppSyntaxSkipperFsmFrameEvent::DoBalancedParenEnd {});
+        let mut __ctx = CppSyntaxSkipperFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
-    fn _state_SkipComment(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_SkipComment_enter(__e); }
-            _ => {}
-        }
-    }
-
-    fn _state_FindLineEnd(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_FindLineEnd_enter(__e); }
-            _ => {}
-        }
-    }
-
     fn _state_Init(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        match __e.message.as_str() {
-            "do_balanced_paren_end" => { self._s_Init_do_balanced_paren_end(__e); }
-            "do_find_line_end" => { self._s_Init_do_find_line_end(__e); }
-            "do_skip_comment" => { self._s_Init_do_skip_comment(__e); }
-            "do_skip_string" => { self._s_Init_do_skip_string(__e); }
+        match __e {
+            CppSyntaxSkipperFsmFrameEvent::DoBalancedParenEnd { .. } => { self._s_Init_hdl_user_do_balanced_paren_end(__e); }
+            CppSyntaxSkipperFsmFrameEvent::DoFindLineEnd { .. } => { self._s_Init_hdl_user_do_find_line_end(__e); }
+            CppSyntaxSkipperFsmFrameEvent::DoSkipComment { .. } => { self._s_Init_hdl_user_do_skip_comment(__e); }
+            CppSyntaxSkipperFsmFrameEvent::DoSkipString { .. } => { self._s_Init_hdl_user_do_skip_string(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_SkipComment(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+        match __e {
+            CppSyntaxSkipperFsmFrameEvent::FrameEnter { .. } => { self._s_SkipComment_hdl_frame_enter(__e); }
             _ => {}
         }
     }
 
     fn _state_SkipString(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_SkipString_enter(__e); }
+        match __e {
+            CppSyntaxSkipperFsmFrameEvent::FrameEnter { .. } => { self._s_SkipString_hdl_frame_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_FindLineEnd(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+        match __e {
+            CppSyntaxSkipperFsmFrameEvent::FrameEnter { .. } => { self._s_FindLineEnd_hdl_frame_enter(__e); }
             _ => {}
         }
     }
 
     fn _state_BalancedParenEnd(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_BalancedParenEnd_enter(__e); }
+        match __e {
+            CppSyntaxSkipperFsmFrameEvent::FrameEnter { .. } => { self._s_BalancedParenEnd_hdl_frame_enter(__e); }
             _ => {}
         }
     }
 
-    fn _s_SkipComment_enter(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+    fn _s_Init_hdl_user_do_balanced_paren_end(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = self.__prepareEnter("BalancedParenEnd", vec![]);
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_hdl_user_do_find_line_end(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = self.__prepareEnter("FindLineEnd", vec![]);
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_hdl_user_do_skip_comment(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = self.__prepareEnter("SkipComment", vec![]);
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_Init_hdl_user_do_skip_string(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+        let mut __compartment = self.__prepareEnter("SkipString", vec![]);
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_SkipComment_hdl_frame_enter(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
         if let Some(j) = skip_line_comment(&self.bytes, self.pos, self.end) {
             self.result_pos = j;
             self.success = 1;
@@ -292,39 +358,7 @@ impl CppSyntaxSkipperFsm {
         self.success = 0;
     }
 
-    fn _s_FindLineEnd_enter(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        self.result_pos = find_line_end_c_like(&self.bytes, self.pos, self.end);
-    }
-
-    fn _s_Init_do_skip_comment(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = CppSyntaxSkipperFsmCompartment::new("SkipComment");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_find_line_end(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = CppSyntaxSkipperFsmCompartment::new("FindLineEnd");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_balanced_paren_end(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = CppSyntaxSkipperFsmCompartment::new("BalancedParenEnd");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_Init_do_skip_string(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
-        let mut __compartment = CppSyntaxSkipperFsmCompartment::new("SkipString");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_SkipString_enter(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+    fn _s_SkipString_hdl_frame_enter(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
         let i = self.pos;
         let end = self.end;
         let bytes = &self.bytes;
@@ -374,7 +408,11 @@ impl CppSyntaxSkipperFsm {
         self.success = 0;
     }
 
-    fn _s_BalancedParenEnd_enter(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+    fn _s_FindLineEnd_hdl_frame_enter(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
+        self.result_pos = find_line_end_c_like(&self.bytes, self.pos, self.end);
+    }
+
+    fn _s_BalancedParenEnd_hdl_frame_enter(&mut self, __e: &CppSyntaxSkipperFsmFrameEvent) {
         if let Some(j) = balanced_paren_end_c_like(&self.bytes, self.pos, self.end) {
             self.result_pos = j;
             self.success = 1;
@@ -383,4 +421,3 @@ impl CppSyntaxSkipperFsm {
         self.success = 0;
     }
 }
-

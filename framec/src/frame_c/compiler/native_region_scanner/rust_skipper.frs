@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Rust syntax skipper — Frame-generated state machine.
 // Delegates to shared helpers where possible; inlines Rust-specific logic.

@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // First dogfooded body closer — C language brace matcher.
 // Generated Rust code replaces the hand-written c.rs implementation.

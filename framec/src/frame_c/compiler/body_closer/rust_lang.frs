@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Dogfooded body closer — Rust language brace matcher.
 // Extends C with nested block comments (/* /* */ */) and raw strings (r#"..."#).

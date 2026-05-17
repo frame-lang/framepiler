@@ -1,5 +1,5 @@
 
-// Erlang scope scanner â detects `fun(...) -> ... end` closures.
+// Erlang scope scanner — detects `fun(...) -> ... end` closures.
 //
 // Erlang reuses `end` to close: fun, case, if, receive, begin, try.
 // This FSM tracks a depth counter for all block-opening keywords so that
@@ -10,52 +10,60 @@
 // Usage: set bytes/pos/end, call do_scan(). On success, result_pos
 // points to the byte after the matching `end`.
 //
-// Does NOT match `fun Module:Function/Arity` (function references â
+// Does NOT match `fun Module:Function/Arity` (function references —
 // no closure scope, safe for Frame statements).
 
+#[derive(Clone, Debug)]
+#[allow(dead_code, non_camel_case_types)]
+enum ErlangScopeScannerFsmFrameEvent {
+    DoScan {  },
+    FrameEnter { args: Vec<String> },
+    FrameExit { args: Vec<String> },
+}
+
+#[derive(Clone)]
+#[allow(dead_code, non_camel_case_types)]
+enum ErlangScopeScannerFsmFrameReturn {
+    _Lifecycle(std::rc::Rc<dyn std::any::Any>),
+}
+
 #[allow(dead_code)]
-struct ErlangScopeScannerFsmFrameEvent {
-    message: String,
-    parameters: std::collections::HashMap<String, Box<dyn std::any::Any>>,
-}
-
-impl Clone for ErlangScopeScannerFsmFrameEvent {
-    fn clone(&self) -> Self {
-        Self {
-            message: self.message.clone(),
-            parameters: std::collections::HashMap::new(),
-        }
-    }
-}
-
 impl ErlangScopeScannerFsmFrameEvent {
-    fn new(message: &str) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: std::collections::HashMap::new(),
+    fn name(&self) -> &'static str {
+        match self {
+            ErlangScopeScannerFsmFrameEvent::DoScan { .. } => "do_scan",
+            ErlangScopeScannerFsmFrameEvent::FrameEnter { .. } => "$>",
+            ErlangScopeScannerFsmFrameEvent::FrameExit { .. } => "<$",
         }
     }
-    fn new_with_params(message: &str, params: &std::collections::HashMap<String, String>) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: params.iter().map(|(k, v)| (k.clone(), Box::new(v.clone()) as Box<dyn std::any::Any>)).collect(),
-        }
-    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum ErlangScopeScannerFsmFrameValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    List(Vec<Self>),
+    Dict(std::collections::HashMap<String, Self>),
 }
 
 #[allow(dead_code)]
 struct ErlangScopeScannerFsmFrameContext {
-    event: ErlangScopeScannerFsmFrameEvent,
-    _return: Option<Box<dyn std::any::Any>>,
-    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    event: std::rc::Rc<ErlangScopeScannerFsmFrameEvent>,
+    _return: Option<ErlangScopeScannerFsmFrameReturn>,
+    _data: std::collections::HashMap<String, ErlangScopeScannerFsmFrameValue>,
+    _transitioned: bool,
 }
 
 impl ErlangScopeScannerFsmFrameContext {
-    fn new(event: ErlangScopeScannerFsmFrameEvent, default_return: Option<Box<dyn std::any::Any>>) -> Self {
+    fn new(event: std::rc::Rc<ErlangScopeScannerFsmFrameEvent>, default_return: Option<ErlangScopeScannerFsmFrameReturn>) -> Self {
         Self {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -79,8 +87,8 @@ impl Default for ErlangScopeScannerFsmStateContext {
 struct ErlangScopeScannerFsmCompartment {
     state: String,
     state_context: ErlangScopeScannerFsmStateContext,
-    enter_args: std::collections::HashMap<String, String>,
-    exit_args: std::collections::HashMap<String, String>,
+    enter_args: Vec<String>,
+    exit_args: Vec<String>,
     forward_event: Option<ErlangScopeScannerFsmFrameEvent>,
     parent_compartment: Option<Box<ErlangScopeScannerFsmCompartment>>,
 }
@@ -96,8 +104,8 @@ impl ErlangScopeScannerFsmCompartment {
         Self {
             state: state.to_string(),
             state_context,
-            enter_args: std::collections::HashMap::new(),
-            exit_args: std::collections::HashMap::new(),
+            enter_args: Vec::new(),
+            exit_args: Vec::new(),
             forward_event: None,
             parent_compartment: None,
         }
@@ -121,9 +129,9 @@ pub struct ErlangScopeScannerFsm {
 #[allow(non_snake_case)]
 impl ErlangScopeScannerFsm {
     pub fn new() -> Self {
-        let mut this = Self {
-            _state_stack: vec![],
-            _context_stack: vec![],
+        Self {
+            _state_stack: Vec::new(),
+            _context_stack: Vec::new(),
             bytes: Vec::new(),
             pos: 0,
             end: 0,
@@ -132,53 +140,102 @@ impl ErlangScopeScannerFsm {
             depth: 0,
             __compartment: ErlangScopeScannerFsmCompartment::new("Init"),
             __next_compartment: None,
-        };
-        let __frame_event = ErlangScopeScannerFsmFrameEvent::new("$>");
-        let __ctx = ErlangScopeScannerFsmFrameContext::new(__frame_event, None);
-        this._context_stack.push(__ctx);
-        this.__kernel();
-        this._context_stack.pop();
-        this
+        }
     }
 
-    fn __kernel(&mut self) {
-        // Clone event from context stack (needed for borrow checker)
-        let __e = self._context_stack.last().unwrap().event.clone();
-        // Route event to current state
-        self.__router(&__e);
-        // Process any pending transition
+    pub fn __create() -> Self {
+        let mut c = Self::new();
+        c.__compartment = c.__prepareEnter("Init", vec![]);
+        let __e = std::rc::Rc::new(ErlangScopeScannerFsmFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = ErlangScopeScannerFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c._context_stack.push(__ctx);
+        c.__kernel(&__e);
+        c._context_stack.pop();
+        c
+    }
+
+    fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
+        match leaf {
+            "Init" => &["Init"],
+            "CheckFun" => &["CheckFun"],
+            "ScanBody" => &["ScanBody"],
+            _ => &[],
+        }
+    }
+
+    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> ErlangScopeScannerFsmCompartment {
+        let chain = self.__hsm_chain(leaf);
+        let mut comp: Option<ErlangScopeScannerFsmCompartment> = None;
+        for name in chain.iter() {
+            let mut new_comp = ErlangScopeScannerFsmCompartment::new(name);
+            new_comp.enter_args = enter_args.clone();
+            if let Some(parent) = comp.take() {
+                new_comp.parent_compartment = Some(Box::new(parent));
+            }
+            comp = Some(new_comp);
+        }
+        comp.expect("chain must contain at least the leaf state")
+    }
+
+    fn __prepareExit(&mut self, exit_args: Vec<String>) {
+        self.__compartment.exit_args = exit_args.clone();
+        let mut cursor = self.__compartment.parent_compartment.as_deref_mut();
+        while let Some(c) = cursor {
+            c.exit_args = exit_args.clone();
+            cursor = c.parent_compartment.as_deref_mut();
+        }
+    }
+
+    fn __kernel(&mut self, __e: &std::rc::Rc<ErlangScopeScannerFsmFrameEvent>) {
+        // Route event to current state.
+        self.__router(__e);
+        // Drain any transitions queued by the handler.
         while self.__next_compartment.is_some() {
             let next_compartment = self.__next_compartment.take().unwrap();
-            // Exit current state (with exit_args from current compartment)
-            let exit_event = ErlangScopeScannerFsmFrameEvent::new_with_params("<$", &self.__compartment.exit_args);
+            // Exit the current (leaf) state.
+            let exit_args = self.__compartment.exit_args.clone();
+            let exit_event = std::rc::Rc::new(ErlangScopeScannerFsmFrameEvent::FrameExit { args: exit_args });
             self.__router(&exit_event);
-            // Switch to new compartment
+            // Switch to the new compartment.
             self.__compartment = next_compartment;
-            // Enter new state (or forward event)
-            if self.__compartment.forward_event.is_none() {
-                let enter_event = ErlangScopeScannerFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-                self.__router(&enter_event);
-            } else {
-                // Forward event to new state
-                let forward_event = self.__compartment.forward_event.take().unwrap();
-                if forward_event.message == "$>" {
-                    // Forwarding enter event - just send it
-                    self.__router(&forward_event);
-                } else {
-                    // Forwarding other event - send $> first, then forward
-                    let enter_event = ErlangScopeScannerFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
+            // Three-branch forward-event handling (RFC-0025 Track B.1: forward
+            // event is matched on enum variant; $> recognition is now a
+            // structural match, not a string compare).
+            match self.__compartment.forward_event.take() {
+                None => {
+                    // No forwarded event — synthesize a fresh $>.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(ErlangScopeScannerFsmFrameEvent::FrameEnter { args: enter_args });
                     self.__router(&enter_event);
-                    self.__router(&forward_event);
                 }
+                Some(fwd) if matches!(fwd, ErlangScopeScannerFsmFrameEvent::FrameEnter { .. }) => {
+                    // Forwarded event IS $> — dispatch directly so the
+                    // destination's $> handler receives the caller's payload.
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+                Some(fwd) => {
+                    // Forwarded event is not $> — initialize the destination
+                    // with a fresh $>, then dispatch the forward.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(ErlangScopeScannerFsmFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+            }
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
             }
         }
     }
 
-    fn __router(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
+    fn __router(&mut self, __e: &std::rc::Rc<ErlangScopeScannerFsmFrameEvent>) {
+        let __ev: &ErlangScopeScannerFsmFrameEvent = &**__e;
         match self.__compartment.state.as_str() {
-            "Init" => self._state_Init(__e),
-            "CheckFun" => self._state_CheckFun(__e),
-            "ScanBody" => self._state_ScanBody(__e),
+            "Init" => self._state_Init(__ev),
+            "CheckFun" => self._state_CheckFun(__ev),
+            "ScanBody" => self._state_ScanBody(__ev),
             _ => {}
         }
     }
@@ -187,59 +244,88 @@ impl ErlangScopeScannerFsm {
         self.__next_compartment = Some(next_compartment);
     }
 
-    fn __push_transition(&mut self, new_compartment: ErlangScopeScannerFsmCompartment) {
-        // Exit current state (old compartment still in place for routing)
-        let exit_event = ErlangScopeScannerFsmFrameEvent::new_with_params("<$", &self.__compartment.exit_args);
-        self.__router(&exit_event);
-        // Swap: old compartment moves to stack, new takes its place
-        let old = std::mem::replace(&mut self.__compartment, new_compartment);
-        self._state_stack.push(old);
-        // Enter new state (or forward event) — matches kernel logic
-        if self.__compartment.forward_event.is_none() {
-            let enter_event = ErlangScopeScannerFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-            self.__router(&enter_event);
-        } else {
-            let forward_event = self.__compartment.forward_event.take().unwrap();
-            if forward_event.message == "$>" {
-                self.__router(&forward_event);
-            } else {
-                let enter_event = ErlangScopeScannerFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-                self.__router(&enter_event);
-                self.__router(&forward_event);
-            }
-        }
-    }
-
     pub fn do_scan(&mut self) {
-        let mut __e = ErlangScopeScannerFsmFrameEvent::new("do_scan");
-        let mut __ctx = ErlangScopeScannerFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(ErlangScopeScannerFsmFrameEvent::DoScan {});
+        let mut __ctx = ErlangScopeScannerFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
-    fn _state_ScanBody(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_ScanBody_enter(__e); }
-            _ => {}
-        }
-    }
-
     fn _state_Init(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "do_scan" => { self._s_Init_do_scan(__e); }
+        match __e {
+            ErlangScopeScannerFsmFrameEvent::DoScan { .. } => { self._s_Init_hdl_user_do_scan(__e); }
             _ => {}
         }
     }
 
     fn _state_CheckFun(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_CheckFun_enter(__e); }
+        match __e {
+            ErlangScopeScannerFsmFrameEvent::FrameEnter { .. } => { self._s_CheckFun_hdl_frame_enter(__e); }
             _ => {}
         }
     }
 
-    fn _s_ScanBody_enter(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
+    fn _state_ScanBody(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
+        match __e {
+            ErlangScopeScannerFsmFrameEvent::FrameEnter { .. } => { self._s_ScanBody_hdl_frame_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _s_Init_hdl_user_do_scan(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
+        let mut __compartment = self.__prepareEnter("CheckFun", vec![]);
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_CheckFun_hdl_frame_enter(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
+        // Must start with `fun` keyword followed by ( or whitespace
+        if self.pos + 3 > self.end {
+            self.success = 0;
+            return
+        }
+        if self.bytes[self.pos] != b'f'
+            || self.bytes[self.pos + 1] != b'u'
+            || self.bytes[self.pos + 2] != b'n' {
+            self.success = 0;
+            return
+        }
+        // Check that `fun` is a word boundary (not part of `function` etc.)
+        let after = self.pos + 3;
+        if after < self.end && (self.bytes[after].is_ascii_alphanumeric() || self.bytes[after] == b'_') {
+            self.success = 0;
+            return
+        }
+        // Skip whitespace after `fun`
+        let mut j = after;
+        while j < self.end && (self.bytes[j] == b' ' || self.bytes[j] == b'\t' || self.bytes[j] == b'\n') {
+            j += 1;
+        }
+        // Check for Module:Function/Arity pattern (function reference, not closure)
+        // Function references have an uppercase letter or atom after `fun`
+        // followed by `:` — e.g., `fun io:format/2`
+        if j < self.end && self.bytes[j].is_ascii_uppercase() {
+            // Could be a function reference — check for `:` after the module name
+            let mut k = j;
+            while k < self.end && (self.bytes[k].is_ascii_alphanumeric() || self.bytes[k] == b'_') {
+                k += 1;
+            }
+            if k < self.end && self.bytes[k] == b':' {
+                // This is `fun Module:Function/Arity` — not a closure
+                self.success = 0;
+                return
+            }
+        }
+        // It's a closure: fun(...) -> ... end
+        self.depth = 1;
+        self.pos = after;
+        let mut __compartment = self.__prepareEnter("ScanBody", vec![]);
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_ScanBody_hdl_frame_enter(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
         let mut i = self.pos;
         while i < self.end {
             let b = self.bytes[i];
@@ -349,59 +435,5 @@ impl ErlangScopeScannerFsm {
         }
         // Ran out of bytes without finding matching `end`
         self.success = 0;
-    }
-
-    fn _s_Init_do_scan(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
-        let mut __compartment = ErlangScopeScannerFsmCompartment::new("CheckFun");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_CheckFun_enter(&mut self, __e: &ErlangScopeScannerFsmFrameEvent) {
-        // Must start with `fun` keyword followed by ( or whitespace
-        if self.pos + 3 > self.end {
-            self.success = 0;
-            return
-        }
-        if self.bytes[self.pos] != b'f'
-            || self.bytes[self.pos + 1] != b'u'
-            || self.bytes[self.pos + 2] != b'n' {
-            self.success = 0;
-            return
-        }
-        // Check that `fun` is a word boundary (not part of `function` etc.)
-        let after = self.pos + 3;
-        if after < self.end && (self.bytes[after].is_ascii_alphanumeric() || self.bytes[after] == b'_') {
-            self.success = 0;
-            return
-        }
-        // Skip whitespace after `fun`
-        let mut j = after;
-        while j < self.end && (self.bytes[j] == b' ' || self.bytes[j] == b'\t' || self.bytes[j] == b'\n') {
-            j += 1;
-        }
-        // Check for Module:Function/Arity pattern (function reference, not closure)
-        // Function references have an uppercase letter or atom after `fun`
-        // followed by `:` — e.g., `fun io:format/2`
-        if j < self.end && self.bytes[j].is_ascii_uppercase() {
-            // Could be a function reference — check for `:` after the module name
-            let mut k = j;
-            while k < self.end && (self.bytes[k].is_ascii_alphanumeric() || self.bytes[k] == b'_') {
-                k += 1;
-            }
-            if k < self.end && self.bytes[k] == b':' {
-                // This is `fun Module:Function/Arity` — not a closure
-                self.success = 0;
-                return
-            }
-        }
-        // It's a closure: fun(...) -> ... end
-        self.depth = 1;
-        self.pos = after;
-        let mut __compartment = ErlangScopeScannerFsmCompartment::new("ScanBody");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
     }
 }

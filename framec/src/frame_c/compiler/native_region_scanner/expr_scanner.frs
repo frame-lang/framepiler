@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // ExprScanner — PDA (pushdown automaton) for scanning assignment RHS expressions.
 //

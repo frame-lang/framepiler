@@ -1,54 +1,62 @@
 
-// Dogfooded body closer â Lua language brace matcher.
+// Dogfooded body closer — Lua language brace matcher.
 // Lua uses -- for line comments, --[[ ]] for block comments,
 // "..." and '...' for strings, and [[ ]] for long strings.
 //
 // State machine flow:
-//   $Init.scan() â $Scanning.$>() â $InString/$InLineComment/$InBlockComment
+//   $Init.scan() → $Scanning.$>() ↔ $InString/$InLineComment/$InBlockComment
+
+#[derive(Clone, Debug)]
+#[allow(dead_code, non_camel_case_types)]
+enum LuaBodyCloserFsmFrameEvent {
+    Scan {  },
+    FrameEnter { args: Vec<String> },
+    FrameExit { args: Vec<String> },
+}
+
+#[derive(Clone)]
+#[allow(dead_code, non_camel_case_types)]
+enum LuaBodyCloserFsmFrameReturn {
+    _Lifecycle(std::rc::Rc<dyn std::any::Any>),
+}
 
 #[allow(dead_code)]
-struct LuaBodyCloserFsmFrameEvent {
-    message: String,
-    parameters: std::collections::HashMap<String, Box<dyn std::any::Any>>,
-}
-
-impl Clone for LuaBodyCloserFsmFrameEvent {
-    fn clone(&self) -> Self {
-        Self {
-            message: self.message.clone(),
-            parameters: std::collections::HashMap::new(),
-        }
-    }
-}
-
 impl LuaBodyCloserFsmFrameEvent {
-    fn new(message: &str) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: std::collections::HashMap::new(),
+    fn name(&self) -> &'static str {
+        match self {
+            LuaBodyCloserFsmFrameEvent::Scan { .. } => "scan",
+            LuaBodyCloserFsmFrameEvent::FrameEnter { .. } => "$>",
+            LuaBodyCloserFsmFrameEvent::FrameExit { .. } => "<$",
         }
     }
-    fn new_with_params(message: &str, params: &std::collections::HashMap<String, String>) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: params.iter().map(|(k, v)| (k.clone(), Box::new(v.clone()) as Box<dyn std::any::Any>)).collect(),
-        }
-    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum LuaBodyCloserFsmFrameValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    List(Vec<Self>),
+    Dict(std::collections::HashMap<String, Self>),
 }
 
 #[allow(dead_code)]
 struct LuaBodyCloserFsmFrameContext {
-    event: LuaBodyCloserFsmFrameEvent,
-    _return: Option<Box<dyn std::any::Any>>,
-    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    event: std::rc::Rc<LuaBodyCloserFsmFrameEvent>,
+    _return: Option<LuaBodyCloserFsmFrameReturn>,
+    _data: std::collections::HashMap<String, LuaBodyCloserFsmFrameValue>,
+    _transitioned: bool,
 }
 
 impl LuaBodyCloserFsmFrameContext {
-    fn new(event: LuaBodyCloserFsmFrameEvent, default_return: Option<Box<dyn std::any::Any>>) -> Self {
+    fn new(event: std::rc::Rc<LuaBodyCloserFsmFrameEvent>, default_return: Option<LuaBodyCloserFsmFrameReturn>) -> Self {
         Self {
             event,
             _return: default_return,
             _data: std::collections::HashMap::new(),
+            _transitioned: false,
         }
     }
 }
@@ -75,8 +83,8 @@ impl Default for LuaBodyCloserFsmStateContext {
 struct LuaBodyCloserFsmCompartment {
     state: String,
     state_context: LuaBodyCloserFsmStateContext,
-    enter_args: std::collections::HashMap<String, String>,
-    exit_args: std::collections::HashMap<String, String>,
+    enter_args: Vec<String>,
+    exit_args: Vec<String>,
     forward_event: Option<LuaBodyCloserFsmFrameEvent>,
     parent_compartment: Option<Box<LuaBodyCloserFsmCompartment>>,
 }
@@ -95,8 +103,8 @@ impl LuaBodyCloserFsmCompartment {
         Self {
             state: state.to_string(),
             state_context,
-            enter_args: std::collections::HashMap::new(),
-            exit_args: std::collections::HashMap::new(),
+            enter_args: Vec::new(),
+            exit_args: Vec::new(),
             forward_event: None,
             parent_compartment: None,
         }
@@ -119,9 +127,9 @@ pub struct LuaBodyCloserFsm {
 #[allow(non_snake_case)]
 impl LuaBodyCloserFsm {
     pub fn new() -> Self {
-        let mut this = Self {
-            _state_stack: vec![],
-            _context_stack: vec![],
+        Self {
+            _state_stack: Vec::new(),
+            _context_stack: Vec::new(),
             bytes: Vec::new(),
             pos: 0,
             depth: 1,
@@ -129,56 +137,108 @@ impl LuaBodyCloserFsm {
             string_char: 0,
             __compartment: LuaBodyCloserFsmCompartment::new("Init"),
             __next_compartment: None,
-        };
-        let __frame_event = LuaBodyCloserFsmFrameEvent::new("$>");
-        let __ctx = LuaBodyCloserFsmFrameContext::new(__frame_event, None);
-        this._context_stack.push(__ctx);
-        this.__kernel();
-        this._context_stack.pop();
-        this
+        }
     }
 
-    fn __kernel(&mut self) {
-        // Clone event from context stack (needed for borrow checker)
-        let __e = self._context_stack.last().unwrap().event.clone();
-        // Route event to current state
-        self.__router(&__e);
-        // Process any pending transition
+    pub fn __create() -> Self {
+        let mut c = Self::new();
+        c.__compartment = c.__prepareEnter("Init", vec![]);
+        let __e = std::rc::Rc::new(LuaBodyCloserFsmFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = LuaBodyCloserFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c._context_stack.push(__ctx);
+        c.__kernel(&__e);
+        c._context_stack.pop();
+        c
+    }
+
+    fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
+        match leaf {
+            "Init" => &["Init"],
+            "Scanning" => &["Scanning"],
+            "InString" => &["InString"],
+            "InLongString" => &["InLongString"],
+            "InLineComment" => &["InLineComment"],
+            "InBlockComment" => &["InBlockComment"],
+            _ => &[],
+        }
+    }
+
+    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> LuaBodyCloserFsmCompartment {
+        let chain = self.__hsm_chain(leaf);
+        let mut comp: Option<LuaBodyCloserFsmCompartment> = None;
+        for name in chain.iter() {
+            let mut new_comp = LuaBodyCloserFsmCompartment::new(name);
+            new_comp.enter_args = enter_args.clone();
+            if let Some(parent) = comp.take() {
+                new_comp.parent_compartment = Some(Box::new(parent));
+            }
+            comp = Some(new_comp);
+        }
+        comp.expect("chain must contain at least the leaf state")
+    }
+
+    fn __prepareExit(&mut self, exit_args: Vec<String>) {
+        self.__compartment.exit_args = exit_args.clone();
+        let mut cursor = self.__compartment.parent_compartment.as_deref_mut();
+        while let Some(c) = cursor {
+            c.exit_args = exit_args.clone();
+            cursor = c.parent_compartment.as_deref_mut();
+        }
+    }
+
+    fn __kernel(&mut self, __e: &std::rc::Rc<LuaBodyCloserFsmFrameEvent>) {
+        // Route event to current state.
+        self.__router(__e);
+        // Drain any transitions queued by the handler.
         while self.__next_compartment.is_some() {
             let next_compartment = self.__next_compartment.take().unwrap();
-            // Exit current state (with exit_args from current compartment)
-            let exit_event = LuaBodyCloserFsmFrameEvent::new_with_params("<$", &self.__compartment.exit_args);
+            // Exit the current (leaf) state.
+            let exit_args = self.__compartment.exit_args.clone();
+            let exit_event = std::rc::Rc::new(LuaBodyCloserFsmFrameEvent::FrameExit { args: exit_args });
             self.__router(&exit_event);
-            // Switch to new compartment
+            // Switch to the new compartment.
             self.__compartment = next_compartment;
-            // Enter new state (or forward event)
-            if self.__compartment.forward_event.is_none() {
-                let enter_event = LuaBodyCloserFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-                self.__router(&enter_event);
-            } else {
-                // Forward event to new state
-                let forward_event = self.__compartment.forward_event.take().unwrap();
-                if forward_event.message == "$>" {
-                    // Forwarding enter event - just send it
-                    self.__router(&forward_event);
-                } else {
-                    // Forwarding other event - send $> first, then forward
-                    let enter_event = LuaBodyCloserFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
+            // Three-branch forward-event handling (RFC-0025 Track B.1: forward
+            // event is matched on enum variant; $> recognition is now a
+            // structural match, not a string compare).
+            match self.__compartment.forward_event.take() {
+                None => {
+                    // No forwarded event — synthesize a fresh $>.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(LuaBodyCloserFsmFrameEvent::FrameEnter { args: enter_args });
                     self.__router(&enter_event);
-                    self.__router(&forward_event);
                 }
+                Some(fwd) if matches!(fwd, LuaBodyCloserFsmFrameEvent::FrameEnter { .. }) => {
+                    // Forwarded event IS $> — dispatch directly so the
+                    // destination's $> handler receives the caller's payload.
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+                Some(fwd) => {
+                    // Forwarded event is not $> — initialize the destination
+                    // with a fresh $>, then dispatch the forward.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(LuaBodyCloserFsmFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+            }
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
             }
         }
     }
 
-    fn __router(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+    fn __router(&mut self, __e: &std::rc::Rc<LuaBodyCloserFsmFrameEvent>) {
+        let __ev: &LuaBodyCloserFsmFrameEvent = &**__e;
         match self.__compartment.state.as_str() {
-            "Init" => self._state_Init(__e),
-            "Scanning" => self._state_Scanning(__e),
-            "InString" => self._state_InString(__e),
-            "InLongString" => self._state_InLongString(__e),
-            "InLineComment" => self._state_InLineComment(__e),
-            "InBlockComment" => self._state_InBlockComment(__e),
+            "Init" => self._state_Init(__ev),
+            "Scanning" => self._state_Scanning(__ev),
+            "InString" => self._state_InString(__ev),
+            "InLongString" => self._state_InLongString(__ev),
+            "InLineComment" => self._state_InLineComment(__ev),
+            "InBlockComment" => self._state_InBlockComment(__ev),
             _ => {}
         }
     }
@@ -187,132 +247,63 @@ impl LuaBodyCloserFsm {
         self.__next_compartment = Some(next_compartment);
     }
 
-    fn __push_transition(&mut self, new_compartment: LuaBodyCloserFsmCompartment) {
-        // Exit current state (old compartment still in place for routing)
-        let exit_event = LuaBodyCloserFsmFrameEvent::new_with_params("<$", &self.__compartment.exit_args);
-        self.__router(&exit_event);
-        // Swap: old compartment moves to stack, new takes its place
-        let old = std::mem::replace(&mut self.__compartment, new_compartment);
-        self._state_stack.push(old);
-        // Enter new state (or forward event) — matches kernel logic
-        if self.__compartment.forward_event.is_none() {
-            let enter_event = LuaBodyCloserFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-            self.__router(&enter_event);
-        } else {
-            let forward_event = self.__compartment.forward_event.take().unwrap();
-            if forward_event.message == "$>" {
-                self.__router(&forward_event);
-            } else {
-                let enter_event = LuaBodyCloserFsmFrameEvent::new_with_params("$>", &self.__compartment.enter_args);
-                self.__router(&enter_event);
-                self.__router(&forward_event);
-            }
-        }
-    }
-
     pub fn scan(&mut self) {
-        let mut __e = LuaBodyCloserFsmFrameEvent::new("scan");
-        let mut __ctx = LuaBodyCloserFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(LuaBodyCloserFsmFrameEvent::Scan {});
+        let mut __ctx = LuaBodyCloserFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
     fn _state_Init(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "scan" => { self._s_Init_scan(__e); }
-            _ => {}
-        }
-    }
-
-    fn _state_InLongString(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_InLongString_enter(__e); }
-            _ => {}
-        }
-    }
-
-    fn _state_InLineComment(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_InLineComment_enter(__e); }
-            _ => {}
-        }
-    }
-
-    fn _state_InString(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_InString_enter(__e); }
+        match __e {
+            LuaBodyCloserFsmFrameEvent::Scan { .. } => { self._s_Init_hdl_user_scan(__e); }
             _ => {}
         }
     }
 
     fn _state_Scanning(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_Scanning_enter(__e); }
+        match __e {
+            LuaBodyCloserFsmFrameEvent::FrameEnter { .. } => { self._s_Scanning_hdl_frame_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_InString(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+        match __e {
+            LuaBodyCloserFsmFrameEvent::FrameEnter { .. } => { self._s_InString_hdl_frame_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_InLongString(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+        match __e {
+            LuaBodyCloserFsmFrameEvent::FrameEnter { .. } => { self._s_InLongString_hdl_frame_enter(__e); }
+            _ => {}
+        }
+    }
+
+    fn _state_InLineComment(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+        match __e {
+            LuaBodyCloserFsmFrameEvent::FrameEnter { .. } => { self._s_InLineComment_hdl_frame_enter(__e); }
             _ => {}
         }
     }
 
     fn _state_InBlockComment(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_InBlockComment_enter(__e); }
+        match __e {
+            LuaBodyCloserFsmFrameEvent::FrameEnter { .. } => { self._s_InBlockComment_hdl_frame_enter(__e); }
             _ => {}
         }
     }
 
-    fn _s_Init_scan(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        let mut __compartment = LuaBodyCloserFsmCompartment::new("Scanning");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+    fn _s_Init_hdl_user_scan(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+        let mut __compartment = self.__prepareEnter("Scanning", vec![]);
         self.__transition(__compartment);
         return;
     }
 
-    fn _s_InLongString_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        let n = self.bytes.len();
-        while self.pos + 1 < n {
-            if self.bytes[self.pos] == b']' && self.bytes[self.pos + 1] == b']' {
-                self.pos += 2;
-                let mut __compartment = LuaBodyCloserFsmCompartment::new("Scanning");
-                __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-                self.__transition(__compartment);
-                return;
-            }
-            self.pos += 1;
-        }
-        self.result = -1;
-    }
-
-    fn _s_InLineComment_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        let n = self.bytes.len();
-        while self.pos < n && self.bytes[self.pos] != b'\n' {
-            self.pos += 1;
-        }
-        let mut __compartment = LuaBodyCloserFsmCompartment::new("Scanning");
-        __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-        self.__transition(__compartment);
-        return;
-    }
-
-    fn _s_InString_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
-        let n = self.bytes.len();
-        while self.pos < n {
-            let b = self.bytes[self.pos];
-            if b == b'\\' {
-                self.pos += 2;
-            } else if b == self.string_char {
-                self.pos += 1;
-                let mut __compartment = LuaBodyCloserFsmCompartment::new("Scanning");
-                __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
-                self.__transition(__compartment);
-                return;
-            } else {
-                self.pos += 1;
-            }
-        }
-        self.result = -1;
-    }
-
-    fn _s_Scanning_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+    fn _s_Scanning_hdl_frame_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
         let n = self.bytes.len();
         while self.pos < n {
             let b = self.bytes[self.pos];
@@ -322,28 +313,24 @@ impl LuaBodyCloserFsm {
                 // Check for block comment --[[ ]]
                 if self.pos + 3 < n && self.bytes[self.pos + 2] == b'[' && self.bytes[self.pos + 3] == b'[' {
                     self.pos += 4;
-                    let mut __compartment = LuaBodyCloserFsmCompartment::new("InBlockComment");
-                    __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+                    let mut __compartment = self.__prepareEnter("InBlockComment", vec![]);
                     self.__transition(__compartment);
                     return;
                 }
                 self.pos += 2;
-                let mut __compartment = LuaBodyCloserFsmCompartment::new("InLineComment");
-                __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+                let mut __compartment = self.__prepareEnter("InLineComment", vec![]);
                 self.__transition(__compartment);
                 return;
             } else if b == b'"' || b == b'\'' {
                 self.string_char = b;
                 self.pos += 1;
-                let mut __compartment = LuaBodyCloserFsmCompartment::new("InString");
-                __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+                let mut __compartment = self.__prepareEnter("InString", vec![]);
                 self.__transition(__compartment);
                 return;
             } else if b == b'[' && self.pos + 1 < n && self.bytes[self.pos + 1] == b'[' {
                 // Long string [[ ]]
                 self.pos += 2;
-                let mut __compartment = LuaBodyCloserFsmCompartment::new("InLongString");
-                __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+                let mut __compartment = self.__prepareEnter("InLongString", vec![]);
                 self.__transition(__compartment);
                 return;
             } else if b == b'{' {
@@ -363,13 +350,54 @@ impl LuaBodyCloserFsm {
         self.result = -1;
     }
 
-    fn _s_InBlockComment_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+    fn _s_InString_hdl_frame_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+        let n = self.bytes.len();
+        while self.pos < n {
+            let b = self.bytes[self.pos];
+            if b == b'\\' {
+                self.pos += 2;
+            } else if b == self.string_char {
+                self.pos += 1;
+                let mut __compartment = self.__prepareEnter("Scanning", vec![]);
+                self.__transition(__compartment);
+                return;
+            } else {
+                self.pos += 1;
+            }
+        }
+        self.result = -1;
+    }
+
+    fn _s_InLongString_hdl_frame_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
         let n = self.bytes.len();
         while self.pos + 1 < n {
             if self.bytes[self.pos] == b']' && self.bytes[self.pos + 1] == b']' {
                 self.pos += 2;
-                let mut __compartment = LuaBodyCloserFsmCompartment::new("Scanning");
-                __compartment.parent_compartment = Some(Box::new(self.__compartment.clone()));
+                let mut __compartment = self.__prepareEnter("Scanning", vec![]);
+                self.__transition(__compartment);
+                return;
+            }
+            self.pos += 1;
+        }
+        self.result = -1;
+    }
+
+    fn _s_InLineComment_hdl_frame_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+        let n = self.bytes.len();
+        while self.pos < n && self.bytes[self.pos] != b'\n' {
+            self.pos += 1;
+        }
+        let mut __compartment = self.__prepareEnter("Scanning", vec![]);
+        self.__transition(__compartment);
+        return;
+    }
+
+    fn _s_InBlockComment_hdl_frame_enter(&mut self, __e: &LuaBodyCloserFsmFrameEvent) {
+        let n = self.bytes.len();
+        while self.pos + 1 < n {
+            if self.bytes[self.pos] == b']' && self.bytes[self.pos + 1] == b']' {
+                self.pos += 2;
+                let mut __compartment = self.__prepareEnter("Scanning", vec![]);
                 self.__transition(__compartment);
                 return;
             }

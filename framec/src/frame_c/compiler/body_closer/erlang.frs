@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Erlang body closer — Frame-generated FSM for brace matching.
 // Erlang has % line comments, "..." strings, '...' quoted atoms.

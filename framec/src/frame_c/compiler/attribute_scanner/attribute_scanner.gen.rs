@@ -37,46 +37,52 @@
 // Replacing the existing Rust `identify_pragma` puts attribute parsing
 // on the same Frame-native footing as the rest of the scanner work.
 
+#[derive(Clone, Debug)]
+#[allow(dead_code, non_camel_case_types)]
+enum AttributeScannerFsmFrameEvent {
+    Scan { start: usize },
+    FrameEnter { args: Vec<String> },
+    FrameExit { args: Vec<String> },
+}
+
+#[derive(Clone)]
+#[allow(dead_code, non_camel_case_types)]
+enum AttributeScannerFsmFrameReturn {
+    _Lifecycle(std::rc::Rc<dyn std::any::Any>),
+}
+
 #[allow(dead_code)]
-struct AttributeScannerFsmFrameEvent {
-    message: String,
-    parameters: Vec<Box<dyn std::any::Any>>,
-}
-
-impl Clone for AttributeScannerFsmFrameEvent {
-    fn clone(&self) -> Self {
-        Self {
-            message: self.message.clone(),
-            parameters: Vec::new(),
-        }
-    }
-}
-
 impl AttributeScannerFsmFrameEvent {
-    fn new(message: &str) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: Vec::new(),
+    fn name(&self) -> &'static str {
+        match self {
+            AttributeScannerFsmFrameEvent::Scan { .. } => "scan",
+            AttributeScannerFsmFrameEvent::FrameEnter { .. } => "$>",
+            AttributeScannerFsmFrameEvent::FrameExit { .. } => "<$",
         }
     }
-    fn new_with_params(message: &str, params: &[String]) -> Self {
-        Self {
-            message: message.to_string(),
-            parameters: params.iter().map(|v| Box::new(v.clone()) as Box<dyn std::any::Any>).collect(),
-        }
-    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum AttributeScannerFsmFrameValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    List(Vec<Self>),
+    Dict(std::collections::HashMap<String, Self>),
 }
 
 #[allow(dead_code)]
 struct AttributeScannerFsmFrameContext {
-    event: AttributeScannerFsmFrameEvent,
-    _return: Option<Box<dyn std::any::Any>>,
-    _data: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    event: std::rc::Rc<AttributeScannerFsmFrameEvent>,
+    _return: Option<AttributeScannerFsmFrameReturn>,
+    _data: std::collections::HashMap<String, AttributeScannerFsmFrameValue>,
     _transitioned: bool,
 }
 
 impl AttributeScannerFsmFrameContext {
-    fn new(event: AttributeScannerFsmFrameEvent, default_return: Option<Box<dyn std::any::Any>>) -> Self {
+    fn new(event: std::rc::Rc<AttributeScannerFsmFrameEvent>, default_return: Option<AttributeScannerFsmFrameReturn>) -> Self {
         Self {
             event,
             _return: default_return,
@@ -174,7 +180,7 @@ pub struct AttributeScannerFsm {
 #[allow(non_snake_case)]
 impl AttributeScannerFsm {
     pub fn new() -> Self {
-        let mut this = Self {
+        Self {
             _state_stack: Vec::new(),
             _context_stack: Vec::new(),
             bytes: Vec::new(),
@@ -191,15 +197,18 @@ impl AttributeScannerFsm {
             value_end: 0,
             __compartment: AttributeScannerFsmCompartment::new("Init"),
             __next_compartment: None,
-        };
-        this.__compartment = this.__prepareEnter("Init", vec![]);
-        let __frame_event = AttributeScannerFsmFrameEvent::new_with_params("$>", &this.__compartment.enter_args);
-        let __ctx = AttributeScannerFsmFrameContext::new(__frame_event, None);
-        this._context_stack.push(__ctx);
-        this.__fire_enter_cascade();
-        this.__process_transition_loop();
-        this._context_stack.pop();
-        this
+        }
+    }
+
+    pub fn __create() -> Self {
+        let mut c = Self::new();
+        c.__compartment = c.__prepareEnter("Init", vec![]);
+        let __e = std::rc::Rc::new(AttributeScannerFsmFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = AttributeScannerFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c._context_stack.push(__ctx);
+        c.__kernel(&__e);
+        c._context_stack.pop();
+        c
     }
 
     fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
@@ -238,85 +247,60 @@ impl AttributeScannerFsm {
         }
     }
 
-    fn __route_to_state(&mut self, state_name: &str, __e: &AttributeScannerFsmFrameEvent) {
-        match state_name {
-            "Init" => self._state_Init(__e),
-            "BracketName" => self._state_BracketName(__e),
-            "BracketAfterName" => self._state_BracketAfterName(__e),
-            "BracketArgs" => self._state_BracketArgs(__e),
-            "BracketBeforeClose" => self._state_BracketBeforeClose(__e),
-            "BareName" => self._state_BareName(__e),
-            "BareValue" => self._state_BareValue(__e),
-            _ => {}
-        }
-    }
-
-    fn __fire_exit_cascade(&mut self) {
-        let mut layers: Vec<(String, Vec<String>)> = Vec::new();
-        {
-            let mut cursor = Some(&self.__compartment);
-            while let Some(c) = cursor {
-                layers.push((c.state.clone(), c.exit_args.clone()));
-                cursor = c.parent_compartment.as_deref();
-            }
-        }
-        for (state_name, args) in &layers {
-            let exit_event = AttributeScannerFsmFrameEvent::new_with_params("<$", args);
-            self.__route_to_state(state_name, &exit_event);
-        }
-    }
-
-    fn __fire_enter_cascade(&mut self) {
-        let mut layers: Vec<(String, Vec<String>)> = Vec::new();
-        {
-            let mut cursor = Some(&self.__compartment);
-            while let Some(c) = cursor {
-                layers.push((c.state.clone(), c.enter_args.clone()));
-                cursor = c.parent_compartment.as_deref();
-            }
-        }
-        for (state_name, args) in layers.iter().rev() {
-            let enter_event = AttributeScannerFsmFrameEvent::new_with_params("$>", args);
-            self.__route_to_state(state_name, &enter_event);
-        }
-    }
-
-    fn __process_transition_loop(&mut self) {
+    fn __kernel(&mut self, __e: &std::rc::Rc<AttributeScannerFsmFrameEvent>) {
+        // Route event to current state.
+        self.__router(__e);
+        // Drain any transitions queued by the handler.
         while self.__next_compartment.is_some() {
             let next_compartment = self.__next_compartment.take().unwrap();
-            self.__fire_exit_cascade();
+            // Exit the current (leaf) state.
+            let exit_args = self.__compartment.exit_args.clone();
+            let exit_event = std::rc::Rc::new(AttributeScannerFsmFrameEvent::FrameExit { args: exit_args });
+            self.__router(&exit_event);
+            // Switch to the new compartment.
             self.__compartment = next_compartment;
-            if self.__compartment.forward_event.is_none() {
-                self.__fire_enter_cascade();
-            } else {
-                let forward_event = self.__compartment.forward_event.take().unwrap();
-                self.__fire_enter_cascade();
-                if forward_event.message != "$>" {
-                    self.__router(&forward_event);
+            // Three-branch forward-event handling (RFC-0025 Track B.1: forward
+            // event is matched on enum variant; $> recognition is now a
+            // structural match, not a string compare).
+            match self.__compartment.forward_event.take() {
+                None => {
+                    // No forwarded event — synthesize a fresh $>.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(AttributeScannerFsmFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                }
+                Some(fwd) if matches!(fwd, AttributeScannerFsmFrameEvent::FrameEnter { .. }) => {
+                    // Forwarded event IS $> — dispatch directly so the
+                    // destination's $> handler receives the caller's payload.
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+                Some(fwd) => {
+                    // Forwarded event is not $> — initialize the destination
+                    // with a fresh $>, then dispatch the forward.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(AttributeScannerFsmFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
                 }
             }
-            let _ = AttributeScannerFsmFrameEvent::new("$>");  // satisfy unused-import / type checks
             for ctx in self._context_stack.iter_mut() {
                 ctx._transitioned = true;
             }
         }
     }
 
-    fn __kernel(&mut self) {
-        let __e = self._context_stack.last().unwrap().event.clone();
-        self.__router(&__e);
-        self.__process_transition_loop();
-    }
-
-    fn __router(&mut self, __e: &AttributeScannerFsmFrameEvent) {
+    fn __router(&mut self, __e: &std::rc::Rc<AttributeScannerFsmFrameEvent>) {
+        let __ev: &AttributeScannerFsmFrameEvent = &**__e;
         match self.__compartment.state.as_str() {
-            "Init" => self._state_Init(__e),
-            "BracketName" => self._state_BracketName(__e),
-            "BracketAfterName" => self._state_BracketAfterName(__e),
-            "BracketArgs" => self._state_BracketArgs(__e),
-            "BracketBeforeClose" => self._state_BracketBeforeClose(__e),
-            "BareName" => self._state_BareName(__e),
-            "BareValue" => self._state_BareValue(__e),
+            "Init" => self._state_Init(__ev),
+            "BracketName" => self._state_BracketName(__ev),
+            "BracketAfterName" => self._state_BracketAfterName(__ev),
+            "BracketArgs" => self._state_BracketArgs(__ev),
+            "BracketBeforeClose" => self._state_BracketBeforeClose(__ev),
+            "BareName" => self._state_BareName(__ev),
+            "BareValue" => self._state_BareValue(__ev),
             _ => {}
         }
     }
@@ -326,20 +310,17 @@ impl AttributeScannerFsm {
     }
 
     pub fn scan(&mut self, start: usize) {
-        let mut __e = AttributeScannerFsmFrameEvent::new("scan");
-        __e.parameters = vec![Box::new(start.clone()) as Box<dyn std::any::Any>];
-        let mut __ctx = AttributeScannerFsmFrameContext::new(__e, None);
+        let __e = std::rc::Rc::new(AttributeScannerFsmFrameEvent::Scan { start: start.clone() });
+        let mut __ctx = AttributeScannerFsmFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
-        self.__kernel();
+        self.__kernel(&__e);
         self._context_stack.pop();
     }
 
     fn _state_Init(&mut self, __e: &AttributeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "scan" => {
-                let __ctx_event = &self._context_stack.last().unwrap().event;
-                let start: usize = __ctx_event.parameters.get(0).and_then(|v| v.downcast_ref::<usize>()).cloned().unwrap_or_default();
-                self._s_Init_hdl_user_scan(__e, start);
+        match __e {
+            AttributeScannerFsmFrameEvent::Scan { start, .. } => {
+                self._s_Init_hdl_user_scan(__e, *start);
             }
             _ => {}
         }
@@ -349,8 +330,8 @@ impl AttributeScannerFsm {
     // Read the attribute name. Name chars: alphanumeric, `_`, `-`.
     // Stop at the first non-name char (`(`, `]`, ws).
     fn _state_BracketName(&mut self, __e: &AttributeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_BracketName_hdl_frame_enter(__e); }
+        match __e {
+            AttributeScannerFsmFrameEvent::FrameEnter { .. } => { self._s_BracketName_hdl_frame_enter(__e); }
             _ => {}
         }
     }
@@ -358,8 +339,8 @@ impl AttributeScannerFsm {
     // After the name: either `(args)` follows, or the closing `]`
     // (with possible intervening whitespace).
     fn _state_BracketAfterName(&mut self, __e: &AttributeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_BracketAfterName_hdl_frame_enter(__e); }
+        match __e {
+            AttributeScannerFsmFrameEvent::FrameEnter { .. } => { self._s_BracketAfterName_hdl_frame_enter(__e); }
             _ => {}
         }
     }
@@ -369,8 +350,8 @@ impl AttributeScannerFsm {
     // E.g. `@@[migrate(from=foo(1), to=2)]` has nested parens that
     // depth-tracking keeps as a single args span.
     fn _state_BracketArgs(&mut self, __e: &AttributeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_BracketArgs_hdl_frame_enter(__e); }
+        match __e {
+            AttributeScannerFsmFrameEvent::FrameEnter { .. } => { self._s_BracketArgs_hdl_frame_enter(__e); }
             _ => {}
         }
     }
@@ -379,8 +360,8 @@ impl AttributeScannerFsm {
     // between `)` and `]` (`@@[name(args) ]`) for source-style
     // flexibility.
     fn _state_BracketBeforeClose(&mut self, __e: &AttributeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_BracketBeforeClose_hdl_frame_enter(__e); }
+        match __e {
+            AttributeScannerFsmFrameEvent::FrameEnter { .. } => { self._s_BracketBeforeClose_hdl_frame_enter(__e); }
             _ => {}
         }
     }
@@ -388,8 +369,8 @@ impl AttributeScannerFsm {
     // --- Bare form: @@<name> <value?> ---------------------------
     // Read the bare keyword name (same char class as bracket).
     fn _state_BareName(&mut self, __e: &AttributeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_BareName_hdl_frame_enter(__e); }
+        match __e {
+            AttributeScannerFsmFrameEvent::FrameEnter { .. } => { self._s_BareName_hdl_frame_enter(__e); }
             _ => {}
         }
     }
@@ -398,8 +379,8 @@ impl AttributeScannerFsm {
     // the line as the value. Trim trailing ws / `\r` so CRLF
     // sources round-trip clean.
     fn _state_BareValue(&mut self, __e: &AttributeScannerFsmFrameEvent) {
-        match __e.message.as_str() {
-            "$>" => { self._s_BareValue_hdl_frame_enter(__e); }
+        match __e {
+            AttributeScannerFsmFrameEvent::FrameEnter { .. } => { self._s_BareValue_hdl_frame_enter(__e); }
             _ => {}
         }
     }

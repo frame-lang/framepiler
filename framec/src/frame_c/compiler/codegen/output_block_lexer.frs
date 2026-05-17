@@ -1,4 +1,4 @@
-@@target rust
+@@[target("rust")]
 
 // Output Block Lexer — Frame state machine.
 //
