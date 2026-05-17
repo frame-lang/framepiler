@@ -30,6 +30,16 @@ thread_local! {
     static NEW_CONTRACT_SYSTEMS: RefCell<HashSet<String>> =
         RefCell::new(HashSet::new());
 
+    /// Every `@@system` declared in the current compilation unit,
+    /// regardless of contract. Used to disambiguate "this name is a
+    /// local legacy system" (in-set but not in
+    /// `NEW_CONTRACT_SYSTEMS`) from "this name is cross-file"
+    /// (not in either set) post-RFC-0024, where the @@import peek
+    /// that previously populated cross-file new-contract names no
+    /// longer runs. FRAMEC_BUGS Issue #17.
+    static LOCAL_SYSTEMS: RefCell<HashSet<String>> =
+        RefCell::new(HashSet::new());
+
     static NESTED_SYSTEM_DOMAIN_PARAMS: RefCell<HashMap<String, Vec<(String, String)>>> =
         RefCell::new(HashMap::new());
 }
@@ -40,6 +50,15 @@ pub fn set_new_contract_systems(names: HashSet<String>) {
     NEW_CONTRACT_SYSTEMS.with(|s| *s.borrow_mut() = names);
 }
 
+/// Set the names of every system declared locally in this
+/// compilation unit, regardless of persist contract. Called once
+/// per compilation, before per-system codegen runs. Enables
+/// `nested_uses_new_contract` to distinguish local legacy systems
+/// from cross-file references.
+pub fn set_local_systems(names: HashSet<String>) {
+    LOCAL_SYSTEMS.with(|s| *s.borrow_mut() = names);
+}
+
 /// Set the per-system Domain-kind param signatures. Called once per
 /// compilation, before per-system codegen runs. Each (param_name,
 /// type) pair is in declaration order.
@@ -47,10 +66,30 @@ pub fn set_nested_system_domain_params(map: HashMap<String, Vec<(String, String)
     NESTED_SYSTEM_DOMAIN_PARAMS.with(|s| *s.borrow_mut() = map);
 }
 
-/// True if a system uses the new persist contract. Used by nested-
-/// system restore emission to pick the right call shape.
+/// True if a system reference should use the new persist contract
+/// call shape (`<Type>.new()` + `inst.restore_state(...)`) as
+/// opposed to the legacy static-factory shape
+/// (`<Type>.restore_state(...)`).
+///
+/// Resolution:
+/// 1. Local system with new contract → true.
+/// 2. Local system with legacy contract → false.
+/// 3. Cross-file reference (not in either local registry) → true.
+///    Default to the new contract because RFC-0016.1 made it the
+///    Frame default and the legacy form is deprecated (W706).
+///    Pre-RFC-0024 this branch was populated from the @@import
+///    peek; post-RFC-0024 the peek is gone and we trust the user
+///    is on the modern contract. FRAMEC_BUGS Issue #17.
 pub fn nested_uses_new_contract(name: &str) -> bool {
-    NEW_CONTRACT_SYSTEMS.with(|s| s.borrow().contains(name))
+    if NEW_CONTRACT_SYSTEMS.with(|s| s.borrow().contains(name)) {
+        return true;
+    }
+    // In the local set but NOT in new-contract set → local legacy.
+    if LOCAL_SYSTEMS.with(|s| s.borrow().contains(name)) {
+        return false;
+    }
+    // Cross-file reference: assume new contract.
+    true
 }
 
 /// Get the Domain-kind params of a nested system by name. Returns an

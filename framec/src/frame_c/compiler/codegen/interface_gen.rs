@@ -18,8 +18,8 @@ use dart_types::{dart_conv_expr, parse_dart_type, render_dart_type, DartTypeNode
 use utility::{frame_return_default, is_dynamic_target};
 
 pub use nested_registry::{
-    get_nested_system_domain_params, nested_uses_new_contract, set_new_contract_systems,
-    set_nested_system_domain_params,
+    get_nested_system_domain_params, nested_uses_new_contract, set_local_systems,
+    set_new_contract_systems, set_nested_system_domain_params,
 };
 
 use std::collections::{HashMap, HashSet};

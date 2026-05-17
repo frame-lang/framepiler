@@ -830,6 +830,18 @@ pub fn compile_ast_based(
             new_contract.insert(n.clone());
         }
         crate::frame_c::compiler::codegen::interface_gen::set_new_contract_systems(new_contract);
+
+        // FRAMEC_BUGS Issue #17: register the full set of local
+        // `@@system` names so `nested_uses_new_contract` can
+        // distinguish "local legacy system" from "cross-file
+        // reference" when a name misses the new-contract set.
+        // Cross-file references default to new contract; local
+        // legacy references default to the legacy emit.
+        let local: std::collections::HashSet<String> = system_asts
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        crate::frame_c::compiler::codegen::interface_gen::set_local_systems(local);
     }
 
     // FRAMEC_BUGS.md Issue #2 hot-fix (pre-RFC-0015): register each
