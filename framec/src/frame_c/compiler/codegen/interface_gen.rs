@@ -19,7 +19,7 @@ use utility::{frame_return_default, is_dynamic_target};
 
 pub use nested_registry::{
     get_nested_system_domain_params, nested_uses_new_contract, set_local_systems,
-    set_new_contract_systems, set_nested_system_domain_params,
+    set_nested_system_domain_params, set_new_contract_systems,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -34,7 +34,6 @@ use crate::frame_c::compiler::frame_ast::{
     ActionAst, InterfaceMethod, MethodParam, OperationAst, Span, SystemAst, Type,
 };
 use crate::frame_c::visitors::TargetLanguage;
-
 
 /// Generate interface wrapper methods
 ///

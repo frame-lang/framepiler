@@ -14,7 +14,10 @@ impl<'a> Lexer<'a> {
     // SOL Frame Statement Detection (Native-Aware Mode)
     // ========================================================================
 
-    pub(super) fn try_sol_frame_statement(&mut self, end: usize) -> Result<Option<Vec<Spanned>>, LexError> {
+    pub(super) fn try_sol_frame_statement(
+        &mut self,
+        end: usize,
+    ) -> Result<Option<Vec<Spanned>>, LexError> {
         let pos = self.cursor;
 
         if pos >= end {
@@ -598,5 +601,4 @@ impl<'a> Lexer<'a> {
 
         Ok(())
     }
-
 }

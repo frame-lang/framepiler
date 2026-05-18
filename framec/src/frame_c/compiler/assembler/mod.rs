@@ -812,7 +812,8 @@ mod tests {
                 },
             }],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
+        let result =
+            assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
         assert_eq!(result, src);
     }
 
@@ -855,7 +856,17 @@ mod tests {
             ],
         );
         let generated = vec![("Foo".to_string(), "class Foo:\n  pass\n".to_string())];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
+        let result = assemble(
+            &map,
+            &generated,
+            &[],
+            TargetLanguage::Python3,
+            &[],
+            &[],
+            &[],
+            None,
+        )
+        .unwrap();
         assert_eq!(result, "prolog\nclass Foo:\n  pass\nepilogue\n");
     }
 
@@ -878,7 +889,8 @@ mod tests {
                 },
             ],
         );
-        let result = assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
+        let result =
+            assemble(&map, &[], &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
         assert_eq!(result, "import os\n");
     }
 
@@ -1038,7 +1050,17 @@ mod tests {
             ("Alpha".to_string(), "class Alpha: pass\n".to_string()),
             ("Beta".to_string(), "class Beta: pass\n".to_string()),
         ];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
+        let result = assemble(
+            &map,
+            &generated,
+            &[],
+            TargetLanguage::Python3,
+            &[],
+            &[],
+            &[],
+            None,
+        )
+        .unwrap();
         assert!(result.contains("prolog\n"));
         assert!(result.contains("class Alpha: pass\n"));
         assert!(result.contains("\nnative_between\n"));
@@ -1115,7 +1137,17 @@ mod tests {
             "MySystem".to_string(),
             "class MySystem:\n  pass\n".to_string(),
         )];
-        let result = assemble(&map, &generated, &[], TargetLanguage::Python3, &[], &[], &[], None).unwrap();
+        let result = assemble(
+            &map,
+            &generated,
+            &[],
+            TargetLanguage::Python3,
+            &[],
+            &[],
+            &[],
+            None,
+        )
+        .unwrap();
         // RFC-0017 Phase A0: Python factory expansion uses `_create`.
         assert_eq!(result, "s = MySystem._create()\nclass MySystem:\n  pass\n");
     }

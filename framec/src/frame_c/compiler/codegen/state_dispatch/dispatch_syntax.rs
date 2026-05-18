@@ -14,7 +14,10 @@
 //! Swift, C#, C, C++, Erlang). Rust uses `match` and stays out
 //! of this path entirely.
 
-use super::super::codegen_utils::{cpp_map_type, csharp_map_type, go_map_type, java_map_type, kotlin_map_type, swift_map_type, to_snake_case};
+use super::super::codegen_utils::{
+    cpp_map_type, csharp_map_type, go_map_type, java_map_type, kotlin_map_type, swift_map_type,
+    to_snake_case,
+};
 use crate::frame_c::visitors::TargetLanguage;
 
 /// Language-specific syntax for state dispatch code generation.

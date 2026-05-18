@@ -35,8 +35,8 @@ mod _state_var_parser {
     include!("state_var_parser.gen.rs");
 }
 
-mod metadata;
 mod interpolation;
+mod metadata;
 
 pub use interpolation::{
     scan_dollar_string_regions, scan_fstring_regions, scan_hash_string_regions,
@@ -1450,8 +1450,6 @@ pub fn skip_ruby_percent_literal(bytes: &[u8], i: usize, end: usize) -> Option<u
         Some(end) // Unterminated
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

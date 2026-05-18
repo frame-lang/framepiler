@@ -218,7 +218,7 @@ impl MiniHsm {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<MiniHsmFrameEvent>) {
-        let __ev: &MiniHsmFrameEvent = &**__e;
+        let __ev: &MiniHsmFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Live" => self._state_Live(__ev),
             "Awake" => self._state_Awake(__ev),

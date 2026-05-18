@@ -231,7 +231,7 @@ impl LuaBodyCloserFsm {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<LuaBodyCloserFsmFrameEvent>) {
-        let __ev: &LuaBodyCloserFsmFrameEvent = &**__e;
+        let __ev: &LuaBodyCloserFsmFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Init" => self._state_Init(__ev),
             "Scanning" => self._state_Scanning(__ev),

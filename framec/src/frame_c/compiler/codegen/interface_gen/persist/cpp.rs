@@ -54,9 +54,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
                 .flat_map(|s| {
                     s.state_vars.iter().map(move |sv| {
                         let type_str = match &sv.var_type {
-                            crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                                t.as_str()
-                            }
+                            crate::frame_c::compiler::frame_ast::Type::Custom(t) => t.as_str(),
                             crate::frame_c::compiler::frame_ast::Type::Unknown => "int",
                         };
                         (s.name.as_str(), sv.name.as_str(), type_str)
@@ -78,9 +76,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
                         .iter()
                         .map(|p| match &p.param_type {
                             crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
-                            crate::frame_c::compiler::frame_ast::Type::Unknown => {
-                                String::new()
-                            }
+                            crate::frame_c::compiler::frame_ast::Type::Unknown => String::new(),
                         })
                         .collect();
                     (s.name.clone(), types)
@@ -120,7 +116,9 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
 
     // save_state
     let mut save_body = String::new();
-    save_body.push_str("if (!_context_stack.empty()) throw std::runtime_error(\"E700: system not quiescent\");\n");
+    save_body.push_str(
+        "if (!_context_stack.empty()) throw std::runtime_error(\"E700: system not quiescent\");\n",
+    );
 
     save_body.push_str(&format!(
         "std::function<nlohmann::json(const {0}*)> __ser = [&](const {0}* c) -> nlohmann::json {{\n",
@@ -253,16 +251,14 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         ));
     }
     restore_body.push_str("    }\n");
-    restore_body.push_str("    if (d.contains(\"state_args\") && d[\"state_args\"].is_array()) {\n");
+    restore_body
+        .push_str("    if (d.contains(\"state_args\") && d[\"state_args\"].is_array()) {\n");
     restore_body.push_str("        const auto& __sa = d[\"state_args\"];\n");
     for (state_name, types) in &cpp_state_arg_decls {
         if types.is_empty() {
             continue;
         }
-        restore_body.push_str(&format!(
-            "        if (c->state == \"{}\") {{\n",
-            state_name
-        ));
+        restore_body.push_str(&format!("        if (c->state == \"{}\") {{\n", state_name));
         for (i, t) in types.iter().enumerate() {
             if t.is_empty() {
                 restore_body.push_str(&format!(
@@ -283,16 +279,14 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     restore_body.push_str("            }\n");
     restore_body.push_str("        }\n");
     restore_body.push_str("    }\n");
-    restore_body.push_str("    if (d.contains(\"enter_args\") && d[\"enter_args\"].is_array()) {\n");
+    restore_body
+        .push_str("    if (d.contains(\"enter_args\") && d[\"enter_args\"].is_array()) {\n");
     restore_body.push_str("        const auto& __ea = d[\"enter_args\"];\n");
     for (state_name, types) in &cpp_enter_arg_decls {
         if types.is_empty() {
             continue;
         }
-        restore_body.push_str(&format!(
-            "        if (c->state == \"{}\") {{\n",
-            state_name
-        ));
+        restore_body.push_str(&format!("        if (c->state == \"{}\") {{\n", state_name));
         for (i, t) in types.iter().enumerate() {
             if t.is_empty() {
                 restore_body.push_str(&format!(

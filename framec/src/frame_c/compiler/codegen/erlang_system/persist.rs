@@ -167,12 +167,18 @@ pub(super) fn emit_persistence_methods(code: &mut String, system: &SystemAst) {
                 ));
             }
             None => {
-                entries.push(format!("        {field} => Data#data.{field}", field = field));
+                entries.push(format!(
+                    "        {field} => Data#data.{field}",
+                    field = field
+                ));
             }
         }
     }
     for field in &other_fields {
-        entries.push(format!("        {field} => Data#data.{field}", field = field));
+        entries.push(format!(
+            "        {field} => Data#data.{field}",
+            field = field
+        ));
     }
     code.push_str(&entries.join(",\n"));
     code.push_str("\n    },\n");
@@ -216,14 +222,13 @@ pub(super) fn emit_persistence_methods(code: &mut String, system: &SystemAst) {
         // to [] on a fresh system; if the saved blob predates a
         // field, fall back to []. (Today no such field exists; this
         // is forward-compatibility insurance.)
-        let dflt = if field == "frame_stack"
-            || field == "frame_state_args"
-            || field == "frame_enter_args"
-        {
-            "[]"
-        } else {
-            "undefined"
-        };
+        let dflt =
+            if field == "frame_stack" || field == "frame_state_args" || field == "frame_enter_args"
+            {
+                "[]"
+            } else {
+                "undefined"
+            };
         entries.push(format!(
             "        {field} = maps:get({field}, Persisted, {dflt})",
             field = field,

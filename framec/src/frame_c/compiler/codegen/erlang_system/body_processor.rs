@@ -37,8 +37,8 @@
 //! `erlang_capitalize_params` is exposed for the lifecycle-helper
 //! emitter in the parent module, which calls it directly.
 
-use super::native_rewrite::{erlang_rewrite_native_classified_full, ErlangRewrite};
 use super::super::codegen_utils::{replace_outside_strings_and_comments, to_snake_case};
+use super::native_rewrite::{erlang_rewrite_native_classified_full, ErlangRewrite};
 use crate::frame_c::visitors::TargetLanguage;
 
 /// Capitalize handler parameter names in a line of code.
@@ -114,7 +114,13 @@ pub(super) fn erlang_process_body_lines_with_params(
     initial_data: &str,
     param_names: &[(&str, String)],
 ) -> ErlangBodyResult {
-    erlang_process_body_lines_full(lines, action_names, interface_names, initial_data, param_names)
+    erlang_process_body_lines_full(
+        lines,
+        action_names,
+        interface_names,
+        initial_data,
+        param_names,
+    )
 }
 
 /// Tracks per-arm data-threading state so each case's arms can converge
@@ -383,7 +389,11 @@ pub(super) fn erlang_process_body_lines_full(
                         }
                     } else if b == b'"' {
                         in_string = true;
-                    } else if b == b' ' && bytes[i + 1] == b'-' && bytes[i + 2] == b'>' && bytes[i + 3] == b' ' {
+                    } else if b == b' '
+                        && bytes[i + 1] == b'-'
+                        && bytes[i + 2] == b'>'
+                        && bytes[i + 3] == b' '
+                    {
                         found = Some(i);
                         break;
                     }

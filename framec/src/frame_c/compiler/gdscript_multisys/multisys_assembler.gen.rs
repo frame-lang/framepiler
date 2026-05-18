@@ -250,7 +250,7 @@ impl GDScriptMultiSysAssemblerFsm {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<GDScriptMultiSysAssemblerFsmFrameEvent>) {
-        let __ev: &GDScriptMultiSysAssemblerFsmFrameEvent = &**__e;
+        let __ev: &GDScriptMultiSysAssemblerFsmFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Init" => self._state_Init(__ev),
             "SkipLeading" => self._state_SkipLeading(__ev),

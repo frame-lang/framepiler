@@ -13,7 +13,11 @@ use std::collections::{HashMap, HashSet};
 
 impl FrameValidator {
     /// E413: Detect circular parent chains in HSM hierarchy
-    pub(super) fn validate_hsm_cycles(&mut self, _system: &SystemAst, state_map: &HashMap<String, &StateAst>) {
+    pub(super) fn validate_hsm_cycles(
+        &mut self,
+        _system: &SystemAst,
+        state_map: &HashMap<String, &StateAst>,
+    ) {
         for (state_name, state) in state_map {
             if state.parent.is_none() {
                 continue;

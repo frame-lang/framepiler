@@ -203,7 +203,7 @@ impl ReturnExplicit {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<ReturnExplicitFrameEvent>) {
-        let __ev: &ReturnExplicitFrameEvent = &**__e;
+        let __ev: &ReturnExplicitFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Judging" => self._state_Judging(__ev),
             _ => {}

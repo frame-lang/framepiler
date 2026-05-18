@@ -207,7 +207,7 @@ impl Actions {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<ActionsFrameEvent>) {
-        let __ev: &ActionsFrameEvent = &**__e;
+        let __ev: &ActionsFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Counting" => self._state_Counting(__ev),
             _ => {}

@@ -165,8 +165,7 @@ impl FrameValidator {
     /// gap at validate time so the user can choose a fix before the
     /// codegen output bites them.
     pub(super) fn validate_domain_fields(&mut self, system: &SystemAst) {
-        let _param_names: HashSet<&str> =
-            system.params.iter().map(|p| p.name.as_str()).collect();
+        let _param_names: HashSet<&str> = system.params.iter().map(|p| p.name.as_str()).collect();
         let mut seen: HashSet<&str> = HashSet::new();
 
         // Collect required (no-default) param names once — the W706
@@ -266,5 +265,4 @@ impl FrameValidator {
             }
         }
     }
-
 }

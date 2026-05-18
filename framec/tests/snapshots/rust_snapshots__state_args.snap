@@ -223,7 +223,7 @@ impl StateArgs {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<StateArgsFrameEvent>) {
-        let __ev: &StateArgsFrameEvent = &**__e;
+        let __ev: &StateArgsFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Idle" => self._state_Idle(__ev),
             "Holding" => self._state_Holding(__ev),

@@ -80,9 +80,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     ser_body.push_str("if (comp == null) return null;\n");
     ser_body.push_str("var j = new java.util.LinkedHashMap<String, Object>();\n");
     ser_body.push_str("j.put(\"state\", comp.state);\n");
-    ser_body.push_str(
-        "j.put(\"state_vars\", new java.util.LinkedHashMap<>(comp.state_vars));\n",
-    );
+    ser_body.push_str("j.put(\"state_vars\", new java.util.LinkedHashMap<>(comp.state_vars));\n");
     ser_body.push_str("j.put(\"state_args\", new java.util.ArrayList<>(comp.state_args));\n");
     ser_body.push_str("j.put(\"enter_args\", new java.util.ArrayList<>(comp.enter_args));\n");
     ser_body.push_str("j.put(\"parent\", __serComp(comp.parent_compartment));\n");
@@ -112,15 +110,13 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     deser_body.push_str("    var fields = node.get(\"state_vars\").fields();\n");
     deser_body.push_str("    while (fields.hasNext()) {\n");
     deser_body.push_str("        var e = fields.next();\n");
-    deser_body.push_str("        c.state_vars.put(e.getKey(), mapper.convertValue(e.getValue(), Object.class));\n");
+    deser_body.push_str(
+        "        c.state_vars.put(e.getKey(), mapper.convertValue(e.getValue(), Object.class));\n",
+    );
     deser_body.push_str("    }\n");
     deser_body.push_str("}\n");
-    deser_body.push_str(
-        "var __sa = node.has(\"state_args\") ? node.get(\"state_args\") : null;\n",
-    );
-    deser_body.push_str(
-        "var __ea = node.has(\"enter_args\") ? node.get(\"enter_args\") : null;\n",
-    );
+    deser_body.push_str("var __sa = node.has(\"state_args\") ? node.get(\"state_args\") : null;\n");
+    deser_body.push_str("var __ea = node.has(\"enter_args\") ? node.get(\"enter_args\") : null;\n");
     if !state_param_types.is_empty() {
         deser_body.push_str("switch (c.state) {\n");
         for (state_name, param_types) in &state_param_types {
@@ -258,9 +254,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
             continue;
         }
         let java_type: String = match &var.var_type {
-            crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                java_box(&java_map_type(t))
-            }
+            crate::frame_c::compiler::frame_ast::Type::Custom(t) => java_box(&java_map_type(t)),
             _ => "Object".to_string(),
         };
         restore_body.push_str(&format!(

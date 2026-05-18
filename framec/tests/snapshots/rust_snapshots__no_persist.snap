@@ -214,7 +214,7 @@ impl NoPersist {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<NoPersistFrameEvent>) {
-        let __ev: &NoPersistFrameEvent = &**__e;
+        let __ev: &NoPersistFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Active" => self._state_Active(__ev),
             _ => {}

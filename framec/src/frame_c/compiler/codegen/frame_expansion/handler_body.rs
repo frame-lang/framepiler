@@ -93,13 +93,11 @@ pub(super) fn context_return_read_typed(
                 _ => raw,
             }
         }
-        TargetLanguage::Rust => {
-            super::super::rust_system::rust_context_return_read_typed(
-                frame_type,
-                system_name,
-                event_name,
-            )
-        }
+        TargetLanguage::Rust => super::super::rust_system::rust_context_return_read_typed(
+            frame_type,
+            system_name,
+            event_name,
+        ),
         TargetLanguage::Cpp => {
             format!(
                 "std::any_cast<{}>(_context_stack.back()._return)",
@@ -323,15 +321,16 @@ pub(crate) fn emit_handler_body_via_statements(
                                                 } = frame_regions[next_frame_idx]
                                                 {
                                                     if *ret_indent == *indent {
-                                                        let ret_exp = super::generate_frame_expansion(
-                                                            body_bytes,
-                                                            ret_span,
-                                                            *ret_kind,
-                                                            *ret_indent,
-                                                            lang,
-                                                            ctx,
-                                                            ret_meta,
-                                                        );
+                                                        let ret_exp =
+                                                            super::generate_frame_expansion(
+                                                                body_bytes,
+                                                                ret_span,
+                                                                *ret_kind,
+                                                                *ret_indent,
+                                                                lang,
+                                                                ctx,
+                                                                ret_meta,
+                                                            );
                                                         out.push('\n');
                                                         out.push_str(&ret_exp);
                                                         skip_set.insert(j);

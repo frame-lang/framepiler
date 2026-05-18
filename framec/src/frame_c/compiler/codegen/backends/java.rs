@@ -641,7 +641,11 @@ impl LanguageBackend for JavaBackend {
                 let pairs_str: Vec<String> = pairs
                     .iter()
                     .map(|(k, v)| {
-                        format!("java.util.Map.entry({}, {})", self.emit(k, ctx), self.emit(v, ctx))
+                        format!(
+                            "java.util.Map.entry({}, {})",
+                            self.emit(k, ctx),
+                            self.emit(v, ctx)
+                        )
                     })
                     .collect();
                 format!("java.util.Map.ofEntries({})", pairs_str.join(", "))

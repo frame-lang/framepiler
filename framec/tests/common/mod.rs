@@ -9,8 +9,8 @@
 #![allow(dead_code)]
 
 use framec::frame_c::compiler::compile_module;
-use framec::frame_c::utils::RunError;
 use framec::frame_c::compiler::TargetLanguage;
+use framec::frame_c::utils::RunError;
 use std::convert::TryFrom;
 use std::path::PathBuf;
 

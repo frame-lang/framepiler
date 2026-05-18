@@ -97,9 +97,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     let c_mangle_type = |t: &str| -> String {
         let t = t.trim();
         let canonical = match t {
-            "i32" | "i64" | "isize" | "uint" | "uintptr_t" | "intptr_t" | "long" | "short" => {
-                "int"
-            }
+            "i32" | "i64" | "isize" | "uint" | "uintptr_t" | "intptr_t" | "long" | "short" => "int",
             "f32" | "f64" | "float" => "double",
             "boolean" => "bool",
             "string" | "String" | "str" | "char*" | "const char*" => "str",
@@ -211,8 +209,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         system.name, system.name
     ));
     deserialize_helper.push_str("    if (!data || cJSON_IsNull(data)) return NULL;\n");
-    deserialize_helper
-        .push_str("    cJSON* state_item = cJSON_GetObjectItem(data, \"state\");\n");
+    deserialize_helper.push_str("    cJSON* state_item = cJSON_GetObjectItem(data, \"state\");\n");
     deserialize_helper.push_str(&format!(
         "    {}_Compartment* comp = {}_Compartment_new(strdup(state_item->valuestring));\n",
         system.name, system.name
@@ -300,8 +297,10 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         "for (int i = 0; i < {}_FrameVec_size(self->_state_stack); i++) {{\n",
         system.name
     ));
-    save_body.push_str(&format!("    {}_Compartment* comp = ({}_Compartment*){}_FrameVec_get(self->_state_stack, i);\n",
-        system.name, system.name, system.name));
+    save_body.push_str(&format!(
+        "    {}_Compartment* comp = ({}_Compartment*){}_FrameVec_get(self->_state_stack, i);\n",
+        system.name, system.name, system.name
+    ));
     save_body.push_str(&format!(
         "    cJSON_AddItemToArray(stack_arr, {}_serialize_compartment(comp));\n",
         system.name
@@ -358,7 +357,10 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
 
     // restore_state
     let mut restore_body = String::new();
-    restore_body.push_str(&format!("cJSON* root = cJSON_Parse({});\n", load_param_name));
+    restore_body.push_str(&format!(
+        "cJSON* root = cJSON_Parse({});\n",
+        load_param_name
+    ));
     if uses_new_contract {
         restore_body.push_str("if (!root) return;\n\n");
     } else {
@@ -381,15 +383,13 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     }
     restore_body.push_str(&format!("{}->__next_compartment = NULL;\n\n", target));
 
-    restore_body
-        .push_str("cJSON* comp_data = cJSON_GetObjectItem(root, \"_compartment\");\n");
+    restore_body.push_str("cJSON* comp_data = cJSON_GetObjectItem(root, \"_compartment\");\n");
     restore_body.push_str(&format!(
         "{}->__compartment = {}_deserialize_compartment(comp_data);\n\n",
         target, system.name
     ));
 
-    restore_body
-        .push_str("cJSON* stack_arr = cJSON_GetObjectItem(root, \"_state_stack\");\n");
+    restore_body.push_str("cJSON* stack_arr = cJSON_GetObjectItem(root, \"_state_stack\");\n");
     restore_body.push_str("if (stack_arr) {\n");
     restore_body.push_str("    cJSON* stack_item;\n");
     restore_body.push_str("    cJSON_ArrayForEach(stack_item, stack_arr) {\n");

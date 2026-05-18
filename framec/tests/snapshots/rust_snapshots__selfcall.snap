@@ -207,7 +207,7 @@ impl SelfCall {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<SelfCallFrameEvent>) {
-        let __ev: &SelfCallFrameEvent = &**__e;
+        let __ev: &SelfCallFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Active" => self._state_Active(__ev),
             _ => {}

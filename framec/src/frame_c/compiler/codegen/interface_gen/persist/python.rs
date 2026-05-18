@@ -100,7 +100,9 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     // param could be named `json`, which the import would shadow.
     restore_body.push_str(&format!("_blob = {}\n", load_param_name));
     restore_body.push_str("import json\n");
-    restore_body.push_str("_raw = _blob.decode(\"utf-8\") if isinstance(_blob, (bytes, bytearray)) else _blob\n");
+    restore_body.push_str(
+        "_raw = _blob.decode(\"utf-8\") if isinstance(_blob, (bytes, bytearray)) else _blob\n",
+    );
     restore_body.push_str("_parsed = json.loads(_raw)\n");
     restore_body.push_str("def _deser_comp(d):\n");
     restore_body.push_str("    if d is None:\n        return None\n");
@@ -109,9 +111,8 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     restore_body.push_str("    comp.state_vars = dict(d.get(\"state_vars\", {}))\n");
     restore_body.push_str("    comp.enter_args = list(d.get(\"enter_args\", []))\n");
     restore_body.push_str("    comp.exit_args = list(d.get(\"exit_args\", []))\n");
-    restore_body.push_str(
-        "    comp.parent_compartment = _deser_comp(d.get(\"parent_compartment\"))\n",
-    );
+    restore_body
+        .push_str("    comp.parent_compartment = _deser_comp(d.get(\"parent_compartment\"))\n");
     restore_body.push_str("    return comp\n");
     if !uses_new_contract {
         restore_body.push_str(&format!(

@@ -69,9 +69,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     });
 
     let mut deser_body = String::new();
-    deser_body.push_str(
-        "if (el.ValueKind == System.Text.Json.JsonValueKind.Null) return null;\n",
-    );
+    deser_body.push_str("if (el.ValueKind == System.Text.Json.JsonValueKind.Null) return null;\n");
     deser_body.push_str(&format!(
         "var c = new {}(el.GetProperty(\"state\").GetString());\n",
         compartment_class
@@ -84,10 +82,14 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     deser_body.push_str("    }\n");
     deser_body.push_str("}\n");
     deser_body.push_str("if (el.TryGetProperty(\"state_args\", out var sa) && sa.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
-    deser_body.push_str("    foreach (var v in sa.EnumerateArray()) c.state_args.Add(__convertJsonValue(v));\n");
+    deser_body.push_str(
+        "    foreach (var v in sa.EnumerateArray()) c.state_args.Add(__convertJsonValue(v));\n",
+    );
     deser_body.push_str("}\n");
     deser_body.push_str("if (el.TryGetProperty(\"enter_args\", out var ea) && ea.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
-    deser_body.push_str("    foreach (var v in ea.EnumerateArray()) c.enter_args.Add(__convertJsonValue(v));\n");
+    deser_body.push_str(
+        "    foreach (var v in ea.EnumerateArray()) c.enter_args.Add(__convertJsonValue(v));\n",
+    );
     deser_body.push_str("}\n");
 
     let cs_typed_conv = |declared_type: &str, idx: usize, slot: &str| -> String {
@@ -116,9 +118,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
                         .iter()
                         .map(|p| match &p.param_type {
                             crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
-                            crate::frame_c::compiler::frame_ast::Type::Unknown => {
-                                String::new()
-                            }
+                            crate::frame_c::compiler::frame_ast::Type::Unknown => String::new(),
                         })
                         .collect();
                     (s.name.clone(), types)
@@ -226,7 +226,9 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.False) return false;\n");
     conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {\n");
     conv_body.push_str("    var __list = new System.Collections.Generic.List<object>();\n");
-    conv_body.push_str("    foreach (var __ne in v.EnumerateArray()) __list.Add(__convertJsonValue(__ne));\n");
+    conv_body.push_str(
+        "    foreach (var __ne in v.EnumerateArray()) __list.Add(__convertJsonValue(__ne));\n",
+    );
     conv_body.push_str("    return __list;\n");
     conv_body.push_str("}\n");
     conv_body.push_str("if (v.ValueKind == System.Text.Json.JsonValueKind.Object) {\n");
@@ -315,8 +317,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         "{}.__compartment = __DeserComp(__root.GetProperty(\"_compartment\"));\n",
         target
     ));
-    restore_body
-        .push_str("if (__root.TryGetProperty(\"_state_stack\", out var __stack)) {\n");
+    restore_body.push_str("if (__root.TryGetProperty(\"_state_stack\", out var __stack)) {\n");
     restore_body.push_str(&format!(
         "    {}._state_stack = new List<{}>();\n",
         target, compartment_class

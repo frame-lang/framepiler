@@ -108,9 +108,8 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     deser_body.push_str("    val fields = node.get(\"state_vars\").fields()\n");
     deser_body.push_str("    while (fields.hasNext()) {\n");
     deser_body.push_str("        val e = fields.next()\n");
-    deser_body.push_str(
-        "        c.state_vars[e.key] = mapper.convertValue(e.value, Any::class.java)\n",
-    );
+    deser_body
+        .push_str("        c.state_vars[e.key] = mapper.convertValue(e.value, Any::class.java)\n");
     deser_body.push_str("    }\n");
     deser_body.push_str("}\n");
     deser_body.push_str(
@@ -173,7 +172,9 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     });
 
     let mut save_body = String::new();
-    save_body.push_str("if (_context_stack.isNotEmpty()) throw RuntimeException(\"E700: system not quiescent\")\n");
+    save_body.push_str(
+        "if (_context_stack.isNotEmpty()) throw RuntimeException(\"E700: system not quiescent\")\n",
+    );
     save_body.push_str("val mapper = com.fasterxml.jackson.databind.ObjectMapper()\n");
     save_body.push_str("val j = java.util.LinkedHashMap<String, Any?>()\n");
     save_body.push_str("j[\"_compartment\"] = __serComp(__compartment)\n");
@@ -253,9 +254,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
             continue;
         }
         let mapped = match &var.var_type {
-            crate::frame_c::compiler::frame_ast::Type::Custom(t) => {
-                kt_box(&kotlin_map_type(t))
-            }
+            crate::frame_c::compiler::frame_ast::Type::Custom(t) => kt_box(&kotlin_map_type(t)),
             _ => "Any".to_string(),
         };
         restore_body.push_str(&format!(

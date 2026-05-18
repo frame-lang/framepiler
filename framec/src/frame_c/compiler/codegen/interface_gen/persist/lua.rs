@@ -44,9 +44,8 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     };
 
     let mut save_body = String::new();
-    save_body.push_str(
-        "if #self._context_stack > 0 then error(\"E700: system not quiescent\") end\n",
-    );
+    save_body
+        .push_str("if #self._context_stack > 0 then error(\"E700: system not quiescent\") end\n");
     save_body.push_str("local serpent = require(\"serpent\")\n");
     save_body.push_str("local function serialize_comp(comp)\n");
     save_body.push_str("    if not comp then return nil end\n");
@@ -57,8 +56,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     save_body.push_str("    t.enter_args = comp.enter_args\n");
     save_body.push_str("    t.exit_args = comp.exit_args\n");
     save_body.push_str("    t.forward_event = comp.forward_event\n");
-    save_body
-        .push_str("    t.parent_compartment = serialize_comp(comp.parent_compartment)\n");
+    save_body.push_str("    t.parent_compartment = serialize_comp(comp.parent_compartment)\n");
     save_body.push_str("    return t\n");
     save_body.push_str("end\n");
     save_body.push_str("local stack = {}\n");
@@ -117,8 +115,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     restore_body.push_str("    comp.enter_args = d.enter_args or {}\n");
     restore_body.push_str("    comp.exit_args = d.exit_args or {}\n");
     restore_body.push_str("    comp.forward_event = d.forward_event\n");
-    restore_body
-        .push_str("    comp.parent_compartment = deserialize_comp(d.parent_compartment)\n");
+    restore_body.push_str("    comp.parent_compartment = deserialize_comp(d.parent_compartment)\n");
     restore_body.push_str("    return comp\n");
     restore_body.push_str("end\n");
     if !uses_new_contract {
@@ -162,8 +159,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
             }
             continue;
         }
-        restore_body
-            .push_str(&format!("{}.{} = _parsed.{}\n", target, var.name, var.name));
+        restore_body.push_str(&format!("{}.{} = _parsed.{}\n", target, var.name, var.name));
     }
     if !uses_new_contract {
         restore_body.push_str("return instance");

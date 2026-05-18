@@ -102,8 +102,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     save_body.push_str("var j: [String: Any] = [:]\n");
     save_body.push_str("j[\"_compartment\"] = __serComp(__compartment) as Any\n");
     save_body.push_str("var stack: [[String: Any]] = []\n");
-    save_body
-        .push_str("for c in _state_stack { if let s = __serComp(c) { stack.append(s) } }\n");
+    save_body.push_str("for c in _state_stack { if let s = __serComp(c) { stack.append(s) } }\n");
     save_body.push_str("j[\"_state_stack\"] = stack\n");
     for var in &system.domain {
         if var.attributes.iter().any(|a| a.name == "no_persist") {
@@ -149,8 +148,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         "{}.__compartment = {}.__deserComp(_parsed[\"_compartment\"] as? [String: Any])!\n",
         target, target
     ));
-    restore_body
-        .push_str("if let stack = _parsed[\"_state_stack\"] as? [[String: Any]] {\n");
+    restore_body.push_str("if let stack = _parsed[\"_state_stack\"] as? [[String: Any]] {\n");
     restore_body.push_str(&format!("    {}._state_stack = []\n", target));
     restore_body.push_str(&format!(
         "    for sc in stack {{ if let c = {}.__deserComp(sc) {{ {}._state_stack.append(c) }} }}\n",

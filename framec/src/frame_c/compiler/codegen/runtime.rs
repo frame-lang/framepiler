@@ -6,11 +6,11 @@
 
 mod c;
 
-pub use c::generate_c_compartment_types;
 use super::ast::{CodegenNode, Field, Param, Visibility};
 use super::codegen_utils::{expression_to_string, state_var_init_value, type_to_string};
 use crate::frame_c::compiler::frame_ast::{Expression, SystemAst, Type};
 use crate::frame_c::visitors::TargetLanguage;
+pub use c::generate_c_compartment_types;
 
 /// Convert a Frame snake_case identifier to a PascalCase variant name
 /// for use in the per-system FrameEvent enum (RFC-0025 Track B.1).
@@ -1128,7 +1128,11 @@ fn generate_rust_runtime_types(
             .iter()
             .map(|(n, ty)| format!("{}: {}", n, ty))
             .collect();
-        code.push_str(&format!("    {} {{ {} }},\n", variant, field_strs.join(", ")));
+        code.push_str(&format!(
+            "    {} {{ {} }},\n",
+            variant,
+            field_strs.join(", ")
+        ));
     }
     // Lifecycle event variants — carry Vec<String> args, parsed at
     // dispatch via .parse::<T>(). Names chosen to not collide with
@@ -1268,8 +1272,14 @@ fn generate_rust_runtime_types(
     // (value enum) instead of `HashMap<String, Box<dyn Any>>`.
     code.push_str("#[allow(dead_code)]\n");
     code.push_str(&format!("struct {}FrameContext {{\n", system_name));
-    code.push_str(&format!("    event: std::rc::Rc<{}FrameEvent>,\n", system_name));
-    code.push_str(&format!("    _return: Option<{}FrameReturn>,\n", system_name));
+    code.push_str(&format!(
+        "    event: std::rc::Rc<{}FrameEvent>,\n",
+        system_name
+    ));
+    code.push_str(&format!(
+        "    _return: Option<{}FrameReturn>,\n",
+        system_name
+    ));
     code.push_str(&format!(
         "    _data: std::collections::HashMap<String, {}FrameValue>,\n",
         system_name
@@ -1458,7 +1468,6 @@ fn generate_rust_runtime_types(
 
     code
 }
-
 
 /// Generate C++17 runtime types (FrameEvent, FrameContext, Compartment classes)
 pub fn generate_cpp_compartment_types(system: &SystemAst) -> String {
@@ -1831,4 +1840,3 @@ pub fn generate_go_compartment_types(system: &SystemAst) -> String {
 
     code
 }
-

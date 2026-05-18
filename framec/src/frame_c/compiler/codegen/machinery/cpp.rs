@@ -235,11 +235,7 @@ while (__next_compartment) {{
         })
     }
 
-    fn emit_transition(
-        &self,
-        _system: &SystemAst,
-        compartment_class: &str,
-    ) -> Option<CodegenNode> {
+    fn emit_transition(&self, _system: &SystemAst, compartment_class: &str) -> Option<CodegenNode> {
         let comp_ptr = format!("std::shared_ptr<{}>", compartment_class);
         Some(CodegenNode::Method {
             name: "__transition".to_string(),

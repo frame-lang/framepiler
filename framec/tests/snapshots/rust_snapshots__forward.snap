@@ -214,7 +214,7 @@ impl Forward {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<ForwardFrameEvent>) {
-        let __ev: &ForwardFrameEvent = &**__e;
+        let __ev: &ForwardFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Start" => self._state_Start(__ev),
             "Middle" => self._state_Middle(__ev),

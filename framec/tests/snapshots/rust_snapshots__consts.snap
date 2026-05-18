@@ -213,7 +213,7 @@ impl Consts {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<ConstsFrameEvent>) {
-        let __ev: &ConstsFrameEvent = &**__e;
+        let __ev: &ConstsFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Running" => self._state_Running(__ev),
             _ => {}

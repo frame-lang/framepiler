@@ -231,11 +231,7 @@ while (__next_compartment != null) {{
         })
     }
 
-    fn emit_transition(
-        &self,
-        _system: &SystemAst,
-        compartment_class: &str,
-    ) -> Option<CodegenNode> {
+    fn emit_transition(&self, _system: &SystemAst, compartment_class: &str) -> Option<CodegenNode> {
         // __transition
         Some(CodegenNode::Method {
             name: "__transition".to_string(),

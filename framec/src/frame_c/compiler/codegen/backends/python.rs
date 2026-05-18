@@ -373,8 +373,8 @@ impl LanguageBackend for PythonBackend {
                 }
                 for stmt in body {
                     let rendered = self.emit(stmt, ctx);
-                    let create_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__kernel");
+                    let create_only =
+                        rendered.contains("__fire_enter_cascade") || rendered.contains("__kernel");
                     if create_only {
                         frame_init_lines.push(rendered);
                         continue;

@@ -169,8 +169,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     } else {
         restore_body.push_str(&format!("instance = {}.allocate\n", sys));
         restore_body.push_str("instance.instance_variable_set(:@_context_stack, [])\n");
-        restore_body
-            .push_str("instance.instance_variable_set(:@__next_compartment, nil)\n");
+        restore_body.push_str("instance.instance_variable_set(:@__next_compartment, nil)\n");
         restore_body.push_str("instance.instance_variable_set(:@__compartment, instance.send(:__deser_comp, _parsed[\"_compartment\"]))\n");
         restore_body.push_str("if _parsed[\"_state_stack\"]\n");
         restore_body.push_str("  instance.instance_variable_set(:@_state_stack, _parsed[\"_state_stack\"].map { |sc| instance.send(:__deser_comp, sc) })\n");

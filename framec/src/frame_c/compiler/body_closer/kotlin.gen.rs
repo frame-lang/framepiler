@@ -236,7 +236,7 @@ impl KotlinBodyCloserFsm {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<KotlinBodyCloserFsmFrameEvent>) {
-        let __ev: &KotlinBodyCloserFsmFrameEvent = &**__e;
+        let __ev: &KotlinBodyCloserFsmFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Init" => self._state_Init(__ev),
             "Scanning" => self._state_Scanning(__ev),

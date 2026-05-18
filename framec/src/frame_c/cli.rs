@@ -717,9 +717,7 @@ fn handle_compile_project(
             had_errors = true;
             continue;
         }
-        if let Some(sys_name) =
-            crate::frame_c::compiler::find_system_name(content.as_bytes(), 0)
-        {
+        if let Some(sys_name) = crate::frame_c::compiler::find_system_name(content.as_bytes(), 0) {
             let entry = dup_systems.entry(sys_name).or_insert_with(Vec::new);
             entry.push(f.clone());
         }
@@ -895,7 +893,9 @@ fn handle_compile_project(
 /// (`<exe>/../../frame_runtime_py`), target-relative guess
 /// (`<exe>/../frame_runtime_py`), then plain `./frame_runtime_py`.
 fn copy_python_runtime(outdir: &Path) {
-    let env_override = std::env::var("FRAME_RUNTIME_PY_DIR").ok().map(PathBuf::from);
+    let env_override = std::env::var("FRAME_RUNTIME_PY_DIR")
+        .ok()
+        .map(PathBuf::from);
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
@@ -921,13 +921,18 @@ fn copy_python_runtime(outdir: &Path) {
             eprintln!("warning: failed to copy frame_runtime_py: {}", e);
         }
     } else {
-        eprintln!("warning: frame_runtime_py not found at {:?}; set FRAME_RUNTIME_PY_DIR to override", runtime_src);
+        eprintln!(
+            "warning: frame_runtime_py not found at {:?}; set FRAME_RUNTIME_PY_DIR to override",
+            runtime_src
+        );
     }
 }
 
 /// Same as copy_python_runtime, but for the TypeScript runtime.
 fn copy_typescript_runtime(outdir: &Path) {
-    let env_override = std::env::var("FRAME_RUNTIME_TS_DIR").ok().map(PathBuf::from);
+    let env_override = std::env::var("FRAME_RUNTIME_TS_DIR")
+        .ok()
+        .map(PathBuf::from);
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
@@ -953,7 +958,10 @@ fn copy_typescript_runtime(outdir: &Path) {
             eprintln!("warning: failed to copy frame_runtime_ts: {}", e);
         }
     } else {
-        eprintln!("warning: frame_runtime_ts not found at {:?}; set FRAME_RUNTIME_TS_DIR to override", runtime_src);
+        eprintln!(
+            "warning: frame_runtime_ts not found at {:?}; set FRAME_RUNTIME_TS_DIR to override",
+            runtime_src
+        );
     }
 }
 

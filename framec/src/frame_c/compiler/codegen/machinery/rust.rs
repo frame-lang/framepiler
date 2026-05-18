@@ -160,9 +160,7 @@ while let Some(c) = cursor {
         let event_class = format!("{}FrameEvent", system.name);
         Some(CodegenNode::Method {
             name: "__kernel".to_string(),
-            params: vec![
-                Param::new("__e").with_type(&format!("&std::rc::Rc<{}>", event_class)),
-            ],
+            params: vec![Param::new("__e").with_type(&format!("&std::rc::Rc<{}>", event_class))],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
                 code: format!(
@@ -226,11 +224,13 @@ while self.__next_compartment.is_some() {{
         // Rust-specific: __router takes `&Rc<FrameEvent>` so the
         // kernel can forward its borrow. Per-state dispatchers keep
         // their `&FrameEvent` signature for handler ergonomics — the
-        // router does the single deref (`&**__e`) before the match.
+        // typed `let __ev: &FooFrameEvent = __e;` relies on Rc's
+        // Deref coercion to reach `&FrameEvent` from `&Rc<FrameEvent>`
+        // (an explicit `&**__e` would be clippy::explicit_auto_deref).
         let event_class = format!("{}FrameEvent", system.name);
         let mut router_code = String::from("let __ev: &");
         router_code.push_str(&event_class);
-        router_code.push_str(" = &**__e;\n");
+        router_code.push_str(" = __e;\n");
         router_code.push_str("match self.__compartment.state.as_str() {\n");
         if let Some(ref machine) = system.machine {
             for state in &machine.states {
@@ -243,9 +243,7 @@ while self.__next_compartment.is_some() {{
         router_code.push_str("    _ => {}\n}");
         Some(CodegenNode::Method {
             name: "__router".to_string(),
-            params: vec![
-                Param::new("__e").with_type(&format!("&std::rc::Rc<{}>", event_class)),
-            ],
+            params: vec![Param::new("__e").with_type(&format!("&std::rc::Rc<{}>", event_class))],
             return_type: None,
             body: vec![CodegenNode::NativeBlock {
                 code: router_code,
@@ -258,11 +256,7 @@ while self.__next_compartment.is_some() {{
         })
     }
 
-    fn emit_transition(
-        &self,
-        _system: &SystemAst,
-        compartment_class: &str,
-    ) -> Option<CodegenNode> {
+    fn emit_transition(&self, _system: &SystemAst, compartment_class: &str) -> Option<CodegenNode> {
         // __transition — caches next compartment (deferred).
         Some(CodegenNode::Method {
             name: "__transition".to_string(),

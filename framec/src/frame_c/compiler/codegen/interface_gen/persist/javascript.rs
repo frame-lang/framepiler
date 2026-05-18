@@ -72,12 +72,10 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     save_body.push_str("return JSON.stringify({\n");
     save_body.push_str("    _compartment: serializeComp(this.__compartment),\n");
     if is_ts {
-        save_body.push_str(
-            "    _state_stack: this._state_stack.map((c: any) => serializeComp(c)),\n",
-        );
-    } else {
         save_body
-            .push_str("    _state_stack: this._state_stack.map((c) => serializeComp(c)),\n");
+            .push_str("    _state_stack: this._state_stack.map((c: any) => serializeComp(c)),\n");
+    } else {
+        save_body.push_str("    _state_stack: this._state_stack.map((c) => serializeComp(c)),\n");
     }
 
     for var in &system.domain {

@@ -662,7 +662,10 @@ impl LanguageBackend for SwiftBackend {
                 if path.is_empty() {
                     return None;
                 }
-                Some(format!("// RFC-0022: @@import \"{}\" — Swift module-local (no emission required)", imp.module))
+                Some(format!(
+                    "// RFC-0022: @@import \"{}\" — Swift module-local (no emission required)",
+                    imp.module
+                ))
             })
             .collect()
     }

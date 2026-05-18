@@ -401,9 +401,7 @@ pub fn compile_ast_based(
                         module: stripped,
                         symbols: peek.names,
                         alias: None,
-                        span: crate::frame_c::compiler::frame_ast::Span::new(
-                            span.start, span.end,
-                        ),
+                        span: crate::frame_c::compiler::frame_ast::Span::new(span.start, span.end),
                     });
                 }
             }
@@ -837,10 +835,8 @@ pub fn compile_ast_based(
         // reference" when a name misses the new-contract set.
         // Cross-file references default to new contract; local
         // legacy references default to the legacy emit.
-        let local: std::collections::HashSet<String> = system_asts
-            .iter()
-            .map(|s| s.name.clone())
-            .collect();
+        let local: std::collections::HashSet<String> =
+            system_asts.iter().map(|s| s.name.clone()).collect();
         crate::frame_c::compiler::codegen::interface_gen::set_local_systems(local);
     }
 
@@ -1226,7 +1222,10 @@ fn peek_imported_system_names(
         }
         pending_save_or_load = false;
     }
-    Ok(PeekData { names, new_contract })
+    Ok(PeekData {
+        names,
+        new_contract,
+    })
 }
 
 fn filter_by_target_attribute(

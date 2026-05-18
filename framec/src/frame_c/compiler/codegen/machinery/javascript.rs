@@ -248,11 +248,7 @@ if (handler) {{
         })
     }
 
-    fn emit_transition(
-        &self,
-        _system: &SystemAst,
-        compartment_class: &str,
-    ) -> Option<CodegenNode> {
+    fn emit_transition(&self, _system: &SystemAst, compartment_class: &str) -> Option<CodegenNode> {
         Some(CodegenNode::Method {
             name: "__transition".to_string(),
             params: vec![Param::new("next_compartment").with_type(compartment_class)],

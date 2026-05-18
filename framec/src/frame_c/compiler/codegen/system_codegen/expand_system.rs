@@ -94,9 +94,9 @@ pub(crate) fn expand_system_instantiation_in_domain(
                         );
                         format!("std::make_shared<{}>({})", name, factory)
                     }
-                    _ => crate::frame_c::compiler::assembler::generate_constructor(
-                        name, args, lang,
-                    ),
+                    _ => {
+                        crate::frame_c::compiler::assembler::generate_constructor(name, args, lang)
+                    }
                 };
                 result.push_str(&constructor);
                 continue;

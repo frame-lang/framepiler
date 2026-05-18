@@ -274,7 +274,7 @@ impl ContextParserFsm {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<ContextParserFsmFrameEvent>) {
-        let __ev: &ContextParserFsmFrameEvent = &**__e;
+        let __ev: &ContextParserFsmFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Init" => self._state_Init(__ev),
             "Dispatching" => self._state_Dispatching(__ev),

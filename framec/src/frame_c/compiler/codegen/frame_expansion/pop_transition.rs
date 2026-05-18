@@ -203,7 +203,9 @@ pub(super) fn generate_pop_transition(
                     code.push_str(&format!("{}__saved.enter_args.add({});\n", indent, value));
                 }
                 TargetLanguage::Rust => {
-                    code.push_str(&super::super::rust_system::rust_pop_enter_arg(indent, value));
+                    code.push_str(&super::super::rust_system::rust_pop_enter_arg(
+                        indent, value,
+                    ));
                 }
                 TargetLanguage::C => {
                     code.push_str(&format!(

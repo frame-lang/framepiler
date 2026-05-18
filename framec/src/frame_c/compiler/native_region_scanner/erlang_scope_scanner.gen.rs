@@ -231,7 +231,7 @@ impl ErlangScopeScannerFsm {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<ErlangScopeScannerFsmFrameEvent>) {
-        let __ev: &ErlangScopeScannerFsmFrameEvent = &**__e;
+        let __ev: &ErlangScopeScannerFsmFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Init" => self._state_Init(__ev),
             "CheckFun" => self._state_CheckFun(__ev),

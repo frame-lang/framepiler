@@ -411,7 +411,10 @@ impl LanguageBackend for ErlangBackend {
                 if path.is_empty() {
                     return None;
                 }
-                Some(format!("%% RFC-0022: @@import \"{}\" — Erlang OTP linkage (no emission required)", imp.module))
+                Some(format!(
+                    "%% RFC-0022: @@import \"{}\" — Erlang OTP linkage (no emission required)",
+                    imp.module
+                ))
             })
             .collect()
     }

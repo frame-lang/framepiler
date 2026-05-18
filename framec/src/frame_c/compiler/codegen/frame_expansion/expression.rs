@@ -98,9 +98,8 @@ pub(super) fn expand_expression(expr: &str, lang: TargetLanguage, ctx: &HandlerC
             ..
         } = region
         {
-            let expansion = super::generate_frame_expansion(
-                body_bytes, span, *kind, 0, lang, ctx, metadata,
-            );
+            let expansion =
+                super::generate_frame_expansion(body_bytes, span, *kind, 0, lang, ctx, metadata);
             expansions.push(expansion);
         }
     }

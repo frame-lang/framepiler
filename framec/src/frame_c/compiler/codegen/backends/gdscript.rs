@@ -376,8 +376,8 @@ impl LanguageBackend for GDScriptBackend {
                     if !rendered.ends_with('\n') {
                         rendered.push('\n');
                     }
-                    let frame_init_only = rendered.contains("__fire_enter_cascade")
-                        || rendered.contains("__kernel");
+                    let frame_init_only =
+                        rendered.contains("__fire_enter_cascade") || rendered.contains("__kernel");
                     if frame_init_only {
                         frame_init_lines.push(rendered);
                         continue;
@@ -864,10 +864,7 @@ impl LanguageBackend for GDScriptBackend {
                     if idx == 0 {
                         out.push(format!("const {} = preload(\"{}\")", sym, gd_path));
                     } else {
-                        out.push(format!(
-                            "const {} = preload(\"{}\").{}",
-                            sym, gd_path, sym
-                        ));
+                        out.push(format!("const {} = preload(\"{}\").{}", sym, gd_path, sym));
                     }
                 }
             } else {

@@ -235,7 +235,7 @@ impl TypeScriptSyntaxSkipperFsm {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<TypeScriptSyntaxSkipperFsmFrameEvent>) {
-        let __ev: &TypeScriptSyntaxSkipperFsmFrameEvent = &**__e;
+        let __ev: &TypeScriptSyntaxSkipperFsmFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Init" => self._state_Init(__ev),
             "SkipComment" => self._state_SkipComment(__ev),

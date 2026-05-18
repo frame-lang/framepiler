@@ -16,7 +16,9 @@
 use crate::frame_c::compiler::codegen::ast::{CodegenNode, Param, Visibility};
 use crate::frame_c::compiler::frame_ast::SystemAst;
 
-use super::super::{dart_conv_expr, extract_tagged_system_name, nested_uses_new_contract, parse_dart_type};
+use super::super::{
+    dart_conv_expr, extract_tagged_system_name, nested_uses_new_contract, parse_dart_type,
+};
 
 pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     system: &SystemAst,
@@ -60,16 +62,13 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     save_body.push_str("        'enter_args': List<dynamic>.from(comp.enter_args),\n");
     save_body.push_str("        'exit_args': List<dynamic>.from(comp.exit_args),\n");
     save_body.push_str("        'forward_event': comp.forward_event,\n");
-    save_body.push_str(
-        "        'parent_compartment': serializeComp(comp.parent_compartment),\n",
-    );
+    save_body.push_str("        'parent_compartment': serializeComp(comp.parent_compartment),\n");
     save_body.push_str("    };\n");
     save_body.push_str("}\n");
     save_body.push_str("return jsonEncode({\n");
     save_body.push_str("    '_compartment': serializeComp(this.__compartment),\n");
-    save_body.push_str(
-        "    '_state_stack': this._state_stack.map((c) => serializeComp(c)).toList(),\n",
-    );
+    save_body
+        .push_str("    '_state_stack': this._state_stack.map((c) => serializeComp(c)).toList(),\n");
     for var in &system.domain {
         if var.attributes.iter().any(|a| a.name == "no_persist") {
             continue;
@@ -150,16 +149,12 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         "    final comp = {}(data['state'] as String);\n",
         compartment_type
     ));
-    restore_body.push_str(
-        "    comp.state_vars = Map<String, dynamic>.from(data['state_vars'] ?? {});\n",
-    );
     restore_body
-        .push_str("    final __saRaw = (data['state_args'] as List?) ?? <dynamic>[];\n");
+        .push_str("    comp.state_vars = Map<String, dynamic>.from(data['state_vars'] ?? {});\n");
+    restore_body.push_str("    final __saRaw = (data['state_args'] as List?) ?? <dynamic>[];\n");
+    restore_body.push_str("    final __eaRaw = (data['enter_args'] as List?) ?? <dynamic>[];\n");
     restore_body
-        .push_str("    final __eaRaw = (data['enter_args'] as List?) ?? <dynamic>[];\n");
-    restore_body.push_str(
-        "    comp.exit_args = List<dynamic>.from(data['exit_args'] ?? <dynamic>[]);\n",
-    );
+        .push_str("    comp.exit_args = List<dynamic>.from(data['exit_args'] ?? <dynamic>[]);\n");
     if !dart_state_param_types.is_empty() {
         restore_body.push_str("    switch (comp.state) {\n");
         for (state_name, param_types) in &dart_state_param_types {
@@ -187,9 +182,8 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         restore_body.push_str("    comp.enter_args.addAll(__eaRaw);\n");
     }
     restore_body.push_str("    comp.forward_event = data['forward_event'];\n");
-    restore_body.push_str(
-        "    comp.parent_compartment = deserializeComp(data['parent_compartment']);\n",
-    );
+    restore_body
+        .push_str("    comp.parent_compartment = deserializeComp(data['parent_compartment']);\n");
     restore_body.push_str("    return comp;\n");
     restore_body.push_str("}\n");
     restore_body.push_str(&format!(

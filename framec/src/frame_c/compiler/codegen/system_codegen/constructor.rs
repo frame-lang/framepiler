@@ -21,13 +21,11 @@
 use super::super::ast::{CodegenNode, Field, Param, Visibility};
 use super::super::backend::ClassSyntax;
 use super::super::codegen_utils::{
-    cpp_map_type, csharp_map_type, go_map_type, java_map_type, kotlin_map_type, swift_map_type,
-    state_var_init_value, to_snake_case, type_to_cpp_string, type_to_string,
-    expression_to_string,
+    cpp_map_type, csharp_map_type, expression_to_string, go_map_type, java_map_type,
+    kotlin_map_type, state_var_init_value, swift_map_type, to_snake_case, type_to_cpp_string,
+    type_to_string,
 };
-use crate::frame_c::compiler::frame_ast::{
-    Expression, ParamKind, StateAst, SystemAst, Type,
-};
+use crate::frame_c::compiler::frame_ast::{Expression, ParamKind, StateAst, SystemAst, Type};
 use crate::frame_c::visitors::TargetLanguage;
 
 /// Element type carried by one of the kernel's two stacks. C# and Go
@@ -220,10 +218,7 @@ fn format_field_assignment(
 }
 
 /// Generate the constructor
-pub(crate) fn generate_constructor(
-    system: &SystemAst,
-    syntax: &ClassSyntax,
-) -> CodegenNode {
+pub(crate) fn generate_constructor(system: &SystemAst, syntax: &ClassSyntax) -> CodegenNode {
     let mut body = Vec::new();
     // C++ member initializer list entries: `field(value), field2(value2)`
     // Collected during domain init loop for const fields whose init was stripped.
@@ -310,7 +305,8 @@ pub(crate) fn generate_constructor(
             Some(t) => t,
             None => continue,
         };
-        let init_refs_param = super::word_util::init_references_param(init_text, &sys_param_names_for_init);
+        let init_refs_param =
+            super::word_util::init_references_param(init_text, &sys_param_names_for_init);
         let init_has_tagged = init_text.contains("@@");
 
         if !should_emit_constructor_body_init(
@@ -322,7 +318,8 @@ pub(crate) fn generate_constructor(
             continue;
         }
 
-        let init_expanded = super::expand_system::expand_system_instantiation_in_domain(init_text, syntax.language);
+        let init_expanded =
+            super::expand_system::expand_system_instantiation_in_domain(init_text, syntax.language);
 
         // C++ const fields whose init references a constructor param
         // must use the member initializer list — `const T x;` cannot
@@ -337,7 +334,9 @@ pub(crate) fn generate_constructor(
         let final_init = match syntax.language {
             // PHP rejects bare names in init expressions; system params
             // need a `$` prefix to be valid PHP.
-            TargetLanguage::Php => super::word_util::prefix_php_vars(&init_expanded, &sys_param_names_for_init),
+            TargetLanguage::Php => {
+                super::word_util::prefix_php_vars(&init_expanded, &sys_param_names_for_init)
+            }
             // Lua uses `{}` for empty tables, not `[]`.
             TargetLanguage::Lua if init_expanded.trim() == "[]" => "{}".to_string(),
             // Rust: a Domain-kind system param of the same name overrides
@@ -782,7 +781,12 @@ pub(crate) fn generate_constructor(
                                 crate::frame_c::compiler::frame_ast::ParamKind::StateArg
                             )
                         })
-                        .map(|p| format!("std::any({})", super::super::codegen_utils::cpp_wrap_any_arg(&p.name)))
+                        .map(|p| {
+                            format!(
+                                "std::any({})",
+                                super::super::codegen_utils::cpp_wrap_any_arg(&p.name)
+                            )
+                        })
                         .collect();
                     let enter_args_wrapped: Vec<String> = system
                         .params
@@ -793,7 +797,12 @@ pub(crate) fn generate_constructor(
                                 crate::frame_c::compiler::frame_ast::ParamKind::EnterArg
                             )
                         })
-                        .map(|p| format!("std::any({})", super::super::codegen_utils::cpp_wrap_any_arg(&p.name)))
+                        .map(|p| {
+                            format!(
+                                "std::any({})",
+                                super::super::codegen_utils::cpp_wrap_any_arg(&p.name)
+                            )
+                        })
                         .collect();
                     let state_arg =
                         format!("std::vector<std::any>{{{}}}", state_args_wrapped.join(", "));

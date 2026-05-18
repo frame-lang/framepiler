@@ -312,12 +312,7 @@ impl LanguageBackend for RustBackend {
                 ctx.push_indent();
                 result.push_str(&format!("{}let mut c = Self::new();\n", ctx.get_indent()));
                 for (field, value, _default) in &param_bound_fields {
-                    result.push_str(&format!(
-                        "{}c.{} = {};\n",
-                        ctx.get_indent(),
-                        field,
-                        value
-                    ));
+                    result.push_str(&format!("{}c.{} = {};\n", ctx.get_indent(), field, value));
                 }
                 for stmt in &cascade_stmts {
                     let stmt_str = self.emit(stmt, ctx);

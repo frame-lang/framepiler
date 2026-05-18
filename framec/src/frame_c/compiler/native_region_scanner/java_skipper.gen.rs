@@ -235,7 +235,7 @@ impl JavaSyntaxSkipperFsm {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<JavaSyntaxSkipperFsmFrameEvent>) {
-        let __ev: &JavaSyntaxSkipperFsmFrameEvent = &**__e;
+        let __ev: &JavaSyntaxSkipperFsmFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Init" => self._state_Init(__ev),
             "SkipComment" => self._state_SkipComment(__ev),

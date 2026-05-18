@@ -453,7 +453,11 @@ pub(crate) fn generate_rust_state_dispatch(
 
         // ----- Lifecycle events ($>, $<) — variants carry Vec<String> args -----
         if is_lifecycle {
-            let variant = if event == "$>" { "FrameEnter" } else { "FrameExit" };
+            let variant = if event == "$>" {
+                "FrameEnter"
+            } else {
+                "FrameExit"
+            };
             if handler.params.is_empty() {
                 code.push_str(&format!(
                     "    {}::{} {{ .. }} => {{ self.{}(__e); }}\n",
@@ -527,11 +531,7 @@ pub(crate) fn generate_rust_state_dispatch(
         // different param shapes across states — the enum variant
         // carries the union; each handler binds only what it cares
         // about).
-        let field_binds: Vec<String> = handler
-            .params
-            .iter()
-            .map(|p| p.name.clone())
-            .collect();
+        let field_binds: Vec<String> = handler.params.iter().map(|p| p.name.clone()).collect();
         code.push_str(&format!(
             "    {}::{} {{ {}, .. }} => {{\n",
             event_class,
@@ -1424,7 +1424,6 @@ pub(crate) fn rust_pop_var_name() -> &'static str {
 pub(crate) fn rust_pop_transition(indent: &str) -> String {
     format!("{}self.__transition(__popped);\n{}return;", indent, indent)
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // Rust auto-clone for non-Copy domain fields passed to Frame calls

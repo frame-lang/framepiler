@@ -153,11 +153,7 @@ pub(crate) trait MachineryGenerator {
     /// Caches the next compartment. The actual transition is deferred to
     /// `__process_transition_loop` so the current handler runs to
     /// completion first (the "queue, don't dispatch" rule).
-    fn emit_transition(
-        &self,
-        system: &SystemAst,
-        compartment_class: &str,
-    ) -> Option<CodegenNode>;
+    fn emit_transition(&self, system: &SystemAst, compartment_class: &str) -> Option<CodegenNode>;
 
     /// Optional postlude nodes emitted *after* the 8-node scaffold.
     ///

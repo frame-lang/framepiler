@@ -215,11 +215,7 @@ for s.__next_compartment != nil {{
         })
     }
 
-    fn emit_transition(
-        &self,
-        system: &SystemAst,
-        _compartment_class: &str,
-    ) -> Option<CodegenNode> {
+    fn emit_transition(&self, system: &SystemAst, _compartment_class: &str) -> Option<CodegenNode> {
         let comp_type = format!("*{}Compartment", system.name);
         Some(CodegenNode::Method {
             name: "__transition".to_string(),

@@ -61,8 +61,6 @@ use crate::frame_c::compiler::native_region_scanner::{
 use crate::frame_c::compiler::splice::Splicer;
 use crate::frame_c::visitors::TargetLanguage;
 
-
-
 /// Generate code expansion for a Frame segment
 ///
 /// NOTE: The scanner leaves a gap between NativeText and FrameSegment where leading
@@ -102,9 +100,9 @@ pub(crate) fn generate_frame_expansion(
         FrameSegmentKind::ContextReturn => {
             context_return::expand_context_return(body_bytes, span, indent, lang, ctx, metadata)
         }
-        FrameSegmentKind::ContextReturnExpr => {
-            context_return::expand_context_return_expr(body_bytes, span, indent, lang, ctx, metadata)
-        }
+        FrameSegmentKind::ContextReturnExpr => context_return::expand_context_return_expr(
+            body_bytes, span, indent, lang, ctx, metadata,
+        ),
         FrameSegmentKind::ContextEvent => {
             context_data::expand_context_event(body_bytes, span, indent, lang, ctx, metadata)
         }

@@ -22,10 +22,7 @@
 
 use super::{type_to_string, CodegenNode, Param, SystemAst, Visibility};
 
-pub(super) fn generate_python_factory_alias(
-    system: &SystemAst,
-    factory_name: &str,
-) -> CodegenNode {
+pub(super) fn generate_python_factory_alias(system: &SystemAst, factory_name: &str) -> CodegenNode {
     let params: Vec<Param> = system
         .params
         .iter()

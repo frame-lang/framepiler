@@ -13,7 +13,6 @@ use crate::frame_c::compiler::arcanum::Arcanum;
 use crate::frame_c::compiler::frame_ast::*;
 
 impl FrameValidator {
-
     /// Additional validation using the Arcanum
     pub(super) fn validate_system_with_arcanum(&mut self, system: &SystemAst, arcanum: &Arcanum) {
         // E402 enhanced: Validate transitions using Arcanum
@@ -116,5 +115,4 @@ impl FrameValidator {
             }
         }
     }
-
 }

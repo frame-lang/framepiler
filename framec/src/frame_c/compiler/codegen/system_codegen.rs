@@ -22,8 +22,8 @@ pub(crate) use constructor::generate_constructor;
 
 use async_wrap::make_java_interface_async;
 use factory::{
-    generate_js_static_factory_alias, generate_python_factory_alias,
-    generate_static_factory_alias, params_arg_list,
+    generate_js_static_factory_alias, generate_python_factory_alias, generate_static_factory_alias,
+    params_arg_list,
 };
 use word_util::prefix_php_vars;
 
@@ -347,9 +347,6 @@ pub fn generate_system_shared(
     class_node
 }
 
-
-
-
 /// Compute the HSM topology chain for each state in the machine.
 ///
 /// Returns a list of (leaf_state_name, ancestor_chain) pairs, where
@@ -419,16 +416,31 @@ pub(crate) fn generate_frame_machinery(
             let m = JavaScriptMachinery {
                 is_ts: matches!(lang, TargetLanguage::TypeScript),
             };
-            methods.extend(generate_machinery(&m, system, &event_class, &compartment_class));
+            methods.extend(generate_machinery(
+                &m,
+                system,
+                &event_class,
+                &compartment_class,
+            ));
         }
         TargetLanguage::Php => {
             // 4.2 plan §7.1.P3: PHP migrated to MachineryGenerator.
             use super::machinery::{generate_machinery, php::PhpMachinery};
-            methods.extend(generate_machinery(&PhpMachinery, system, &event_class, &compartment_class));
+            methods.extend(generate_machinery(
+                &PhpMachinery,
+                system,
+                &event_class,
+                &compartment_class,
+            ));
         }
         TargetLanguage::Ruby => {
             use super::machinery::{generate_machinery, ruby::RubyMachinery};
-            methods.extend(generate_machinery(&RubyMachinery, system, &event_class, &compartment_class));
+            methods.extend(generate_machinery(
+                &RubyMachinery,
+                system,
+                &event_class,
+                &compartment_class,
+            ));
         }
         TargetLanguage::Rust => {
             // 4.2 plan §7.1.P2: Rust migrated to the MachineryGenerator trait.
@@ -527,7 +539,7 @@ pub(crate) fn generate_frame_machinery(
         }
         TargetLanguage::GDScript => {
             // 4.2 plan §7.1.P2: GDScript migrated to the MachineryGenerator trait.
-            use super::machinery::{generate_machinery, gdscript::GDScriptMachinery};
+            use super::machinery::{gdscript::GDScriptMachinery, generate_machinery};
             methods.extend(generate_machinery(
                 &GDScriptMachinery,
                 system,
@@ -551,9 +563,6 @@ pub(crate) fn generate_frame_machinery(
 // ~1374 lines (one giant match across 17 backends). Splitting them
 // out gives each language an isolated, navigable function while
 // keeping codegen entirely in this file.
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -671,5 +680,4 @@ mod tests {
         assert!(!init_references_param("", &["balance".into()]));
         assert!(!init_references_param("balance", &[]));
     }
-
 }

@@ -402,8 +402,14 @@ pub(super) fn emit_handler_return_init(
         return String::new();
     };
     let assign = match lang {
-        TargetLanguage::Python3 => format!("{}self._context_stack[-1]._return = {}\n", indent, init_expr),
-        TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!("{}this._context_stack[this._context_stack.length - 1]._return = {};\n", indent, init_expr),
+        TargetLanguage::Python3 => format!(
+            "{}self._context_stack[-1]._return = {}\n",
+            indent, init_expr
+        ),
+        TargetLanguage::TypeScript | TargetLanguage::JavaScript => format!(
+            "{}this._context_stack[this._context_stack.length - 1]._return = {};\n",
+            indent, init_expr
+        ),
         TargetLanguage::C => {
             // Doubles don't survive `(void*)(intptr_t)(val)` — the
             // intptr_t cast truncates. Bit-pun through memcpy via the
@@ -438,9 +444,8 @@ pub(super) fn emit_handler_return_init(
                     system_name, init_expr
                 )
             } else {
-                let variant = crate::frame_c::compiler::codegen::runtime::pascal_case_variant(
-                    &handler.event,
-                );
+                let variant =
+                    crate::frame_c::compiler::codegen::runtime::pascal_case_variant(&handler.event);
                 format!("{}FrameReturn::{}({})", system_name, variant, init_expr)
             };
             format!(
@@ -448,17 +453,50 @@ pub(super) fn emit_handler_return_init(
                 indent, payload
             )
         }
-        TargetLanguage::Cpp => format!("{}_context_stack.back()._return = std::any({});\n", indent, init_expr),
-        TargetLanguage::Java => format!("{}_context_stack.get(_context_stack.size() - 1)._return = {};\n", indent, init_expr),
-        TargetLanguage::Kotlin => format!("{}_context_stack[_context_stack.size - 1]._return = {}\n", indent, init_expr),
-        TargetLanguage::Swift => format!("{}_context_stack[_context_stack.count - 1]._return = {}\n", indent, init_expr),
-        TargetLanguage::CSharp => format!("{}_context_stack[_context_stack.Count - 1]._return = {};\n", indent, init_expr),
-        TargetLanguage::Go => format!("{}s._context_stack[len(s._context_stack)-1]._return = {}\n", indent, init_expr),
-        TargetLanguage::Php => format!("{}$this->_context_stack[count($this->_context_stack) - 1]->_return = {};\n", indent, init_expr),
-        TargetLanguage::Ruby => format!("{}@_context_stack[@_context_stack.length - 1]._return = {}\n", indent, init_expr),
-        TargetLanguage::Lua => format!("{}self._context_stack[#self._context_stack]._return = {}\n", indent, init_expr),
-        TargetLanguage::Dart => format!("{}_context_stack[_context_stack.length - 1]._return = {};\n", indent, init_expr),
-        TargetLanguage::GDScript => format!("{}self._context_stack[self._context_stack.size() - 1]._return = {}\n", indent, init_expr),
+        TargetLanguage::Cpp => format!(
+            "{}_context_stack.back()._return = std::any({});\n",
+            indent, init_expr
+        ),
+        TargetLanguage::Java => format!(
+            "{}_context_stack.get(_context_stack.size() - 1)._return = {};\n",
+            indent, init_expr
+        ),
+        TargetLanguage::Kotlin => format!(
+            "{}_context_stack[_context_stack.size - 1]._return = {}\n",
+            indent, init_expr
+        ),
+        TargetLanguage::Swift => format!(
+            "{}_context_stack[_context_stack.count - 1]._return = {}\n",
+            indent, init_expr
+        ),
+        TargetLanguage::CSharp => format!(
+            "{}_context_stack[_context_stack.Count - 1]._return = {};\n",
+            indent, init_expr
+        ),
+        TargetLanguage::Go => format!(
+            "{}s._context_stack[len(s._context_stack)-1]._return = {}\n",
+            indent, init_expr
+        ),
+        TargetLanguage::Php => format!(
+            "{}$this->_context_stack[count($this->_context_stack) - 1]->_return = {};\n",
+            indent, init_expr
+        ),
+        TargetLanguage::Ruby => format!(
+            "{}@_context_stack[@_context_stack.length - 1]._return = {}\n",
+            indent, init_expr
+        ),
+        TargetLanguage::Lua => format!(
+            "{}self._context_stack[#self._context_stack]._return = {}\n",
+            indent, init_expr
+        ),
+        TargetLanguage::Dart => format!(
+            "{}_context_stack[_context_stack.length - 1]._return = {};\n",
+            indent, init_expr
+        ),
+        TargetLanguage::GDScript => format!(
+            "{}self._context_stack[self._context_stack.size() - 1]._return = {}\n",
+            indent, init_expr
+        ),
         TargetLanguage::Erlang => format!("{}__ReturnVal = {},\n", indent, init_expr),
         TargetLanguage::Graphviz => String::new(),
     };

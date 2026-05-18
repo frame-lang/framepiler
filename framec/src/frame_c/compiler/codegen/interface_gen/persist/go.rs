@@ -40,9 +40,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     let target = if uses_new_contract { "s" } else { "instance" };
 
     let mut save_body = String::new();
-    save_body.push_str(
-        "if len(s._context_stack) > 0 { panic(\"E700: system not quiescent\") }\n",
-    );
+    save_body.push_str("if len(s._context_stack) > 0 { panic(\"E700: system not quiescent\") }\n");
     save_body.push_str(&format!(
         "var serializeComp func(c *{}) interface{{}}\n",
         compartment_type
@@ -59,15 +57,16 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
     save_body.push_str("        \"enter_args\": c.enterArgs,\n");
     save_body.push_str("        \"exit_args\": c.exitArgs,\n");
     save_body.push_str("        \"forward_event\": c.forwardEvent,\n");
-    save_body
-        .push_str("        \"parent_compartment\": serializeComp(c.parentCompartment),\n");
+    save_body.push_str("        \"parent_compartment\": serializeComp(c.parentCompartment),\n");
     save_body.push_str("    }\n");
     save_body.push_str("}\n");
     save_body.push_str("data := map[string]interface{}{\n");
     save_body.push_str("    \"_compartment\": serializeComp(s.__compartment),\n");
     save_body.push_str("    \"_state_stack\": func() []interface{} {\n");
     save_body.push_str("        var arr []interface{}\n");
-    save_body.push_str("        for _, c := range s._state_stack { arr = append(arr, serializeComp(c)) }\n");
+    save_body.push_str(
+        "        for _, c := range s._state_stack { arr = append(arr, serializeComp(c)) }\n",
+    );
     save_body.push_str("        return arr\n");
     save_body.push_str("    }(),\n");
     for var in &system.domain {
@@ -162,9 +161,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
                         .iter()
                         .map(|p| match &p.param_type {
                             crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.clone(),
-                            crate::frame_c::compiler::frame_ast::Type::Unknown => {
-                                String::new()
-                            }
+                            crate::frame_c::compiler::frame_ast::Type::Unknown => String::new(),
                         })
                         .collect();
                     (s.name.clone(), types)
@@ -232,9 +229,8 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         }
     }
     restore_body.push_str("    // forward_event is typically nil in persisted state\n");
-    restore_body.push_str(
-        "    comp.parentCompartment = deserializeComp(m[\"parent_compartment\"])\n",
-    );
+    restore_body
+        .push_str("    comp.parentCompartment = deserializeComp(m[\"parent_compartment\"])\n");
     restore_body.push_str("    return comp\n");
     restore_body.push_str("}\n");
     if !uses_new_contract {
@@ -245,8 +241,7 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         target
     ));
     restore_body.push_str(&format!("{}.__next_compartment = nil\n", target));
-    restore_body
-        .push_str("if stack, ok := _parsed[\"_state_stack\"].([]interface{}); ok {\n");
+    restore_body.push_str("if stack, ok := _parsed[\"_state_stack\"].([]interface{}); ok {\n");
     restore_body.push_str(&format!(
         "    {}._state_stack = make([]*{}, 0, len(stack))\n",
         target, compartment_type

@@ -213,7 +213,7 @@ impl Lifecycle {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<LifecycleFrameEvent>) {
-        let __ev: &LifecycleFrameEvent = &**__e;
+        let __ev: &LifecycleFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Idle" => self._state_Idle(__ev),
             "Running" => self._state_Running(__ev),

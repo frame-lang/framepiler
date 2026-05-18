@@ -207,7 +207,7 @@ impl Counter {
     }
 
     fn __router(&mut self, __e: &std::rc::Rc<CounterFrameEvent>) {
-        let __ev: &CounterFrameEvent = &**__e;
+        let __ev: &CounterFrameEvent = __e;
         match self.__compartment.state.as_str() {
             "Counting" => self._state_Counting(__ev),
             _ => {}

@@ -31,9 +31,8 @@ impl MachineryGenerator for SwiftMachinery {
         // hsm_chain — class method (so it's callable from init before all
         // stored properties are initialized; Swift forbids instance-method
         // calls on `self` until that point).
-        let mut chain_method = String::from(
-            "private static func hsm_chain() -> [String: [String]] {\n    return [\n",
-        );
+        let mut chain_method =
+            String::from("private static func hsm_chain() -> [String: [String]] {\n    return [\n");
         for (leaf, chain) in chains {
             let chain_str = chain
                 .iter()
@@ -216,11 +215,7 @@ while __next_compartment != nil {{
         })
     }
 
-    fn emit_transition(
-        &self,
-        _system: &SystemAst,
-        compartment_class: &str,
-    ) -> Option<CodegenNode> {
+    fn emit_transition(&self, _system: &SystemAst, compartment_class: &str) -> Option<CodegenNode> {
         Some(CodegenNode::Method {
             name: "__transition".to_string(),
             params: vec![Param::new("next").with_type(compartment_class)],

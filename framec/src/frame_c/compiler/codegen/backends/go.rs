@@ -736,8 +736,7 @@ fn rewrite_go_member_refs_for_factory(line: &str) -> String {
         if bytes[i] == b's'
             && i + 1 < bytes.len()
             && bytes[i + 1] == b'.'
-            && (i == 0
-                || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'))
+            && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'))
         {
             result.push_str("c.");
             i += 2;

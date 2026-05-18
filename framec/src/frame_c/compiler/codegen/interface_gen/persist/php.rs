@@ -67,12 +67,9 @@ pub(in crate::frame_c::compiler::codegen::interface_gen) fn generate(
         "$c = new {}($data['state']);\n",
         compartment_class
     ));
-    deser_body
-        .push_str("if (isset($data['state_vars'])) $c->state_vars = $data['state_vars'];\n");
-    deser_body
-        .push_str("if (isset($data['state_args'])) $c->state_args = $data['state_args'];\n");
-    deser_body
-        .push_str("if (isset($data['enter_args'])) $c->enter_args = $data['enter_args'];\n");
+    deser_body.push_str("if (isset($data['state_vars'])) $c->state_vars = $data['state_vars'];\n");
+    deser_body.push_str("if (isset($data['state_args'])) $c->state_args = $data['state_args'];\n");
+    deser_body.push_str("if (isset($data['enter_args'])) $c->enter_args = $data['enter_args'];\n");
     deser_body.push_str("if (isset($data['parent'])) $c->parent_compartment = self::__deserComp($data['parent']);\n");
     deser_body.push_str("return $c;");
 

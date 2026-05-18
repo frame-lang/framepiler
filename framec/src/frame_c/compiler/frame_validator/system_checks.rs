@@ -368,15 +368,12 @@ impl FrameValidator {
             // use dynamic dispatch and tolerate the dead write — gating
             // this validator pass to Rust avoids breaking ~70 fixtures
             // across dynamic-typed targets where the pattern is benign.
-            if !returns_value
-                && matches!(target, crate::frame_c::visitors::TargetLanguage::Rust)
-            {
+            if !returns_value && matches!(target, crate::frame_c::visitors::TargetLanguage::Rust) {
                 for r in scan_result.regions.iter() {
                     if let Region::FrameSegment { kind: k, .. } = r {
                         if matches!(
                             k,
-                            FrameSegmentKind::ContextReturnExpr
-                                | FrameSegmentKind::ReturnCall
+                            FrameSegmentKind::ContextReturnExpr | FrameSegmentKind::ReturnCall
                         ) {
                             self.errors.push(ValidationError::new(
                                 "E606",
@@ -462,5 +459,4 @@ impl FrameValidator {
             }
         }
     }
-
 }

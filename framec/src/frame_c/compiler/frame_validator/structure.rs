@@ -102,7 +102,10 @@ impl FrameValidator {
     }
 
     /// Build a map of state names to state definitions
-    pub(super) fn build_state_map<'a>(&mut self, system: &'a SystemAst) -> HashMap<String, &'a StateAst> {
+    pub(super) fn build_state_map<'a>(
+        &mut self,
+        system: &'a SystemAst,
+    ) -> HashMap<String, &'a StateAst> {
         let mut map = HashMap::new();
         if let Some(machine) = &system.machine {
             for state in &machine.states {
@@ -136,5 +139,4 @@ impl FrameValidator {
         }
         map
     }
-
 }

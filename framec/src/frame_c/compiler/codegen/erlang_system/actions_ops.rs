@@ -32,10 +32,10 @@
 //! persist methods in the generated module — same order Erlang
 //! Frame programmers expect for hand-rolled modules.
 
+use super::super::codegen_utils::{replace_outside_strings_and_comments, to_snake_case};
 use super::blocks::{erlang_smart_join, erlang_transform_blocks};
 use super::body_processor::{erlang_capitalize_params, erlang_process_body_lines_full};
 use super::lexical::{erlang_op_name, erlang_safe_capitalize};
-use super::super::codegen_utils::{replace_outside_strings_and_comments, to_snake_case};
 use crate::frame_c::compiler::frame_ast::SystemAst;
 use crate::frame_c::visitors::TargetLanguage;
 
@@ -334,8 +334,10 @@ pub(super) fn emit_actions_and_operations(
                 .collect();
 
             // Expand @@:system.state and @@:(expr) in operation bodies
-            let inner =
-                super::super::frame_expansion::expand_system_state_in_code(inner, TargetLanguage::Erlang);
+            let inner = super::super::frame_expansion::expand_system_state_in_code(
+                inner,
+                TargetLanguage::Erlang,
+            );
             let inner = inner.as_str();
 
             // Process lines: strip return keyword, capitalize params, rewrite self

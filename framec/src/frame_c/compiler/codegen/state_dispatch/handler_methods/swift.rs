@@ -4,10 +4,13 @@
 
 use super::super::super::ast::{CodegenNode, Param, Visibility};
 use super::super::super::codegen_utils::{
-    cpp_map_type, csharp_map_type, go_map_type, java_map_type, kotlin_map_type, swift_map_type,
-    expression_to_string, state_var_init_value, to_snake_case, type_to_cpp_string, HandlerContext,
+    cpp_map_type, csharp_map_type, expression_to_string, go_map_type, java_map_type,
+    kotlin_map_type, state_var_init_value, swift_map_type, to_snake_case, type_to_cpp_string,
+    HandlerContext,
 };
-use super::super::super::frame_expansion::{emit_handler_body_via_statements, normalize_indentation};
+use super::super::super::frame_expansion::{
+    emit_handler_body_via_statements, normalize_indentation,
+};
 use super::super::{emit_handler_return_init, handler_method_name};
 use crate::frame_c::compiler::arcanum::HandlerEntry;
 use crate::frame_c::compiler::frame_ast::StateVarAst;
