@@ -337,16 +337,60 @@ impl FrameValidator {
         // branch — that's accepted; the warning is meant to catch
         // the easy mistake without flagging legitimate patterns.
         if let Some(iface_method) = interface_methods.get(scope_inner) {
-            let returns_value = match &iface_method.return_type {
-                Some(t) => {
-                    let s = match t {
-                        crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
-                        crate::frame_c::compiler::frame_ast::Type::Unknown => "",
-                    };
-                    !s.is_empty() && s != "void"
-                }
-                None => false,
+            // A handler "returns a value" if EITHER the interface
+            // declares an explicit return type (`: int`) OR a default
+            // return expression (`= "denied"`). Dynamic-typed targets
+            // (Ruby, Lua, PHP, JS) commonly drop the type annotation
+            // and rely on the default-expression form — `get_status()
+            // = ""` is "returns a value, defaulting to empty string."
+            let returns_value = {
+                let has_type = match &iface_method.return_type {
+                    Some(t) => {
+                        let s = match t {
+                            crate::frame_c::compiler::frame_ast::Type::Custom(s) => s.as_str(),
+                            crate::frame_c::compiler::frame_ast::Type::Unknown => "",
+                        };
+                        !s.is_empty() && s != "void"
+                    }
+                    None => false,
+                };
+                has_type || iface_method.return_init.is_some()
             };
+            // E606: `@@:(value)` (or `@@:return(value)`) in a handler
+            // whose interface method is void. The write to `_return` has
+            // no observable effect — the caller has no typed read path
+            // for the value.
+            //
+            // RUST-ONLY: pre-Track-B `Box<dyn Any>` accepted this silently
+            // on every backend, but Track B's per-event return enum on
+            // the Rust target exposes it as a structural error (no enum
+            // variant exists to write into). The other 16 backends still
+            // use dynamic dispatch and tolerate the dead write — gating
+            // this validator pass to Rust avoids breaking ~70 fixtures
+            // across dynamic-typed targets where the pattern is benign.
+            if !returns_value
+                && matches!(target, crate::frame_c::visitors::TargetLanguage::Rust)
+            {
+                for r in scan_result.regions.iter() {
+                    if let Region::FrameSegment { kind: k, .. } = r {
+                        if matches!(
+                            k,
+                            FrameSegmentKind::ContextReturnExpr
+                                | FrameSegmentKind::ReturnCall
+                        ) {
+                            self.errors.push(ValidationError::new(
+                                "E606",
+                                format!(
+                                    "`@@:(value)` in {}/{} — interface method `{}` is void on the Rust target, so writing to `_return` has no observable effect (and Track B's per-event return enum has no variant for it). Remove the `@@:(value)` (or add a return type to `{}` in the interface).",
+                                    scope_outer, scope_inner, scope_inner, scope_inner
+                                ),
+                            ));
+                            break; // one error per handler is enough
+                        }
+                    }
+                }
+            }
+
             if returns_value {
                 let frame_regs: Vec<&Region> = scan_result
                     .regions
