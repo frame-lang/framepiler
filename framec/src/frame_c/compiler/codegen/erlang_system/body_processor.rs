@@ -357,8 +357,48 @@ pub(super) fn erlang_process_body_lines_full(
             // Arm-arrow with content after. Skip lines that end at
             // the arrow (already an arm header) — those are handled
             // by the looks_like_arm_header branch below.
-            let arrow_pos = t.find(" -> ")?;
-            let body = t[arrow_pos + 4..].trim();
+            //
+            // The arrow search must skip occurrences inside Erlang
+            // string literals so that a line like
+            //     io:format("[~s] -> ~s~n", [Id, V])
+            // is NOT misread as the arm header `io:format("[~s] ` and
+            // the body `~s~n", [Id, V])`. Walk the string tracking
+            // string-literal state (Erlang strings are double-quoted
+            // with `\"` escapes) and only consider arrow positions
+            // outside strings.
+            let arrow_pos = {
+                let bytes = t.as_bytes();
+                let mut in_string = false;
+                let mut i = 0;
+                let mut found: Option<usize> = None;
+                while i + 3 < bytes.len() {
+                    let b = bytes[i];
+                    if in_string {
+                        if b == b'\\' {
+                            i += 2;
+                            continue;
+                        }
+                        if b == b'"' {
+                            in_string = false;
+                        }
+                    } else if b == b'"' {
+                        in_string = true;
+                    } else if b == b' ' && bytes[i + 1] == b'-' && bytes[i + 2] == b'>' && bytes[i + 3] == b' ' {
+                        found = Some(i);
+                        break;
+                    }
+                    i += 1;
+                }
+                found?
+            };
+            // Strip a trailing `;` from the extracted body. Erlang's
+            // case-arm separator `;` belongs to framec's structural
+            // emission of the NEXT arm header (`; <pattern> ->`);
+            // when the user wrote `true -> Data#data.n;` inline, the
+            // trailing `;` is their case-arm separator. Keeping it
+            // produces `Data#data.n;` + `; false ->` = `;;` which is
+            // malformed Erlang.
+            let body = t[arrow_pos + 4..].trim().trim_end_matches(';').trim();
             if body.is_empty() {
                 return None;
             }
