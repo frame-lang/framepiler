@@ -1202,11 +1202,32 @@ pub(crate) fn rust_expand_context_data_write(
 fn rust_wrap_for_boxing(expr: &str, return_type: &Option<String>) -> String {
     let trimmed = expr.trim();
     let is_string_literal = trimmed.starts_with('"') && trimmed.ends_with('"');
+    // For non-Copy return types (String, etc.), reads of borrowed
+    // sources (`self.field`, `field` from state-args/enter-args, etc.)
+    // must be cloned so the value can be moved into the return enum
+    // variant — `&mut self` borrows `self`, so `self.s` cannot be
+    // moved out without violating Rust's borrow rules. Copy types
+    // (int → i64, float → f64) are unaffected because the cast itself
+    // copies. The heuristic: dotted-path simple field access
+    // (`self.foo`, `compartment.bar`, single bare identifier with no
+    // operators) on a non-Copy return type needs `.clone()`. Compound
+    // expressions (`self.x + self.y`, `format!(...)`, function calls)
+    // already produce an owned value and don't need cloning.
+    let needs_clone_for_non_copy = {
+        // Bare identifier or dotted path (e.g. `self.s`, `slot`,
+        // `arg.field`) — no operators, no parentheses, no quotes.
+        !trimmed.is_empty()
+            && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+            && !is_string_literal
+    };
     match return_type.as_deref() {
         Some("int") => format!("({}) as i64", trimmed),
         Some("float") => format!("({}) as f64", trimmed),
         Some("str") | Some("string") | Some("String") | Some("Any") if is_string_literal => {
             format!("String::from({})", trimmed)
+        }
+        Some("str") | Some("string") | Some("String") | Some("Any") if needs_clone_for_non_copy => {
+            format!("{}.clone()", trimmed)
         }
         _ if is_string_literal => format!("String::from({})", trimmed),
         _ => expr.to_string(),
