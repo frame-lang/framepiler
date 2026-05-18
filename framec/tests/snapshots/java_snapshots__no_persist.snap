@@ -1,0 +1,285 @@
+---
+source: framec/tests/java_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"java\")"
+---
+class NoPersistFrameEvent {
+    String _message;
+    java.util.ArrayList<Object> _parameters;
+
+    NoPersistFrameEvent(String message) {
+        this._message = message;
+        this._parameters = new java.util.ArrayList<>();
+    }
+
+    NoPersistFrameEvent(String message, java.util.ArrayList<Object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class NoPersistFrameContext {
+    NoPersistFrameEvent _event;
+    Object _return;
+    java.util.HashMap<String, Object> _data;
+    boolean _transitioned = false;
+
+    NoPersistFrameContext(NoPersistFrameEvent event, Object defaultReturn) {
+        this._event = event;
+        this._return = defaultReturn;
+        this._data = new java.util.HashMap<>();
+        this._transitioned = false;
+    }
+}
+
+class NoPersistCompartment {
+    String state;
+    java.util.ArrayList<Object> state_args;
+    java.util.HashMap<String, Object> state_vars;
+    java.util.ArrayList<Object> enter_args;
+    java.util.ArrayList<Object> exit_args;
+    NoPersistFrameEvent forward_event;
+    NoPersistCompartment parent_compartment;
+
+    NoPersistCompartment(String state) {
+        this.state = state;
+        this.state_args = new java.util.ArrayList<>();
+        this.state_vars = new java.util.HashMap<>();
+        this.enter_args = new java.util.ArrayList<>();
+        this.exit_args = new java.util.ArrayList<>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    NoPersistCompartment copy() {
+        NoPersistCompartment c = new NoPersistCompartment(this.state);
+        c.state_args = new java.util.ArrayList<>(this.state_args);
+        c.state_vars = new java.util.HashMap<>(this.state_vars);
+        c.enter_args = new java.util.ArrayList<>(this.enter_args);
+        c.exit_args = new java.util.ArrayList<>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class NoPersist {
+    private java.util.ArrayList<NoPersistCompartment> _state_stack;
+    private NoPersistCompartment __compartment;
+    private NoPersistCompartment __next_compartment;
+    private java.util.ArrayList<NoPersistFrameContext> _context_stack;
+    public int count = 0;
+    public int cache = -1;
+
+    public NoPersist() {
+        _state_stack = new java.util.ArrayList<>();
+        _context_stack = new java.util.ArrayList<>();
+        this.__compartment = __prepareEnter("Active", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        this.__next_compartment = null;
+    }
+
+    public static NoPersist __create() {
+        NoPersist c = new NoPersist();
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("$>", c.__compartment.enter_args);
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        c._context_stack.add(__ctx);
+        c.__kernel(__e);
+        c._context_stack.remove(c._context_stack.size() - 1);
+        return c;
+    }
+
+    private java.util.HashMap<String, java.util.ArrayList<String>> hsm_chain() {
+        java.util.HashMap<String, java.util.ArrayList<String>> m = new java.util.HashMap<>();
+        m.put("Active", new java.util.ArrayList<>(java.util.Arrays.asList("Active")));
+        return m;
+    }
+    private NoPersistCompartment __prepareEnter(String leaf, java.util.ArrayList<Object> state_args, java.util.ArrayList<Object> enter_args) {
+        NoPersistCompartment comp = null;
+        for (String name : hsm_chain().get(leaf)) {
+            NoPersistCompartment new_comp = new NoPersistCompartment(name);
+            new_comp.state_args = new java.util.ArrayList<>(state_args);
+            new_comp.enter_args = new java.util.ArrayList<>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    private void __prepareExit(java.util.ArrayList<Object> exit_args) {
+        NoPersistCompartment comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new java.util.ArrayList<>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(NoPersistFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            NoPersistCompartment next_compartment = __next_compartment;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            NoPersistFrameEvent exit_event = new NoPersistFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            NoPersistFrameEvent forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                NoPersistFrameEvent enter_event = new NoPersistFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message.equals("$>")) {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                NoPersistFrameEvent enter_event = new NoPersistFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (NoPersistFrameContext ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(NoPersistFrameEvent __e) {
+        if (__compartment.state.equals("Active")) {
+            _state_Active(__e, __compartment);
+        }
+    }
+
+    private void __transition(NoPersistCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void bump() {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("bump", new java.util.ArrayList<>());
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void set_cache(int v) {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("set_cache", new java.util.ArrayList<>(java.util.Arrays.asList(v)));
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public int get_count() {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("get_count", new java.util.ArrayList<>());
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        int __result = (int) _context_stack.get(_context_stack.size() - 1)._return;
+        _context_stack.remove(_context_stack.size() - 1);
+        return __result;
+    }
+
+    public int get_cache() {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("get_cache", new java.util.ArrayList<>());
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        int __result = (int) _context_stack.get(_context_stack.size() - 1)._return;
+        _context_stack.remove(_context_stack.size() - 1);
+        return __result;
+    }
+
+    private void _state_Active(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        if (__e._message.equals("bump")) {
+            this._s_Active_hdl_user_bump(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("get_cache")) {
+            this._s_Active_hdl_user_get_cache(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("get_count")) {
+            this._s_Active_hdl_user_get_count(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("set_cache")) {
+            this._s_Active_hdl_user_set_cache(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Active_hdl_user_bump(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        self.count = self.count + 1
+    }
+
+    private void _s_Active_hdl_user_get_cache(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        _context_stack.get(_context_stack.size() - 1)._return = self.cache;
+    }
+
+    private void _s_Active_hdl_user_get_count(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        _context_stack.get(_context_stack.size() - 1)._return = self.count;
+    }
+
+    private void _s_Active_hdl_user_set_cache(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        int v = ((Number) __e._parameters.get(0)).intValue();
+        self.cache = v
+    }
+
+    private Object __serComp(NoPersistCompartment comp) {
+        if (comp == null) return null;
+        var j = new java.util.LinkedHashMap<String, Object>();
+        j.put("state", comp.state);
+        j.put("state_vars", new java.util.LinkedHashMap<>(comp.state_vars));
+        j.put("state_args", new java.util.ArrayList<>(comp.state_args));
+        j.put("enter_args", new java.util.ArrayList<>(comp.enter_args));
+        j.put("parent", __serComp(comp.parent_compartment));
+        return j;
+    }
+
+    private static NoPersistCompartment __deserComp(com.fasterxml.jackson.databind.JsonNode node, com.fasterxml.jackson.databind.ObjectMapper mapper) {
+        if (node == null || node.isNull()) return null;
+        var c = new NoPersistCompartment(node.get("state").asText());
+        if (node.has("state_vars")) {
+            var fields = node.get("state_vars").fields();
+            while (fields.hasNext()) {
+                var e = fields.next();
+                c.state_vars.put(e.getKey(), mapper.convertValue(e.getValue(), Object.class));
+            }
+        }
+        var __sa = node.has("state_args") ? node.get("state_args") : null;
+        var __ea = node.has("enter_args") ? node.get("enter_args") : null;
+        if (__sa != null) for (var n : __sa) c.state_args.add(mapper.convertValue(n, Object.class));
+        if (__ea != null) for (var n : __ea) c.enter_args.add(mapper.convertValue(n, Object.class));
+        if (node.has("parent") && !node.get("parent").isNull()) c.parent_compartment = __deserComp(node.get("parent"), mapper);
+        return c;
+    }
+
+    public String snapshot() {
+        if (!_context_stack.isEmpty()) throw new RuntimeException("E700: system not quiescent");
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var __j = new java.util.LinkedHashMap<String, Object>();
+        __j.put("_compartment", __serComp(__compartment));
+        var __stack = new java.util.ArrayList<Object>();
+        for (var c : _state_stack) __stack.add(__serComp(c));
+        __j.put("_state_stack", __stack);
+        __j.put("count", count);
+        try { return mapper.writeValueAsString(__j); } catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    public void restore(String json) {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode __j;
+        try { __j = mapper.readTree(json); } catch (Exception e) { throw new RuntimeException(e); }
+        this.__compartment = __deserComp(__j.get("_compartment"), mapper);
+        if (__j.has("_state_stack")) {
+            this._state_stack = new java.util.ArrayList<>();
+            for (var __sc : __j.get("_state_stack")) this._state_stack.add(__deserComp(__sc, mapper));
+        }
+        if (__j.has("count")) this.count = mapper.convertValue(__j.get("count"), new com.fasterxml.jackson.core.type.TypeReference<Integer>(){});
+    }
+}

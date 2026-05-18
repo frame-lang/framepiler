@@ -1,0 +1,746 @@
+---
+source: framec/tests/c_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"c\")"
+---
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+// ============================================================================
+// NoPersist_FrameDict - String-keyed dictionary
+// ============================================================================
+
+typedef struct NoPersist_FrameDictEntry {
+    char* key;
+    void* value;
+    struct NoPersist_FrameDictEntry* next;
+} NoPersist_FrameDictEntry;
+
+typedef struct {
+    NoPersist_FrameDictEntry** buckets;
+    int bucket_count;
+    int size;
+} NoPersist_FrameDict;
+
+static unsigned int NoPersist_hash_string(const char* str) {
+    unsigned int hash = 5381;
+    int c;
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c;
+    }
+    return hash;
+}
+
+static NoPersist_FrameDict* NoPersist_FrameDict_new(void) {
+    NoPersist_FrameDict* d = malloc(sizeof(NoPersist_FrameDict));
+    d->bucket_count = 16;
+    d->buckets = calloc(d->bucket_count, sizeof(NoPersist_FrameDictEntry*));
+    d->size = 0;
+    return d;
+}
+
+static void NoPersist_FrameDict_set(NoPersist_FrameDict* d, const char* key, void* value) {
+    unsigned int idx = NoPersist_hash_string(key) % d->bucket_count;
+    NoPersist_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            entry->value = value;
+            return;
+        }
+        entry = entry->next;
+    }
+    NoPersist_FrameDictEntry* new_entry = malloc(sizeof(NoPersist_FrameDictEntry));
+    new_entry->key = strdup(key);
+    new_entry->value = value;
+    new_entry->next = d->buckets[idx];
+    d->buckets[idx] = new_entry;
+    d->size++;
+}
+
+static void* NoPersist_FrameDict_get(NoPersist_FrameDict* d, const char* key) {
+    unsigned int idx = NoPersist_hash_string(key) % d->bucket_count;
+    NoPersist_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            return entry->value;
+        }
+        entry = entry->next;
+    }
+    return NULL;
+}
+
+static int NoPersist_FrameDict_has(NoPersist_FrameDict* d, const char* key) {
+    unsigned int idx = NoPersist_hash_string(key) % d->bucket_count;
+    NoPersist_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            return 1;
+        }
+        entry = entry->next;
+    }
+    return 0;
+}
+
+static NoPersist_FrameDict* NoPersist_FrameDict_copy(NoPersist_FrameDict* src) {
+    NoPersist_FrameDict* dst = NoPersist_FrameDict_new();
+    for (int i = 0; i < src->bucket_count; i++) {
+        NoPersist_FrameDictEntry* entry = src->buckets[i];
+        while (entry) {
+            NoPersist_FrameDict_set(dst, entry->key, entry->value);
+            entry = entry->next;
+        }
+    }
+    return dst;
+}
+
+static void NoPersist_FrameDict_destroy(NoPersist_FrameDict* d) {
+    for (int i = 0; i < d->bucket_count; i++) {
+        NoPersist_FrameDictEntry* entry = d->buckets[i];
+        while (entry) {
+            NoPersist_FrameDictEntry* next = entry->next;
+            free(entry->key);
+            free(entry);
+            entry = next;
+        }
+    }
+    free(d->buckets);
+    free(d);
+}
+
+// ============================================================================
+// NoPersist_FrameVec - Dynamic array
+// ============================================================================
+
+typedef struct {
+    void** items;
+    int size;
+    int capacity;
+} NoPersist_FrameVec;
+
+static NoPersist_FrameVec* NoPersist_FrameVec_new(void) {
+    NoPersist_FrameVec* v = malloc(sizeof(NoPersist_FrameVec));
+    v->capacity = 8;
+    v->size = 0;
+    v->items = malloc(sizeof(void*) * v->capacity);
+    return v;
+}
+
+static void NoPersist_FrameVec_push(NoPersist_FrameVec* v, void* item) {
+    if (v->size >= v->capacity) {
+        v->capacity *= 2;
+        v->items = realloc(v->items, sizeof(void*) * v->capacity);
+    }
+    v->items[v->size++] = item;
+}
+
+static void* NoPersist_FrameVec_pop(NoPersist_FrameVec* v) {
+    if (v->size == 0) return NULL;
+    return v->items[--v->size];
+}
+
+static void* NoPersist_FrameVec_last(NoPersist_FrameVec* v) {
+    if (v->size == 0) return NULL;
+    return v->items[v->size - 1];
+}
+
+static void* NoPersist_FrameVec_get(NoPersist_FrameVec* v, int index) {
+    if (index < 0 || index >= v->size) return NULL;
+    return v->items[index];
+}
+
+static int NoPersist_FrameVec_size(NoPersist_FrameVec* v) {
+    return v->size;
+}
+
+static void NoPersist_FrameVec_destroy(NoPersist_FrameVec* v) {
+    if (!v) return;
+    free(v->items);
+    free(v);
+}
+
+static NoPersist_FrameVec* NoPersist_FrameVec_copy(NoPersist_FrameVec* src) {
+    if (!src) return NULL;
+    NoPersist_FrameVec* v = NoPersist_FrameVec_new();
+    for (int i = 0; i < src->size; i++) {
+        NoPersist_FrameVec_push(v, src->items[i]);
+    }
+    return v;
+}
+
+// ============================================================================
+// NoPersist_pack_double / NoPersist_unpack_double — bit-pun doubles through void*
+// ============================================================================
+
+static inline void* NoPersist_pack_double(double v) {
+    void* p = 0;
+    memcpy(&p, &v, sizeof(double));
+    return p;
+}
+
+static inline double NoPersist_unpack_double(void* p) {
+    double d;
+    memcpy(&d, &p, sizeof(double));
+    return d;
+}
+
+// ============================================================================
+// NoPersist_persist_pack_*  /  NoPersist_persist_unpack_*  — persist dispatcher
+// ============================================================================
+
+static cJSON* NoPersist_persist_pack_int(void* v);
+static cJSON* NoPersist_persist_pack_double(void* v);
+static cJSON* NoPersist_persist_pack_str(void* v);
+static cJSON* NoPersist_persist_pack_bool(void* v);
+static cJSON* NoPersist_persist_pack_list(void* v);
+static cJSON* NoPersist_persist_pack_dict(void* v);
+static void* NoPersist_persist_unpack_int(cJSON* j);
+static void* NoPersist_persist_unpack_double(cJSON* j);
+static void* NoPersist_persist_unpack_str(cJSON* j);
+static void* NoPersist_persist_unpack_bool(cJSON* j);
+static void* NoPersist_persist_unpack_list(cJSON* j);
+static void* NoPersist_persist_unpack_dict(cJSON* j);
+
+static cJSON* NoPersist_persist_pack_int(void* v) { return cJSON_CreateNumber((double)(intptr_t)v); }
+static void* NoPersist_persist_unpack_int(cJSON* j) { return (void*)(intptr_t)(int)(j ? j->valuedouble : 0); }
+
+static cJSON* NoPersist_persist_pack_double(void* v) { return cJSON_CreateNumber(NoPersist_unpack_double(v)); }
+static void* NoPersist_persist_unpack_double(cJSON* j) { return NoPersist_pack_double(j ? j->valuedouble : 0.0); }
+
+static cJSON* NoPersist_persist_pack_str(void* v) { return cJSON_CreateString(v ? (const char*)v : ""); }
+static void* NoPersist_persist_unpack_str(cJSON* j) { const char* s = (j && j->valuestring) ? j->valuestring : ""; return (void*)strdup(s); }
+
+static cJSON* NoPersist_persist_pack_bool(void* v) { return cJSON_CreateBool((intptr_t)v != 0); }
+static void* NoPersist_persist_unpack_bool(cJSON* j) { return (void*)(intptr_t)(j && cJSON_IsTrue(j) ? 1 : 0); }
+
+static cJSON* NoPersist_persist_pack_list(void* v) {
+    NoPersist_FrameVec* vec = (NoPersist_FrameVec*)v;
+    cJSON* arr = cJSON_CreateArray();
+    if (vec) {
+        for (int __i = 0; __i < vec->size; __i++) {
+            cJSON_AddItemToArray(arr, NoPersist_persist_pack_int(vec->items[__i]));
+        }
+    }
+    return arr;
+}
+static void* NoPersist_persist_unpack_list(cJSON* j) {
+    if (!cJSON_IsArray(j)) return NULL;
+    NoPersist_FrameVec* vec = NoPersist_FrameVec_new();
+    cJSON* __child;
+    cJSON_ArrayForEach(__child, j) {
+        NoPersist_FrameVec_push(vec, NoPersist_persist_unpack_int(__child));
+    }
+    return vec;
+}
+
+static cJSON* NoPersist_persist_pack_dict(void* v) {
+    NoPersist_FrameDict* d = (NoPersist_FrameDict*)v;
+    cJSON* obj = cJSON_CreateObject();
+    if (d) {
+        for (int __i = 0; __i < d->bucket_count; __i++) {
+            NoPersist_FrameDictEntry* __e = d->buckets[__i];
+            while (__e) {
+                cJSON_AddItemToObject(obj, __e->key, NoPersist_persist_pack_int(__e->value));
+                __e = __e->next;
+            }
+        }
+    }
+    return obj;
+}
+static void* NoPersist_persist_unpack_dict(cJSON* j) {
+    if (!cJSON_IsObject(j)) return NULL;
+    NoPersist_FrameDict* d = NoPersist_FrameDict_new();
+    cJSON* __child;
+    cJSON_ArrayForEach(__child, j) {
+        NoPersist_FrameDict_set(d, __child->string, NoPersist_persist_unpack_int(__child));
+    }
+    return d;
+}
+
+static cJSON* NoPersist_persist_pack_field_int(void* p) { return cJSON_CreateNumber((double)*(int*)p); }
+static void NoPersist_persist_unpack_field_int(cJSON* j, void* p) { *(int*)p = (int)(j ? j->valuedouble : 0); }
+static cJSON* NoPersist_persist_pack_field_double(void* p) { return cJSON_CreateNumber(*(double*)p); }
+static void NoPersist_persist_unpack_field_double(cJSON* j, void* p) { *(double*)p = j ? j->valuedouble : 0.0; }
+static cJSON* NoPersist_persist_pack_field_bool(void* p) { return cJSON_CreateBool(*(bool*)p); }
+static void NoPersist_persist_unpack_field_bool(cJSON* j, void* p) { *(bool*)p = (bool)(j && cJSON_IsTrue(j)); }
+static cJSON* NoPersist_persist_pack_field_str(void* p) { const char* s = *(const char**)p; return cJSON_CreateString(s ? s : ""); }
+static void NoPersist_persist_unpack_field_str(cJSON* j, void* p) { const char* s = (j && j->valuestring) ? j->valuestring : ""; *(char**)p = strdup(s); }
+static cJSON* NoPersist_persist_pack_field_list(void* p) { return NoPersist_persist_pack_list(*(NoPersist_FrameVec**)p); }
+static void NoPersist_persist_unpack_field_list(cJSON* j, void* p) { *(NoPersist_FrameVec**)p = (NoPersist_FrameVec*)NoPersist_persist_unpack_list(j); }
+static cJSON* NoPersist_persist_pack_field_dict(void* p) { return NoPersist_persist_pack_dict(*(NoPersist_FrameDict**)p); }
+static void NoPersist_persist_unpack_field_dict(cJSON* j, void* p) { *(NoPersist_FrameDict**)p = (NoPersist_FrameDict*)NoPersist_persist_unpack_dict(j); }
+
+// ============================================================================
+// NoPersist_FrameEvent - Event routing object
+// ============================================================================
+
+typedef struct {
+    const char* _message;
+    NoPersist_FrameVec* _parameters;
+    int _owns_parameters;
+} NoPersist_FrameEvent;
+
+static NoPersist_FrameEvent* NoPersist_FrameEvent_new(const char* message, NoPersist_FrameVec* parameters, int owns_parameters) {
+    NoPersist_FrameEvent* e = malloc(sizeof(NoPersist_FrameEvent));
+    e->_message = message;
+    e->_parameters = parameters;
+    e->_owns_parameters = owns_parameters;
+    return e;
+}
+
+static void NoPersist_FrameEvent_destroy(NoPersist_FrameEvent* e) {
+    if (e->_owns_parameters && e->_parameters) NoPersist_FrameVec_destroy(e->_parameters);
+    free(e);
+}
+
+// ============================================================================
+// NoPersist_FrameContext - Interface call context
+// ============================================================================
+
+typedef struct {
+    NoPersist_FrameEvent* event;
+    void* _return;
+    NoPersist_FrameDict* _data;
+    int _transitioned;
+} NoPersist_FrameContext;
+
+static NoPersist_FrameContext* NoPersist_FrameContext_new(NoPersist_FrameEvent* event, void* default_return) {
+    NoPersist_FrameContext* ctx = malloc(sizeof(NoPersist_FrameContext));
+    ctx->event = event;
+    ctx->_return = default_return;
+    ctx->_data = NoPersist_FrameDict_new();
+    ctx->_transitioned = 0;
+    return ctx;
+}
+
+static void NoPersist_FrameContext_destroy(NoPersist_FrameContext* ctx) {
+    NoPersist_FrameDict_destroy(ctx->_data);
+    free(ctx);
+}
+
+// ============================================================================
+// NoPersist_Compartment - State closure
+// ============================================================================
+
+typedef struct NoPersist_Compartment {
+    const char* state;
+    NoPersist_FrameVec* state_args;
+    NoPersist_FrameDict* state_vars;
+    NoPersist_FrameVec* enter_args;
+    NoPersist_FrameVec* exit_args;
+    NoPersist_FrameEvent* forward_event;
+    struct NoPersist_Compartment* parent_compartment;
+    int _ref_count;
+} NoPersist_Compartment;
+
+static NoPersist_Compartment* NoPersist_Compartment_new(const char* state) {
+    NoPersist_Compartment* c = malloc(sizeof(NoPersist_Compartment));
+    c->state = state;
+    c->state_args = NoPersist_FrameVec_new();
+    c->state_vars = NoPersist_FrameDict_new();
+    c->enter_args = NoPersist_FrameVec_new();
+    c->exit_args = NoPersist_FrameVec_new();
+    c->forward_event = NULL;
+    c->parent_compartment = NULL;
+    c->_ref_count = 1;
+    return c;
+}
+
+static NoPersist_Compartment* NoPersist_Compartment_ref(NoPersist_Compartment* c) {
+    if (c) c->_ref_count++;
+    return c;
+}
+
+static void NoPersist_Compartment_unref(NoPersist_Compartment* c);
+static void NoPersist_Compartment_unref(NoPersist_Compartment* c) {
+    if (c == NULL) return;
+    c->_ref_count--;
+    if (c->_ref_count <= 0) {
+        NoPersist_Compartment_unref(c->parent_compartment);
+        NoPersist_FrameVec_destroy(c->state_args);
+        NoPersist_FrameDict_destroy(c->state_vars);
+        NoPersist_FrameVec_destroy(c->enter_args);
+        NoPersist_FrameVec_destroy(c->exit_args);
+        free(c);
+    }
+}
+
+static NoPersist_Compartment* NoPersist_Compartment_copy(NoPersist_Compartment* src) {
+    NoPersist_Compartment* c = malloc(sizeof(NoPersist_Compartment));
+    c->state = src->state;
+    c->state_args = NoPersist_FrameVec_copy(src->state_args);
+    c->state_vars = NoPersist_FrameDict_copy(src->state_vars);
+    c->enter_args = NoPersist_FrameVec_copy(src->enter_args);
+    c->exit_args = NoPersist_FrameVec_copy(src->exit_args);
+    c->forward_event = src->forward_event;  // Shallow copy OK
+    c->parent_compartment = src->parent_compartment;
+    return c;
+}
+
+static void NoPersist_Compartment_destroy(NoPersist_Compartment* c) {
+    NoPersist_FrameVec_destroy(c->state_args);
+    NoPersist_FrameDict_destroy(c->state_vars);
+    NoPersist_FrameVec_destroy(c->enter_args);
+    NoPersist_FrameVec_destroy(c->exit_args);
+    free(c);
+}
+
+// Helper macros for context access
+#define NoPersist_CTX(self) ((NoPersist_FrameContext*)NoPersist_FrameVec_last((self)->_context_stack))
+#define NoPersist_PARAM(self, key) NoPersist_FrameDict_get(NoPersist_CTX(self)->event->_parameters, key)
+#define NoPersist_RETURN(self) NoPersist_CTX(self)->_return
+#define NoPersist_DATA(self, key) NoPersist_FrameDict_get(NoPersist_CTX(self)->_data, key)
+#define NoPersist_DATA_SET(self, key, val) NoPersist_FrameDict_set(NoPersist_CTX(self)->_data, key, val)
+
+// Forward declarations
+typedef struct NoPersist NoPersist;
+static void NoPersist_kernel(NoPersist* self, NoPersist_FrameEvent* __e);
+static void NoPersist_router(NoPersist* self, NoPersist_FrameEvent* __e);
+static void NoPersist_transition(NoPersist* self, NoPersist_Compartment* next);
+static int NoPersist_hsm_chain(NoPersist* self, const char* leaf, const char*** out_chain);
+static NoPersist_Compartment* NoPersist_prepareEnter(NoPersist* self, const char* leaf, NoPersist_FrameVec* state_args, NoPersist_FrameVec* enter_args);
+static void NoPersist_prepareExit(NoPersist* self, NoPersist_FrameVec* exit_args);
+static void NoPersist_state_Active(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment);
+static void NoPersist_s_Active_hdl_user_bump(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment);
+static void NoPersist_s_Active_hdl_user_get_cache(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment);
+static void NoPersist_s_Active_hdl_user_get_count(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment);
+static void NoPersist_s_Active_hdl_user_set_cache(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment);
+void NoPersist_bump (NoPersist* self);
+void NoPersist_set_cache (NoPersist* self, i32 v);
+i32 NoPersist_get_count (NoPersist* self);
+i32 NoPersist_get_cache (NoPersist* self);
+char* NoPersist_snapshot (NoPersist* self);
+void NoPersist_restore (NoPersist* self, const char* json);
+
+struct NoPersist {
+    NoPersist_FrameVec* _state_stack;
+    NoPersist_Compartment* __compartment;
+    NoPersist_Compartment* __next_compartment;
+    NoPersist_FrameVec* _context_stack;
+    i32 count;
+    i32 cache;
+};
+
+NoPersist* NoPersist_new(void) {
+    NoPersist* self = calloc(1, sizeof(NoPersist));
+    self->_state_stack = NoPersist_FrameVec_new();
+    self->_context_stack = NoPersist_FrameVec_new();
+    self->count = 0;
+    self->cache = -1;
+    NoPersist_FrameVec* __sa = NULL;
+    NoPersist_FrameVec* __ea = NULL;
+    self->__compartment = NoPersist_prepareEnter(self, "Active", __sa, __ea);
+    self->__next_compartment = NULL;
+    NoPersist_FrameEvent* __e = NoPersist_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+    NoPersist_FrameContext* __ctx = NoPersist_FrameContext_new(__e, NULL);
+    NoPersist_FrameVec_push(self->_context_stack, __ctx);
+    NoPersist_FrameContext* __init_ctx = (NoPersist_FrameContext*)NoPersist_FrameVec_pop(self->_context_stack);
+    NoPersist_FrameContext_destroy(__init_ctx);
+    NoPersist_FrameEvent_destroy(__e);
+    return self;
+}
+
+NoPersist* NoPersist_create(void) {
+    NoPersist* self = NoPersist_new();
+    self->_state_stack = NoPersist_FrameVec_new();
+    self->_context_stack = NoPersist_FrameVec_new();
+    self->count = 0;
+    self->cache = -1;
+    NoPersist_FrameVec* __sa = NULL;
+    NoPersist_FrameVec* __ea = NULL;
+    self->__compartment = NoPersist_prepareEnter(self, "Active", __sa, __ea);
+    self->__next_compartment = NULL;
+    NoPersist_FrameEvent* __e = NoPersist_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+    NoPersist_FrameContext* __ctx = NoPersist_FrameContext_new(__e, NULL);
+    NoPersist_FrameVec_push(self->_context_stack, __ctx);
+    NoPersist_kernel(self, __e);
+    NoPersist_FrameContext* __init_ctx = (NoPersist_FrameContext*)NoPersist_FrameVec_pop(self->_context_stack);
+    NoPersist_FrameContext_destroy(__init_ctx);
+    NoPersist_FrameEvent_destroy(__e);
+    return self;
+}
+
+static int NoPersist_hsm_chain(NoPersist* self, const char* leaf, const char*** out_chain) {
+    if (false) { (void)0; }
+        else if (strcmp(leaf, "Active") == 0) {
+            static const char* __chain[] = { "Active" };
+            *out_chain = __chain;
+            return 1;
+        }
+        *out_chain = NULL;
+        return 0;
+}
+
+static NoPersist_Compartment* NoPersist_prepareEnter(NoPersist* self, const char* leaf, NoPersist_FrameVec* state_args, NoPersist_FrameVec* enter_args) {
+    const char** chain = NULL;
+    int n = NoPersist_hsm_chain(self, leaf, &chain);
+    NoPersist_Compartment* comp = NULL;
+    for (int i = 0; i < n; i++) {
+        NoPersist_Compartment* nc = NoPersist_Compartment_new(chain[i]);
+        if (state_args) {
+            for (int j = 0; j < state_args->size; j++) NoPersist_FrameVec_push(nc->state_args, state_args->items[j]);
+        }
+        if (enter_args) {
+            for (int j = 0; j < enter_args->size; j++) NoPersist_FrameVec_push(nc->enter_args, enter_args->items[j]);
+        }
+        nc->parent_compartment = comp;  // adopts ref
+        comp = nc;
+    }
+    return comp;
+}
+
+static void NoPersist_prepareExit(NoPersist* self, NoPersist_FrameVec* exit_args) {
+    NoPersist_Compartment* comp = self->__compartment;
+    while (comp != NULL) {
+        // Clear any prior exit_args before copying the new ones in.
+        while (comp->exit_args->size > 0) comp->exit_args->size--;
+        if (exit_args) {
+            for (int j = 0; j < exit_args->size; j++) NoPersist_FrameVec_push(comp->exit_args, exit_args->items[j]);
+        }
+        comp = comp->parent_compartment;
+    }
+}
+
+static void NoPersist_kernel(NoPersist* self, NoPersist_FrameEvent* __e) {
+    NoPersist_router(self, __e);
+    while (self->__next_compartment != NULL) {
+        NoPersist_Compartment* next_compartment = self->__next_compartment;
+        self->__next_compartment = NULL;
+        // Exit the current (leaf) state
+        NoPersist_FrameEvent* __exit_event = NoPersist_FrameEvent_new("<$", self->__compartment->exit_args, 0);
+        NoPersist_router(self, __exit_event);
+        NoPersist_FrameEvent_destroy(__exit_event);
+        NoPersist_Compartment_unref(self->__compartment);
+        self->__compartment = next_compartment;
+        if (next_compartment->forward_event == NULL) {
+            // No forwarded event — synthesize a fresh $>
+            NoPersist_FrameEvent* __enter_event = NoPersist_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+            NoPersist_router(self, __enter_event);
+            NoPersist_FrameEvent_destroy(__enter_event);
+        } else if (strcmp(next_compartment->forward_event->_message, "$>") == 0) {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            // The forward_event is borrowed (owned by the wrapper that
+            // queued the transition) — do NOT destroy it here.
+            NoPersist_FrameEvent* forward_event = next_compartment->forward_event;
+            next_compartment->forward_event = NULL;
+            NoPersist_router(self, forward_event);
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward to it. The
+            // forward_event is borrowed; only the synthesized $> belongs
+            // to the kernel and is freed here.
+            NoPersist_FrameEvent* forward_event = next_compartment->forward_event;
+            next_compartment->forward_event = NULL;
+            NoPersist_FrameEvent* __enter_event = NoPersist_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+            NoPersist_router(self, __enter_event);
+            NoPersist_FrameEvent_destroy(__enter_event);
+            NoPersist_router(self, forward_event);
+        }
+        // Mark every stacked context as having transitioned. Read by
+        // @@:self.X() guard so outer self-calls short-circuit.
+        for (int __i = 0; __i < self->_context_stack->size; __i++) {
+            ((NoPersist_FrameContext*)self->_context_stack->items[__i])->_transitioned = 1;
+        }
+    }
+}
+
+static void NoPersist_router(NoPersist* self, NoPersist_FrameEvent* __e) {
+    if (strcmp(self->__compartment->state, "Active") == 0) {
+        NoPersist_state_Active(self, __e, self->__compartment);
+    }
+}
+
+static void NoPersist_transition(NoPersist* self, NoPersist_Compartment* next_compartment) {
+    self->__next_compartment = next_compartment;
+}
+
+void NoPersist_destroy(NoPersist* self) {
+    // Unref current compartment (may free if not on stack)
+    if (self->__compartment) NoPersist_Compartment_unref(self->__compartment);
+    if (self->__next_compartment) NoPersist_Compartment_unref(self->__next_compartment);
+    // Unref all state stack entries
+    if (self->_state_stack) {
+        for (int __i = 0; __i < self->_state_stack->size; __i++) {
+            NoPersist_Compartment_unref((NoPersist_Compartment*)self->_state_stack->items[__i]);
+        }
+        NoPersist_FrameVec_destroy(self->_state_stack);
+    }
+    if (self->_context_stack) NoPersist_FrameVec_destroy(self->_context_stack);
+    free(self);
+}
+
+void NoPersist_bump(NoPersist* self) {
+    NoPersist_FrameEvent* __e = NoPersist_FrameEvent_new("bump", NULL, 0);
+    NoPersist_FrameContext* __ctx = NoPersist_FrameContext_new(__e, NULL);
+    NoPersist_FrameVec_push(self->_context_stack, __ctx);
+    NoPersist_kernel(self, __e);
+    NoPersist_FrameContext* __result_ctx = (NoPersist_FrameContext*)NoPersist_FrameVec_pop(self->_context_stack);
+    NoPersist_FrameContext_destroy(__result_ctx);
+    NoPersist_FrameEvent_destroy(__e);
+}
+
+void NoPersist_set_cache(NoPersist* self, i32 v) {
+    NoPersist_FrameVec* __params = NoPersist_FrameVec_new();
+    NoPersist_FrameVec_push(__params, (void*)(intptr_t)v);
+    NoPersist_FrameEvent* __e = NoPersist_FrameEvent_new("set_cache", __params, 1);
+    NoPersist_FrameContext* __ctx = NoPersist_FrameContext_new(__e, NULL);
+    NoPersist_FrameVec_push(self->_context_stack, __ctx);
+    NoPersist_kernel(self, __e);
+    NoPersist_FrameContext* __result_ctx = (NoPersist_FrameContext*)NoPersist_FrameVec_pop(self->_context_stack);
+    NoPersist_FrameContext_destroy(__result_ctx);
+    NoPersist_FrameEvent_destroy(__e);
+}
+
+i32 NoPersist_get_count(NoPersist* self) {
+    NoPersist_FrameEvent* __e = NoPersist_FrameEvent_new("get_count", NULL, 0);
+    NoPersist_FrameContext* __ctx = NoPersist_FrameContext_new(__e, NULL);
+    NoPersist_FrameVec_push(self->_context_stack, __ctx);
+    NoPersist_kernel(self, __e);
+    NoPersist_FrameContext* __result_ctx = (NoPersist_FrameContext*)NoPersist_FrameVec_pop(self->_context_stack);
+    i32 __result = (i32)__result_ctx->_return;
+    NoPersist_FrameContext_destroy(__result_ctx);
+    NoPersist_FrameEvent_destroy(__e);
+    return __result;
+}
+
+i32 NoPersist_get_cache(NoPersist* self) {
+    NoPersist_FrameEvent* __e = NoPersist_FrameEvent_new("get_cache", NULL, 0);
+    NoPersist_FrameContext* __ctx = NoPersist_FrameContext_new(__e, NULL);
+    NoPersist_FrameVec_push(self->_context_stack, __ctx);
+    NoPersist_kernel(self, __e);
+    NoPersist_FrameContext* __result_ctx = (NoPersist_FrameContext*)NoPersist_FrameVec_pop(self->_context_stack);
+    i32 __result = (i32)__result_ctx->_return;
+    NoPersist_FrameContext_destroy(__result_ctx);
+    NoPersist_FrameEvent_destroy(__e);
+    return __result;
+}
+
+static void NoPersist_state_Active(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment) {
+    if (strcmp(__e->_message, "bump") == 0) {
+        NoPersist_s_Active_hdl_user_bump(self, __e, compartment);
+        return;
+    }
+    if (strcmp(__e->_message, "get_cache") == 0) {
+        NoPersist_s_Active_hdl_user_get_cache(self, __e, compartment);
+        return;
+    }
+    if (strcmp(__e->_message, "get_count") == 0) {
+        NoPersist_s_Active_hdl_user_get_count(self, __e, compartment);
+        return;
+    }
+    if (strcmp(__e->_message, "set_cache") == 0) {
+        NoPersist_s_Active_hdl_user_set_cache(self, __e, compartment);
+        return;
+    }
+}
+
+static void NoPersist_s_Active_hdl_user_bump(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment) {
+    self.count = self.count + 1
+}
+
+static void NoPersist_s_Active_hdl_user_get_cache(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment) {
+    NoPersist_CTX(self)->_return = (void*)(intptr_t)(self.cache);
+}
+
+static void NoPersist_s_Active_hdl_user_get_count(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment) {
+    NoPersist_CTX(self)->_return = (void*)(intptr_t)(self.count);
+}
+
+static void NoPersist_s_Active_hdl_user_set_cache(NoPersist* self, NoPersist_FrameEvent* __e, NoPersist_Compartment* compartment) {
+    int v = (int)(intptr_t)NoPersist_FrameVec_get(__e->_parameters, 0);
+    (void)v;
+    self.cache = v
+}
+
+static cJSON* NoPersist_serialize_compartment(NoPersist_Compartment* comp) {
+    if (!comp) return cJSON_CreateNull();
+    cJSON* obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "state", comp->state);
+    cJSON* vars = cJSON_CreateObject();
+    NoPersist_FrameDict* sv = comp->state_vars;
+    if (sv) {
+        for (int i = 0; i < sv->bucket_count; i++) {
+            NoPersist_FrameDictEntry* entry = sv->buckets[i];
+            while (entry) {
+                cJSON_AddNumberToObject(vars, entry->key, (double)(intptr_t)entry->value);
+                entry = entry->next;
+            }
+        }
+    }
+    cJSON_AddItemToObject(obj, "state_vars", vars);
+    cJSON* sa = cJSON_CreateArray();
+    if (comp->state_args) {
+    }
+    cJSON_AddItemToObject(obj, "state_args", sa);
+    cJSON* ea = cJSON_CreateArray();
+    if (comp->enter_args) {
+    }
+    cJSON_AddItemToObject(obj, "enter_args", ea);
+    cJSON_AddItemToObject(obj, "parent_compartment", NoPersist_serialize_compartment(comp->parent_compartment));
+    return obj;
+}
+
+static NoPersist_Compartment* NoPersist_deserialize_compartment(cJSON* data) {
+    if (!data || cJSON_IsNull(data)) return NULL;
+    cJSON* state_item = cJSON_GetObjectItem(data, "state");
+    NoPersist_Compartment* comp = NoPersist_Compartment_new(strdup(state_item->valuestring));
+    cJSON* vars = cJSON_GetObjectItem(data, "state_vars");
+    if (vars) {
+        cJSON* var_item;
+        cJSON_ArrayForEach(var_item, vars) {
+            NoPersist_FrameDict_set(comp->state_vars, var_item->string, (void*)(intptr_t)(int)var_item->valuedouble);
+        }
+    }
+    cJSON* sa = cJSON_GetObjectItem(data, "state_args");
+    if (sa) {
+    }
+    cJSON* ea = cJSON_GetObjectItem(data, "enter_args");
+    if (ea) {
+    }
+    cJSON* parent = cJSON_GetObjectItem(data, "parent_compartment");
+    comp->parent_compartment = NoPersist_deserialize_compartment(parent);
+    return comp;
+}
+
+char* NoPersist_snapshot(NoPersist* self) {
+    if (NoPersist_FrameVec_size(self->_context_stack) > 0) { fprintf(stderr, "E700: system not quiescent\n"); abort(); }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddItemToObject(root, "_compartment", NoPersist_serialize_compartment(self->__compartment));
+    cJSON* stack_arr = cJSON_CreateArray();
+    for (int i = 0; i < NoPersist_FrameVec_size(self->_state_stack); i++) {
+        NoPersist_Compartment* comp = (NoPersist_Compartment*)NoPersist_FrameVec_get(self->_state_stack, i);
+        cJSON_AddItemToArray(stack_arr, NoPersist_serialize_compartment(comp));
+    }
+    cJSON_AddItemToObject(root, "_state_stack", stack_arr);
+    cJSON_AddItemToObject(root, "count", NoPersist_persist_pack_field_int((void*)&self->count));
+    char* json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return json;
+}
+
+void NoPersist_restore(NoPersist* self, const char* json) {
+    cJSON* root = cJSON_Parse(json);
+    if (!root) return;
+
+    self->__next_compartment = NULL;
+
+    cJSON* comp_data = cJSON_GetObjectItem(root, "_compartment");
+    self->__compartment = NoPersist_deserialize_compartment(comp_data);
+
+    cJSON* stack_arr = cJSON_GetObjectItem(root, "_state_stack");
+    if (stack_arr) {
+        cJSON* stack_item;
+        cJSON_ArrayForEach(stack_item, stack_arr) {
+            NoPersist_Compartment* comp = NoPersist_deserialize_compartment(stack_item);
+            if (comp) {
+                NoPersist_FrameVec_push(self->_state_stack, comp);
+            }
+        }
+    }
+
+    NoPersist_persist_unpack_field_int(cJSON_GetObjectItem(root, "count"), (void*)&self->count);
+
+    cJSON_Delete(root);
+}

@@ -1,0 +1,273 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"dart\")"
+---
+class NoPersistFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    NoPersistFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class NoPersistFrameContext {
+    late NoPersistFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    NoPersistFrameContext(NoPersistFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class NoPersistCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    NoPersistCompartment? parent_compartment;
+
+    NoPersistCompartment(String state, [NoPersistCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    NoPersistCompartment copy() {
+        final c = NoPersistCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class NoPersist {
+    late List<NoPersistCompartment> _state_stack;
+    late NoPersistCompartment __compartment;
+    NoPersistCompartment? __next_compartment;
+    late List<NoPersistFrameContext> _context_stack;
+    i32 count = 0;
+    i32 cache = -1;
+
+    NoPersist() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Active", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init() {
+        final __e = NoPersistFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static NoPersist _create() {
+        final c = NoPersist();
+        c._frame_init();
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Active": ["Active"],
+        };
+    }
+    NoPersistCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        NoPersistCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = NoPersistCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        NoPersistCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(NoPersistFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = NoPersistFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = NoPersistFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = NoPersistFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(NoPersistFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Active":
+                _state_Active(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(NoPersistCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void bump() {
+        final __e = NoPersistFrameEvent("bump", []);
+        final __ctx = NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void set_cache(i32 v) {
+        final __e = NoPersistFrameEvent("set_cache", [v]);
+        final __ctx = NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    i32 get_count() {
+        final __e = NoPersistFrameEvent("get_count", []);
+        final __ctx = NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        return _context_stack.removeLast()._return;
+    }
+
+    i32 get_cache() {
+        final __e = NoPersistFrameEvent("get_cache", []);
+        final __ctx = NoPersistFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        return _context_stack.removeLast()._return;
+    }
+
+    void _state_Active(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        if (__e._message == "bump") {
+            this._s_Active_hdl_user_bump(__e, compartment);
+            return;
+        }
+        if (__e._message == "get_cache") {
+            this._s_Active_hdl_user_get_cache(__e, compartment);
+            return;
+        }
+        if (__e._message == "get_count") {
+            this._s_Active_hdl_user_get_count(__e, compartment);
+            return;
+        }
+        if (__e._message == "set_cache") {
+            this._s_Active_hdl_user_set_cache(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Active_hdl_user_bump(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        self.count = self.count + 1
+    }
+
+    void _s_Active_hdl_user_get_cache(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        this._context_stack[this._context_stack.length - 1]._return = self.cache;
+    }
+
+    void _s_Active_hdl_user_get_count(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        this._context_stack[this._context_stack.length - 1]._return = self.count;
+    }
+
+    void _s_Active_hdl_user_set_cache(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        final v = __e._parameters[0];
+        self.cache = v
+    }
+
+    String snapshot() {
+        if (_context_stack.isNotEmpty) throw Exception("E700: system not quiescent");
+        Map<String, dynamic>? serializeComp(NoPersistCompartment? comp) {
+            if (comp == null) return null;
+            return {
+                'state': comp.state,
+                'state_args': List<dynamic>.from(comp.state_args),
+                'state_vars': Map<String, dynamic>.from(comp.state_vars),
+                'enter_args': List<dynamic>.from(comp.enter_args),
+                'exit_args': List<dynamic>.from(comp.exit_args),
+                'forward_event': comp.forward_event,
+                'parent_compartment': serializeComp(comp.parent_compartment),
+            };
+        }
+        return jsonEncode({
+            '_compartment': serializeComp(this.__compartment),
+            '_state_stack': this._state_stack.map((c) => serializeComp(c)).toList(),
+            'count': this.count,
+        });
+    }
+
+    void restore(String json) {
+        NoPersistCompartment? deserializeComp(dynamic data) {
+            if (data == null || data is! Map) return null;
+            final comp = NoPersistCompartment(data['state'] as String);
+            comp.state_vars = Map<String, dynamic>.from(data['state_vars'] ?? {});
+            final __saRaw = (data['state_args'] as List?) ?? <dynamic>[];
+            final __eaRaw = (data['enter_args'] as List?) ?? <dynamic>[];
+            comp.exit_args = List<dynamic>.from(data['exit_args'] ?? <dynamic>[]);
+            comp.state_args.addAll(__saRaw);
+            comp.enter_args.addAll(__eaRaw);
+            comp.forward_event = data['forward_event'];
+            comp.parent_compartment = deserializeComp(data['parent_compartment']);
+            return comp;
+        }
+        final _parsed = jsonDecode(json) as Map<String, dynamic>;
+        this.__compartment = deserializeComp(_parsed['_compartment'])!;
+        this.__next_compartment = null;
+        this._state_stack = (_parsed['_state_stack'] as List?)?.map((c) => deserializeComp(c)!).toList() ?? <NoPersistCompartment>[];
+        this.count = _parsed['count'] as i32;
+    }
+}

@@ -1,0 +1,276 @@
+---
+source: framec/tests/lua_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"lua\")"
+---
+local NoPersistFrameEvent = {}
+NoPersistFrameEvent.__index = NoPersistFrameEvent
+
+function NoPersistFrameEvent.new(message, parameters)
+    local self = setmetatable({}, NoPersistFrameEvent)
+    self._message = message
+    self._parameters = parameters or {}
+    return self
+end
+
+
+local NoPersistFrameContext = {}
+NoPersistFrameContext.__index = NoPersistFrameContext
+
+function NoPersistFrameContext.new(event, default_return)
+    local self = setmetatable({}, NoPersistFrameContext)
+    self._event = event
+    self._return = default_return
+    self._data = {}
+    self._transitioned = false
+    return self
+end
+
+
+local NoPersistCompartment = {}
+NoPersistCompartment.__index = NoPersistCompartment
+
+function NoPersistCompartment.new(state, parent_compartment)
+    local self = setmetatable({}, NoPersistCompartment)
+    self.state = state
+    self.state_args = {}
+    self.state_vars = {}
+    self.enter_args = {}
+    self.exit_args = {}
+    self.forward_event = nil
+    self.parent_compartment = parent_compartment
+    return self
+end
+
+function NoPersistCompartment:copy()
+    local c = NoPersistCompartment.new(self.state, self.parent_compartment)
+    c.state_args = {}
+    for k, v in pairs(self.state_args) do c.state_args[k] = v end
+    c.state_vars = {}
+    for k, v in pairs(self.state_vars) do c.state_vars[k] = v end
+    c.enter_args = {}
+    for k, v in pairs(self.enter_args) do c.enter_args[k] = v end
+    c.exit_args = {}
+    for k, v in pairs(self.exit_args) do c.exit_args[k] = v end
+    c.forward_event = self.forward_event
+    return c
+end
+
+
+local NoPersist = {}
+NoPersist.__index = NoPersist
+
+function NoPersist.new()
+    local self = setmetatable({}, NoPersist)
+    self._state_stack = {}
+    self._context_stack = {}
+    self.count = 0
+    self.cache = -1
+    self.__compartment = self:__prepareEnter("Active", nil, nil)
+    self.__next_compartment = nil
+    return self
+end
+
+function NoPersist:_frame_init()
+    local __e = NoPersistFrameEvent.new("$>", self.__compartment.enter_args)
+    local __ctx = NoPersistFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    table.remove(self._context_stack)
+end
+
+function NoPersist._create()
+    local c = NoPersist.new()
+    c:_frame_init()
+    return c
+end
+
+function NoPersist:hsm_chain()
+    local t = {}
+    t["Active"] = {"Active"}
+    return t
+end
+function NoPersist:__prepareEnter(leaf, state_args, enter_args)
+    state_args = state_args or {}
+    enter_args = enter_args or {}
+    local comp = nil
+    local chain = self:hsm_chain()[leaf]
+    for i = 1, #chain do
+        local new_comp = NoPersistCompartment.new(chain[i])
+        new_comp.state_args = {}
+        for j = 1, #state_args do new_comp.state_args[j] = state_args[j] end
+        new_comp.enter_args = {}
+        for j = 1, #enter_args do new_comp.enter_args[j] = enter_args[j] end
+        new_comp.parent_compartment = comp
+        comp = new_comp
+    end
+    return comp
+end
+
+function NoPersist:__prepareExit(exit_args)
+    local comp = self.__compartment
+    while comp ~= nil do
+        comp.exit_args = {}
+        for j = 1, #exit_args do comp.exit_args[j] = exit_args[j] end
+        comp = comp.parent_compartment
+    end
+end
+
+function NoPersist:__kernel(__e)
+    -- Route event to current state.
+    self:__router(__e)
+    -- Drain any transitions queued by the handler.
+    while self.__next_compartment ~= nil do
+        local next_compartment = self.__next_compartment
+        self.__next_compartment = nil
+        local exit_event = NoPersistFrameEvent.new("<$", self.__compartment.exit_args)
+        self:__router(exit_event)
+        self.__compartment = next_compartment
+        local forward_event = next_compartment.forward_event
+        next_compartment.forward_event = nil
+        if forward_event == nil then
+            local enter_event = NoPersistFrameEvent.new("$>", self.__compartment.enter_args)
+            self:__router(enter_event)
+        elseif forward_event._message == "$>" then
+            self:__router(forward_event)
+        else
+            local enter_event = NoPersistFrameEvent.new("$>", self.__compartment.enter_args)
+            self:__router(enter_event)
+            self:__router(forward_event)
+        end
+        for _, ctx in ipairs(self._context_stack) do
+            ctx._transitioned = true
+        end
+    end
+end
+
+function NoPersist:__router(__e)
+    local handler = self["_state_" .. self.__compartment.state]
+    if handler then
+        handler(self, __e, self.__compartment)
+    end
+end
+
+function NoPersist:__transition(next_compartment)
+    self.__next_compartment = next_compartment
+end
+
+function NoPersist:bump()
+    local __e = NoPersistFrameEvent.new("bump", {})
+    local __ctx = NoPersistFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function NoPersist:set_cache(v)
+    local __e = NoPersistFrameEvent.new("set_cache", {v})
+    local __ctx = NoPersistFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function NoPersist:get_count()
+    local __e = NoPersistFrameEvent.new("get_count", {})
+    local __ctx = NoPersistFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function NoPersist:get_cache()
+    local __e = NoPersistFrameEvent.new("get_cache", {})
+    local __ctx = NoPersistFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function NoPersist:_state_Active(__e, compartment)
+    if __e._message == "bump" then
+        self:_s_Active_hdl_user_bump(__e, compartment)
+        return
+    end
+    if __e._message == "get_cache" then
+        self:_s_Active_hdl_user_get_cache(__e, compartment)
+        return
+    end
+    if __e._message == "get_count" then
+        self:_s_Active_hdl_user_get_count(__e, compartment)
+        return
+    end
+    if __e._message == "set_cache" then
+        self:_s_Active_hdl_user_set_cache(__e, compartment)
+        return
+    end
+end
+
+function NoPersist:_s_Active_hdl_user_bump(__e, compartment)
+    self.count = self.count + 1
+end
+
+function NoPersist:_s_Active_hdl_user_get_cache(__e, compartment)
+    self._context_stack[#self._context_stack]._return = self.cache
+end
+
+function NoPersist:_s_Active_hdl_user_get_count(__e, compartment)
+    self._context_stack[#self._context_stack]._return = self.count
+end
+
+function NoPersist:_s_Active_hdl_user_set_cache(__e, compartment)
+    local v = __e._parameters[1]
+    self.cache = v
+end
+
+function NoPersist:snapshot()
+    if #self._context_stack > 0 then error("E700: system not quiescent") end
+    local serpent = require("serpent")
+    local function serialize_comp(comp)
+        if not comp then return nil end
+        local t = {}
+        t.state = comp.state
+        t.state_args = comp.state_args
+        t.state_vars = comp.state_vars
+        t.enter_args = comp.enter_args
+        t.exit_args = comp.exit_args
+        t.forward_event = comp.forward_event
+        t.parent_compartment = serialize_comp(comp.parent_compartment)
+        return t
+    end
+    local stack = {}
+    for _, c in ipairs(self._state_stack) do
+        stack[#stack + 1] = serialize_comp(c)
+    end
+    local result = {}
+    result._compartment = serialize_comp(self.__compartment)
+    result._state_stack = stack
+    result.count = self.count
+    return serpent.dump(result)
+end
+
+function NoPersist:restore(json_str)
+    local serpent = require("serpent")
+    local ok, _parsed = serpent.load(json_str)
+    if not ok then error("persist load failed: " .. tostring(_parsed)) end
+    local function deserialize_comp(d)
+        if not d then return nil end
+        local comp = NoPersistCompartment.new(d.state)
+        comp.state_args = d.state_args or {}
+        comp.state_vars = d.state_vars or {}
+        comp.enter_args = d.enter_args or {}
+        comp.exit_args = d.exit_args or {}
+        comp.forward_event = d.forward_event
+        comp.parent_compartment = deserialize_comp(d.parent_compartment)
+        return comp
+    end
+    self.__compartment = deserialize_comp(_parsed._compartment)
+    self.__next_compartment = nil
+    self._state_stack = {}
+    self._context_stack = {}
+    if _parsed._state_stack then
+        for _, c in ipairs(_parsed._state_stack) do
+            self._state_stack[#self._state_stack + 1] = deserialize_comp(c)
+        end
+    end
+    self.count = _parsed.count
+end

@@ -1,0 +1,219 @@
+---
+source: framec/tests/ruby_snapshots.rs
+expression: "compile_fixture(\"08_lifecycle\", \"ruby\")"
+---
+class LifecycleFrameEvent
+    attr_accessor :_message
+    attr_accessor :_parameters
+
+    def initialize(message, parameters = [])
+        @_message = message
+        @_parameters = parameters
+    end
+end
+
+
+class LifecycleFrameContext
+    attr_accessor :_event
+    attr_accessor :_return
+    attr_accessor :_data
+    attr_accessor :_transitioned
+
+    def initialize(event, default_return = nil)
+        @_event = event
+        @_return = default_return
+        @_data = {}
+        @_transitioned = false
+    end
+end
+
+
+class LifecycleCompartment
+    attr_accessor :state
+    attr_accessor :state_args
+    attr_accessor :state_vars
+    attr_accessor :enter_args
+    attr_accessor :exit_args
+    attr_accessor :forward_event
+    attr_accessor :parent_compartment
+
+    def initialize(state, parent_compartment = nil)
+        @state = state
+        @state_args = []
+        @state_vars = {}
+        @enter_args = []
+        @exit_args = []
+        @forward_event = nil
+        @parent_compartment = parent_compartment
+    end
+
+    def copy
+        c = LifecycleCompartment.new(@state, @parent_compartment)
+        c.state_args = @state_args.dup
+        c.state_vars = @state_vars.dup
+        c.enter_args = @enter_args.dup
+        c.exit_args = @exit_args.dup
+        c.forward_event = @forward_event
+        c
+    end
+end
+
+
+class Lifecycle
+    attr_accessor :_state_stack
+    attr_accessor :__compartment
+    attr_accessor :__next_compartment
+    attr_accessor :_context_stack
+    attr_accessor :entered
+    attr_accessor :exited
+    attr_accessor :tag
+
+    def initialize
+        @_state_stack = []
+        @_context_stack = []
+        @entered = 0
+        @exited = 0
+        @tag = ""
+        @__compartment = __prepareEnter("Idle", [], [])
+        @__next_compartment = nil
+    end
+
+    def _frame_init
+        __e = LifecycleFrameEvent.new("$>", @__compartment.enter_args)
+        __ctx = LifecycleFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        @_context_stack.pop
+    end
+
+    def self._create
+        c = new
+        c._frame_init()
+        c
+    end
+
+    def self.hsm_chain
+        {
+            "Idle" => ["Idle"],
+            "Running" => ["Running"],
+        }
+    end
+    def __prepareEnter(leaf, state_args, enter_args)
+        comp = nil
+        self.class.hsm_chain[leaf].each do |name|
+            new_comp = LifecycleCompartment.new(name)
+            new_comp.state_args = state_args.dup
+            new_comp.enter_args = enter_args.dup
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        end
+        comp
+    end
+
+    def __prepareExit(exit_args)
+        comp = @__compartment
+        while comp != nil
+            comp.exit_args = exit_args.dup
+            comp = comp.parent_compartment
+        end
+    end
+
+    def __kernel(__e)
+        # Route event to current state.
+        __router(__e)
+        # Drain any transitions queued by the handler.
+        while @__next_compartment != nil
+            next_compartment = @__next_compartment
+            @__next_compartment = nil
+            exit_event = LifecycleFrameEvent.new("<$", @__compartment.exit_args)
+            __router(exit_event)
+            @__compartment = next_compartment
+            forward_event = next_compartment.forward_event
+            next_compartment.forward_event = nil
+            if forward_event == nil
+                enter_event = LifecycleFrameEvent.new("$>", @__compartment.enter_args)
+                __router(enter_event)
+            elsif forward_event._message == "$>"
+                __router(forward_event)
+            else
+                enter_event = LifecycleFrameEvent.new("$>", @__compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            end
+            @_context_stack.each { |ctx| ctx._transitioned = true }
+        end
+    end
+
+    def __router(__e)
+        handler_name = "_state_#{@__compartment.state}"
+        if respond_to?(handler_name, true)
+            send(handler_name, __e, @__compartment)
+        end
+    end
+
+    def __transition(next_compartment)
+        @__next_compartment = next_compartment
+    end
+
+    def start(label)
+        __e = LifecycleFrameEvent.new("start", [label])
+        __ctx = LifecycleFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        return @_context_stack.pop._return
+    end
+
+    def stop
+        __e = LifecycleFrameEvent.new("stop", [])
+        __ctx = LifecycleFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        return @_context_stack.pop._return
+    end
+
+    def _state_Idle(__e, compartment)
+        if __e._message == "start"
+            self._s_Idle_hdl_user_start(__e, compartment)
+            return
+        end
+    end
+
+    def _state_Running(__e, compartment)
+        if __e._message == "<$"
+            self._s_Running_hdl_frame_exit(__e, compartment)
+            return
+        end
+        if __e._message == "$>"
+            self._s_Running_hdl_frame_enter(__e, compartment)
+            return
+        end
+        if __e._message == "stop"
+            self._s_Running_hdl_user_stop(__e, compartment)
+            return
+        end
+    end
+
+    def _s_Idle_hdl_user_start(__e, compartment)
+        label = __e._parameters[0]
+        (label)
+        __compartment = __prepareEnter("Running", [], [])
+        __transition(__compartment)
+        return
+    end
+
+    def _s_Running_hdl_frame_exit(__e, compartment)
+        self.exited = self.exited + 1
+    end
+
+    def _s_Running_hdl_frame_enter(__e, compartment)
+        label = compartment.enter_args[0]
+        self.entered = self.entered + 1
+        self.tag = label
+    end
+
+    def _s_Running_hdl_user_stop(__e, compartment)
+        __compartment = __prepareEnter("Idle", [], [])
+        __transition(__compartment)
+        return
+    end
+end

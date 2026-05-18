@@ -1,0 +1,520 @@
+---
+source: framec/tests/c_snapshots.rs
+expression: "compile_fixture(\"06_selfcall\", \"c\")"
+---
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+// ============================================================================
+// SelfCall_FrameDict - String-keyed dictionary
+// ============================================================================
+
+typedef struct SelfCall_FrameDictEntry {
+    char* key;
+    void* value;
+    struct SelfCall_FrameDictEntry* next;
+} SelfCall_FrameDictEntry;
+
+typedef struct {
+    SelfCall_FrameDictEntry** buckets;
+    int bucket_count;
+    int size;
+} SelfCall_FrameDict;
+
+static unsigned int SelfCall_hash_string(const char* str) {
+    unsigned int hash = 5381;
+    int c;
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c;
+    }
+    return hash;
+}
+
+static SelfCall_FrameDict* SelfCall_FrameDict_new(void) {
+    SelfCall_FrameDict* d = malloc(sizeof(SelfCall_FrameDict));
+    d->bucket_count = 16;
+    d->buckets = calloc(d->bucket_count, sizeof(SelfCall_FrameDictEntry*));
+    d->size = 0;
+    return d;
+}
+
+static void SelfCall_FrameDict_set(SelfCall_FrameDict* d, const char* key, void* value) {
+    unsigned int idx = SelfCall_hash_string(key) % d->bucket_count;
+    SelfCall_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            entry->value = value;
+            return;
+        }
+        entry = entry->next;
+    }
+    SelfCall_FrameDictEntry* new_entry = malloc(sizeof(SelfCall_FrameDictEntry));
+    new_entry->key = strdup(key);
+    new_entry->value = value;
+    new_entry->next = d->buckets[idx];
+    d->buckets[idx] = new_entry;
+    d->size++;
+}
+
+static void* SelfCall_FrameDict_get(SelfCall_FrameDict* d, const char* key) {
+    unsigned int idx = SelfCall_hash_string(key) % d->bucket_count;
+    SelfCall_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            return entry->value;
+        }
+        entry = entry->next;
+    }
+    return NULL;
+}
+
+static int SelfCall_FrameDict_has(SelfCall_FrameDict* d, const char* key) {
+    unsigned int idx = SelfCall_hash_string(key) % d->bucket_count;
+    SelfCall_FrameDictEntry* entry = d->buckets[idx];
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            return 1;
+        }
+        entry = entry->next;
+    }
+    return 0;
+}
+
+static SelfCall_FrameDict* SelfCall_FrameDict_copy(SelfCall_FrameDict* src) {
+    SelfCall_FrameDict* dst = SelfCall_FrameDict_new();
+    for (int i = 0; i < src->bucket_count; i++) {
+        SelfCall_FrameDictEntry* entry = src->buckets[i];
+        while (entry) {
+            SelfCall_FrameDict_set(dst, entry->key, entry->value);
+            entry = entry->next;
+        }
+    }
+    return dst;
+}
+
+static void SelfCall_FrameDict_destroy(SelfCall_FrameDict* d) {
+    for (int i = 0; i < d->bucket_count; i++) {
+        SelfCall_FrameDictEntry* entry = d->buckets[i];
+        while (entry) {
+            SelfCall_FrameDictEntry* next = entry->next;
+            free(entry->key);
+            free(entry);
+            entry = next;
+        }
+    }
+    free(d->buckets);
+    free(d);
+}
+
+// ============================================================================
+// SelfCall_FrameVec - Dynamic array
+// ============================================================================
+
+typedef struct {
+    void** items;
+    int size;
+    int capacity;
+} SelfCall_FrameVec;
+
+static SelfCall_FrameVec* SelfCall_FrameVec_new(void) {
+    SelfCall_FrameVec* v = malloc(sizeof(SelfCall_FrameVec));
+    v->capacity = 8;
+    v->size = 0;
+    v->items = malloc(sizeof(void*) * v->capacity);
+    return v;
+}
+
+static void SelfCall_FrameVec_push(SelfCall_FrameVec* v, void* item) {
+    if (v->size >= v->capacity) {
+        v->capacity *= 2;
+        v->items = realloc(v->items, sizeof(void*) * v->capacity);
+    }
+    v->items[v->size++] = item;
+}
+
+static void* SelfCall_FrameVec_pop(SelfCall_FrameVec* v) {
+    if (v->size == 0) return NULL;
+    return v->items[--v->size];
+}
+
+static void* SelfCall_FrameVec_last(SelfCall_FrameVec* v) {
+    if (v->size == 0) return NULL;
+    return v->items[v->size - 1];
+}
+
+static void* SelfCall_FrameVec_get(SelfCall_FrameVec* v, int index) {
+    if (index < 0 || index >= v->size) return NULL;
+    return v->items[index];
+}
+
+static int SelfCall_FrameVec_size(SelfCall_FrameVec* v) {
+    return v->size;
+}
+
+static void SelfCall_FrameVec_destroy(SelfCall_FrameVec* v) {
+    if (!v) return;
+    free(v->items);
+    free(v);
+}
+
+static SelfCall_FrameVec* SelfCall_FrameVec_copy(SelfCall_FrameVec* src) {
+    if (!src) return NULL;
+    SelfCall_FrameVec* v = SelfCall_FrameVec_new();
+    for (int i = 0; i < src->size; i++) {
+        SelfCall_FrameVec_push(v, src->items[i]);
+    }
+    return v;
+}
+
+// ============================================================================
+// SelfCall_pack_double / SelfCall_unpack_double — bit-pun doubles through void*
+// ============================================================================
+
+static inline void* SelfCall_pack_double(double v) {
+    void* p = 0;
+    memcpy(&p, &v, sizeof(double));
+    return p;
+}
+
+static inline double SelfCall_unpack_double(void* p) {
+    double d;
+    memcpy(&d, &p, sizeof(double));
+    return d;
+}
+
+// ============================================================================
+// SelfCall_FrameEvent - Event routing object
+// ============================================================================
+
+typedef struct {
+    const char* _message;
+    SelfCall_FrameVec* _parameters;
+    int _owns_parameters;
+} SelfCall_FrameEvent;
+
+static SelfCall_FrameEvent* SelfCall_FrameEvent_new(const char* message, SelfCall_FrameVec* parameters, int owns_parameters) {
+    SelfCall_FrameEvent* e = malloc(sizeof(SelfCall_FrameEvent));
+    e->_message = message;
+    e->_parameters = parameters;
+    e->_owns_parameters = owns_parameters;
+    return e;
+}
+
+static void SelfCall_FrameEvent_destroy(SelfCall_FrameEvent* e) {
+    if (e->_owns_parameters && e->_parameters) SelfCall_FrameVec_destroy(e->_parameters);
+    free(e);
+}
+
+// ============================================================================
+// SelfCall_FrameContext - Interface call context
+// ============================================================================
+
+typedef struct {
+    SelfCall_FrameEvent* event;
+    void* _return;
+    SelfCall_FrameDict* _data;
+    int _transitioned;
+} SelfCall_FrameContext;
+
+static SelfCall_FrameContext* SelfCall_FrameContext_new(SelfCall_FrameEvent* event, void* default_return) {
+    SelfCall_FrameContext* ctx = malloc(sizeof(SelfCall_FrameContext));
+    ctx->event = event;
+    ctx->_return = default_return;
+    ctx->_data = SelfCall_FrameDict_new();
+    ctx->_transitioned = 0;
+    return ctx;
+}
+
+static void SelfCall_FrameContext_destroy(SelfCall_FrameContext* ctx) {
+    SelfCall_FrameDict_destroy(ctx->_data);
+    free(ctx);
+}
+
+// ============================================================================
+// SelfCall_Compartment - State closure
+// ============================================================================
+
+typedef struct SelfCall_Compartment {
+    const char* state;
+    SelfCall_FrameVec* state_args;
+    SelfCall_FrameDict* state_vars;
+    SelfCall_FrameVec* enter_args;
+    SelfCall_FrameVec* exit_args;
+    SelfCall_FrameEvent* forward_event;
+    struct SelfCall_Compartment* parent_compartment;
+    int _ref_count;
+} SelfCall_Compartment;
+
+static SelfCall_Compartment* SelfCall_Compartment_new(const char* state) {
+    SelfCall_Compartment* c = malloc(sizeof(SelfCall_Compartment));
+    c->state = state;
+    c->state_args = SelfCall_FrameVec_new();
+    c->state_vars = SelfCall_FrameDict_new();
+    c->enter_args = SelfCall_FrameVec_new();
+    c->exit_args = SelfCall_FrameVec_new();
+    c->forward_event = NULL;
+    c->parent_compartment = NULL;
+    c->_ref_count = 1;
+    return c;
+}
+
+static SelfCall_Compartment* SelfCall_Compartment_ref(SelfCall_Compartment* c) {
+    if (c) c->_ref_count++;
+    return c;
+}
+
+static void SelfCall_Compartment_unref(SelfCall_Compartment* c);
+static void SelfCall_Compartment_unref(SelfCall_Compartment* c) {
+    if (c == NULL) return;
+    c->_ref_count--;
+    if (c->_ref_count <= 0) {
+        SelfCall_Compartment_unref(c->parent_compartment);
+        SelfCall_FrameVec_destroy(c->state_args);
+        SelfCall_FrameDict_destroy(c->state_vars);
+        SelfCall_FrameVec_destroy(c->enter_args);
+        SelfCall_FrameVec_destroy(c->exit_args);
+        free(c);
+    }
+}
+
+static SelfCall_Compartment* SelfCall_Compartment_copy(SelfCall_Compartment* src) {
+    SelfCall_Compartment* c = malloc(sizeof(SelfCall_Compartment));
+    c->state = src->state;
+    c->state_args = SelfCall_FrameVec_copy(src->state_args);
+    c->state_vars = SelfCall_FrameDict_copy(src->state_vars);
+    c->enter_args = SelfCall_FrameVec_copy(src->enter_args);
+    c->exit_args = SelfCall_FrameVec_copy(src->exit_args);
+    c->forward_event = src->forward_event;  // Shallow copy OK
+    c->parent_compartment = src->parent_compartment;
+    return c;
+}
+
+static void SelfCall_Compartment_destroy(SelfCall_Compartment* c) {
+    SelfCall_FrameVec_destroy(c->state_args);
+    SelfCall_FrameDict_destroy(c->state_vars);
+    SelfCall_FrameVec_destroy(c->enter_args);
+    SelfCall_FrameVec_destroy(c->exit_args);
+    free(c);
+}
+
+// Helper macros for context access
+#define SelfCall_CTX(self) ((SelfCall_FrameContext*)SelfCall_FrameVec_last((self)->_context_stack))
+#define SelfCall_PARAM(self, key) SelfCall_FrameDict_get(SelfCall_CTX(self)->event->_parameters, key)
+#define SelfCall_RETURN(self) SelfCall_CTX(self)->_return
+#define SelfCall_DATA(self, key) SelfCall_FrameDict_get(SelfCall_CTX(self)->_data, key)
+#define SelfCall_DATA_SET(self, key, val) SelfCall_FrameDict_set(SelfCall_CTX(self)->_data, key, val)
+
+// Forward declarations
+typedef struct SelfCall SelfCall;
+static void SelfCall_kernel(SelfCall* self, SelfCall_FrameEvent* __e);
+static void SelfCall_router(SelfCall* self, SelfCall_FrameEvent* __e);
+static void SelfCall_transition(SelfCall* self, SelfCall_Compartment* next);
+static int SelfCall_hsm_chain(SelfCall* self, const char* leaf, const char*** out_chain);
+static SelfCall_Compartment* SelfCall_prepareEnter(SelfCall* self, const char* leaf, SelfCall_FrameVec* state_args, SelfCall_FrameVec* enter_args);
+static void SelfCall_prepareExit(SelfCall* self, SelfCall_FrameVec* exit_args);
+static void SelfCall_state_Active(SelfCall* self, SelfCall_FrameEvent* __e, SelfCall_Compartment* compartment);
+static void SelfCall_s_Active_hdl_user_kick(SelfCall* self, SelfCall_FrameEvent* __e, SelfCall_Compartment* compartment);
+static void SelfCall_s_Active_hdl_user_report(SelfCall* self, SelfCall_FrameEvent* __e, SelfCall_Compartment* compartment);
+void SelfCall_kick (SelfCall* self);
+i32 SelfCall_report (SelfCall* self);
+
+struct SelfCall {
+    SelfCall_FrameVec* _state_stack;
+    SelfCall_Compartment* __compartment;
+    SelfCall_Compartment* __next_compartment;
+    SelfCall_FrameVec* _context_stack;
+    i32 count;
+};
+
+SelfCall* SelfCall_new(void) {
+    SelfCall* self = calloc(1, sizeof(SelfCall));
+    self->_state_stack = SelfCall_FrameVec_new();
+    self->_context_stack = SelfCall_FrameVec_new();
+    self->count = 0;
+    SelfCall_FrameVec* __sa = NULL;
+    SelfCall_FrameVec* __ea = NULL;
+    self->__compartment = SelfCall_prepareEnter(self, "Active", __sa, __ea);
+    self->__next_compartment = NULL;
+    SelfCall_FrameEvent* __e = SelfCall_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+    SelfCall_FrameContext* __ctx = SelfCall_FrameContext_new(__e, NULL);
+    SelfCall_FrameVec_push(self->_context_stack, __ctx);
+    SelfCall_FrameContext* __init_ctx = (SelfCall_FrameContext*)SelfCall_FrameVec_pop(self->_context_stack);
+    SelfCall_FrameContext_destroy(__init_ctx);
+    SelfCall_FrameEvent_destroy(__e);
+    return self;
+}
+
+SelfCall* SelfCall_create(void) {
+    SelfCall* self = SelfCall_new();
+    self->_state_stack = SelfCall_FrameVec_new();
+    self->_context_stack = SelfCall_FrameVec_new();
+    self->count = 0;
+    SelfCall_FrameVec* __sa = NULL;
+    SelfCall_FrameVec* __ea = NULL;
+    self->__compartment = SelfCall_prepareEnter(self, "Active", __sa, __ea);
+    self->__next_compartment = NULL;
+    SelfCall_FrameEvent* __e = SelfCall_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+    SelfCall_FrameContext* __ctx = SelfCall_FrameContext_new(__e, NULL);
+    SelfCall_FrameVec_push(self->_context_stack, __ctx);
+    SelfCall_kernel(self, __e);
+    SelfCall_FrameContext* __init_ctx = (SelfCall_FrameContext*)SelfCall_FrameVec_pop(self->_context_stack);
+    SelfCall_FrameContext_destroy(__init_ctx);
+    SelfCall_FrameEvent_destroy(__e);
+    return self;
+}
+
+static int SelfCall_hsm_chain(SelfCall* self, const char* leaf, const char*** out_chain) {
+    if (false) { (void)0; }
+        else if (strcmp(leaf, "Active") == 0) {
+            static const char* __chain[] = { "Active" };
+            *out_chain = __chain;
+            return 1;
+        }
+        *out_chain = NULL;
+        return 0;
+}
+
+static SelfCall_Compartment* SelfCall_prepareEnter(SelfCall* self, const char* leaf, SelfCall_FrameVec* state_args, SelfCall_FrameVec* enter_args) {
+    const char** chain = NULL;
+    int n = SelfCall_hsm_chain(self, leaf, &chain);
+    SelfCall_Compartment* comp = NULL;
+    for (int i = 0; i < n; i++) {
+        SelfCall_Compartment* nc = SelfCall_Compartment_new(chain[i]);
+        if (state_args) {
+            for (int j = 0; j < state_args->size; j++) SelfCall_FrameVec_push(nc->state_args, state_args->items[j]);
+        }
+        if (enter_args) {
+            for (int j = 0; j < enter_args->size; j++) SelfCall_FrameVec_push(nc->enter_args, enter_args->items[j]);
+        }
+        nc->parent_compartment = comp;  // adopts ref
+        comp = nc;
+    }
+    return comp;
+}
+
+static void SelfCall_prepareExit(SelfCall* self, SelfCall_FrameVec* exit_args) {
+    SelfCall_Compartment* comp = self->__compartment;
+    while (comp != NULL) {
+        // Clear any prior exit_args before copying the new ones in.
+        while (comp->exit_args->size > 0) comp->exit_args->size--;
+        if (exit_args) {
+            for (int j = 0; j < exit_args->size; j++) SelfCall_FrameVec_push(comp->exit_args, exit_args->items[j]);
+        }
+        comp = comp->parent_compartment;
+    }
+}
+
+static void SelfCall_kernel(SelfCall* self, SelfCall_FrameEvent* __e) {
+    SelfCall_router(self, __e);
+    while (self->__next_compartment != NULL) {
+        SelfCall_Compartment* next_compartment = self->__next_compartment;
+        self->__next_compartment = NULL;
+        // Exit the current (leaf) state
+        SelfCall_FrameEvent* __exit_event = SelfCall_FrameEvent_new("<$", self->__compartment->exit_args, 0);
+        SelfCall_router(self, __exit_event);
+        SelfCall_FrameEvent_destroy(__exit_event);
+        SelfCall_Compartment_unref(self->__compartment);
+        self->__compartment = next_compartment;
+        if (next_compartment->forward_event == NULL) {
+            // No forwarded event — synthesize a fresh $>
+            SelfCall_FrameEvent* __enter_event = SelfCall_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+            SelfCall_router(self, __enter_event);
+            SelfCall_FrameEvent_destroy(__enter_event);
+        } else if (strcmp(next_compartment->forward_event->_message, "$>") == 0) {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            // The forward_event is borrowed (owned by the wrapper that
+            // queued the transition) — do NOT destroy it here.
+            SelfCall_FrameEvent* forward_event = next_compartment->forward_event;
+            next_compartment->forward_event = NULL;
+            SelfCall_router(self, forward_event);
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward to it. The
+            // forward_event is borrowed; only the synthesized $> belongs
+            // to the kernel and is freed here.
+            SelfCall_FrameEvent* forward_event = next_compartment->forward_event;
+            next_compartment->forward_event = NULL;
+            SelfCall_FrameEvent* __enter_event = SelfCall_FrameEvent_new("$>", self->__compartment->enter_args, 0);
+            SelfCall_router(self, __enter_event);
+            SelfCall_FrameEvent_destroy(__enter_event);
+            SelfCall_router(self, forward_event);
+        }
+        // Mark every stacked context as having transitioned. Read by
+        // @@:self.X() guard so outer self-calls short-circuit.
+        for (int __i = 0; __i < self->_context_stack->size; __i++) {
+            ((SelfCall_FrameContext*)self->_context_stack->items[__i])->_transitioned = 1;
+        }
+    }
+}
+
+static void SelfCall_router(SelfCall* self, SelfCall_FrameEvent* __e) {
+    if (strcmp(self->__compartment->state, "Active") == 0) {
+        SelfCall_state_Active(self, __e, self->__compartment);
+    }
+}
+
+static void SelfCall_transition(SelfCall* self, SelfCall_Compartment* next_compartment) {
+    self->__next_compartment = next_compartment;
+}
+
+void SelfCall_destroy(SelfCall* self) {
+    // Unref current compartment (may free if not on stack)
+    if (self->__compartment) SelfCall_Compartment_unref(self->__compartment);
+    if (self->__next_compartment) SelfCall_Compartment_unref(self->__next_compartment);
+    // Unref all state stack entries
+    if (self->_state_stack) {
+        for (int __i = 0; __i < self->_state_stack->size; __i++) {
+            SelfCall_Compartment_unref((SelfCall_Compartment*)self->_state_stack->items[__i]);
+        }
+        SelfCall_FrameVec_destroy(self->_state_stack);
+    }
+    if (self->_context_stack) SelfCall_FrameVec_destroy(self->_context_stack);
+    free(self);
+}
+
+void SelfCall_kick(SelfCall* self) {
+    SelfCall_FrameEvent* __e = SelfCall_FrameEvent_new("kick", NULL, 0);
+    SelfCall_FrameContext* __ctx = SelfCall_FrameContext_new(__e, NULL);
+    SelfCall_FrameVec_push(self->_context_stack, __ctx);
+    SelfCall_kernel(self, __e);
+    SelfCall_FrameContext* __result_ctx = (SelfCall_FrameContext*)SelfCall_FrameVec_pop(self->_context_stack);
+    SelfCall_FrameContext_destroy(__result_ctx);
+    SelfCall_FrameEvent_destroy(__e);
+}
+
+i32 SelfCall_report(SelfCall* self) {
+    SelfCall_FrameEvent* __e = SelfCall_FrameEvent_new("report", NULL, 0);
+    SelfCall_FrameContext* __ctx = SelfCall_FrameContext_new(__e, NULL);
+    SelfCall_FrameVec_push(self->_context_stack, __ctx);
+    SelfCall_kernel(self, __e);
+    SelfCall_FrameContext* __result_ctx = (SelfCall_FrameContext*)SelfCall_FrameVec_pop(self->_context_stack);
+    i32 __result = (i32)__result_ctx->_return;
+    SelfCall_FrameContext_destroy(__result_ctx);
+    SelfCall_FrameEvent_destroy(__e);
+    return __result;
+}
+
+static void SelfCall_state_Active(SelfCall* self, SelfCall_FrameEvent* __e, SelfCall_Compartment* compartment) {
+    if (strcmp(__e->_message, "kick") == 0) {
+        SelfCall_s_Active_hdl_user_kick(self, __e, compartment);
+        return;
+    }
+    if (strcmp(__e->_message, "report") == 0) {
+        SelfCall_s_Active_hdl_user_report(self, __e, compartment);
+        return;
+    }
+}
+
+static void SelfCall_s_Active_hdl_user_kick(SelfCall* self, SelfCall_FrameEvent* __e, SelfCall_Compartment* compartment) {
+    self.count = self.count + 1
+    SelfCall_report(self);
+    if (SelfCall_FrameVec_size(self->_context_stack) > 0 && SelfCall_CTX(self)->_transitioned) return;
+}
+
+static void SelfCall_s_Active_hdl_user_report(SelfCall* self, SelfCall_FrameEvent* __e, SelfCall_Compartment* compartment) {
+    SelfCall_CTX(self)->_return = (void*)(intptr_t)(self.count);
+}

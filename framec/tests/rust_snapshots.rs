@@ -22,3 +22,48 @@ fn hsm() {
 fn persist() {
     insta::assert_snapshot!(compile_fixture("03_persist", "rust"));
 }
+
+#[test]
+fn state_args() {
+    insta::assert_snapshot!(compile_fixture("04_state_args", "rust"));
+}
+
+#[test]
+fn pushpop() {
+    insta::assert_snapshot!(compile_fixture("05_pushpop", "rust"));
+}
+
+#[test]
+fn selfcall() {
+    insta::assert_snapshot!(compile_fixture("06_selfcall", "rust"));
+}
+
+#[test]
+fn forward() {
+    insta::assert_snapshot!(compile_fixture("07_forward", "rust"));
+}
+
+#[test]
+fn lifecycle() {
+    insta::assert_snapshot!(compile_fixture("08_lifecycle", "rust"));
+}
+
+#[test]
+fn return_explicit() {
+    insta::assert_snapshot!(compile_fixture("09_return_explicit", "rust"));
+}
+
+#[test]
+fn actions() {
+    insta::assert_snapshot!(compile_fixture("10_actions", "rust"));
+}
+
+#[test]
+fn consts() {
+    insta::assert_snapshot!(compile_fixture("11_consts", "rust"));
+}
+
+#[test]
+fn no_persist() {
+    insta::assert_snapshot!(compile_fixture("12_no_persist", "rust"));
+}

@@ -1,0 +1,226 @@
+---
+source: framec/tests/java_snapshots.rs
+expression: "compile_fixture(\"08_lifecycle\", \"java\")"
+---
+class LifecycleFrameEvent {
+    String _message;
+    java.util.ArrayList<Object> _parameters;
+
+    LifecycleFrameEvent(String message) {
+        this._message = message;
+        this._parameters = new java.util.ArrayList<>();
+    }
+
+    LifecycleFrameEvent(String message, java.util.ArrayList<Object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class LifecycleFrameContext {
+    LifecycleFrameEvent _event;
+    Object _return;
+    java.util.HashMap<String, Object> _data;
+    boolean _transitioned = false;
+
+    LifecycleFrameContext(LifecycleFrameEvent event, Object defaultReturn) {
+        this._event = event;
+        this._return = defaultReturn;
+        this._data = new java.util.HashMap<>();
+        this._transitioned = false;
+    }
+}
+
+class LifecycleCompartment {
+    String state;
+    java.util.ArrayList<Object> state_args;
+    java.util.HashMap<String, Object> state_vars;
+    java.util.ArrayList<Object> enter_args;
+    java.util.ArrayList<Object> exit_args;
+    LifecycleFrameEvent forward_event;
+    LifecycleCompartment parent_compartment;
+
+    LifecycleCompartment(String state) {
+        this.state = state;
+        this.state_args = new java.util.ArrayList<>();
+        this.state_vars = new java.util.HashMap<>();
+        this.enter_args = new java.util.ArrayList<>();
+        this.exit_args = new java.util.ArrayList<>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    LifecycleCompartment copy() {
+        LifecycleCompartment c = new LifecycleCompartment(this.state);
+        c.state_args = new java.util.ArrayList<>(this.state_args);
+        c.state_vars = new java.util.HashMap<>(this.state_vars);
+        c.enter_args = new java.util.ArrayList<>(this.enter_args);
+        c.exit_args = new java.util.ArrayList<>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class Lifecycle {
+    private java.util.ArrayList<LifecycleCompartment> _state_stack;
+    private LifecycleCompartment __compartment;
+    private LifecycleCompartment __next_compartment;
+    private java.util.ArrayList<LifecycleFrameContext> _context_stack;
+    public int entered = 0;
+    public int exited = 0;
+    public String tag = "";
+
+    public Lifecycle() {
+        _state_stack = new java.util.ArrayList<>();
+        _context_stack = new java.util.ArrayList<>();
+        this.__compartment = __prepareEnter("Idle", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        this.__next_compartment = null;
+    }
+
+    public static Lifecycle __create() {
+        Lifecycle c = new Lifecycle();
+        LifecycleFrameEvent __e = new LifecycleFrameEvent("$>", c.__compartment.enter_args);
+        LifecycleFrameContext __ctx = new LifecycleFrameContext(__e, null);
+        c._context_stack.add(__ctx);
+        c.__kernel(__e);
+        c._context_stack.remove(c._context_stack.size() - 1);
+        return c;
+    }
+
+    private java.util.HashMap<String, java.util.ArrayList<String>> hsm_chain() {
+        java.util.HashMap<String, java.util.ArrayList<String>> m = new java.util.HashMap<>();
+        m.put("Idle", new java.util.ArrayList<>(java.util.Arrays.asList("Idle")));
+        m.put("Running", new java.util.ArrayList<>(java.util.Arrays.asList("Running")));
+        return m;
+    }
+    private LifecycleCompartment __prepareEnter(String leaf, java.util.ArrayList<Object> state_args, java.util.ArrayList<Object> enter_args) {
+        LifecycleCompartment comp = null;
+        for (String name : hsm_chain().get(leaf)) {
+            LifecycleCompartment new_comp = new LifecycleCompartment(name);
+            new_comp.state_args = new java.util.ArrayList<>(state_args);
+            new_comp.enter_args = new java.util.ArrayList<>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    private void __prepareExit(java.util.ArrayList<Object> exit_args) {
+        LifecycleCompartment comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new java.util.ArrayList<>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(LifecycleFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            LifecycleCompartment next_compartment = __next_compartment;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            LifecycleFrameEvent exit_event = new LifecycleFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            LifecycleFrameEvent forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                LifecycleFrameEvent enter_event = new LifecycleFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message.equals("$>")) {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                LifecycleFrameEvent enter_event = new LifecycleFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (LifecycleFrameContext ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(LifecycleFrameEvent __e) {
+        if (__compartment.state.equals("Idle")) {
+            _state_Idle(__e, __compartment);
+        } else if (__compartment.state.equals("Running")) {
+            _state_Running(__e, __compartment);
+        }
+    }
+
+    private void __transition(LifecycleCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void start(String label) {
+        LifecycleFrameEvent __e = new LifecycleFrameEvent("start", new java.util.ArrayList<>(java.util.Arrays.asList(label)));
+        LifecycleFrameContext __ctx = new LifecycleFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void stop() {
+        LifecycleFrameEvent __e = new LifecycleFrameEvent("stop", new java.util.ArrayList<>());
+        LifecycleFrameContext __ctx = new LifecycleFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    private void _state_Idle(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        if (__e._message.equals("start")) {
+            this._s_Idle_hdl_user_start(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Running(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        if (__e._message.equals("<$")) {
+            this._s_Running_hdl_frame_exit(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("$>")) {
+            this._s_Running_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("stop")) {
+            this._s_Running_hdl_user_stop(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Idle_hdl_user_start(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        String label = (String) __e._parameters.get(0);
+        (label)
+        LifecycleCompartment __compartment = __prepareEnter("Running", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        __transition(__compartment);
+        return;
+    }
+
+    private void _s_Running_hdl_frame_exit(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        self.exited = self.exited + 1
+    }
+
+    private void _s_Running_hdl_frame_enter(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        String label = (String) compartment.enter_args.get(0);
+        self.entered = self.entered + 1
+        self.tag = label
+    }
+
+    private void _s_Running_hdl_user_stop(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        LifecycleCompartment __compartment = __prepareEnter("Idle", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        __transition(__compartment);
+        return;
+    }
+}

@@ -1,0 +1,221 @@
+---
+source: framec/tests/swift_snapshots.rs
+expression: "compile_fixture(\"07_forward\", \"swift\")"
+---
+import Foundation
+
+class ForwardFrameEvent {
+    var _message: String
+    var _parameters: [Any]
+
+    init(message: String, parameters: [Any] = []) {
+        self._message = message
+        self._parameters = parameters
+    }
+}
+
+class ForwardFrameContext {
+    var _event: ForwardFrameEvent
+    var _return: Any?
+    var _data: [String: Any] = [:]
+    var _transitioned: Bool = false
+
+    init(event: ForwardFrameEvent, defaultReturn: Any? = nil) {
+        self._event = event
+        self._return = defaultReturn
+    }
+}
+
+class ForwardCompartment {
+    var state: String
+    var state_args: [Any] = []
+    var state_vars: [String: Any] = [:]
+    var enter_args: [Any] = []
+    var exit_args: [Any] = []
+    var forward_event: ForwardFrameEvent?
+    var parent_compartment: ForwardCompartment?
+
+    init(state: String) {
+        self.state = state
+    }
+
+    func copy() -> ForwardCompartment {
+        let c = ForwardCompartment(state: self.state)
+        c.state_args = self.state_args
+        c.state_vars = self.state_vars
+        c.enter_args = self.enter_args
+        c.exit_args = self.exit_args
+        c.forward_event = self.forward_event
+        c.parent_compartment = self.parent_compartment
+        return c
+    }
+}
+
+public class Forward {
+    private var _state_stack: [ForwardCompartment] = []
+    private var __compartment: ForwardCompartment
+    private var __next_compartment: ForwardCompartment? = nil
+    private var _context_stack: [ForwardFrameContext] = []
+    public var starts: Int = 0
+    public var middles: Int = 0
+
+    init() {
+        _state_stack = []
+        _context_stack = []
+        self.__compartment = Forward.__prepareEnter("Start", [], [])
+        self.__next_compartment = nil
+    }
+
+    func __frame_init() {
+        let __e = ForwardFrameEvent(message: "$>", parameters: __compartment.enter_args)
+        let __ctx = ForwardFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(__e)
+        _context_stack.removeLast()
+    }
+
+    static func __create() -> Forward {
+        let c = Forward()
+        c.__frame_init()
+        return c
+    }
+
+    private static func hsm_chain() -> [String: [String]] {
+        return [
+            "Start": ["Start"],
+            "Middle": ["Middle"],
+            "End": ["End"],
+        ]
+    }
+    private static func __prepareEnter(_ leaf: String, _ state_args: [Any], _ enter_args: [Any]) -> ForwardCompartment {
+        var comp: ForwardCompartment? = nil
+        for name in Forward.hsm_chain()[leaf]! {
+            let new_comp = ForwardCompartment(state: name)
+            new_comp.state_args = state_args
+            new_comp.enter_args = enter_args
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!
+    }
+    private func __prepareExit(_ exit_args: [Any]) {
+        var comp: ForwardCompartment? = __compartment
+        while comp != nil {
+            comp!.exit_args = exit_args
+            comp = comp!.parent_compartment
+        }
+    }
+
+    private func __kernel(_ __e: ForwardFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while __next_compartment != nil {
+            let next_compartment: ForwardCompartment = __next_compartment!
+            __next_compartment = nil
+            // Exit the current (leaf) state.
+            let exit_event = ForwardFrameEvent(message: "<$", parameters: __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            let forward_event: ForwardFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = nil
+            if forward_event == nil {
+                // No forwarded event — synthesize a fresh $>.
+                let enter_event = ForwardFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+            } else if forward_event!._message == "$>" {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event!)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                let enter_event = ForwardFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event!)
+            }
+            for ctx in _context_stack {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private func __router(_ __e: ForwardFrameEvent) {
+        if __compartment.state == "Start" {
+            _state_Start(__e, __compartment)
+        } else if __compartment.state == "Middle" {
+            _state_Middle(__e, __compartment)
+        } else if __compartment.state == "End" {
+            _state_End(__e, __compartment)
+        }
+    }
+
+    private func __transition(_ next: ForwardCompartment) {
+        __next_compartment = next
+    }
+
+    public func run() {
+        let __e = ForwardFrameEvent(message: "run", parameters: [])
+        let __ctx = ForwardFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    public func finish() {
+        let __e = ForwardFrameEvent(message: "finish", parameters: [])
+        let __ctx = ForwardFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    private func _state_Start(_ __e: ForwardFrameEvent, _ compartment: ForwardCompartment) {
+        if __e._message == "run" {
+            self._s_Start_hdl_user_run(__e, compartment)
+            return
+        }
+    }
+
+    private func _state_Middle(_ __e: ForwardFrameEvent, _ compartment: ForwardCompartment) {
+        if __e._message == "finish" {
+            self._s_Middle_hdl_user_finish(__e, compartment)
+            return
+        }
+        if __e._message == "run" {
+            self._s_Middle_hdl_user_run(__e, compartment)
+            return
+        }
+    }
+
+    private func _state_End(_ __e: ForwardFrameEvent, _ compartment: ForwardCompartment) {
+        if __e._message == "finish" {
+            self._s_End_hdl_user_finish(__e, compartment)
+            return
+        }
+    }
+
+    private func _s_Start_hdl_user_run(_ __e: ForwardFrameEvent, _ compartment: ForwardCompartment) {
+        self.starts = self.starts + 1
+        let __compartment = Forward.__prepareEnter("Middle", [], [])
+        __compartment.forward_event = __e
+        __transition(__compartment)
+        return
+    }
+
+    private func _s_Middle_hdl_user_finish(_ __e: ForwardFrameEvent, _ compartment: ForwardCompartment) {
+        let __compartment = Forward.__prepareEnter("End", [], [])
+        __transition(__compartment)
+        return
+    }
+
+    private func _s_Middle_hdl_user_run(_ __e: ForwardFrameEvent, _ compartment: ForwardCompartment) {
+        self.middles = self.middles + 1
+    }
+
+    private func _s_End_hdl_user_finish(_ __e: ForwardFrameEvent, _ compartment: ForwardCompartment) {
+
+    }
+}

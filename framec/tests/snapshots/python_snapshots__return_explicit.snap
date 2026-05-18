@@ -1,0 +1,132 @@
+---
+source: framec/tests/python_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"python_3\")"
+---
+from typing import Any, Optional, List, Dict, Callable
+
+class ReturnExplicitFrameEvent:
+    def __init__(self, message: str, parameters):
+        self._message = message
+        self._parameters = parameters
+
+
+class ReturnExplicitFrameContext:
+    def __init__(self, event: ReturnExplicitFrameEvent, default_return):
+        self.event = event
+        self._return = default_return
+        self._data = {}
+        self._transitioned = False
+
+
+class ReturnExplicitCompartment:
+    def __init__(self, state: str, parent_compartment = None):
+        self.state = state
+        self.state_args = []
+        self.state_vars = {}
+        self.enter_args = []
+        self.exit_args = []
+        self.forward_event = None
+        self.parent_compartment = parent_compartment
+
+    def copy(self) -> 'ReturnExplicitCompartment':
+        c = ReturnExplicitCompartment(self.state, self.parent_compartment)
+        c.state_args = self.state_args.copy()
+        c.state_vars = self.state_vars.copy()
+        c.enter_args = self.enter_args.copy()
+        c.exit_args = self.exit_args.copy()
+        c.forward_event = self.forward_event
+        return c
+
+
+class ReturnExplicit:
+    def __init__(self):
+        self._state_stack = []
+        self._context_stack = []
+        self.__compartment = self.__prepareEnter("Judging", [], [])
+        self.__next_compartment = None
+
+    @classmethod
+    def _create(cls):
+        c = cls()
+        __e = ReturnExplicitFrameEvent("$>", c.__compartment.enter_args)
+        __ctx = ReturnExplicitFrameContext(__e, None)
+        c._context_stack.append(__ctx)
+        c.__kernel(__e)
+        c._context_stack.pop()
+        return c
+
+    _HSM_CHAIN = {
+        "Judging": ["Judging"],
+    }
+    def __prepareEnter(self, leaf, state_args, enter_args):
+        comp = None
+        for name in self._HSM_CHAIN[leaf]:
+            new_comp = ReturnExplicitCompartment(name)
+            new_comp.state_args = list(state_args)
+            new_comp.enter_args = list(enter_args)
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        return comp
+
+    def __prepareExit(self, exit_args):
+        comp = self.__compartment
+        while comp is not None:
+            comp.exit_args = list(exit_args)
+            comp = comp.parent_compartment
+
+    def __kernel(self, __e):
+        # Route event to current state
+        self.__router(__e)
+        # Drain any transitions queued by the handler
+        while self.__next_compartment is not None:
+            next_compartment = self.__next_compartment
+            self.__next_compartment = None
+            # Exit the current (leaf) state
+            self.__router(ReturnExplicitFrameEvent("<$", self.__compartment.exit_args))
+            # Switch to the new compartment
+            self.__compartment = next_compartment
+            if next_compartment.forward_event is None:
+                # No forwarded event — synthesize a fresh $>
+                self.__router(ReturnExplicitFrameEvent("$>", self.__compartment.enter_args))
+            else:
+                if next_compartment.forward_event._message == "$>":
+                    # Forwarded event IS $> — dispatch directly so the
+                    # destination's $> receives the caller's payload
+                    self.__router(next_compartment.forward_event)
+                else:
+                    # Forwarded event is not $> — initialize the destination
+                    # with a fresh $>, then dispatch the forward to it
+                    self.__router(ReturnExplicitFrameEvent("$>", self.__compartment.enter_args))
+                    self.__router(next_compartment.forward_event)
+            next_compartment.forward_event = None
+            # Mark all stacked contexts as transitioned
+            for ctx in self._context_stack:
+                ctx._transitioned = True
+
+    def __router(self, __e):
+        if self.__compartment.state == "Judging":
+            self._state_Judging(__e, self.__compartment)
+
+    def __transition(self, next_compartment):
+        self.__next_compartment = next_compartment
+
+    def decide(self, score: i32) -> String:
+        __e = ReturnExplicitFrameEvent("decide", [score])
+        __ctx = ReturnExplicitFrameContext(__e, None)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop()._return
+
+    def _state_Judging(self, __e, compartment):
+        if __e._message == "decide":
+            self._s_Judging_hdl_user_decide(__e, compartment)
+            return
+
+    def _s_Judging_hdl_user_decide(self, __e, compartment):
+        score = __e._parameters[0]
+        if score >= 60 {
+            self._context_stack[-1]._return = "pass"
+            return
+        }
+        self._context_stack[-1]._return = "fail"
+        return

@@ -1,0 +1,198 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"10_actions\", \"go\")"
+---
+type ActionsFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type ActionsFrameContext struct {
+    _event  ActionsFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type ActionsCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *ActionsFrameEvent
+    parentCompartment *ActionsCompartment
+}
+
+func newActionsCompartment(state string) *ActionsCompartment {
+    return &ActionsCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *ActionsCompartment) copy() *ActionsCompartment {
+    nc := &ActionsCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type Actions struct {
+    _state_stack []*ActionsCompartment
+    __compartment *ActionsCompartment
+    __next_compartment *ActionsCompartment
+    _context_stack []ActionsFrameContext
+    total int
+}
+
+func NewActions() *Actions {
+    s := &Actions{}
+    s._state_stack = make([]*ActionsCompartment, 0)
+    s._context_stack = make([]ActionsFrameContext, 0)
+    s.total = 0
+    s.__compartment = s.__prepareEnter("Counting", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateActions() *Actions {
+    c := NewActions()
+    __e := ActionsFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := ActionsFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *Actions) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Counting": {"Counting"},
+    }
+}
+func (s *Actions) __prepareEnter(leaf string, state_args []any, enter_args []any) *ActionsCompartment {
+    var comp *ActionsCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newActionsCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *Actions) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *Actions) __kernel(__e *ActionsFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &ActionsFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &ActionsFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &ActionsFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *Actions) __router(__e *ActionsFrameEvent) {
+    switch s.__compartment.state {
+    case "Counting":
+        s._state_Counting(__e, s.__compartment)
+    }
+}
+
+func (s *Actions) __transition(next *ActionsCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *Actions) Increment(n int) {
+    __e := ActionsFrameEvent{_message: "increment", _parameters: []any{n}}
+    __ctx := ActionsFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *Actions) Get_total() int {
+    __e := ActionsFrameEvent{_message: "get_total", _parameters: []any{}}
+    __ctx := ActionsFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    var __result int
+    if __rv := s._context_stack[len(s._context_stack)-1]._return; __rv != nil { __result = __rv.(int) }
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+    return __result
+}
+
+func (s *Actions) _state_Counting(__e *ActionsFrameEvent, compartment *ActionsCompartment) {
+    if __e._message == "get_total" {
+        s._s_Counting_hdl_user_get_total(__e, compartment)
+        return
+    }
+    if __e._message == "increment" {
+        s._s_Counting_hdl_user_increment(__e, compartment)
+        return
+    }
+}
+
+func (s *Actions) _s_Counting_hdl_user_get_total(__e *ActionsFrameEvent, compartment *ActionsCompartment) {
+    {
+    s._context_stack[len(s._context_stack)-1]._return = s.total
+    }
+}
+
+func (s *Actions) _s_Counting_hdl_user_increment(__e *ActionsFrameEvent, compartment *ActionsCompartment) {
+    n := __e._parameters[0].(int)
+    _ = n
+    {
+    _scale(n)
+    }
+}
+
+func (s *Actions) _scale(n int) {
+                self.total = self.total + n * 2
+}

@@ -1,0 +1,176 @@
+---
+source: framec/tests/kotlin_snapshots.rs
+expression: "compile_fixture(\"11_consts\", \"kotlin\")"
+---
+class ConstsFrameEvent(val _message: String, val _parameters: MutableList<Any?> = mutableListOf())
+
+class ConstsFrameContext(val _event: ConstsFrameEvent, var _return: Any? = null) {
+    val _data: MutableMap<String, Any?> = mutableMapOf()
+    var _transitioned: Boolean = false
+}
+
+class ConstsCompartment(val state: String) {
+    val state_args: MutableList<Any?> = mutableListOf()
+    val state_vars: MutableMap<String, Any?> = mutableMapOf()
+    val enter_args: MutableList<Any?> = mutableListOf()
+    val exit_args: MutableList<Any?> = mutableListOf()
+    var forward_event: ConstsFrameEvent? = null
+    var parent_compartment: ConstsCompartment? = null
+
+    fun copy(): ConstsCompartment {
+        val c = ConstsCompartment(this.state)
+        c.state_args.addAll(this.state_args)
+        c.state_vars.putAll(this.state_vars)
+        c.enter_args.addAll(this.enter_args)
+        c.exit_args.addAll(this.exit_args)
+        c.forward_event = this.forward_event
+        c.parent_compartment = this.parent_compartment
+        return c
+    }
+}
+
+class Consts {
+    private var _state_stack: MutableList<ConstsCompartment>
+    private var __compartment: ConstsCompartment
+    private var __next_compartment: ConstsCompartment?
+    private var _context_stack: MutableList<ConstsFrameContext>
+    var step: Int = 5
+    var limit: Int = 20
+    var count: Int = 0
+
+    init {
+        _state_stack = mutableListOf()
+        _context_stack = mutableListOf()
+        this.__compartment = __prepareEnter("Running", mutableListOf<Any?>(), mutableListOf<Any?>())
+        this.__next_compartment = null
+    }
+
+    fun __frame_init(step: Int, limit: Int) {
+        this.step = step;
+        this.limit = limit;
+        val __e = ConstsFrameEvent("$>", __compartment.enter_args)
+        val __ctx = ConstsFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(__e)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    private fun hsm_chain(): Map<String, List<String>> {
+        return mapOf(
+            "Running" to listOf("Running"),
+        )
+    }
+    private fun __prepareEnter(leaf: String, state_args: MutableList<Any?>, enter_args: MutableList<Any?>): ConstsCompartment {
+        var comp: ConstsCompartment? = null
+        for (name in hsm_chain()[leaf]!!) {
+            val new_comp = ConstsCompartment(name)
+            new_comp.state_args.addAll(state_args)
+            new_comp.enter_args.addAll(enter_args)
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!!
+    }
+
+    private fun __prepareExit(exit_args: MutableList<Any?>) {
+        var comp: ConstsCompartment? = __compartment
+        while (comp != null) {
+            comp.exit_args.clear()
+            comp.exit_args.addAll(exit_args)
+            comp = comp.parent_compartment
+        }
+    }
+
+    private fun __kernel(__e: ConstsFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            val next_compartment: ConstsCompartment = __next_compartment!!
+            __next_compartment = null
+            // Exit the current (leaf) state.
+            val exit_event = ConstsFrameEvent("<$", __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            val forward_event: ConstsFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = null
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                val enter_event = ConstsFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                val enter_event = ConstsFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            }
+            for (ctx in _context_stack) {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private fun __router(__e: ConstsFrameEvent) {
+        if (__compartment.state == "Running") {
+            _state_Running(__e, __compartment)
+        }
+    }
+
+    private fun __transition(next: ConstsCompartment) {
+        __next_compartment = next
+    }
+
+    fun tick() {
+        val __e = ConstsFrameEvent("tick", mutableListOf())
+        val __ctx = ConstsFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    fun get_count(): Int {
+        val __e = ConstsFrameEvent("get_count", mutableListOf())
+        val __ctx = ConstsFrameContext(__e, 0)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        val __result = _context_stack[_context_stack.size - 1]._return as Int
+        _context_stack.removeAt(_context_stack.size - 1)
+        return __result
+    }
+
+    private fun _state_Running(__e: ConstsFrameEvent, compartment: ConstsCompartment) {
+        if (__e._message == "get_count") {
+            this._s_Running_hdl_user_get_count(__e, compartment)
+            return
+        }
+        if (__e._message == "tick") {
+            this._s_Running_hdl_user_tick(__e, compartment)
+            return
+        }
+    }
+
+    private fun _s_Running_hdl_user_get_count(__e: ConstsFrameEvent, compartment: ConstsCompartment) {
+        _context_stack[_context_stack.size - 1]._return = self.count
+    }
+
+    private fun _s_Running_hdl_user_tick(__e: ConstsFrameEvent, compartment: ConstsCompartment) {
+        self.count = self.count + self.step
+        if self.count >= self.limit {
+            self.count = 0
+        }
+    }
+
+    companion object {
+        @JvmStatic fun __create(step: Int, limit: Int): Consts {
+            val c = Consts()
+            c.__frame_init(step, limit)
+            return c
+        }    }
+}

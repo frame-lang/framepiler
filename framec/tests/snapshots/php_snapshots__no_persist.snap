@@ -1,0 +1,265 @@
+---
+source: framec/tests/php_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"php\")"
+---
+<?php
+
+class NoPersistFrameEvent {
+    public $_message;
+    public $_parameters;
+
+    public function __construct($message, $parameters = null) {
+        $this->_message = $message;
+        $this->_parameters = $parameters ?? [];
+    }
+}
+
+
+class NoPersistFrameContext {
+    public $_event;
+    public $_return;
+    public $_data;
+    public $_transitioned;
+
+    public function __construct($event, $defaultReturn = null) {
+        $this->_event = $event;
+        $this->_return = $defaultReturn;
+        $this->_data = [];
+        $this->_transitioned = false;
+    }
+}
+
+
+class NoPersistCompartment {
+    public $state;
+    public $state_args;
+    public $state_vars;
+    public $enter_args;
+    public $exit_args;
+    public $forward_event;
+    public $parent_compartment;
+
+    public function __construct($state, $parent_compartment = null) {
+        $this->state = $state;
+        $this->state_args = [];
+        $this->state_vars = [];
+        $this->enter_args = [];
+        $this->exit_args = [];
+        $this->forward_event = null;
+        $this->parent_compartment = $parent_compartment;
+    }
+
+    public function copy() {
+        $c = new NoPersistCompartment($this->state, $this->parent_compartment);
+        $c->state_args = $this->state_args;
+        $c->state_vars = $this->state_vars;
+        $c->enter_args = $this->enter_args;
+        $c->exit_args = $this->exit_args;
+        $c->forward_event = $this->forward_event;
+        return $c;
+    }
+}
+
+
+class NoPersist {
+    private $_state_stack;
+    private $__compartment;
+    private $__next_compartment;
+    private $_context_stack;
+    public $count = 0;
+    public $cache = -1;
+
+    public function __construct() {
+        $this->_state_stack = [];
+        $this->_context_stack = [];
+        $this->__compartment = $this->__prepareEnter("Active", [], []);
+        $this->__next_compartment = null;
+    }
+
+    public function _frame_init(): void {
+        $__e = new NoPersistFrameEvent("$>", $this->__compartment->enter_args);
+        $__ctx = new NoPersistFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        array_pop($this->_context_stack);
+    }
+
+    public static function _create(): self {
+        $c = new self();
+        $c->_frame_init();
+        return $c;
+    }
+
+    public function hsm_chain() {
+        return [
+            "Active" => ["Active"],
+        ];
+    }
+    private function __prepareEnter($leaf, $state_args, $enter_args) {
+        $comp = null;
+        foreach ($this->hsm_chain()[$leaf] as $name) {
+            $new_comp = new NoPersistCompartment($name);
+            $new_comp->state_args = $state_args;
+            $new_comp->enter_args = $enter_args;
+            $new_comp->parent_compartment = $comp;
+            $comp = $new_comp;
+        }
+        return $comp;
+    }
+
+    private function __prepareExit($exit_args) {
+        $comp = $this->__compartment;
+        while ($comp !== null) {
+            $comp->exit_args = $exit_args;
+            $comp = $comp->parent_compartment;
+        }
+    }
+
+    private function __kernel($__e) {
+        // Route event to current state.
+        $this->__router($__e);
+        // Drain any transitions queued by the handler.
+        while ($this->__next_compartment !== null) {
+            $next_compartment = $this->__next_compartment;
+            $this->__next_compartment = null;
+            $exit_event = new NoPersistFrameEvent("<$", $this->__compartment->exit_args);
+            $this->__router($exit_event);
+            $this->__compartment = $next_compartment;
+            $forward_event = $next_compartment->forward_event;
+            $next_compartment->forward_event = null;
+            if ($forward_event === null) {
+                $enter_event = new NoPersistFrameEvent("$>", $this->__compartment->enter_args);
+                $this->__router($enter_event);
+            } else if ($forward_event->_message === "$>") {
+                $this->__router($forward_event);
+            } else {
+                $enter_event = new NoPersistFrameEvent("$>", $this->__compartment->enter_args);
+                $this->__router($enter_event);
+                $this->__router($forward_event);
+            }
+            foreach ($this->_context_stack as $ctx) {
+                $ctx->_transitioned = true;
+            }
+        }
+    }
+
+    private function __router($__e) {
+        $handler_name = "_state_" . $this->__compartment->state;
+        if (method_exists($this, $handler_name)) {
+            $this->$handler_name($__e, $this->__compartment);
+        }
+    }
+
+    private function __transition($next_compartment) {
+        $this->__next_compartment = $next_compartment;
+    }
+
+    public function bump() {
+        $__e = new NoPersistFrameEvent("bump", []);
+        $__ctx = new NoPersistFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function set_cache($v) {
+        $__e = new NoPersistFrameEvent("set_cache", [$v]);
+        $__ctx = new NoPersistFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function get_count() {
+        $__e = new NoPersistFrameEvent("get_count", []);
+        $__ctx = new NoPersistFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function get_cache() {
+        $__e = new NoPersistFrameEvent("get_cache", []);
+        $__ctx = new NoPersistFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    private function _state_Active($__e, $compartment) {
+        if ($__e->_message == "bump") {
+            $this->_s_Active_hdl_user_bump($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "get_cache") {
+            $this->_s_Active_hdl_user_get_cache($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "get_count") {
+            $this->_s_Active_hdl_user_get_count($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "set_cache") {
+            $this->_s_Active_hdl_user_set_cache($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _s_Active_hdl_user_bump($__e, $compartment) {
+        self.count = self.count + 1
+    }
+
+    private function _s_Active_hdl_user_get_cache($__e, $compartment) {
+        $this->_context_stack[count($this->_context_stack) - 1]->_return = self.cache;
+    }
+
+    private function _s_Active_hdl_user_get_count($__e, $compartment) {
+        $this->_context_stack[count($this->_context_stack) - 1]->_return = self.count;
+    }
+
+    private function _s_Active_hdl_user_set_cache($__e, $compartment) {
+        $v = $__e->_parameters[0];
+        self.cache = v
+    }
+
+    private function __serComp($comp) {
+        if ($comp === null) return null;
+        $j = ['state' => $comp->state, 'state_vars' => $comp->state_vars];
+        $j['state_args'] = $comp->state_args;
+        $j['enter_args'] = $comp->enter_args;
+        $j['parent'] = $this->__serComp($comp->parent_compartment);
+        return $j;
+    }
+
+    private static function __deserComp($data) {
+        if ($data === null) return null;
+        $c = new NoPersistCompartment($data['state']);
+        if (isset($data['state_vars'])) $c->state_vars = $data['state_vars'];
+        if (isset($data['state_args'])) $c->state_args = $data['state_args'];
+        if (isset($data['enter_args'])) $c->enter_args = $data['enter_args'];
+        if (isset($data['parent'])) $c->parent_compartment = self::__deserComp($data['parent']);
+        return $c;
+    }
+
+    public function snapshot() {
+        if (!empty($this->_context_stack)) throw new \Exception("E700: system not quiescent");
+        $j = [];
+        $j['_compartment'] = $this->__serComp($this->__compartment);
+        $stack = [];
+        foreach ($this->_state_stack as $c) { $stack[] = $this->__serComp($c); }
+        $j['_state_stack'] = $stack;
+        $j['count'] = $this->count;
+        return json_encode($j);
+    }
+
+    public function restore($json) {
+        $_parsed = json_decode($json, true);
+        $this->_state_stack = [];
+        $this->_context_stack = [];
+        $this->__compartment = $this->__deserComp($_parsed['_compartment']);
+        if (isset($_parsed['_state_stack'])) {
+            foreach ($_parsed['_state_stack'] as $sc) { $this->_state_stack[] = $this->__deserComp($sc); }
+        }
+        if (isset($_parsed['count'])) $this->count = $_parsed['count'];
+    }
+}

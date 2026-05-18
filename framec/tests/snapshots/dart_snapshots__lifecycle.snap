@@ -1,0 +1,230 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"08_lifecycle\", \"dart\")"
+---
+class LifecycleFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    LifecycleFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class LifecycleFrameContext {
+    late LifecycleFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    LifecycleFrameContext(LifecycleFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class LifecycleCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    LifecycleCompartment? parent_compartment;
+
+    LifecycleCompartment(String state, [LifecycleCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    LifecycleCompartment copy() {
+        final c = LifecycleCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class Lifecycle {
+    late List<LifecycleCompartment> _state_stack;
+    late LifecycleCompartment __compartment;
+    LifecycleCompartment? __next_compartment;
+    late List<LifecycleFrameContext> _context_stack;
+    i32 entered = 0;
+    i32 exited = 0;
+    String tag = "";
+
+    Lifecycle() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Idle", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init() {
+        final __e = LifecycleFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = LifecycleFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static Lifecycle _create() {
+        final c = Lifecycle();
+        c._frame_init();
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Idle": ["Idle"],
+            "Running": ["Running"],
+        };
+    }
+    LifecycleCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        LifecycleCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = LifecycleCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        LifecycleCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(LifecycleFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = LifecycleFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = LifecycleFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = LifecycleFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(LifecycleFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Idle":
+                _state_Idle(__e, __compartment);
+                break;
+            case "Running":
+                _state_Running(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(LifecycleCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void start(String label) {
+        final __e = LifecycleFrameEvent("start", [label]);
+        final __ctx = LifecycleFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void stop() {
+        final __e = LifecycleFrameEvent("stop", []);
+        final __ctx = LifecycleFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void _state_Idle(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        if (__e._message == "start") {
+            this._s_Idle_hdl_user_start(__e, compartment);
+            return;
+        }
+    }
+
+    void _state_Running(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        if (__e._message == "<\$") {
+            this._s_Running_hdl_frame_exit(__e, compartment);
+            return;
+        }
+        if (__e._message == "\$>") {
+            this._s_Running_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message == "stop") {
+            this._s_Running_hdl_user_stop(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Idle_hdl_user_start(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        final label = __e._parameters[0] as String;
+        (label)
+        final __compartment = this.__prepareEnter("Running", [], []);
+        this.__transition(__compartment);
+        return;
+    }
+
+    void _s_Running_hdl_frame_exit(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        self.exited = self.exited + 1
+    }
+
+    void _s_Running_hdl_frame_enter(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        final label = compartment.enter_args[0] as String;
+        self.entered = self.entered + 1
+        self.tag = label
+    }
+
+    void _s_Running_hdl_user_stop(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        final __compartment = this.__prepareEnter("Idle", [], []);
+        this.__transition(__compartment);
+        return;
+    }
+}

@@ -1,0 +1,228 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"04_state_args\", \"dart\")"
+---
+class StateArgsFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    StateArgsFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class StateArgsFrameContext {
+    late StateArgsFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    StateArgsFrameContext(StateArgsFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class StateArgsCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    StateArgsCompartment? parent_compartment;
+
+    StateArgsCompartment(String state, [StateArgsCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    StateArgsCompartment copy() {
+        final c = StateArgsCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class StateArgs {
+    late List<StateArgsCompartment> _state_stack;
+    late StateArgsCompartment __compartment;
+    StateArgsCompartment? __next_compartment;
+    late List<StateArgsFrameContext> _context_stack;
+
+    StateArgs() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Idle", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init() {
+        final __e = StateArgsFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = StateArgsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static StateArgs _create() {
+        final c = StateArgs();
+        c._frame_init();
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Idle": ["Idle"],
+            "Holding": ["Holding"],
+        };
+    }
+    StateArgsCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        StateArgsCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = StateArgsCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        StateArgsCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(StateArgsFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = StateArgsFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = StateArgsFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = StateArgsFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(StateArgsFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Idle":
+                _state_Idle(__e, __compartment);
+                break;
+            case "Holding":
+                _state_Holding(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(StateArgsCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void load(i32 initial) {
+        final __e = StateArgsFrameEvent("load", [initial]);
+        final __ctx = StateArgsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void adjust(i32 delta) {
+        final __e = StateArgsFrameEvent("adjust", [delta]);
+        final __ctx = StateArgsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    i32 peek() {
+        final __e = StateArgsFrameEvent("peek", []);
+        final __ctx = StateArgsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        return _context_stack.removeLast()._return;
+    }
+
+    void _state_Idle(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        if (__e._message == "load") {
+            this._s_Idle_hdl_user_load(__e, compartment);
+            return;
+        }
+    }
+
+    void _state_Holding(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        var value = __compartment.state_args[0];
+        if (__e._message == "adjust") {
+            this._s_Holding_hdl_user_adjust(__e, compartment);
+            return;
+        }
+        if (__e._message == "peek") {
+            this._s_Holding_hdl_user_peek(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Idle_hdl_user_load(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        final initial = __e._parameters[0];
+        final __compartment = this.__prepareEnter("Holding", [initial], []);
+        this.__transition(__compartment);
+        return;
+    }
+
+    void _s_Holding_hdl_user_adjust(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        final value = compartment.state_args[0];
+        final delta = __e._parameters[0];
+        final __compartment = this.__prepareEnter("Holding", [value + delta], []);
+        this.__transition(__compartment);
+        return;
+    }
+
+    void _s_Holding_hdl_user_peek(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        final value = compartment.state_args[0];
+        this._context_stack[this._context_stack.length - 1]._return = value;
+    }
+}

@@ -1,0 +1,238 @@
+---
+source: framec/tests/java_snapshots.rs
+expression: "compile_fixture(\"05_pushpop\", \"java\")"
+---
+class PushPopFrameEvent {
+    String _message;
+    java.util.ArrayList<Object> _parameters;
+
+    PushPopFrameEvent(String message) {
+        this._message = message;
+        this._parameters = new java.util.ArrayList<>();
+    }
+
+    PushPopFrameEvent(String message, java.util.ArrayList<Object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class PushPopFrameContext {
+    PushPopFrameEvent _event;
+    Object _return;
+    java.util.HashMap<String, Object> _data;
+    boolean _transitioned = false;
+
+    PushPopFrameContext(PushPopFrameEvent event, Object defaultReturn) {
+        this._event = event;
+        this._return = defaultReturn;
+        this._data = new java.util.HashMap<>();
+        this._transitioned = false;
+    }
+}
+
+class PushPopCompartment {
+    String state;
+    java.util.ArrayList<Object> state_args;
+    java.util.HashMap<String, Object> state_vars;
+    java.util.ArrayList<Object> enter_args;
+    java.util.ArrayList<Object> exit_args;
+    PushPopFrameEvent forward_event;
+    PushPopCompartment parent_compartment;
+
+    PushPopCompartment(String state) {
+        this.state = state;
+        this.state_args = new java.util.ArrayList<>();
+        this.state_vars = new java.util.HashMap<>();
+        this.enter_args = new java.util.ArrayList<>();
+        this.exit_args = new java.util.ArrayList<>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    PushPopCompartment copy() {
+        PushPopCompartment c = new PushPopCompartment(this.state);
+        c.state_args = new java.util.ArrayList<>(this.state_args);
+        c.state_vars = new java.util.HashMap<>(this.state_vars);
+        c.enter_args = new java.util.ArrayList<>(this.enter_args);
+        c.exit_args = new java.util.ArrayList<>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class PushPop {
+    private java.util.ArrayList<PushPopCompartment> _state_stack;
+    private PushPopCompartment __compartment;
+    private PushPopCompartment __next_compartment;
+    private java.util.ArrayList<PushPopFrameContext> _context_stack;
+    public int pings = 0;
+    public int leaves = 0;
+
+    public PushPop() {
+        _state_stack = new java.util.ArrayList<>();
+        _context_stack = new java.util.ArrayList<>();
+        this.__compartment = __prepareEnter("Idle", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        this.__next_compartment = null;
+    }
+
+    public static PushPop __create() {
+        PushPop c = new PushPop();
+        PushPopFrameEvent __e = new PushPopFrameEvent("$>", c.__compartment.enter_args);
+        PushPopFrameContext __ctx = new PushPopFrameContext(__e, null);
+        c._context_stack.add(__ctx);
+        c.__kernel(__e);
+        c._context_stack.remove(c._context_stack.size() - 1);
+        return c;
+    }
+
+    private java.util.HashMap<String, java.util.ArrayList<String>> hsm_chain() {
+        java.util.HashMap<String, java.util.ArrayList<String>> m = new java.util.HashMap<>();
+        m.put("Idle", new java.util.ArrayList<>(java.util.Arrays.asList("Idle")));
+        m.put("Nested", new java.util.ArrayList<>(java.util.Arrays.asList("Nested")));
+        return m;
+    }
+    private PushPopCompartment __prepareEnter(String leaf, java.util.ArrayList<Object> state_args, java.util.ArrayList<Object> enter_args) {
+        PushPopCompartment comp = null;
+        for (String name : hsm_chain().get(leaf)) {
+            PushPopCompartment new_comp = new PushPopCompartment(name);
+            new_comp.state_args = new java.util.ArrayList<>(state_args);
+            new_comp.enter_args = new java.util.ArrayList<>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    private void __prepareExit(java.util.ArrayList<Object> exit_args) {
+        PushPopCompartment comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new java.util.ArrayList<>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(PushPopFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            PushPopCompartment next_compartment = __next_compartment;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            PushPopFrameEvent exit_event = new PushPopFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            PushPopFrameEvent forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                PushPopFrameEvent enter_event = new PushPopFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message.equals("$>")) {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                PushPopFrameEvent enter_event = new PushPopFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (PushPopFrameContext ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(PushPopFrameEvent __e) {
+        if (__compartment.state.equals("Idle")) {
+            _state_Idle(__e, __compartment);
+        } else if (__compartment.state.equals("Nested")) {
+            _state_Nested(__e, __compartment);
+        }
+    }
+
+    private void __transition(PushPopCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void ping() {
+        PushPopFrameEvent __e = new PushPopFrameEvent("ping", new java.util.ArrayList<>());
+        PushPopFrameContext __ctx = new PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void nest() {
+        PushPopFrameEvent __e = new PushPopFrameEvent("nest", new java.util.ArrayList<>());
+        PushPopFrameContext __ctx = new PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void unnest() {
+        PushPopFrameEvent __e = new PushPopFrameEvent("unnest", new java.util.ArrayList<>());
+        PushPopFrameContext __ctx = new PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void leaf() {
+        PushPopFrameEvent __e = new PushPopFrameEvent("leaf", new java.util.ArrayList<>());
+        PushPopFrameContext __ctx = new PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    private void _state_Idle(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        if (__e._message.equals("nest")) {
+            this._s_Idle_hdl_user_nest(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("ping")) {
+            this._s_Idle_hdl_user_ping(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Nested(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        if (__e._message.equals("leaf")) {
+            this._s_Nested_hdl_user_leaf(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("unnest")) {
+            this._s_Nested_hdl_user_unnest(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Idle_hdl_user_nest(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        _state_stack.add(__compartment);
+        PushPopCompartment __compartment = __prepareEnter("Nested", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        __transition(__compartment);
+        return;
+    }
+
+    private void _s_Idle_hdl_user_ping(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        self.pings = self.pings + 1
+    }
+
+    private void _s_Nested_hdl_user_leaf(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        self.leaves = self.leaves + 1
+    }
+
+    private void _s_Nested_hdl_user_unnest(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        var __saved = _state_stack.remove(_state_stack.size() - 1);
+        __transition(__saved);
+        return;
+    }
+}

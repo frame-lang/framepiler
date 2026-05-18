@@ -1,0 +1,158 @@
+---
+source: framec/tests/kotlin_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"kotlin\")"
+---
+class ReturnExplicitFrameEvent(val _message: String, val _parameters: MutableList<Any?> = mutableListOf())
+
+class ReturnExplicitFrameContext(val _event: ReturnExplicitFrameEvent, var _return: Any? = null) {
+    val _data: MutableMap<String, Any?> = mutableMapOf()
+    var _transitioned: Boolean = false
+}
+
+class ReturnExplicitCompartment(val state: String) {
+    val state_args: MutableList<Any?> = mutableListOf()
+    val state_vars: MutableMap<String, Any?> = mutableMapOf()
+    val enter_args: MutableList<Any?> = mutableListOf()
+    val exit_args: MutableList<Any?> = mutableListOf()
+    var forward_event: ReturnExplicitFrameEvent? = null
+    var parent_compartment: ReturnExplicitCompartment? = null
+
+    fun copy(): ReturnExplicitCompartment {
+        val c = ReturnExplicitCompartment(this.state)
+        c.state_args.addAll(this.state_args)
+        c.state_vars.putAll(this.state_vars)
+        c.enter_args.addAll(this.enter_args)
+        c.exit_args.addAll(this.exit_args)
+        c.forward_event = this.forward_event
+        c.parent_compartment = this.parent_compartment
+        return c
+    }
+}
+
+class ReturnExplicit {
+    private var _state_stack: MutableList<ReturnExplicitCompartment>
+    private var __compartment: ReturnExplicitCompartment
+    private var __next_compartment: ReturnExplicitCompartment?
+    private var _context_stack: MutableList<ReturnExplicitFrameContext>
+
+    init {
+        _state_stack = mutableListOf()
+        _context_stack = mutableListOf()
+        this.__compartment = __prepareEnter("Judging", mutableListOf<Any?>(), mutableListOf<Any?>())
+        this.__next_compartment = null
+    }
+
+    fun __frame_init() {
+        val __e = ReturnExplicitFrameEvent("$>", __compartment.enter_args)
+        val __ctx = ReturnExplicitFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(__e)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    private fun hsm_chain(): Map<String, List<String>> {
+        return mapOf(
+            "Judging" to listOf("Judging"),
+        )
+    }
+    private fun __prepareEnter(leaf: String, state_args: MutableList<Any?>, enter_args: MutableList<Any?>): ReturnExplicitCompartment {
+        var comp: ReturnExplicitCompartment? = null
+        for (name in hsm_chain()[leaf]!!) {
+            val new_comp = ReturnExplicitCompartment(name)
+            new_comp.state_args.addAll(state_args)
+            new_comp.enter_args.addAll(enter_args)
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!!
+    }
+
+    private fun __prepareExit(exit_args: MutableList<Any?>) {
+        var comp: ReturnExplicitCompartment? = __compartment
+        while (comp != null) {
+            comp.exit_args.clear()
+            comp.exit_args.addAll(exit_args)
+            comp = comp.parent_compartment
+        }
+    }
+
+    private fun __kernel(__e: ReturnExplicitFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            val next_compartment: ReturnExplicitCompartment = __next_compartment!!
+            __next_compartment = null
+            // Exit the current (leaf) state.
+            val exit_event = ReturnExplicitFrameEvent("<$", __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            val forward_event: ReturnExplicitFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = null
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                val enter_event = ReturnExplicitFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                val enter_event = ReturnExplicitFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            }
+            for (ctx in _context_stack) {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private fun __router(__e: ReturnExplicitFrameEvent) {
+        if (__compartment.state == "Judging") {
+            _state_Judging(__e, __compartment)
+        }
+    }
+
+    private fun __transition(next: ReturnExplicitCompartment) {
+        __next_compartment = next
+    }
+
+    fun decide(score: Int): String {
+        val __e = ReturnExplicitFrameEvent("decide", mutableListOf(score))
+        val __ctx = ReturnExplicitFrameContext(__e, "")
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        val __result = _context_stack[_context_stack.size - 1]._return as String
+        _context_stack.removeAt(_context_stack.size - 1)
+        return __result
+    }
+
+    private fun _state_Judging(__e: ReturnExplicitFrameEvent, compartment: ReturnExplicitCompartment) {
+        if (__e._message == "decide") {
+            this._s_Judging_hdl_user_decide(__e, compartment)
+            return
+        }
+    }
+
+    private fun _s_Judging_hdl_user_decide(__e: ReturnExplicitFrameEvent, compartment: ReturnExplicitCompartment) {
+        val score = __e._parameters[0] as Int
+                        if score >= 60 {
+        _context_stack[_context_stack.size - 1]._return = "pass"
+                            return
+                        }
+        _context_stack[_context_stack.size - 1]._return = "fail"
+                        return
+    }
+
+    companion object {
+        @JvmStatic fun __create(): ReturnExplicit {
+            val c = ReturnExplicit()
+            c.__frame_init()
+            return c
+        }    }
+}

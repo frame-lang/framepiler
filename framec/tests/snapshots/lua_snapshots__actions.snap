@@ -1,0 +1,194 @@
+---
+source: framec/tests/lua_snapshots.rs
+expression: "compile_fixture(\"10_actions\", \"lua\")"
+---
+local ActionsFrameEvent = {}
+ActionsFrameEvent.__index = ActionsFrameEvent
+
+function ActionsFrameEvent.new(message, parameters)
+    local self = setmetatable({}, ActionsFrameEvent)
+    self._message = message
+    self._parameters = parameters or {}
+    return self
+end
+
+
+local ActionsFrameContext = {}
+ActionsFrameContext.__index = ActionsFrameContext
+
+function ActionsFrameContext.new(event, default_return)
+    local self = setmetatable({}, ActionsFrameContext)
+    self._event = event
+    self._return = default_return
+    self._data = {}
+    self._transitioned = false
+    return self
+end
+
+
+local ActionsCompartment = {}
+ActionsCompartment.__index = ActionsCompartment
+
+function ActionsCompartment.new(state, parent_compartment)
+    local self = setmetatable({}, ActionsCompartment)
+    self.state = state
+    self.state_args = {}
+    self.state_vars = {}
+    self.enter_args = {}
+    self.exit_args = {}
+    self.forward_event = nil
+    self.parent_compartment = parent_compartment
+    return self
+end
+
+function ActionsCompartment:copy()
+    local c = ActionsCompartment.new(self.state, self.parent_compartment)
+    c.state_args = {}
+    for k, v in pairs(self.state_args) do c.state_args[k] = v end
+    c.state_vars = {}
+    for k, v in pairs(self.state_vars) do c.state_vars[k] = v end
+    c.enter_args = {}
+    for k, v in pairs(self.enter_args) do c.enter_args[k] = v end
+    c.exit_args = {}
+    for k, v in pairs(self.exit_args) do c.exit_args[k] = v end
+    c.forward_event = self.forward_event
+    return c
+end
+
+
+local Actions = {}
+Actions.__index = Actions
+
+function Actions.new()
+    local self = setmetatable({}, Actions)
+    self._state_stack = {}
+    self._context_stack = {}
+    self.total = 0
+    self.__compartment = self:__prepareEnter("Counting", nil, nil)
+    self.__next_compartment = nil
+    return self
+end
+
+function Actions:_frame_init()
+    local __e = ActionsFrameEvent.new("$>", self.__compartment.enter_args)
+    local __ctx = ActionsFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    table.remove(self._context_stack)
+end
+
+function Actions._create()
+    local c = Actions.new()
+    c:_frame_init()
+    return c
+end
+
+function Actions:hsm_chain()
+    local t = {}
+    t["Counting"] = {"Counting"}
+    return t
+end
+function Actions:__prepareEnter(leaf, state_args, enter_args)
+    state_args = state_args or {}
+    enter_args = enter_args or {}
+    local comp = nil
+    local chain = self:hsm_chain()[leaf]
+    for i = 1, #chain do
+        local new_comp = ActionsCompartment.new(chain[i])
+        new_comp.state_args = {}
+        for j = 1, #state_args do new_comp.state_args[j] = state_args[j] end
+        new_comp.enter_args = {}
+        for j = 1, #enter_args do new_comp.enter_args[j] = enter_args[j] end
+        new_comp.parent_compartment = comp
+        comp = new_comp
+    end
+    return comp
+end
+
+function Actions:__prepareExit(exit_args)
+    local comp = self.__compartment
+    while comp ~= nil do
+        comp.exit_args = {}
+        for j = 1, #exit_args do comp.exit_args[j] = exit_args[j] end
+        comp = comp.parent_compartment
+    end
+end
+
+function Actions:__kernel(__e)
+    -- Route event to current state.
+    self:__router(__e)
+    -- Drain any transitions queued by the handler.
+    while self.__next_compartment ~= nil do
+        local next_compartment = self.__next_compartment
+        self.__next_compartment = nil
+        local exit_event = ActionsFrameEvent.new("<$", self.__compartment.exit_args)
+        self:__router(exit_event)
+        self.__compartment = next_compartment
+        local forward_event = next_compartment.forward_event
+        next_compartment.forward_event = nil
+        if forward_event == nil then
+            local enter_event = ActionsFrameEvent.new("$>", self.__compartment.enter_args)
+            self:__router(enter_event)
+        elseif forward_event._message == "$>" then
+            self:__router(forward_event)
+        else
+            local enter_event = ActionsFrameEvent.new("$>", self.__compartment.enter_args)
+            self:__router(enter_event)
+            self:__router(forward_event)
+        end
+        for _, ctx in ipairs(self._context_stack) do
+            ctx._transitioned = true
+        end
+    end
+end
+
+function Actions:__router(__e)
+    local handler = self["_state_" .. self.__compartment.state]
+    if handler then
+        handler(self, __e, self.__compartment)
+    end
+end
+
+function Actions:__transition(next_compartment)
+    self.__next_compartment = next_compartment
+end
+
+function Actions:increment(n)
+    local __e = ActionsFrameEvent.new("increment", {n})
+    local __ctx = ActionsFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function Actions:get_total()
+    local __e = ActionsFrameEvent.new("get_total", {})
+    local __ctx = ActionsFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function Actions:_state_Counting(__e, compartment)
+    if __e._message == "get_total" then
+        self:_s_Counting_hdl_user_get_total(__e, compartment)
+        return
+    end
+    if __e._message == "increment" then
+        self:_s_Counting_hdl_user_increment(__e, compartment)
+        return
+    end
+end
+
+function Actions:_s_Counting_hdl_user_get_total(__e, compartment)
+    self._context_stack[#self._context_stack]._return = self.total
+end
+
+function Actions:_s_Counting_hdl_user_increment(__e, compartment)
+    local n = __e._parameters[1]
+    _scale(n)
+end
+
+function Actions:_scale(n)
+    self.total = self.total + n * 2
+end

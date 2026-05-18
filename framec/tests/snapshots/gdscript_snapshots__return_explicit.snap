@@ -1,0 +1,151 @@
+---
+source: framec/tests/gdscript_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"gdscript\")"
+---
+class ReturnExplicitFrameEvent:
+    var _message
+    var _parameters
+
+    func _init(message: String, parameters):
+        self._message = message
+        self._parameters = parameters
+
+
+class ReturnExplicitFrameContext:
+    var event
+    var _return
+    var _data
+    var _transitioned
+
+    func _init(event: ReturnExplicitFrameEvent, default_return):
+        self.event = event
+        self._return = default_return
+        self._data = {}
+        self._transitioned = false
+
+
+class ReturnExplicitCompartment:
+    var state
+    var state_args
+    var state_vars
+    var enter_args
+    var exit_args
+    var forward_event
+    var parent_compartment
+
+    func _init(state: String, parent_compartment = null):
+        self.state = state
+        self.state_args = []
+        self.state_vars = {}
+        self.enter_args = []
+        self.exit_args = []
+        self.forward_event = null
+        self.parent_compartment = parent_compartment
+
+    func copy() -> ReturnExplicitCompartment:
+        var c = ReturnExplicitCompartment.new(self.state, self.parent_compartment)
+        c.state_args = self.state_args.duplicate()
+        c.state_vars = self.state_vars.duplicate()
+        c.enter_args = self.enter_args.duplicate()
+        c.exit_args = self.exit_args.duplicate()
+        c.forward_event = self.forward_event
+        return c
+
+
+class ReturnExplicit:
+    var _state_stack
+    var __compartment
+    var __next_compartment
+    var _context_stack
+
+    func _init():
+        self._state_stack = []
+        self._context_stack = []
+        self.__compartment = self.__prepareEnter("Judging", [], [])
+        self.__next_compartment = null
+
+    static func _create():
+        var c = ReturnExplicit.new()
+        var __e = ReturnExplicitFrameEvent.new("$>", c.__compartment.enter_args)
+        var __ctx = ReturnExplicitFrameContext.new(__e, null)
+        c._context_stack.append(__ctx)
+        c.__kernel(__e)
+        c._context_stack.pop_back()
+        return c
+
+    func hsm_chain() -> Dictionary:
+        return {
+            "Judging": ["Judging"],
+        }
+    func __prepareEnter(leaf, state_args, enter_args):
+        var comp = null
+        for name in self.hsm_chain()[leaf]:
+            var new_comp = ReturnExplicitCompartment.new(name)
+            new_comp.state_args = state_args.duplicate()
+            new_comp.enter_args = enter_args.duplicate()
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        return comp
+
+    func __prepareExit(exit_args):
+        var comp = self.__compartment
+        while comp != null:
+            comp.exit_args = exit_args.duplicate()
+            comp = comp.parent_compartment
+
+    func __kernel(__e):
+        # Route event to current state
+        self.__router(__e)
+        # Drain any transitions queued by the handler
+        while self.__next_compartment != null:
+            var next_compartment = self.__next_compartment
+            self.__next_compartment = null
+            # Exit the current (leaf) state
+            self.__router(ReturnExplicitFrameEvent.new("<$", self.__compartment.exit_args))
+            # Switch to the new compartment
+            self.__compartment = next_compartment
+            if next_compartment.forward_event == null:
+                # No forwarded event — synthesize a fresh $>
+                self.__router(ReturnExplicitFrameEvent.new("$>", self.__compartment.enter_args))
+            else:
+                if next_compartment.forward_event._message == "$>":
+                    # Forwarded event IS $> — dispatch directly so the
+                    # destination's $> receives the caller's payload
+                    self.__router(next_compartment.forward_event)
+                else:
+                    # Forwarded event is not $> — initialize the destination
+                    # with a fresh $>, then dispatch the forward to it
+                    self.__router(ReturnExplicitFrameEvent.new("$>", self.__compartment.enter_args))
+                    self.__router(next_compartment.forward_event)
+            next_compartment.forward_event = null
+            # Mark all stacked contexts as transitioned
+            for ctx in self._context_stack:
+                ctx._transitioned = true
+
+    func __router(__e):
+        if self.__compartment.state == "Judging":
+            self._state_Judging(__e, self.__compartment)
+
+    func __transition(next_compartment):
+        self.__next_compartment = next_compartment
+
+    func decide(score: i32) -> String:
+        var __e = ReturnExplicitFrameEvent.new("decide", [score])
+        var __ctx = ReturnExplicitFrameContext.new(__e, null)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop_back()._return
+
+    func _state_Judging(__e, compartment):
+        if __e._message == "decide":
+            self._s_Judging_hdl_user_decide(__e, compartment)
+            return
+
+    func _s_Judging_hdl_user_decide(__e, compartment):
+        var score = __e._parameters[0]
+        if score >= 60 {
+            self._context_stack[-1]._return = "pass"
+            return
+        }
+        self._context_stack[-1]._return = "fail"
+        return

@@ -32,3 +32,48 @@ fn hsm() {
 fn persist() {
     insta::assert_snapshot!(compile_fixture("03_persist", "python_3"));
 }
+
+#[test]
+fn state_args() {
+    insta::assert_snapshot!(compile_fixture("04_state_args", "python_3"));
+}
+
+#[test]
+fn pushpop() {
+    insta::assert_snapshot!(compile_fixture("05_pushpop", "python_3"));
+}
+
+#[test]
+fn selfcall() {
+    insta::assert_snapshot!(compile_fixture("06_selfcall", "python_3"));
+}
+
+#[test]
+fn forward() {
+    insta::assert_snapshot!(compile_fixture("07_forward", "python_3"));
+}
+
+#[test]
+fn lifecycle() {
+    insta::assert_snapshot!(compile_fixture("08_lifecycle", "python_3"));
+}
+
+#[test]
+fn return_explicit() {
+    insta::assert_snapshot!(compile_fixture("09_return_explicit", "python_3"));
+}
+
+#[test]
+fn actions() {
+    insta::assert_snapshot!(compile_fixture("10_actions", "python_3"));
+}
+
+#[test]
+fn consts() {
+    insta::assert_snapshot!(compile_fixture("11_consts", "python_3"));
+}
+
+#[test]
+fn no_persist() {
+    insta::assert_snapshot!(compile_fixture("12_no_persist", "python_3"));
+}

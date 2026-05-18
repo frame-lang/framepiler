@@ -1,0 +1,257 @@
+---
+source: framec/tests/kotlin_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"kotlin\")"
+---
+class NoPersistFrameEvent(val _message: String, val _parameters: MutableList<Any?> = mutableListOf())
+
+class NoPersistFrameContext(val _event: NoPersistFrameEvent, var _return: Any? = null) {
+    val _data: MutableMap<String, Any?> = mutableMapOf()
+    var _transitioned: Boolean = false
+}
+
+class NoPersistCompartment(val state: String) {
+    val state_args: MutableList<Any?> = mutableListOf()
+    val state_vars: MutableMap<String, Any?> = mutableMapOf()
+    val enter_args: MutableList<Any?> = mutableListOf()
+    val exit_args: MutableList<Any?> = mutableListOf()
+    var forward_event: NoPersistFrameEvent? = null
+    var parent_compartment: NoPersistCompartment? = null
+
+    fun copy(): NoPersistCompartment {
+        val c = NoPersistCompartment(this.state)
+        c.state_args.addAll(this.state_args)
+        c.state_vars.putAll(this.state_vars)
+        c.enter_args.addAll(this.enter_args)
+        c.exit_args.addAll(this.exit_args)
+        c.forward_event = this.forward_event
+        c.parent_compartment = this.parent_compartment
+        return c
+    }
+}
+
+class NoPersist {
+    private var _state_stack: MutableList<NoPersistCompartment>
+    private var __compartment: NoPersistCompartment
+    private var __next_compartment: NoPersistCompartment?
+    private var _context_stack: MutableList<NoPersistFrameContext>
+    var count: Int = 0
+    var cache: Int = -1
+
+    init {
+        _state_stack = mutableListOf()
+        _context_stack = mutableListOf()
+        this.__compartment = __prepareEnter("Active", mutableListOf<Any?>(), mutableListOf<Any?>())
+        this.__next_compartment = null
+    }
+
+    fun __frame_init() {
+        val __e = NoPersistFrameEvent("$>", __compartment.enter_args)
+        val __ctx = NoPersistFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(__e)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    private fun hsm_chain(): Map<String, List<String>> {
+        return mapOf(
+            "Active" to listOf("Active"),
+        )
+    }
+    private fun __prepareEnter(leaf: String, state_args: MutableList<Any?>, enter_args: MutableList<Any?>): NoPersistCompartment {
+        var comp: NoPersistCompartment? = null
+        for (name in hsm_chain()[leaf]!!) {
+            val new_comp = NoPersistCompartment(name)
+            new_comp.state_args.addAll(state_args)
+            new_comp.enter_args.addAll(enter_args)
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!!
+    }
+
+    private fun __prepareExit(exit_args: MutableList<Any?>) {
+        var comp: NoPersistCompartment? = __compartment
+        while (comp != null) {
+            comp.exit_args.clear()
+            comp.exit_args.addAll(exit_args)
+            comp = comp.parent_compartment
+        }
+    }
+
+    private fun __kernel(__e: NoPersistFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            val next_compartment: NoPersistCompartment = __next_compartment!!
+            __next_compartment = null
+            // Exit the current (leaf) state.
+            val exit_event = NoPersistFrameEvent("<$", __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            val forward_event: NoPersistFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = null
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                val enter_event = NoPersistFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                val enter_event = NoPersistFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            }
+            for (ctx in _context_stack) {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private fun __router(__e: NoPersistFrameEvent) {
+        if (__compartment.state == "Active") {
+            _state_Active(__e, __compartment)
+        }
+    }
+
+    private fun __transition(next: NoPersistCompartment) {
+        __next_compartment = next
+    }
+
+    fun bump() {
+        val __e = NoPersistFrameEvent("bump", mutableListOf())
+        val __ctx = NoPersistFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    fun set_cache(v: Int) {
+        val __e = NoPersistFrameEvent("set_cache", mutableListOf(v))
+        val __ctx = NoPersistFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    fun get_count(): Int {
+        val __e = NoPersistFrameEvent("get_count", mutableListOf())
+        val __ctx = NoPersistFrameContext(__e, 0)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        val __result = _context_stack[_context_stack.size - 1]._return as Int
+        _context_stack.removeAt(_context_stack.size - 1)
+        return __result
+    }
+
+    fun get_cache(): Int {
+        val __e = NoPersistFrameEvent("get_cache", mutableListOf())
+        val __ctx = NoPersistFrameContext(__e, 0)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        val __result = _context_stack[_context_stack.size - 1]._return as Int
+        _context_stack.removeAt(_context_stack.size - 1)
+        return __result
+    }
+
+    private fun _state_Active(__e: NoPersistFrameEvent, compartment: NoPersistCompartment) {
+        if (__e._message == "bump") {
+            this._s_Active_hdl_user_bump(__e, compartment)
+            return
+        }
+        if (__e._message == "get_cache") {
+            this._s_Active_hdl_user_get_cache(__e, compartment)
+            return
+        }
+        if (__e._message == "get_count") {
+            this._s_Active_hdl_user_get_count(__e, compartment)
+            return
+        }
+        if (__e._message == "set_cache") {
+            this._s_Active_hdl_user_set_cache(__e, compartment)
+            return
+        }
+    }
+
+    private fun _s_Active_hdl_user_bump(__e: NoPersistFrameEvent, compartment: NoPersistCompartment) {
+        self.count = self.count + 1
+    }
+
+    private fun _s_Active_hdl_user_get_cache(__e: NoPersistFrameEvent, compartment: NoPersistCompartment) {
+        _context_stack[_context_stack.size - 1]._return = self.cache
+    }
+
+    private fun _s_Active_hdl_user_get_count(__e: NoPersistFrameEvent, compartment: NoPersistCompartment) {
+        _context_stack[_context_stack.size - 1]._return = self.count
+    }
+
+    private fun _s_Active_hdl_user_set_cache(__e: NoPersistFrameEvent, compartment: NoPersistCompartment) {
+        val v = __e._parameters[0] as Int
+        self.cache = v
+    }
+
+    private fun __serComp(comp: NoPersistCompartment?): Any? {
+        if (comp == null) return null
+        val j = java.util.LinkedHashMap<String, Any?>()
+        j["state"] = comp.state
+        j["state_vars"] = java.util.LinkedHashMap(comp.state_vars)
+        j["state_args"] = java.util.ArrayList(comp.state_args)
+        j["enter_args"] = java.util.ArrayList(comp.enter_args)
+        j["parent"] = __serComp(comp.parent_compartment)
+        return j
+    }
+
+    fun snapshot(): String {
+        if (_context_stack.isNotEmpty()) throw RuntimeException("E700: system not quiescent")
+        val mapper = com.fasterxml.jackson.databind.ObjectMapper()
+        val j = java.util.LinkedHashMap<String, Any?>()
+        j["_compartment"] = __serComp(__compartment)
+        val stack = java.util.ArrayList<Any?>()
+        for (c in _state_stack) stack.add(__serComp(c))
+        j["_state_stack"] = stack
+        j["count"] = count
+        return mapper.writeValueAsString(j)
+    }
+
+    fun restore(json: String) {
+        val mapper = com.fasterxml.jackson.databind.ObjectMapper()
+        val _parsed = mapper.readTree(json)
+        this.__compartment = __deserComp(_parsed.get("_compartment"), mapper)!!
+        if (_parsed.has("_state_stack")) {
+            this._state_stack = mutableListOf()
+            for (sc in _parsed.get("_state_stack")) this._state_stack.add(__deserComp(sc, mapper)!!)
+        }
+        if (_parsed.has("count")) this.count = mapper.convertValue(_parsed.get("count"), object : com.fasterxml.jackson.core.type.TypeReference<Int>(){})
+    }
+
+    companion object {
+        @JvmStatic fun __create(): NoPersist {
+            val c = NoPersist()
+            c.__frame_init()
+            return c
+        }
+        private fun __deserComp(node: com.fasterxml.jackson.databind.JsonNode?, mapper: com.fasterxml.jackson.databind.ObjectMapper): NoPersistCompartment? {
+            if (node == null || node.isNull) return null
+            val c = NoPersistCompartment(node.get("state").asText())
+            if (node.has("state_vars")) {
+                val fields = node.get("state_vars").fields()
+                while (fields.hasNext()) {
+                    val e = fields.next()
+                    c.state_vars[e.key] = mapper.convertValue(e.value, Any::class.java)
+                }
+            }
+            val __sa: com.fasterxml.jackson.databind.JsonNode? = if (node.has("state_args")) node.get("state_args") else null
+            val __ea: com.fasterxml.jackson.databind.JsonNode? = if (node.has("enter_args")) node.get("enter_args") else null
+            if (__sa != null) for (n in __sa) c.state_args.add(mapper.convertValue(n, Any::class.java))
+            if (__ea != null) for (n in __ea) c.enter_args.add(mapper.convertValue(n, Any::class.java))
+            if (node.has("parent") && !node.get("parent").isNull) c.parent_compartment = __deserComp(node.get("parent"), mapper)
+            return c
+        }
+    }
+}

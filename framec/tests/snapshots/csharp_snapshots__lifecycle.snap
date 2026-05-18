@@ -1,0 +1,234 @@
+---
+source: framec/tests/csharp_snapshots.rs
+expression: "compile_fixture(\"08_lifecycle\", \"csharp\")"
+---
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+class LifecycleFrameEvent {
+    public string _message;
+    public List<object> _parameters;
+
+    public LifecycleFrameEvent(string message) {
+        this._message = message;
+        this._parameters = new List<object>();
+    }
+
+    public LifecycleFrameEvent(string message, List<object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class LifecycleFrameContext {
+    public LifecycleFrameEvent _event;
+    public object? _return;
+    public Dictionary<string, object> _data;
+    public bool _transitioned = false;
+
+    public LifecycleFrameContext(LifecycleFrameEvent ev, object? defaultReturn = null) {
+        this._event = ev;
+        this._return = defaultReturn;
+        this._data = new Dictionary<string, object>();
+        this._transitioned = false;
+    }
+}
+
+class LifecycleCompartment {
+    public string state;
+    public List<object> state_args;
+    public Dictionary<string, object> state_vars;
+    public List<object> enter_args;
+    public List<object> exit_args;
+    public LifecycleFrameEvent? forward_event;
+    public LifecycleCompartment? parent_compartment;
+
+    public LifecycleCompartment(string state) {
+        this.state = state;
+        this.state_args = new List<object>();
+        this.state_vars = new Dictionary<string, object>();
+        this.enter_args = new List<object>();
+        this.exit_args = new List<object>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    public LifecycleCompartment Copy() {
+        LifecycleCompartment c = new LifecycleCompartment(this.state);
+        c.state_args = new List<object>(this.state_args);
+        c.state_vars = new Dictionary<string, object>(this.state_vars);
+        c.enter_args = new List<object>(this.enter_args);
+        c.exit_args = new List<object>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class Lifecycle {
+    private List<LifecycleCompartment> _state_stack;
+    private LifecycleCompartment __compartment;
+    private LifecycleCompartment? __next_compartment;
+    private List<LifecycleFrameContext> _context_stack;
+    public int entered = 0;
+    public int exited = 0;
+    public string tag = "";
+
+    public Lifecycle() {
+        _state_stack = new List<LifecycleCompartment>();
+        _context_stack = new List<LifecycleFrameContext>();
+        this.__compartment = __prepareEnter("Idle", new List<object>(), new List<object>());
+        this.__next_compartment = null;
+    }
+
+    public void __frame_init() {
+        LifecycleFrameEvent __e = new LifecycleFrameEvent("$>", __compartment.enter_args);
+        LifecycleFrameContext __ctx = new LifecycleFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(__e);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public static Lifecycle __create() {
+        Lifecycle c = new Lifecycle();
+        c.__frame_init();
+        return c;
+    }
+
+    private Dictionary<string, List<string>> hsm_chain() {
+        return new Dictionary<string, List<string>> {
+            { "Idle", new List<string> { "Idle" } },
+            { "Running", new List<string> { "Running" } },
+        };
+    }
+    private LifecycleCompartment __prepareEnter(string leaf, List<object> state_args, List<object> enter_args) {
+        LifecycleCompartment? comp = null;
+        foreach (string name in hsm_chain()[leaf]) {
+            LifecycleCompartment new_comp = new LifecycleCompartment(name);
+            new_comp.state_args = new List<object>(state_args);
+            new_comp.enter_args = new List<object>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    private void __prepareExit(List<object> exit_args) {
+        LifecycleCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new List<object>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(LifecycleFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            LifecycleCompartment next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            LifecycleFrameEvent exit_event = new LifecycleFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            LifecycleFrameEvent? forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                LifecycleFrameEvent enter_event = new LifecycleFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                LifecycleFrameEvent enter_event = new LifecycleFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            foreach (var ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(LifecycleFrameEvent __e) {
+        if (__compartment.state == "Idle") {
+            _state_Idle(__e, __compartment);
+        } else if (__compartment.state == "Running") {
+            _state_Running(__e, __compartment);
+        }
+    }
+
+    private void __transition(LifecycleCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void start(string label) {
+        LifecycleFrameEvent __e = new LifecycleFrameEvent("start", new List<object> { label });
+        LifecycleFrameContext __ctx = new LifecycleFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public void stop() {
+        LifecycleFrameEvent __e = new LifecycleFrameEvent("stop", new List<object>());
+        LifecycleFrameContext __ctx = new LifecycleFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    private void _state_Idle(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        if (__e._message == "start") {
+            this._s_Idle_hdl_user_start(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Running(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        if (__e._message == "<$") {
+            this._s_Running_hdl_frame_exit(__e, compartment);
+            return;
+        }
+        if (__e._message == "$>") {
+            this._s_Running_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message == "stop") {
+            this._s_Running_hdl_user_stop(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Idle_hdl_user_start(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        string label = (string) __e._parameters[0];
+        (label)
+        { LifecycleCompartment __next = __prepareEnter("Running", new List<object>(), new List<object>());
+        __transition(__next); }
+        return;
+    }
+
+    private void _s_Running_hdl_frame_exit(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        self.exited = self.exited + 1
+    }
+
+    private void _s_Running_hdl_frame_enter(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        string label = (string) compartment.enter_args[0];
+        self.entered = self.entered + 1
+        self.tag = label
+    }
+
+    private void _s_Running_hdl_user_stop(LifecycleFrameEvent __e, LifecycleCompartment compartment) {
+        { LifecycleCompartment __next = __prepareEnter("Idle", new List<object>(), new List<object>());
+        __transition(__next); }
+        return;
+    }
+}

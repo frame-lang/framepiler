@@ -1,0 +1,234 @@
+---
+source: framec/tests/cpp_snapshots.rs
+expression: "compile_fixture(\"05_pushpop\", \"cpp\")"
+---
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <any>
+#include <memory>
+#include <functional>
+
+class PushPopFrameEvent {
+public:
+    std::string _message;
+    std::vector<std::any> _parameters;
+
+    PushPopFrameEvent(const std::string& message, std::vector<std::any> params = {})
+        : _message(message), _parameters(std::move(params)) {}
+};
+
+class PushPopFrameContext {
+public:
+    PushPopFrameEvent _event;
+    std::any _return;
+    std::unordered_map<std::string, std::any> _data;
+    bool _transitioned = false;
+
+    PushPopFrameContext(PushPopFrameEvent event, std::any default_return = {})
+        : _event(std::move(event)), _return(std::move(default_return)) {}
+};
+
+class PushPopCompartment {
+public:
+    std::string state;
+    std::vector<std::any> state_args;
+    std::unordered_map<std::string, std::any> state_vars;
+    std::vector<std::any> enter_args;
+    std::vector<std::any> exit_args;
+    std::unique_ptr<PushPopFrameEvent> forward_event;
+    std::shared_ptr<PushPopCompartment> parent_compartment;
+
+    explicit PushPopCompartment(const std::string& state) : state(state) {}
+};
+
+class PushPop {
+private:
+    std::vector<std::shared_ptr<PushPopCompartment>> _state_stack;
+    std::shared_ptr<PushPopCompartment> __compartment;
+    std::shared_ptr<PushPopCompartment> __next_compartment;
+    std::vector<PushPopFrameContext> _context_stack;
+
+    std::shared_ptr<PushPopCompartment> __prepareEnter(const std::string& leaf, std::vector<std::any> state_args, std::vector<std::any> enter_args) {
+        std::shared_ptr<PushPopCompartment> comp = nullptr;
+        auto chain_table = hsm_chain();
+        for (const auto& name : chain_table[leaf]) {
+            auto new_comp = std::make_shared<PushPopCompartment>(name);
+            new_comp->state_args = state_args;
+            new_comp->enter_args = enter_args;
+            new_comp->parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+
+    }
+
+    void __prepareExit(std::vector<std::any> exit_args) {
+        std::shared_ptr<PushPopCompartment> comp = __compartment;
+        while (comp) {
+            comp->exit_args = exit_args;
+            comp = comp->parent_compartment;
+        }
+
+    }
+
+    void __kernel(PushPopFrameEvent& __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment) {
+            auto next_compartment = std::move(__next_compartment);
+            // Exit the current (leaf) state.
+            PushPopFrameEvent __exit_event("<$", __compartment->exit_args);
+            __router(__exit_event);
+            // Switch to the new compartment.
+            __compartment = std::move(next_compartment);
+            // Three-branch forward-event handling.
+            if (!__compartment->forward_event) {
+                // No forwarded event — synthesize a fresh $>.
+                PushPopFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+            } else if (__compartment->forward_event->_message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                auto forward_event = std::move(__compartment->forward_event);
+                __router(*forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                auto forward_event = std::move(__compartment->forward_event);
+                PushPopFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+                __router(*forward_event);
+            }
+            for (auto& ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+
+    }
+
+    void __router(PushPopFrameEvent& __e) {
+        if (__compartment->state == "Idle") {
+            _state_Idle(__e, __compartment);
+        } else if (__compartment->state == "Nested") {
+            _state_Nested(__e, __compartment);
+        }
+
+    }
+
+    void __transition(std::shared_ptr<PushPopCompartment> next) {
+        __next_compartment = next;
+
+    }
+
+    void _state_Idle(PushPopFrameEvent& __e, std::shared_ptr<PushPopCompartment> compartment) {
+        if (__e._message == "nest") {
+            this->_s_Idle_hdl_user_nest(__e, compartment);
+            return;
+        }
+        if (__e._message == "ping") {
+            this->_s_Idle_hdl_user_ping(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _state_Nested(PushPopFrameEvent& __e, std::shared_ptr<PushPopCompartment> compartment) {
+        if (__e._message == "leaf") {
+            this->_s_Nested_hdl_user_leaf(__e, compartment);
+            return;
+        }
+        if (__e._message == "unnest") {
+            this->_s_Nested_hdl_user_unnest(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _s_Idle_hdl_user_nest(PushPopFrameEvent& __e, std::shared_ptr<PushPopCompartment> compartment) {
+        _state_stack.push_back(__compartment);
+        auto __next = __prepareEnter("Nested", std::vector<std::any>{}, std::vector<std::any>{});
+        __transition(std::move(__next));
+        return;
+
+    }
+
+    void _s_Idle_hdl_user_ping(PushPopFrameEvent& __e, std::shared_ptr<PushPopCompartment> compartment) {
+        self.pings = self.pings + 1
+
+    }
+
+    void _s_Nested_hdl_user_leaf(PushPopFrameEvent& __e, std::shared_ptr<PushPopCompartment> compartment) {
+        self.leaves = self.leaves + 1
+
+    }
+
+    void _s_Nested_hdl_user_unnest(PushPopFrameEvent& __e, std::shared_ptr<PushPopCompartment> compartment) {
+        auto __saved = std::move(_state_stack.back()); _state_stack.pop_back();
+        __transition(std::move(__saved));
+        return;
+
+    }
+
+public:
+    i32 pings = 0;
+    i32 leaves = 0;
+
+    PushPop() {
+        __compartment = __prepareEnter("Idle", std::vector<std::any>{}, std::vector<std::any>{});
+    }
+
+    static PushPop __create() {
+        PushPop c;
+        PushPopFrameEvent __e("$>", c.__compartment->enter_args);
+        PushPopFrameContext __ctx(std::move(__e));
+        c._context_stack.push_back(std::move(__ctx));
+        c.__kernel(c._context_stack.back()._event);
+        c._context_stack.pop_back();
+        return c;
+    }
+
+    std::unordered_map<std::string, std::vector<std::string>> hsm_chain() {
+        return {
+            {"Idle", {"Idle"} },
+            {"Nested", {"Nested"} },
+        };
+    }
+
+    void ping() {
+        PushPopFrameEvent __e("ping");
+        PushPopFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    void nest() {
+        PushPopFrameEvent __e("nest");
+        PushPopFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    void unnest() {
+        PushPopFrameEvent __e("unnest");
+        PushPopFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    void leaf() {
+        PushPopFrameEvent __e("leaf");
+        PushPopFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+};

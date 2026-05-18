@@ -22,3 +22,48 @@ fn hsm() {
 fn persist() {
     insta::assert_snapshot!(compile_fixture("03_persist", "gdscript"));
 }
+
+#[test]
+fn state_args() {
+    insta::assert_snapshot!(compile_fixture("04_state_args", "gdscript"));
+}
+
+#[test]
+fn pushpop() {
+    insta::assert_snapshot!(compile_fixture("05_pushpop", "gdscript"));
+}
+
+#[test]
+fn selfcall() {
+    insta::assert_snapshot!(compile_fixture("06_selfcall", "gdscript"));
+}
+
+#[test]
+fn forward() {
+    insta::assert_snapshot!(compile_fixture("07_forward", "gdscript"));
+}
+
+#[test]
+fn lifecycle() {
+    insta::assert_snapshot!(compile_fixture("08_lifecycle", "gdscript"));
+}
+
+#[test]
+fn return_explicit() {
+    insta::assert_snapshot!(compile_fixture("09_return_explicit", "gdscript"));
+}
+
+#[test]
+fn actions() {
+    insta::assert_snapshot!(compile_fixture("10_actions", "gdscript"));
+}
+
+#[test]
+fn consts() {
+    insta::assert_snapshot!(compile_fixture("11_consts", "gdscript"));
+}
+
+#[test]
+fn no_persist() {
+    insta::assert_snapshot!(compile_fixture("12_no_persist", "gdscript"));
+}

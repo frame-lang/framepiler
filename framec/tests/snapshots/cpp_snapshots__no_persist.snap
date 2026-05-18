@@ -1,0 +1,305 @@
+---
+source: framec/tests/cpp_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"cpp\")"
+---
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <any>
+#include <memory>
+#include <functional>
+
+class NoPersistFrameEvent {
+public:
+    std::string _message;
+    std::vector<std::any> _parameters;
+
+    NoPersistFrameEvent(const std::string& message, std::vector<std::any> params = {})
+        : _message(message), _parameters(std::move(params)) {}
+};
+
+class NoPersistFrameContext {
+public:
+    NoPersistFrameEvent _event;
+    std::any _return;
+    std::unordered_map<std::string, std::any> _data;
+    bool _transitioned = false;
+
+    NoPersistFrameContext(NoPersistFrameEvent event, std::any default_return = {})
+        : _event(std::move(event)), _return(std::move(default_return)) {}
+};
+
+class NoPersistCompartment {
+public:
+    std::string state;
+    std::vector<std::any> state_args;
+    std::unordered_map<std::string, std::any> state_vars;
+    std::vector<std::any> enter_args;
+    std::vector<std::any> exit_args;
+    std::unique_ptr<NoPersistFrameEvent> forward_event;
+    std::shared_ptr<NoPersistCompartment> parent_compartment;
+
+    explicit NoPersistCompartment(const std::string& state) : state(state) {}
+};
+
+class NoPersist {
+private:
+    std::vector<std::shared_ptr<NoPersistCompartment>> _state_stack;
+    std::shared_ptr<NoPersistCompartment> __compartment;
+    std::shared_ptr<NoPersistCompartment> __next_compartment;
+    std::vector<NoPersistFrameContext> _context_stack;
+
+    std::shared_ptr<NoPersistCompartment> __prepareEnter(const std::string& leaf, std::vector<std::any> state_args, std::vector<std::any> enter_args) {
+        std::shared_ptr<NoPersistCompartment> comp = nullptr;
+        auto chain_table = hsm_chain();
+        for (const auto& name : chain_table[leaf]) {
+            auto new_comp = std::make_shared<NoPersistCompartment>(name);
+            new_comp->state_args = state_args;
+            new_comp->enter_args = enter_args;
+            new_comp->parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+
+    }
+
+    void __prepareExit(std::vector<std::any> exit_args) {
+        std::shared_ptr<NoPersistCompartment> comp = __compartment;
+        while (comp) {
+            comp->exit_args = exit_args;
+            comp = comp->parent_compartment;
+        }
+
+    }
+
+    void __kernel(NoPersistFrameEvent& __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment) {
+            auto next_compartment = std::move(__next_compartment);
+            // Exit the current (leaf) state.
+            NoPersistFrameEvent __exit_event("<$", __compartment->exit_args);
+            __router(__exit_event);
+            // Switch to the new compartment.
+            __compartment = std::move(next_compartment);
+            // Three-branch forward-event handling.
+            if (!__compartment->forward_event) {
+                // No forwarded event — synthesize a fresh $>.
+                NoPersistFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+            } else if (__compartment->forward_event->_message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                auto forward_event = std::move(__compartment->forward_event);
+                __router(*forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                auto forward_event = std::move(__compartment->forward_event);
+                NoPersistFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+                __router(*forward_event);
+            }
+            for (auto& ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+
+    }
+
+    void __router(NoPersistFrameEvent& __e) {
+        if (__compartment->state == "Active") {
+            _state_Active(__e, __compartment);
+        }
+
+    }
+
+    void __transition(std::shared_ptr<NoPersistCompartment> next) {
+        __next_compartment = next;
+
+    }
+
+    void _state_Active(NoPersistFrameEvent& __e, std::shared_ptr<NoPersistCompartment> compartment) {
+        if (__e._message == "bump") {
+            this->_s_Active_hdl_user_bump(__e, compartment);
+            return;
+        }
+        if (__e._message == "get_cache") {
+            this->_s_Active_hdl_user_get_cache(__e, compartment);
+            return;
+        }
+        if (__e._message == "get_count") {
+            this->_s_Active_hdl_user_get_count(__e, compartment);
+            return;
+        }
+        if (__e._message == "set_cache") {
+            this->_s_Active_hdl_user_set_cache(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _s_Active_hdl_user_bump(NoPersistFrameEvent& __e, std::shared_ptr<NoPersistCompartment> compartment) {
+        self.count = self.count + 1
+
+    }
+
+    void _s_Active_hdl_user_get_cache(NoPersistFrameEvent& __e, std::shared_ptr<NoPersistCompartment> compartment) {
+        _context_stack.back()._return = std::any(self.cache);
+
+    }
+
+    void _s_Active_hdl_user_get_count(NoPersistFrameEvent& __e, std::shared_ptr<NoPersistCompartment> compartment) {
+        _context_stack.back()._return = std::any(self.count);
+
+    }
+
+    void _s_Active_hdl_user_set_cache(NoPersistFrameEvent& __e, std::shared_ptr<NoPersistCompartment> compartment) {
+        auto v = std::any_cast<int>(__e._parameters[0]);
+        self.cache = v
+
+    }
+
+public:
+    i32 count = 0;
+    i32 cache = -1;
+
+    NoPersist() {
+        __compartment = __prepareEnter("Active", std::vector<std::any>{}, std::vector<std::any>{});
+    }
+
+    static NoPersist __create() {
+        NoPersist c;
+        NoPersistFrameEvent __e("$>", c.__compartment->enter_args);
+        NoPersistFrameContext __ctx(std::move(__e));
+        c._context_stack.push_back(std::move(__ctx));
+        c.__kernel(c._context_stack.back()._event);
+        c._context_stack.pop_back();
+        return c;
+    }
+
+    std::unordered_map<std::string, std::vector<std::string>> hsm_chain() {
+        return {
+            {"Active", {"Active"} },
+        };
+    }
+
+    void bump() {
+        NoPersistFrameEvent __e("bump");
+        NoPersistFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    void set_cache(int v) {
+        NoPersistFrameEvent __e("set_cache", std::vector<std::any>{v});
+        NoPersistFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    int get_count() {
+        NoPersistFrameEvent __e("get_count");
+        NoPersistFrameContext __ctx(std::move(__e), std::any(int()));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        auto __result = std::any_cast<int>(std::move(_context_stack.back()._return));
+        _context_stack.pop_back();
+        return __result;
+
+    }
+
+    int get_cache() {
+        NoPersistFrameEvent __e("get_cache");
+        NoPersistFrameContext __ctx(std::move(__e), std::any(int()));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        auto __result = std::any_cast<int>(std::move(_context_stack.back()._return));
+        _context_stack.pop_back();
+        return __result;
+
+    }
+
+    std::string snapshot() {
+        if (!_context_stack.empty()) throw std::runtime_error("E700: system not quiescent");
+        std::function<nlohmann::json(const NoPersistCompartment*)> __ser = [&](const NoPersistCompartment* c) -> nlohmann::json {
+            if (!c) return nullptr;
+            nlohmann::json __cj;
+            __cj["state"] = c->state;
+            nlohmann::json __sv;
+            for (auto& [k, v] : c->state_vars) {
+            }
+            __cj["state_vars"] = __sv;
+            nlohmann::json __sa = nlohmann::json::array();
+            {
+            {
+                for (const auto& v : c->state_args) { try { __sa.push_back(std::any_cast<int>(v)); } catch(...) { try { __sa.push_back(std::any_cast<double>(v)); } catch(...) { __sa.push_back(nullptr); } } }
+            }
+            }
+            __cj["state_args"] = __sa;
+            nlohmann::json __ea = nlohmann::json::array();
+            {
+            {
+                for (const auto& v : c->enter_args) { try { __ea.push_back(std::any_cast<int>(v)); } catch(...) { try { __ea.push_back(std::any_cast<double>(v)); } catch(...) { __ea.push_back(nullptr); } } }
+            }
+            }
+            __cj["enter_args"] = __ea;
+            __cj["parent"] = __ser(c->parent_compartment.get());
+            return __cj;
+        };
+        nlohmann::json __j;
+        __j["_compartment"] = __ser(__compartment.get());
+        nlohmann::json __stack = nlohmann::json::array();
+        for (auto& c : _state_stack) { __stack.push_back(__ser(c.get())); }
+        __j["_state_stack"] = __stack;
+        __j["count"] = count;
+        return __j.dump();
+
+    }
+
+    void restore(const std::string& json) {
+        std::function<std::unique_ptr<NoPersistCompartment>(const nlohmann::json&)> __deser = [&](const nlohmann::json& d) -> std::unique_ptr<NoPersistCompartment> {
+            if (d.is_null()) return nullptr;
+            auto c = std::make_unique<NoPersistCompartment>(std::string(d["state"]));
+            if (d.contains("state_vars")) {
+                auto& sv = d["state_vars"];
+            }
+            if (d.contains("state_args") && d["state_args"].is_array()) {
+                const auto& __sa = d["state_args"];
+                {
+                    for (const auto& v : __sa) {
+                        if (v.is_number_integer()) c->state_args.push_back(std::any(v.get<int>()));
+                        else if (v.is_number_float()) c->state_args.push_back(std::any(v.get<double>()));
+                    }
+                }
+            }
+            if (d.contains("enter_args") && d["enter_args"].is_array()) {
+                const auto& __ea = d["enter_args"];
+                {
+                    for (const auto& v : __ea) {
+                        if (v.is_number_integer()) c->enter_args.push_back(std::any(v.get<int>()));
+                        else if (v.is_number_float()) c->enter_args.push_back(std::any(v.get<double>()));
+                    }
+                }
+            }
+            if (d.contains("parent") && !d["parent"].is_null()) {
+                c->parent_compartment = __deser(d["parent"]);
+            }
+            return c;
+        };
+        auto __j = nlohmann::json::parse(json);
+        (*this).__compartment = __deser(__j["_compartment"]);
+        if (__j.contains("_state_stack")) {
+            for (auto& __sc : __j["_state_stack"]) {
+                (*this)._state_stack.push_back(__deser(__sc));
+            }
+        }
+        if (__j.contains("count")) { __j["count"].get_to((*this).count); }
+
+    }
+};

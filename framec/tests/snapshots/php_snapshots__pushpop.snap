@@ -1,0 +1,232 @@
+---
+source: framec/tests/php_snapshots.rs
+expression: "compile_fixture(\"05_pushpop\", \"php\")"
+---
+<?php
+
+class PushPopFrameEvent {
+    public $_message;
+    public $_parameters;
+
+    public function __construct($message, $parameters = null) {
+        $this->_message = $message;
+        $this->_parameters = $parameters ?? [];
+    }
+}
+
+
+class PushPopFrameContext {
+    public $_event;
+    public $_return;
+    public $_data;
+    public $_transitioned;
+
+    public function __construct($event, $defaultReturn = null) {
+        $this->_event = $event;
+        $this->_return = $defaultReturn;
+        $this->_data = [];
+        $this->_transitioned = false;
+    }
+}
+
+
+class PushPopCompartment {
+    public $state;
+    public $state_args;
+    public $state_vars;
+    public $enter_args;
+    public $exit_args;
+    public $forward_event;
+    public $parent_compartment;
+
+    public function __construct($state, $parent_compartment = null) {
+        $this->state = $state;
+        $this->state_args = [];
+        $this->state_vars = [];
+        $this->enter_args = [];
+        $this->exit_args = [];
+        $this->forward_event = null;
+        $this->parent_compartment = $parent_compartment;
+    }
+
+    public function copy() {
+        $c = new PushPopCompartment($this->state, $this->parent_compartment);
+        $c->state_args = $this->state_args;
+        $c->state_vars = $this->state_vars;
+        $c->enter_args = $this->enter_args;
+        $c->exit_args = $this->exit_args;
+        $c->forward_event = $this->forward_event;
+        return $c;
+    }
+}
+
+
+class PushPop {
+    private $_state_stack;
+    private $__compartment;
+    private $__next_compartment;
+    private $_context_stack;
+    public $pings = 0;
+    public $leaves = 0;
+
+    public function __construct() {
+        $this->_state_stack = [];
+        $this->_context_stack = [];
+        $this->__compartment = $this->__prepareEnter("Idle", [], []);
+        $this->__next_compartment = null;
+    }
+
+    public function _frame_init(): void {
+        $__e = new PushPopFrameEvent("$>", $this->__compartment->enter_args);
+        $__ctx = new PushPopFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        array_pop($this->_context_stack);
+    }
+
+    public static function _create(): self {
+        $c = new self();
+        $c->_frame_init();
+        return $c;
+    }
+
+    public function hsm_chain() {
+        return [
+            "Idle" => ["Idle"],
+            "Nested" => ["Nested"],
+        ];
+    }
+    private function __prepareEnter($leaf, $state_args, $enter_args) {
+        $comp = null;
+        foreach ($this->hsm_chain()[$leaf] as $name) {
+            $new_comp = new PushPopCompartment($name);
+            $new_comp->state_args = $state_args;
+            $new_comp->enter_args = $enter_args;
+            $new_comp->parent_compartment = $comp;
+            $comp = $new_comp;
+        }
+        return $comp;
+    }
+
+    private function __prepareExit($exit_args) {
+        $comp = $this->__compartment;
+        while ($comp !== null) {
+            $comp->exit_args = $exit_args;
+            $comp = $comp->parent_compartment;
+        }
+    }
+
+    private function __kernel($__e) {
+        // Route event to current state.
+        $this->__router($__e);
+        // Drain any transitions queued by the handler.
+        while ($this->__next_compartment !== null) {
+            $next_compartment = $this->__next_compartment;
+            $this->__next_compartment = null;
+            $exit_event = new PushPopFrameEvent("<$", $this->__compartment->exit_args);
+            $this->__router($exit_event);
+            $this->__compartment = $next_compartment;
+            $forward_event = $next_compartment->forward_event;
+            $next_compartment->forward_event = null;
+            if ($forward_event === null) {
+                $enter_event = new PushPopFrameEvent("$>", $this->__compartment->enter_args);
+                $this->__router($enter_event);
+            } else if ($forward_event->_message === "$>") {
+                $this->__router($forward_event);
+            } else {
+                $enter_event = new PushPopFrameEvent("$>", $this->__compartment->enter_args);
+                $this->__router($enter_event);
+                $this->__router($forward_event);
+            }
+            foreach ($this->_context_stack as $ctx) {
+                $ctx->_transitioned = true;
+            }
+        }
+    }
+
+    private function __router($__e) {
+        $handler_name = "_state_" . $this->__compartment->state;
+        if (method_exists($this, $handler_name)) {
+            $this->$handler_name($__e, $this->__compartment);
+        }
+    }
+
+    private function __transition($next_compartment) {
+        $this->__next_compartment = $next_compartment;
+    }
+
+    public function ping() {
+        $__e = new PushPopFrameEvent("ping", []);
+        $__ctx = new PushPopFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function nest() {
+        $__e = new PushPopFrameEvent("nest", []);
+        $__ctx = new PushPopFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function unnest() {
+        $__e = new PushPopFrameEvent("unnest", []);
+        $__ctx = new PushPopFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function leaf() {
+        $__e = new PushPopFrameEvent("leaf", []);
+        $__ctx = new PushPopFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    private function _state_Idle($__e, $compartment) {
+        if ($__e->_message == "nest") {
+            $this->_s_Idle_hdl_user_nest($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "ping") {
+            $this->_s_Idle_hdl_user_ping($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _state_Nested($__e, $compartment) {
+        if ($__e->_message == "leaf") {
+            $this->_s_Nested_hdl_user_leaf($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "unnest") {
+            $this->_s_Nested_hdl_user_unnest($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _s_Idle_hdl_user_nest($__e, $compartment) {
+        $this->_state_stack[] = $this->__compartment;
+        $__compartment = $this->__prepareEnter("Nested", [], []);
+        $this->__transition($__compartment);
+        return;
+    }
+
+    private function _s_Idle_hdl_user_ping($__e, $compartment) {
+        self.pings = self.pings + 1
+    }
+
+    private function _s_Nested_hdl_user_leaf($__e, $compartment) {
+        self.leaves = self.leaves + 1
+    }
+
+    private function _s_Nested_hdl_user_unnest($__e, $compartment) {
+        $__saved = array_pop($this->_state_stack);
+        $this->__transition($__saved);
+        return;
+    }
+}

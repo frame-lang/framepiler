@@ -1,0 +1,228 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"04_state_args\", \"go\")"
+---
+type StateArgsFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type StateArgsFrameContext struct {
+    _event  StateArgsFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type StateArgsCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *StateArgsFrameEvent
+    parentCompartment *StateArgsCompartment
+}
+
+func newStateArgsCompartment(state string) *StateArgsCompartment {
+    return &StateArgsCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *StateArgsCompartment) copy() *StateArgsCompartment {
+    nc := &StateArgsCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type StateArgs struct {
+    _state_stack []*StateArgsCompartment
+    __compartment *StateArgsCompartment
+    __next_compartment *StateArgsCompartment
+    _context_stack []StateArgsFrameContext
+}
+
+func NewStateArgs() *StateArgs {
+    s := &StateArgs{}
+    s._state_stack = make([]*StateArgsCompartment, 0)
+    s._context_stack = make([]StateArgsFrameContext, 0)
+    s.__compartment = s.__prepareEnter("Idle", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateStateArgs() *StateArgs {
+    c := NewStateArgs()
+    __e := StateArgsFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := StateArgsFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *StateArgs) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Idle": {"Idle"},
+        "Holding": {"Holding"},
+    }
+}
+func (s *StateArgs) __prepareEnter(leaf string, state_args []any, enter_args []any) *StateArgsCompartment {
+    var comp *StateArgsCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newStateArgsCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *StateArgs) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *StateArgs) __kernel(__e *StateArgsFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &StateArgsFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &StateArgsFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &StateArgsFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *StateArgs) __router(__e *StateArgsFrameEvent) {
+    switch s.__compartment.state {
+    case "Idle":
+        s._state_Idle(__e, s.__compartment)
+    case "Holding":
+        s._state_Holding(__e, s.__compartment)
+    }
+}
+
+func (s *StateArgs) __transition(next *StateArgsCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *StateArgs) Load(initial int) {
+    __e := StateArgsFrameEvent{_message: "load", _parameters: []any{initial}}
+    __ctx := StateArgsFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *StateArgs) Adjust(delta int) {
+    __e := StateArgsFrameEvent{_message: "adjust", _parameters: []any{delta}}
+    __ctx := StateArgsFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *StateArgs) Peek() int {
+    __e := StateArgsFrameEvent{_message: "peek", _parameters: []any{}}
+    __ctx := StateArgsFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    var __result int
+    if __rv := s._context_stack[len(s._context_stack)-1]._return; __rv != nil { __result = __rv.(int) }
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+    return __result
+}
+
+func (s *StateArgs) _state_Idle(__e *StateArgsFrameEvent, compartment *StateArgsCompartment) {
+    if __e._message == "load" {
+        s._s_Idle_hdl_user_load(__e, compartment)
+        return
+    }
+}
+
+func (s *StateArgs) _state_Holding(__e *StateArgsFrameEvent, compartment *StateArgsCompartment) {
+    value := s.__compartment.stateArgs[0].(int)
+    _ = value
+    if __e._message == "adjust" {
+        s._s_Holding_hdl_user_adjust(__e, compartment)
+        return
+    }
+    if __e._message == "peek" {
+        s._s_Holding_hdl_user_peek(__e, compartment)
+        return
+    }
+}
+
+func (s *StateArgs) _s_Idle_hdl_user_load(__e *StateArgsFrameEvent, compartment *StateArgsCompartment) {
+    initial := __e._parameters[0].(int)
+    _ = initial
+    {
+    __compartment := s.__prepareEnter("Holding", []any{initial}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}
+
+func (s *StateArgs) _s_Holding_hdl_user_adjust(__e *StateArgsFrameEvent, compartment *StateArgsCompartment) {
+    value := compartment.stateArgs[0].(int)
+    _ = value
+    delta := __e._parameters[0].(int)
+    _ = delta
+    {
+    __compartment := s.__prepareEnter("Holding", []any{value + delta}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}
+
+func (s *StateArgs) _s_Holding_hdl_user_peek(__e *StateArgsFrameEvent, compartment *StateArgsCompartment) {
+    value := compartment.stateArgs[0].(int)
+    _ = value
+    {
+    s._context_stack[len(s._context_stack)-1]._return = value
+    }
+}

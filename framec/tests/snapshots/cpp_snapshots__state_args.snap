@@ -1,0 +1,219 @@
+---
+source: framec/tests/cpp_snapshots.rs
+expression: "compile_fixture(\"04_state_args\", \"cpp\")"
+---
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <any>
+#include <memory>
+#include <functional>
+
+class StateArgsFrameEvent {
+public:
+    std::string _message;
+    std::vector<std::any> _parameters;
+
+    StateArgsFrameEvent(const std::string& message, std::vector<std::any> params = {})
+        : _message(message), _parameters(std::move(params)) {}
+};
+
+class StateArgsFrameContext {
+public:
+    StateArgsFrameEvent _event;
+    std::any _return;
+    std::unordered_map<std::string, std::any> _data;
+    bool _transitioned = false;
+
+    StateArgsFrameContext(StateArgsFrameEvent event, std::any default_return = {})
+        : _event(std::move(event)), _return(std::move(default_return)) {}
+};
+
+class StateArgsCompartment {
+public:
+    std::string state;
+    std::vector<std::any> state_args;
+    std::unordered_map<std::string, std::any> state_vars;
+    std::vector<std::any> enter_args;
+    std::vector<std::any> exit_args;
+    std::unique_ptr<StateArgsFrameEvent> forward_event;
+    std::shared_ptr<StateArgsCompartment> parent_compartment;
+
+    explicit StateArgsCompartment(const std::string& state) : state(state) {}
+};
+
+class StateArgs {
+private:
+    std::vector<std::shared_ptr<StateArgsCompartment>> _state_stack;
+    std::shared_ptr<StateArgsCompartment> __compartment;
+    std::shared_ptr<StateArgsCompartment> __next_compartment;
+    std::vector<StateArgsFrameContext> _context_stack;
+
+    std::shared_ptr<StateArgsCompartment> __prepareEnter(const std::string& leaf, std::vector<std::any> state_args, std::vector<std::any> enter_args) {
+        std::shared_ptr<StateArgsCompartment> comp = nullptr;
+        auto chain_table = hsm_chain();
+        for (const auto& name : chain_table[leaf]) {
+            auto new_comp = std::make_shared<StateArgsCompartment>(name);
+            new_comp->state_args = state_args;
+            new_comp->enter_args = enter_args;
+            new_comp->parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+
+    }
+
+    void __prepareExit(std::vector<std::any> exit_args) {
+        std::shared_ptr<StateArgsCompartment> comp = __compartment;
+        while (comp) {
+            comp->exit_args = exit_args;
+            comp = comp->parent_compartment;
+        }
+
+    }
+
+    void __kernel(StateArgsFrameEvent& __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment) {
+            auto next_compartment = std::move(__next_compartment);
+            // Exit the current (leaf) state.
+            StateArgsFrameEvent __exit_event("<$", __compartment->exit_args);
+            __router(__exit_event);
+            // Switch to the new compartment.
+            __compartment = std::move(next_compartment);
+            // Three-branch forward-event handling.
+            if (!__compartment->forward_event) {
+                // No forwarded event — synthesize a fresh $>.
+                StateArgsFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+            } else if (__compartment->forward_event->_message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                auto forward_event = std::move(__compartment->forward_event);
+                __router(*forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                auto forward_event = std::move(__compartment->forward_event);
+                StateArgsFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+                __router(*forward_event);
+            }
+            for (auto& ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+
+    }
+
+    void __router(StateArgsFrameEvent& __e) {
+        if (__compartment->state == "Idle") {
+            _state_Idle(__e, __compartment);
+        } else if (__compartment->state == "Holding") {
+            _state_Holding(__e, __compartment);
+        }
+
+    }
+
+    void __transition(std::shared_ptr<StateArgsCompartment> next) {
+        __next_compartment = next;
+
+    }
+
+    void _state_Idle(StateArgsFrameEvent& __e, std::shared_ptr<StateArgsCompartment> compartment) {
+        if (__e._message == "load") {
+            this->_s_Idle_hdl_user_load(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _state_Holding(StateArgsFrameEvent& __e, std::shared_ptr<StateArgsCompartment> compartment) {
+        int value = std::any_cast<int>(__compartment->state_args[0]);
+        if (__e._message == "adjust") {
+            this->_s_Holding_hdl_user_adjust(__e, compartment);
+            return;
+        }
+        if (__e._message == "peek") {
+            this->_s_Holding_hdl_user_peek(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _s_Idle_hdl_user_load(StateArgsFrameEvent& __e, std::shared_ptr<StateArgsCompartment> compartment) {
+        auto initial = std::any_cast<int>(__e._parameters[0]);
+        auto __next = __prepareEnter("Holding", std::vector<std::any>{std::any(initial)}, std::vector<std::any>{});
+        __transition(std::move(__next));
+        return;
+
+    }
+
+    void _s_Holding_hdl_user_adjust(StateArgsFrameEvent& __e, std::shared_ptr<StateArgsCompartment> compartment) {
+        int value = std::any_cast<int>(compartment->state_args[0]);
+        auto delta = std::any_cast<int>(__e._parameters[0]);
+        auto __next = __prepareEnter("Holding", std::vector<std::any>{std::any(value + delta)}, std::vector<std::any>{});
+        __transition(std::move(__next));
+        return;
+
+    }
+
+    void _s_Holding_hdl_user_peek(StateArgsFrameEvent& __e, std::shared_ptr<StateArgsCompartment> compartment) {
+        int value = std::any_cast<int>(compartment->state_args[0]);
+        _context_stack.back()._return = std::any(value);
+
+    }
+
+public:
+    StateArgs() {
+        __compartment = __prepareEnter("Idle", std::vector<std::any>{}, std::vector<std::any>{});
+    }
+
+    static StateArgs __create() {
+        StateArgs c;
+        StateArgsFrameEvent __e("$>", c.__compartment->enter_args);
+        StateArgsFrameContext __ctx(std::move(__e));
+        c._context_stack.push_back(std::move(__ctx));
+        c.__kernel(c._context_stack.back()._event);
+        c._context_stack.pop_back();
+        return c;
+    }
+
+    std::unordered_map<std::string, std::vector<std::string>> hsm_chain() {
+        return {
+            {"Idle", {"Idle"} },
+            {"Holding", {"Holding"} },
+        };
+    }
+
+    void load(int initial) {
+        StateArgsFrameEvent __e("load", std::vector<std::any>{initial});
+        StateArgsFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    void adjust(int delta) {
+        StateArgsFrameEvent __e("adjust", std::vector<std::any>{delta});
+        StateArgsFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    int peek() {
+        StateArgsFrameEvent __e("peek");
+        StateArgsFrameContext __ctx(std::move(__e), std::any(int()));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        auto __result = std::any_cast<int>(std::move(_context_stack.back()._return));
+        _context_stack.pop_back();
+        return __result;
+
+    }
+};

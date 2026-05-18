@@ -1,0 +1,193 @@
+---
+source: framec/tests/cpp_snapshots.rs
+expression: "compile_fixture(\"10_actions\", \"cpp\")"
+---
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <any>
+#include <memory>
+#include <functional>
+
+class ActionsFrameEvent {
+public:
+    std::string _message;
+    std::vector<std::any> _parameters;
+
+    ActionsFrameEvent(const std::string& message, std::vector<std::any> params = {})
+        : _message(message), _parameters(std::move(params)) {}
+};
+
+class ActionsFrameContext {
+public:
+    ActionsFrameEvent _event;
+    std::any _return;
+    std::unordered_map<std::string, std::any> _data;
+    bool _transitioned = false;
+
+    ActionsFrameContext(ActionsFrameEvent event, std::any default_return = {})
+        : _event(std::move(event)), _return(std::move(default_return)) {}
+};
+
+class ActionsCompartment {
+public:
+    std::string state;
+    std::vector<std::any> state_args;
+    std::unordered_map<std::string, std::any> state_vars;
+    std::vector<std::any> enter_args;
+    std::vector<std::any> exit_args;
+    std::unique_ptr<ActionsFrameEvent> forward_event;
+    std::shared_ptr<ActionsCompartment> parent_compartment;
+
+    explicit ActionsCompartment(const std::string& state) : state(state) {}
+};
+
+class Actions {
+private:
+    std::vector<std::shared_ptr<ActionsCompartment>> _state_stack;
+    std::shared_ptr<ActionsCompartment> __compartment;
+    std::shared_ptr<ActionsCompartment> __next_compartment;
+    std::vector<ActionsFrameContext> _context_stack;
+
+    std::shared_ptr<ActionsCompartment> __prepareEnter(const std::string& leaf, std::vector<std::any> state_args, std::vector<std::any> enter_args) {
+        std::shared_ptr<ActionsCompartment> comp = nullptr;
+        auto chain_table = hsm_chain();
+        for (const auto& name : chain_table[leaf]) {
+            auto new_comp = std::make_shared<ActionsCompartment>(name);
+            new_comp->state_args = state_args;
+            new_comp->enter_args = enter_args;
+            new_comp->parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+
+    }
+
+    void __prepareExit(std::vector<std::any> exit_args) {
+        std::shared_ptr<ActionsCompartment> comp = __compartment;
+        while (comp) {
+            comp->exit_args = exit_args;
+            comp = comp->parent_compartment;
+        }
+
+    }
+
+    void __kernel(ActionsFrameEvent& __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment) {
+            auto next_compartment = std::move(__next_compartment);
+            // Exit the current (leaf) state.
+            ActionsFrameEvent __exit_event("<$", __compartment->exit_args);
+            __router(__exit_event);
+            // Switch to the new compartment.
+            __compartment = std::move(next_compartment);
+            // Three-branch forward-event handling.
+            if (!__compartment->forward_event) {
+                // No forwarded event — synthesize a fresh $>.
+                ActionsFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+            } else if (__compartment->forward_event->_message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                auto forward_event = std::move(__compartment->forward_event);
+                __router(*forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                auto forward_event = std::move(__compartment->forward_event);
+                ActionsFrameEvent __enter_event("$>", __compartment->enter_args);
+                __router(__enter_event);
+                __router(*forward_event);
+            }
+            for (auto& ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+
+    }
+
+    void __router(ActionsFrameEvent& __e) {
+        if (__compartment->state == "Counting") {
+            _state_Counting(__e, __compartment);
+        }
+
+    }
+
+    void __transition(std::shared_ptr<ActionsCompartment> next) {
+        __next_compartment = next;
+
+    }
+
+    void _state_Counting(ActionsFrameEvent& __e, std::shared_ptr<ActionsCompartment> compartment) {
+        if (__e._message == "get_total") {
+            this->_s_Counting_hdl_user_get_total(__e, compartment);
+            return;
+        }
+        if (__e._message == "increment") {
+            this->_s_Counting_hdl_user_increment(__e, compartment);
+            return;
+        }
+
+    }
+
+    void _s_Counting_hdl_user_get_total(ActionsFrameEvent& __e, std::shared_ptr<ActionsCompartment> compartment) {
+        _context_stack.back()._return = std::any(self.total);
+
+    }
+
+    void _s_Counting_hdl_user_increment(ActionsFrameEvent& __e, std::shared_ptr<ActionsCompartment> compartment) {
+        auto n = std::any_cast<int>(__e._parameters[0]);
+        _scale(n)
+
+    }
+
+    void _scale(int n) {
+                    self.total = self.total + n * 2
+
+    }
+
+public:
+    i32 total = 0;
+
+    Actions() {
+        __compartment = __prepareEnter("Counting", std::vector<std::any>{}, std::vector<std::any>{});
+    }
+
+    static Actions __create() {
+        Actions c;
+        ActionsFrameEvent __e("$>", c.__compartment->enter_args);
+        ActionsFrameContext __ctx(std::move(__e));
+        c._context_stack.push_back(std::move(__ctx));
+        c.__kernel(c._context_stack.back()._event);
+        c._context_stack.pop_back();
+        return c;
+    }
+
+    std::unordered_map<std::string, std::vector<std::string>> hsm_chain() {
+        return {
+            {"Counting", {"Counting"} },
+        };
+    }
+
+    void increment(int n) {
+        ActionsFrameEvent __e("increment", std::vector<std::any>{n});
+        ActionsFrameContext __ctx(std::move(__e));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        _context_stack.pop_back();
+
+    }
+
+    int get_total() {
+        ActionsFrameEvent __e("get_total");
+        ActionsFrameContext __ctx(std::move(__e), std::any(int()));
+        _context_stack.push_back(std::move(__ctx));
+        __kernel(_context_stack.back()._event);
+        auto __result = std::any_cast<int>(std::move(_context_stack.back()._return));
+        _context_stack.pop_back();
+        return __result;
+
+    }
+};

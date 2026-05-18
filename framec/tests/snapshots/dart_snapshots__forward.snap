@@ -1,0 +1,234 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"07_forward\", \"dart\")"
+---
+class ForwardFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    ForwardFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class ForwardFrameContext {
+    late ForwardFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    ForwardFrameContext(ForwardFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class ForwardCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    ForwardCompartment? parent_compartment;
+
+    ForwardCompartment(String state, [ForwardCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    ForwardCompartment copy() {
+        final c = ForwardCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class Forward {
+    late List<ForwardCompartment> _state_stack;
+    late ForwardCompartment __compartment;
+    ForwardCompartment? __next_compartment;
+    late List<ForwardFrameContext> _context_stack;
+    i32 starts = 0;
+    i32 middles = 0;
+
+    Forward() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Start", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init() {
+        final __e = ForwardFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = ForwardFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static Forward _create() {
+        final c = Forward();
+        c._frame_init();
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Start": ["Start"],
+            "Middle": ["Middle"],
+            "End": ["End"],
+        };
+    }
+    ForwardCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        ForwardCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = ForwardCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        ForwardCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(ForwardFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = ForwardFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = ForwardFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = ForwardFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(ForwardFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Start":
+                _state_Start(__e, __compartment);
+                break;
+            case "Middle":
+                _state_Middle(__e, __compartment);
+                break;
+            case "End":
+                _state_End(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(ForwardCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void run() {
+        final __e = ForwardFrameEvent("run", []);
+        final __ctx = ForwardFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void finish() {
+        final __e = ForwardFrameEvent("finish", []);
+        final __ctx = ForwardFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void _state_Start(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        if (__e._message == "run") {
+            this._s_Start_hdl_user_run(__e, compartment);
+            return;
+        }
+    }
+
+    void _state_Middle(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        if (__e._message == "finish") {
+            this._s_Middle_hdl_user_finish(__e, compartment);
+            return;
+        }
+        if (__e._message == "run") {
+            this._s_Middle_hdl_user_run(__e, compartment);
+            return;
+        }
+    }
+
+    void _state_End(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        if (__e._message == "finish") {
+            this._s_End_hdl_user_finish(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Start_hdl_user_run(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        self.starts = self.starts + 1
+        final __compartment = this.__prepareEnter("Middle", [], []);
+        __compartment.forward_event = __e;
+        this.__transition(__compartment);
+        return;
+    }
+
+    void _s_Middle_hdl_user_finish(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        final __compartment = this.__prepareEnter("End", [], []);
+        this.__transition(__compartment);
+        return;
+    }
+
+    void _s_Middle_hdl_user_run(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        self.middles = self.middles + 1
+    }
+
+    void _s_End_hdl_user_finish(ForwardFrameEvent __e, ForwardCompartment compartment) {
+
+    }
+}

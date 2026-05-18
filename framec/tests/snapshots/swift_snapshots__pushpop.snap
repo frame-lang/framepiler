@@ -1,0 +1,230 @@
+---
+source: framec/tests/swift_snapshots.rs
+expression: "compile_fixture(\"05_pushpop\", \"swift\")"
+---
+import Foundation
+
+class PushPopFrameEvent {
+    var _message: String
+    var _parameters: [Any]
+
+    init(message: String, parameters: [Any] = []) {
+        self._message = message
+        self._parameters = parameters
+    }
+}
+
+class PushPopFrameContext {
+    var _event: PushPopFrameEvent
+    var _return: Any?
+    var _data: [String: Any] = [:]
+    var _transitioned: Bool = false
+
+    init(event: PushPopFrameEvent, defaultReturn: Any? = nil) {
+        self._event = event
+        self._return = defaultReturn
+    }
+}
+
+class PushPopCompartment {
+    var state: String
+    var state_args: [Any] = []
+    var state_vars: [String: Any] = [:]
+    var enter_args: [Any] = []
+    var exit_args: [Any] = []
+    var forward_event: PushPopFrameEvent?
+    var parent_compartment: PushPopCompartment?
+
+    init(state: String) {
+        self.state = state
+    }
+
+    func copy() -> PushPopCompartment {
+        let c = PushPopCompartment(state: self.state)
+        c.state_args = self.state_args
+        c.state_vars = self.state_vars
+        c.enter_args = self.enter_args
+        c.exit_args = self.exit_args
+        c.forward_event = self.forward_event
+        c.parent_compartment = self.parent_compartment
+        return c
+    }
+}
+
+public class PushPop {
+    private var _state_stack: [PushPopCompartment] = []
+    private var __compartment: PushPopCompartment
+    private var __next_compartment: PushPopCompartment? = nil
+    private var _context_stack: [PushPopFrameContext] = []
+    public var pings: Int = 0
+    public var leaves: Int = 0
+
+    init() {
+        _state_stack = []
+        _context_stack = []
+        self.__compartment = PushPop.__prepareEnter("Idle", [], [])
+        self.__next_compartment = nil
+    }
+
+    func __frame_init() {
+        let __e = PushPopFrameEvent(message: "$>", parameters: __compartment.enter_args)
+        let __ctx = PushPopFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(__e)
+        _context_stack.removeLast()
+    }
+
+    static func __create() -> PushPop {
+        let c = PushPop()
+        c.__frame_init()
+        return c
+    }
+
+    private static func hsm_chain() -> [String: [String]] {
+        return [
+            "Idle": ["Idle"],
+            "Nested": ["Nested"],
+        ]
+    }
+    private static func __prepareEnter(_ leaf: String, _ state_args: [Any], _ enter_args: [Any]) -> PushPopCompartment {
+        var comp: PushPopCompartment? = nil
+        for name in PushPop.hsm_chain()[leaf]! {
+            let new_comp = PushPopCompartment(state: name)
+            new_comp.state_args = state_args
+            new_comp.enter_args = enter_args
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!
+    }
+    private func __prepareExit(_ exit_args: [Any]) {
+        var comp: PushPopCompartment? = __compartment
+        while comp != nil {
+            comp!.exit_args = exit_args
+            comp = comp!.parent_compartment
+        }
+    }
+
+    private func __kernel(_ __e: PushPopFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while __next_compartment != nil {
+            let next_compartment: PushPopCompartment = __next_compartment!
+            __next_compartment = nil
+            // Exit the current (leaf) state.
+            let exit_event = PushPopFrameEvent(message: "<$", parameters: __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            let forward_event: PushPopFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = nil
+            if forward_event == nil {
+                // No forwarded event — synthesize a fresh $>.
+                let enter_event = PushPopFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+            } else if forward_event!._message == "$>" {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event!)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                let enter_event = PushPopFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event!)
+            }
+            for ctx in _context_stack {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private func __router(_ __e: PushPopFrameEvent) {
+        if __compartment.state == "Idle" {
+            _state_Idle(__e, __compartment)
+        } else if __compartment.state == "Nested" {
+            _state_Nested(__e, __compartment)
+        }
+    }
+
+    private func __transition(_ next: PushPopCompartment) {
+        __next_compartment = next
+    }
+
+    public func ping() {
+        let __e = PushPopFrameEvent(message: "ping", parameters: [])
+        let __ctx = PushPopFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    public func nest() {
+        let __e = PushPopFrameEvent(message: "nest", parameters: [])
+        let __ctx = PushPopFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    public func unnest() {
+        let __e = PushPopFrameEvent(message: "unnest", parameters: [])
+        let __ctx = PushPopFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    public func leaf() {
+        let __e = PushPopFrameEvent(message: "leaf", parameters: [])
+        let __ctx = PushPopFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    private func _state_Idle(_ __e: PushPopFrameEvent, _ compartment: PushPopCompartment) {
+        if __e._message == "nest" {
+            self._s_Idle_hdl_user_nest(__e, compartment)
+            return
+        }
+        if __e._message == "ping" {
+            self._s_Idle_hdl_user_ping(__e, compartment)
+            return
+        }
+    }
+
+    private func _state_Nested(_ __e: PushPopFrameEvent, _ compartment: PushPopCompartment) {
+        if __e._message == "leaf" {
+            self._s_Nested_hdl_user_leaf(__e, compartment)
+            return
+        }
+        if __e._message == "unnest" {
+            self._s_Nested_hdl_user_unnest(__e, compartment)
+            return
+        }
+    }
+
+    private func _s_Idle_hdl_user_nest(_ __e: PushPopFrameEvent, _ compartment: PushPopCompartment) {
+        _state_stack.append(__compartment)
+        let __compartment = PushPop.__prepareEnter("Nested", [], [])
+        __transition(__compartment)
+        return
+    }
+
+    private func _s_Idle_hdl_user_ping(_ __e: PushPopFrameEvent, _ compartment: PushPopCompartment) {
+        self.pings = self.pings + 1
+    }
+
+    private func _s_Nested_hdl_user_leaf(_ __e: PushPopFrameEvent, _ compartment: PushPopCompartment) {
+        self.leaves = self.leaves + 1
+    }
+
+    private func _s_Nested_hdl_user_unnest(_ __e: PushPopFrameEvent, _ compartment: PushPopCompartment) {
+        let __saved = _state_stack.removeLast()
+        __transition(__saved)
+        return
+    }
+}

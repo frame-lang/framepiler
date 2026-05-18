@@ -1,0 +1,204 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"11_consts\", \"dart\")"
+---
+class ConstsFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    ConstsFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class ConstsFrameContext {
+    late ConstsFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    ConstsFrameContext(ConstsFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class ConstsCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    ConstsCompartment? parent_compartment;
+
+    ConstsCompartment(String state, [ConstsCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    ConstsCompartment copy() {
+        final c = ConstsCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class Consts {
+    late List<ConstsCompartment> _state_stack;
+    late ConstsCompartment __compartment;
+    ConstsCompartment? __next_compartment;
+    late List<ConstsFrameContext> _context_stack;
+    i32 step = 5;
+    i32 limit = 20;
+    i32 count = 0;
+
+    Consts() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Running", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init([i32 step = 5, i32 limit = 20]) {
+        this.step = step;
+        this.limit = limit;
+        final __e = ConstsFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = ConstsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static Consts _create([i32 step = 5, i32 limit = 20]) {
+        final c = Consts();
+        c._frame_init(step, limit);
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Running": ["Running"],
+        };
+    }
+    ConstsCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        ConstsCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = ConstsCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        ConstsCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(ConstsFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = ConstsFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = ConstsFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = ConstsFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(ConstsFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Running":
+                _state_Running(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(ConstsCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void tick() {
+        final __e = ConstsFrameEvent("tick", []);
+        final __ctx = ConstsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    i32 get_count() {
+        final __e = ConstsFrameEvent("get_count", []);
+        final __ctx = ConstsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        return _context_stack.removeLast()._return;
+    }
+
+    void _state_Running(ConstsFrameEvent __e, ConstsCompartment compartment) {
+        if (__e._message == "get_count") {
+            this._s_Running_hdl_user_get_count(__e, compartment);
+            return;
+        }
+        if (__e._message == "tick") {
+            this._s_Running_hdl_user_tick(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Running_hdl_user_get_count(ConstsFrameEvent __e, ConstsCompartment compartment) {
+        this._context_stack[this._context_stack.length - 1]._return = self.count;
+    }
+
+    void _s_Running_hdl_user_tick(ConstsFrameEvent __e, ConstsCompartment compartment) {
+        self.count = self.count + self.step
+        if self.count >= self.limit {
+            self.count = 0
+        }
+    }
+}

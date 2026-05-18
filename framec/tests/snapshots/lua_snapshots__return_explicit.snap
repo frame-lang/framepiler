@@ -1,0 +1,178 @@
+---
+source: framec/tests/lua_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"lua\")"
+---
+local ReturnExplicitFrameEvent = {}
+ReturnExplicitFrameEvent.__index = ReturnExplicitFrameEvent
+
+function ReturnExplicitFrameEvent.new(message, parameters)
+    local self = setmetatable({}, ReturnExplicitFrameEvent)
+    self._message = message
+    self._parameters = parameters or {}
+    return self
+end
+
+
+local ReturnExplicitFrameContext = {}
+ReturnExplicitFrameContext.__index = ReturnExplicitFrameContext
+
+function ReturnExplicitFrameContext.new(event, default_return)
+    local self = setmetatable({}, ReturnExplicitFrameContext)
+    self._event = event
+    self._return = default_return
+    self._data = {}
+    self._transitioned = false
+    return self
+end
+
+
+local ReturnExplicitCompartment = {}
+ReturnExplicitCompartment.__index = ReturnExplicitCompartment
+
+function ReturnExplicitCompartment.new(state, parent_compartment)
+    local self = setmetatable({}, ReturnExplicitCompartment)
+    self.state = state
+    self.state_args = {}
+    self.state_vars = {}
+    self.enter_args = {}
+    self.exit_args = {}
+    self.forward_event = nil
+    self.parent_compartment = parent_compartment
+    return self
+end
+
+function ReturnExplicitCompartment:copy()
+    local c = ReturnExplicitCompartment.new(self.state, self.parent_compartment)
+    c.state_args = {}
+    for k, v in pairs(self.state_args) do c.state_args[k] = v end
+    c.state_vars = {}
+    for k, v in pairs(self.state_vars) do c.state_vars[k] = v end
+    c.enter_args = {}
+    for k, v in pairs(self.enter_args) do c.enter_args[k] = v end
+    c.exit_args = {}
+    for k, v in pairs(self.exit_args) do c.exit_args[k] = v end
+    c.forward_event = self.forward_event
+    return c
+end
+
+
+local ReturnExplicit = {}
+ReturnExplicit.__index = ReturnExplicit
+
+function ReturnExplicit.new()
+    local self = setmetatable({}, ReturnExplicit)
+    self._state_stack = {}
+    self._context_stack = {}
+    self.__compartment = self:__prepareEnter("Judging", nil, nil)
+    self.__next_compartment = nil
+    return self
+end
+
+function ReturnExplicit:_frame_init()
+    local __e = ReturnExplicitFrameEvent.new("$>", self.__compartment.enter_args)
+    local __ctx = ReturnExplicitFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    table.remove(self._context_stack)
+end
+
+function ReturnExplicit._create()
+    local c = ReturnExplicit.new()
+    c:_frame_init()
+    return c
+end
+
+function ReturnExplicit:hsm_chain()
+    local t = {}
+    t["Judging"] = {"Judging"}
+    return t
+end
+function ReturnExplicit:__prepareEnter(leaf, state_args, enter_args)
+    state_args = state_args or {}
+    enter_args = enter_args or {}
+    local comp = nil
+    local chain = self:hsm_chain()[leaf]
+    for i = 1, #chain do
+        local new_comp = ReturnExplicitCompartment.new(chain[i])
+        new_comp.state_args = {}
+        for j = 1, #state_args do new_comp.state_args[j] = state_args[j] end
+        new_comp.enter_args = {}
+        for j = 1, #enter_args do new_comp.enter_args[j] = enter_args[j] end
+        new_comp.parent_compartment = comp
+        comp = new_comp
+    end
+    return comp
+end
+
+function ReturnExplicit:__prepareExit(exit_args)
+    local comp = self.__compartment
+    while comp ~= nil do
+        comp.exit_args = {}
+        for j = 1, #exit_args do comp.exit_args[j] = exit_args[j] end
+        comp = comp.parent_compartment
+    end
+end
+
+function ReturnExplicit:__kernel(__e)
+    -- Route event to current state.
+    self:__router(__e)
+    -- Drain any transitions queued by the handler.
+    while self.__next_compartment ~= nil do
+        local next_compartment = self.__next_compartment
+        self.__next_compartment = nil
+        local exit_event = ReturnExplicitFrameEvent.new("<$", self.__compartment.exit_args)
+        self:__router(exit_event)
+        self.__compartment = next_compartment
+        local forward_event = next_compartment.forward_event
+        next_compartment.forward_event = nil
+        if forward_event == nil then
+            local enter_event = ReturnExplicitFrameEvent.new("$>", self.__compartment.enter_args)
+            self:__router(enter_event)
+        elseif forward_event._message == "$>" then
+            self:__router(forward_event)
+        else
+            local enter_event = ReturnExplicitFrameEvent.new("$>", self.__compartment.enter_args)
+            self:__router(enter_event)
+            self:__router(forward_event)
+        end
+        for _, ctx in ipairs(self._context_stack) do
+            ctx._transitioned = true
+        end
+    end
+end
+
+function ReturnExplicit:__router(__e)
+    local handler = self["_state_" .. self.__compartment.state]
+    if handler then
+        handler(self, __e, self.__compartment)
+    end
+end
+
+function ReturnExplicit:__transition(next_compartment)
+    self.__next_compartment = next_compartment
+end
+
+function ReturnExplicit:decide(score)
+    local __e = ReturnExplicitFrameEvent.new("decide", {score})
+    local __ctx = ReturnExplicitFrameContext.new(__e, nil)
+    self._context_stack[#self._context_stack + 1] = __ctx
+    self:__kernel(__e)
+    return table.remove(self._context_stack)._return
+end
+
+function ReturnExplicit:_state_Judging(__e, compartment)
+    if __e._message == "decide" then
+        self:_s_Judging_hdl_user_decide(__e, compartment)
+        return
+    end
+end
+
+function ReturnExplicit:_s_Judging_hdl_user_decide(__e, compartment)
+    local score = __e._parameters[1]
+                    if score >= 60 then
+    self._context_stack[#self._context_stack]._return = "pass"
+                        return
+    end
+    self._context_stack[#self._context_stack]._return = "fail"
+                    return
+end

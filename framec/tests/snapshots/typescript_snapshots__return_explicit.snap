@@ -1,0 +1,184 @@
+---
+source: framec/tests/typescript_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"typescript\")"
+---
+class ReturnExplicitFrameEvent {
+    public _message: string;
+    public _parameters: any[];
+
+    constructor(message: string, parameters: any[]) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class ReturnExplicitFrameContext {
+    public event: ReturnExplicitFrameEvent;
+    public _return: any;
+    public _data: Record<string, any>;
+    public _transitioned: boolean;
+
+    constructor(event: ReturnExplicitFrameEvent, default_return: any) {
+        this.event = event;
+        this._return = default_return;
+        this._data = {  };
+        this._transitioned = false;
+    }
+}
+
+
+class ReturnExplicitCompartment {
+    public state: string;
+    public state_args: any[];
+    public state_vars: Record<string, any>;
+    public enter_args: any[];
+    public exit_args: any[];
+    public forward_event: any;
+    public parent_compartment: ReturnExplicitCompartment | null;
+
+    constructor(state: string, parent_compartment: ReturnExplicitCompartment | null = null) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = {  };
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    public copy(): ReturnExplicitCompartment {
+        const c = new ReturnExplicitCompartment(this.state, this.parent_compartment);
+        c.state_args = {...this.state_args};
+        c.state_vars = {...this.state_vars};
+        c.enter_args = {...this.enter_args};
+        c.exit_args = {...this.exit_args};
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+export class ReturnExplicit {
+    private _state_stack: Array<any>;
+    private __compartment: ReturnExplicitCompartment;
+    private __next_compartment: ReturnExplicitCompartment | null;
+    private _context_stack: Array<any>;
+
+    constructor() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Judging", [], []);
+        this.__next_compartment = null;
+    }
+
+    _frame_init(): void {
+        const __e = new ReturnExplicitFrameEvent("$>", this.__compartment.enter_args);
+        const __ctx = new ReturnExplicitFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    static _create(): ReturnExplicit {
+        const c = new ReturnExplicit();
+        c._frame_init();
+        return c;
+    }
+
+    static readonly _HSM_CHAIN: Record<string, string[]> = {
+        "Judging": ["Judging"],
+    };
+    private __prepareEnter(leaf: string, state_args: any[], enter_args: any[]): ReturnExplicitCompartment {
+        let comp: ReturnExplicitCompartment | null = null;
+        for (const name of ReturnExplicit._HSM_CHAIN[leaf]) {
+            const new_comp = new ReturnExplicitCompartment(name);
+            new_comp.state_args = [...state_args];
+            new_comp.enter_args = [...enter_args];
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    private __prepareExit(exit_args: any[]) {
+        let comp: ReturnExplicitCompartment | null = this.__compartment;
+        while (comp !== null) {
+            comp.exit_args = [...exit_args];
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private __kernel(__e: ReturnExplicitFrameEvent) {
+        // Route event to current state.
+        this.__router(__e);
+        // Drain any transitions queued by the handler.
+        while (this.__next_compartment !== null) {
+            const next_compartment = this.__next_compartment;
+            this.__next_compartment = null;
+            // Exit the current (leaf) state.
+            const exit_event = new ReturnExplicitFrameEvent("<$", this.__compartment.exit_args);
+            this.__router(exit_event);
+            // Switch to the new compartment.
+            this.__compartment = next_compartment;
+            // Three-branch forward-event handling.
+            const forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event === null) {
+                // No forwarded event — synthesize a fresh $>.
+                const enter_event = new ReturnExplicitFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+            } else if (forward_event._message === "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                this.__router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                const enter_event = new ReturnExplicitFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+                this.__router(forward_event);
+            }
+            for (const ctx of this._context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private __router(__e: ReturnExplicitFrameEvent) {
+        const handler_name = `_state_${this.__compartment.state}`;
+        const handler = (this as any)[handler_name];
+        if (handler) {
+            handler.call(this, __e, this.__compartment);
+        }
+    }
+
+    private __transition(next_compartment: ReturnExplicitCompartment) {
+        this.__next_compartment = next_compartment;
+    }
+
+    public decide(score: i32): String {
+        const __e = new ReturnExplicitFrameEvent("decide", [score]);
+        const __ctx = new ReturnExplicitFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        return this._context_stack.pop()!._return;
+    }
+
+    private _state_Judging(__e: ReturnExplicitFrameEvent, compartment: ReturnExplicitCompartment) {
+        if (__e._message === "decide") {
+            this._s_Judging_hdl_user_decide(__e, compartment);
+            return;
+        }
+    }
+
+    private _s_Judging_hdl_user_decide(__e: ReturnExplicitFrameEvent, compartment: ReturnExplicitCompartment) {
+        const score = __e._parameters[0];
+                        if score >= 60 {
+        this._context_stack[this._context_stack.length - 1]._return = "pass";
+                            return;
+                        }
+        this._context_stack[this._context_stack.length - 1]._return = "fail";
+                        return;
+    }
+}

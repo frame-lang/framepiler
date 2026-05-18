@@ -1,0 +1,179 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"go\")"
+---
+type ReturnExplicitFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type ReturnExplicitFrameContext struct {
+    _event  ReturnExplicitFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type ReturnExplicitCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *ReturnExplicitFrameEvent
+    parentCompartment *ReturnExplicitCompartment
+}
+
+func newReturnExplicitCompartment(state string) *ReturnExplicitCompartment {
+    return &ReturnExplicitCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *ReturnExplicitCompartment) copy() *ReturnExplicitCompartment {
+    nc := &ReturnExplicitCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type ReturnExplicit struct {
+    _state_stack []*ReturnExplicitCompartment
+    __compartment *ReturnExplicitCompartment
+    __next_compartment *ReturnExplicitCompartment
+    _context_stack []ReturnExplicitFrameContext
+}
+
+func NewReturnExplicit() *ReturnExplicit {
+    s := &ReturnExplicit{}
+    s._state_stack = make([]*ReturnExplicitCompartment, 0)
+    s._context_stack = make([]ReturnExplicitFrameContext, 0)
+    s.__compartment = s.__prepareEnter("Judging", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateReturnExplicit() *ReturnExplicit {
+    c := NewReturnExplicit()
+    __e := ReturnExplicitFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := ReturnExplicitFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *ReturnExplicit) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Judging": {"Judging"},
+    }
+}
+func (s *ReturnExplicit) __prepareEnter(leaf string, state_args []any, enter_args []any) *ReturnExplicitCompartment {
+    var comp *ReturnExplicitCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newReturnExplicitCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *ReturnExplicit) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *ReturnExplicit) __kernel(__e *ReturnExplicitFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &ReturnExplicitFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &ReturnExplicitFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &ReturnExplicitFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *ReturnExplicit) __router(__e *ReturnExplicitFrameEvent) {
+    switch s.__compartment.state {
+    case "Judging":
+        s._state_Judging(__e, s.__compartment)
+    }
+}
+
+func (s *ReturnExplicit) __transition(next *ReturnExplicitCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *ReturnExplicit) Decide(score int) string {
+    __e := ReturnExplicitFrameEvent{_message: "decide", _parameters: []any{score}}
+    __ctx := ReturnExplicitFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    var __result string
+    if __rv := s._context_stack[len(s._context_stack)-1]._return; __rv != nil { __result = __rv.(string) }
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+    return __result
+}
+
+func (s *ReturnExplicit) _state_Judging(__e *ReturnExplicitFrameEvent, compartment *ReturnExplicitCompartment) {
+    if __e._message == "decide" {
+        s._s_Judging_hdl_user_decide(__e, compartment)
+        return
+    }
+}
+
+func (s *ReturnExplicit) _s_Judging_hdl_user_decide(__e *ReturnExplicitFrameEvent, compartment *ReturnExplicitCompartment) {
+    score := __e._parameters[0].(int)
+    _ = score
+    {
+                    if score >= 60 {
+    s._context_stack[len(s._context_stack)-1]._return = "pass"
+                        return
+                    }
+    s._context_stack[len(s._context_stack)-1]._return = "fail"
+                    return
+    }
+}

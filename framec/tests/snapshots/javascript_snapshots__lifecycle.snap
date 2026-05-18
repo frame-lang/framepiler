@@ -1,0 +1,225 @@
+---
+source: framec/tests/javascript_snapshots.rs
+expression: "compile_fixture(\"08_lifecycle\", \"javascript\")"
+---
+export class LifecycleFrameEvent {
+    _message;
+    _parameters;
+
+    constructor(message, parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+export class LifecycleFrameContext {
+    event;
+    _return;
+    _data;
+    _transitioned;
+
+    constructor(event, default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = {  };
+        this._transitioned = false;
+    }
+}
+
+
+export class LifecycleCompartment {
+    state;
+    state_args;
+    state_vars;
+    enter_args;
+    exit_args;
+    forward_event;
+    parent_compartment;
+
+    constructor(state, parent_compartment = null) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = {  };
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    copy() {
+        const c = new LifecycleCompartment(this.state, this.parent_compartment);
+        c.state_args = {...this.state_args};
+        c.state_vars = {...this.state_vars};
+        c.enter_args = {...this.enter_args};
+        c.exit_args = {...this.exit_args};
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+export class Lifecycle {
+    _state_stack;
+    __compartment;
+    __next_compartment;
+    _context_stack;
+    entered = 0;
+    exited = 0;
+    tag = "";
+
+    constructor() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Idle", [], []);
+        this.__next_compartment = null;
+    }
+
+    _frame_init() {
+        const __e = new LifecycleFrameEvent("$>", this.__compartment.enter_args);
+        const __ctx = new LifecycleFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    static _create() {
+        const c = new Lifecycle();
+        c._frame_init();
+        return c;
+    }
+
+    static _HSM_CHAIN = {
+        "Idle": ["Idle"],
+        "Running": ["Running"],
+    };
+    __prepareEnter(leaf, state_args, enter_args) {
+        let comp = null;
+        for (const name of Lifecycle._HSM_CHAIN[leaf]) {
+            const new_comp = new LifecycleCompartment(name);
+            new_comp.state_args = [...state_args];
+            new_comp.enter_args = [...enter_args];
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    __prepareExit(exit_args) {
+        let comp = this.__compartment;
+        while (comp !== null) {
+            comp.exit_args = [...exit_args];
+            comp = comp.parent_compartment;
+        }
+    }
+
+    __kernel(__e) {
+        // Route event to current state.
+        this.__router(__e);
+        // Drain any transitions queued by the handler.
+        while (this.__next_compartment !== null) {
+            const next_compartment = this.__next_compartment;
+            this.__next_compartment = null;
+            // Exit the current (leaf) state.
+            const exit_event = new LifecycleFrameEvent("<$", this.__compartment.exit_args);
+            this.__router(exit_event);
+            // Switch to the new compartment.
+            this.__compartment = next_compartment;
+            // Three-branch forward-event handling.
+            const forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event === null) {
+                // No forwarded event — synthesize a fresh $>.
+                const enter_event = new LifecycleFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+            } else if (forward_event._message === "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                this.__router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                const enter_event = new LifecycleFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+                this.__router(forward_event);
+            }
+            for (const ctx of this._context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    __router(__e) {
+        const handler_name = `_state_${this.__compartment.state}`;
+        const handler = this[handler_name];
+        if (handler) {
+            handler.call(this, __e, this.__compartment);
+        }
+    }
+
+    __transition(next_compartment) {
+        this.__next_compartment = next_compartment;
+    }
+
+    start(label) {
+        const __e = new LifecycleFrameEvent("start", [label]);
+        const __ctx = new LifecycleFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        return this._context_stack.pop()._return;
+    }
+
+    stop() {
+        const __e = new LifecycleFrameEvent("stop", []);
+        const __ctx = new LifecycleFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        return this._context_stack.pop()._return;
+    }
+
+    _state_Idle(__e, compartment) {
+        if (__e._message === "start") {
+            this._s_Idle_hdl_user_start(__e, compartment);
+            return;
+        }
+    }
+
+    _state_Running(__e, compartment) {
+        if (__e._message === "<$") {
+            this._s_Running_hdl_frame_exit(__e, compartment);
+            return;
+        }
+        if (__e._message === "$>") {
+            this._s_Running_hdl_frame_enter(__e, compartment);
+            return;
+        }
+        if (__e._message === "stop") {
+            this._s_Running_hdl_user_stop(__e, compartment);
+            return;
+        }
+    }
+
+    _s_Idle_hdl_user_start(__e, compartment) {
+        const label = __e._parameters[0];
+        (label)
+        const __compartment = this.__prepareEnter("Running", [], []);
+        this.__transition(__compartment);
+        return;
+    }
+
+    _s_Running_hdl_frame_exit(__e, compartment) {
+        self.exited = self.exited + 1
+    }
+
+    _s_Running_hdl_frame_enter(__e, compartment) {
+        const label = compartment.enter_args[0];
+        self.entered = self.entered + 1
+        self.tag = label
+    }
+
+    _s_Running_hdl_user_stop(__e, compartment) {
+        const __compartment = this.__prepareEnter("Idle", [], []);
+        this.__transition(__compartment);
+        return;
+    }
+}

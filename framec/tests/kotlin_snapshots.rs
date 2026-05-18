@@ -22,3 +22,48 @@ fn hsm() {
 fn persist() {
     insta::assert_snapshot!(compile_fixture("03_persist", "kotlin"));
 }
+
+#[test]
+fn state_args() {
+    insta::assert_snapshot!(compile_fixture("04_state_args", "kotlin"));
+}
+
+#[test]
+fn pushpop() {
+    insta::assert_snapshot!(compile_fixture("05_pushpop", "kotlin"));
+}
+
+#[test]
+fn selfcall() {
+    insta::assert_snapshot!(compile_fixture("06_selfcall", "kotlin"));
+}
+
+#[test]
+fn forward() {
+    insta::assert_snapshot!(compile_fixture("07_forward", "kotlin"));
+}
+
+#[test]
+fn lifecycle() {
+    insta::assert_snapshot!(compile_fixture("08_lifecycle", "kotlin"));
+}
+
+#[test]
+fn return_explicit() {
+    insta::assert_snapshot!(compile_fixture("09_return_explicit", "kotlin"));
+}
+
+#[test]
+fn actions() {
+    insta::assert_snapshot!(compile_fixture("10_actions", "kotlin"));
+}
+
+#[test]
+fn consts() {
+    insta::assert_snapshot!(compile_fixture("11_consts", "kotlin"));
+}
+
+#[test]
+fn no_persist() {
+    insta::assert_snapshot!(compile_fixture("12_no_persist", "kotlin"));
+}

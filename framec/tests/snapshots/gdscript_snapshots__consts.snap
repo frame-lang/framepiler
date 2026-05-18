@@ -1,0 +1,166 @@
+---
+source: framec/tests/gdscript_snapshots.rs
+expression: "compile_fixture(\"11_consts\", \"gdscript\")"
+---
+class ConstsFrameEvent:
+    var _message
+    var _parameters
+
+    func _init(message: String, parameters):
+        self._message = message
+        self._parameters = parameters
+
+
+class ConstsFrameContext:
+    var event
+    var _return
+    var _data
+    var _transitioned
+
+    func _init(event: ConstsFrameEvent, default_return):
+        self.event = event
+        self._return = default_return
+        self._data = {}
+        self._transitioned = false
+
+
+class ConstsCompartment:
+    var state
+    var state_args
+    var state_vars
+    var enter_args
+    var exit_args
+    var forward_event
+    var parent_compartment
+
+    func _init(state: String, parent_compartment = null):
+        self.state = state
+        self.state_args = []
+        self.state_vars = {}
+        self.enter_args = []
+        self.exit_args = []
+        self.forward_event = null
+        self.parent_compartment = parent_compartment
+
+    func copy() -> ConstsCompartment:
+        var c = ConstsCompartment.new(self.state, self.parent_compartment)
+        c.state_args = self.state_args.duplicate()
+        c.state_vars = self.state_vars.duplicate()
+        c.enter_args = self.enter_args.duplicate()
+        c.exit_args = self.exit_args.duplicate()
+        c.forward_event = self.forward_event
+        return c
+
+
+class Consts:
+    var _state_stack
+    var __compartment
+    var __next_compartment
+    var _context_stack
+    var step = 5
+    var limit = 20
+    var count = 0
+
+    func _init():
+        self._state_stack = []
+        self._context_stack = []
+        self.__compartment = self.__prepareEnter("Running", [], [])
+        self.__next_compartment = null
+
+    static func _create(step: i32 = 5, limit: i32 = 20):
+        var c = Consts.new()
+        c.step = step
+        c.limit = limit
+        var __e = ConstsFrameEvent.new("$>", c.__compartment.enter_args)
+        var __ctx = ConstsFrameContext.new(__e, null)
+        c._context_stack.append(__ctx)
+        c.__kernel(__e)
+        c._context_stack.pop_back()
+        return c
+
+    func hsm_chain() -> Dictionary:
+        return {
+            "Running": ["Running"],
+        }
+    func __prepareEnter(leaf, state_args, enter_args):
+        var comp = null
+        for name in self.hsm_chain()[leaf]:
+            var new_comp = ConstsCompartment.new(name)
+            new_comp.state_args = state_args.duplicate()
+            new_comp.enter_args = enter_args.duplicate()
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        return comp
+
+    func __prepareExit(exit_args):
+        var comp = self.__compartment
+        while comp != null:
+            comp.exit_args = exit_args.duplicate()
+            comp = comp.parent_compartment
+
+    func __kernel(__e):
+        # Route event to current state
+        self.__router(__e)
+        # Drain any transitions queued by the handler
+        while self.__next_compartment != null:
+            var next_compartment = self.__next_compartment
+            self.__next_compartment = null
+            # Exit the current (leaf) state
+            self.__router(ConstsFrameEvent.new("<$", self.__compartment.exit_args))
+            # Switch to the new compartment
+            self.__compartment = next_compartment
+            if next_compartment.forward_event == null:
+                # No forwarded event — synthesize a fresh $>
+                self.__router(ConstsFrameEvent.new("$>", self.__compartment.enter_args))
+            else:
+                if next_compartment.forward_event._message == "$>":
+                    # Forwarded event IS $> — dispatch directly so the
+                    # destination's $> receives the caller's payload
+                    self.__router(next_compartment.forward_event)
+                else:
+                    # Forwarded event is not $> — initialize the destination
+                    # with a fresh $>, then dispatch the forward to it
+                    self.__router(ConstsFrameEvent.new("$>", self.__compartment.enter_args))
+                    self.__router(next_compartment.forward_event)
+            next_compartment.forward_event = null
+            # Mark all stacked contexts as transitioned
+            for ctx in self._context_stack:
+                ctx._transitioned = true
+
+    func __router(__e):
+        if self.__compartment.state == "Running":
+            self._state_Running(__e, self.__compartment)
+
+    func __transition(next_compartment):
+        self.__next_compartment = next_compartment
+
+    func tick():
+        var __e = ConstsFrameEvent.new("tick", [])
+        var __ctx = ConstsFrameContext.new(__e, null)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop_back()._return
+
+    func get_count() -> i32:
+        var __e = ConstsFrameEvent.new("get_count", [])
+        var __ctx = ConstsFrameContext.new(__e, null)
+        self._context_stack.append(__ctx)
+        self.__kernel(__e)
+        return self._context_stack.pop_back()._return
+
+    func _state_Running(__e, compartment):
+        if __e._message == "get_count":
+            self._s_Running_hdl_user_get_count(__e, compartment)
+            return
+        if __e._message == "tick":
+            self._s_Running_hdl_user_tick(__e, compartment)
+            return
+
+    func _s_Running_hdl_user_get_count(__e, compartment):
+        self._context_stack[-1]._return = self.count
+
+    func _s_Running_hdl_user_tick(__e, compartment):
+        self.count = self.count + self.step
+        if self.count >= self.limit {
+            self.count = 0
+        }

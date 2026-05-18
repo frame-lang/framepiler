@@ -1,0 +1,201 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"11_consts\", \"go\")"
+---
+type ConstsFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type ConstsFrameContext struct {
+    _event  ConstsFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type ConstsCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *ConstsFrameEvent
+    parentCompartment *ConstsCompartment
+}
+
+func newConstsCompartment(state string) *ConstsCompartment {
+    return &ConstsCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *ConstsCompartment) copy() *ConstsCompartment {
+    nc := &ConstsCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type Consts struct {
+    _state_stack []*ConstsCompartment
+    __compartment *ConstsCompartment
+    __next_compartment *ConstsCompartment
+    _context_stack []ConstsFrameContext
+    step int
+    limit int
+    count int
+}
+
+func NewConsts() *Consts {
+    s := &Consts{}
+    s._state_stack = make([]*ConstsCompartment, 0)
+    s._context_stack = make([]ConstsFrameContext, 0)
+    s.count = 0
+    s.__compartment = s.__prepareEnter("Running", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateConsts(step int, limit int) *Consts {
+    c := NewConsts()
+    c.step = 5
+    c.limit = 20
+    c.step = step
+    c.limit = limit
+    __e := ConstsFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := ConstsFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *Consts) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Running": {"Running"},
+    }
+}
+func (s *Consts) __prepareEnter(leaf string, state_args []any, enter_args []any) *ConstsCompartment {
+    var comp *ConstsCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newConstsCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *Consts) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *Consts) __kernel(__e *ConstsFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &ConstsFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &ConstsFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &ConstsFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *Consts) __router(__e *ConstsFrameEvent) {
+    switch s.__compartment.state {
+    case "Running":
+        s._state_Running(__e, s.__compartment)
+    }
+}
+
+func (s *Consts) __transition(next *ConstsCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *Consts) Tick() {
+    __e := ConstsFrameEvent{_message: "tick", _parameters: []any{}}
+    __ctx := ConstsFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *Consts) Get_count() int {
+    __e := ConstsFrameEvent{_message: "get_count", _parameters: []any{}}
+    __ctx := ConstsFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    var __result int
+    if __rv := s._context_stack[len(s._context_stack)-1]._return; __rv != nil { __result = __rv.(int) }
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+    return __result
+}
+
+func (s *Consts) _state_Running(__e *ConstsFrameEvent, compartment *ConstsCompartment) {
+    if __e._message == "get_count" {
+        s._s_Running_hdl_user_get_count(__e, compartment)
+        return
+    }
+    if __e._message == "tick" {
+        s._s_Running_hdl_user_tick(__e, compartment)
+        return
+    }
+}
+
+func (s *Consts) _s_Running_hdl_user_get_count(__e *ConstsFrameEvent, compartment *ConstsCompartment) {
+    {
+    s._context_stack[len(s._context_stack)-1]._return = s.count
+    }
+}
+
+func (s *Consts) _s_Running_hdl_user_tick(__e *ConstsFrameEvent, compartment *ConstsCompartment) {
+    {
+    self.count = self.count + self.step
+    if self.count >= self.limit {
+        self.count = 0
+    }
+    }
+}

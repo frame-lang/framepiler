@@ -1,0 +1,242 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"05_pushpop\", \"dart\")"
+---
+class PushPopFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    PushPopFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class PushPopFrameContext {
+    late PushPopFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    PushPopFrameContext(PushPopFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class PushPopCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    PushPopCompartment? parent_compartment;
+
+    PushPopCompartment(String state, [PushPopCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    PushPopCompartment copy() {
+        final c = PushPopCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class PushPop {
+    late List<PushPopCompartment> _state_stack;
+    late PushPopCompartment __compartment;
+    PushPopCompartment? __next_compartment;
+    late List<PushPopFrameContext> _context_stack;
+    i32 pings = 0;
+    i32 leaves = 0;
+
+    PushPop() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Idle", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init() {
+        final __e = PushPopFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static PushPop _create() {
+        final c = PushPop();
+        c._frame_init();
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Idle": ["Idle"],
+            "Nested": ["Nested"],
+        };
+    }
+    PushPopCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        PushPopCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = PushPopCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        PushPopCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(PushPopFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = PushPopFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = PushPopFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = PushPopFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(PushPopFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Idle":
+                _state_Idle(__e, __compartment);
+                break;
+            case "Nested":
+                _state_Nested(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(PushPopCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void ping() {
+        final __e = PushPopFrameEvent("ping", []);
+        final __ctx = PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void nest() {
+        final __e = PushPopFrameEvent("nest", []);
+        final __ctx = PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void unnest() {
+        final __e = PushPopFrameEvent("unnest", []);
+        final __ctx = PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void leaf() {
+        final __e = PushPopFrameEvent("leaf", []);
+        final __ctx = PushPopFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    void _state_Idle(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        if (__e._message == "nest") {
+            this._s_Idle_hdl_user_nest(__e, compartment);
+            return;
+        }
+        if (__e._message == "ping") {
+            this._s_Idle_hdl_user_ping(__e, compartment);
+            return;
+        }
+    }
+
+    void _state_Nested(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        if (__e._message == "leaf") {
+            this._s_Nested_hdl_user_leaf(__e, compartment);
+            return;
+        }
+        if (__e._message == "unnest") {
+            this._s_Nested_hdl_user_unnest(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Idle_hdl_user_nest(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        this._state_stack.add(this.__compartment);
+        final __compartment = this.__prepareEnter("Nested", [], []);
+        this.__transition(__compartment);
+        return;
+    }
+
+    void _s_Idle_hdl_user_ping(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        self.pings = self.pings + 1
+    }
+
+    void _s_Nested_hdl_user_leaf(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        self.leaves = self.leaves + 1
+    }
+
+    void _s_Nested_hdl_user_unnest(PushPopFrameEvent __e, PushPopCompartment compartment) {
+        final __saved = this._state_stack.removeLast();
+        this.__transition(__saved);
+        return;
+    }
+}

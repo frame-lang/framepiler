@@ -1,0 +1,229 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"08_lifecycle\", \"go\")"
+---
+type LifecycleFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type LifecycleFrameContext struct {
+    _event  LifecycleFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type LifecycleCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *LifecycleFrameEvent
+    parentCompartment *LifecycleCompartment
+}
+
+func newLifecycleCompartment(state string) *LifecycleCompartment {
+    return &LifecycleCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *LifecycleCompartment) copy() *LifecycleCompartment {
+    nc := &LifecycleCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type Lifecycle struct {
+    _state_stack []*LifecycleCompartment
+    __compartment *LifecycleCompartment
+    __next_compartment *LifecycleCompartment
+    _context_stack []LifecycleFrameContext
+    entered int
+    exited int
+    tag string
+}
+
+func NewLifecycle() *Lifecycle {
+    s := &Lifecycle{}
+    s._state_stack = make([]*LifecycleCompartment, 0)
+    s._context_stack = make([]LifecycleFrameContext, 0)
+    s.entered = 0
+    s.exited = 0
+    s.tag = ""
+    s.__compartment = s.__prepareEnter("Idle", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateLifecycle() *Lifecycle {
+    c := NewLifecycle()
+    __e := LifecycleFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := LifecycleFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *Lifecycle) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Idle": {"Idle"},
+        "Running": {"Running"},
+    }
+}
+func (s *Lifecycle) __prepareEnter(leaf string, state_args []any, enter_args []any) *LifecycleCompartment {
+    var comp *LifecycleCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newLifecycleCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *Lifecycle) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *Lifecycle) __kernel(__e *LifecycleFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &LifecycleFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &LifecycleFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &LifecycleFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *Lifecycle) __router(__e *LifecycleFrameEvent) {
+    switch s.__compartment.state {
+    case "Idle":
+        s._state_Idle(__e, s.__compartment)
+    case "Running":
+        s._state_Running(__e, s.__compartment)
+    }
+}
+
+func (s *Lifecycle) __transition(next *LifecycleCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *Lifecycle) Start(label string) {
+    __e := LifecycleFrameEvent{_message: "start", _parameters: []any{label}}
+    __ctx := LifecycleFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *Lifecycle) Stop() {
+    __e := LifecycleFrameEvent{_message: "stop", _parameters: []any{}}
+    __ctx := LifecycleFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *Lifecycle) _state_Idle(__e *LifecycleFrameEvent, compartment *LifecycleCompartment) {
+    if __e._message == "start" {
+        s._s_Idle_hdl_user_start(__e, compartment)
+        return
+    }
+}
+
+func (s *Lifecycle) _state_Running(__e *LifecycleFrameEvent, compartment *LifecycleCompartment) {
+    if __e._message == "<$" {
+        s._s_Running_hdl_frame_exit(__e, compartment)
+        return
+    }
+    if __e._message == "$>" {
+        s._s_Running_hdl_frame_enter(__e, compartment)
+        return
+    }
+    if __e._message == "stop" {
+        s._s_Running_hdl_user_stop(__e, compartment)
+        return
+    }
+}
+
+func (s *Lifecycle) _s_Idle_hdl_user_start(__e *LifecycleFrameEvent, compartment *LifecycleCompartment) {
+    label := __e._parameters[0].(string)
+    _ = label
+    {
+    (label)
+    __compartment := s.__prepareEnter("Running", []any{}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}
+
+func (s *Lifecycle) _s_Running_hdl_frame_exit(__e *LifecycleFrameEvent, compartment *LifecycleCompartment) {
+    {
+    self.exited = self.exited + 1
+    }
+}
+
+func (s *Lifecycle) _s_Running_hdl_frame_enter(__e *LifecycleFrameEvent, compartment *LifecycleCompartment) {
+    label := compartment.enterArgs[0].(string)
+    _ = label
+    {
+    self.entered = self.entered + 1
+    self.tag = label
+    }
+}
+
+func (s *Lifecycle) _s_Running_hdl_user_stop(__e *LifecycleFrameEvent, compartment *LifecycleCompartment) {
+    {
+    __compartment := s.__prepareEnter("Idle", []any{}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}

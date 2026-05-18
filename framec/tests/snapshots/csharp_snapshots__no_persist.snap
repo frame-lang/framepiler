@@ -1,0 +1,319 @@
+---
+source: framec/tests/csharp_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"csharp\")"
+---
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+class NoPersistFrameEvent {
+    public string _message;
+    public List<object> _parameters;
+
+    public NoPersistFrameEvent(string message) {
+        this._message = message;
+        this._parameters = new List<object>();
+    }
+
+    public NoPersistFrameEvent(string message, List<object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class NoPersistFrameContext {
+    public NoPersistFrameEvent _event;
+    public object? _return;
+    public Dictionary<string, object> _data;
+    public bool _transitioned = false;
+
+    public NoPersistFrameContext(NoPersistFrameEvent ev, object? defaultReturn = null) {
+        this._event = ev;
+        this._return = defaultReturn;
+        this._data = new Dictionary<string, object>();
+        this._transitioned = false;
+    }
+}
+
+class NoPersistCompartment {
+    public string state;
+    public List<object> state_args;
+    public Dictionary<string, object> state_vars;
+    public List<object> enter_args;
+    public List<object> exit_args;
+    public NoPersistFrameEvent? forward_event;
+    public NoPersistCompartment? parent_compartment;
+
+    public NoPersistCompartment(string state) {
+        this.state = state;
+        this.state_args = new List<object>();
+        this.state_vars = new Dictionary<string, object>();
+        this.enter_args = new List<object>();
+        this.exit_args = new List<object>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    public NoPersistCompartment Copy() {
+        NoPersistCompartment c = new NoPersistCompartment(this.state);
+        c.state_args = new List<object>(this.state_args);
+        c.state_vars = new Dictionary<string, object>(this.state_vars);
+        c.enter_args = new List<object>(this.enter_args);
+        c.exit_args = new List<object>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class NoPersist {
+    private List<NoPersistCompartment> _state_stack;
+    private NoPersistCompartment __compartment;
+    private NoPersistCompartment? __next_compartment;
+    private List<NoPersistFrameContext> _context_stack;
+    public int count = 0;
+    public int cache = -1;
+
+    public NoPersist() {
+        _state_stack = new List<NoPersistCompartment>();
+        _context_stack = new List<NoPersistFrameContext>();
+        this.__compartment = __prepareEnter("Active", new List<object>(), new List<object>());
+        this.__next_compartment = null;
+    }
+
+    public void __frame_init() {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("$>", __compartment.enter_args);
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(__e);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public static NoPersist __create() {
+        NoPersist c = new NoPersist();
+        c.__frame_init();
+        return c;
+    }
+
+    private Dictionary<string, List<string>> hsm_chain() {
+        return new Dictionary<string, List<string>> {
+            { "Active", new List<string> { "Active" } },
+        };
+    }
+    private NoPersistCompartment __prepareEnter(string leaf, List<object> state_args, List<object> enter_args) {
+        NoPersistCompartment? comp = null;
+        foreach (string name in hsm_chain()[leaf]) {
+            NoPersistCompartment new_comp = new NoPersistCompartment(name);
+            new_comp.state_args = new List<object>(state_args);
+            new_comp.enter_args = new List<object>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    private void __prepareExit(List<object> exit_args) {
+        NoPersistCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new List<object>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(NoPersistFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            NoPersistCompartment next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            NoPersistFrameEvent exit_event = new NoPersistFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            NoPersistFrameEvent? forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                NoPersistFrameEvent enter_event = new NoPersistFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                NoPersistFrameEvent enter_event = new NoPersistFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            foreach (var ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(NoPersistFrameEvent __e) {
+        if (__compartment.state == "Active") {
+            _state_Active(__e, __compartment);
+        }
+    }
+
+    private void __transition(NoPersistCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void bump() {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("bump", new List<object>());
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public void set_cache(int v) {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("set_cache", new List<object> { v });
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public int get_count() {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("get_count", new List<object>());
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        var __result = (int) _context_stack[_context_stack.Count - 1]._return;
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+        return __result;
+    }
+
+    public int get_cache() {
+        NoPersistFrameEvent __e = new NoPersistFrameEvent("get_cache", new List<object>());
+        NoPersistFrameContext __ctx = new NoPersistFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        var __result = (int) _context_stack[_context_stack.Count - 1]._return;
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+        return __result;
+    }
+
+    private void _state_Active(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        if (__e._message == "bump") {
+            this._s_Active_hdl_user_bump(__e, compartment);
+            return;
+        }
+        if (__e._message == "get_cache") {
+            this._s_Active_hdl_user_get_cache(__e, compartment);
+            return;
+        }
+        if (__e._message == "get_count") {
+            this._s_Active_hdl_user_get_count(__e, compartment);
+            return;
+        }
+        if (__e._message == "set_cache") {
+            this._s_Active_hdl_user_set_cache(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Active_hdl_user_bump(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        self.count = self.count + 1
+    }
+
+    private void _s_Active_hdl_user_get_cache(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        _context_stack[_context_stack.Count - 1]._return = self.cache;
+    }
+
+    private void _s_Active_hdl_user_get_count(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        _context_stack[_context_stack.Count - 1]._return = self.count;
+    }
+
+    private void _s_Active_hdl_user_set_cache(NoPersistFrameEvent __e, NoPersistCompartment compartment) {
+        int v = System.Convert.ToInt32(__e._parameters[0]);
+        self.cache = v
+    }
+
+    private object __SerComp(NoPersistCompartment comp) {
+        if (comp == null) return null;
+        var j = new Dictionary<string, object>();
+        j["state"] = comp.state;
+        var sv = new Dictionary<string, object>(comp.state_vars);
+        j["state_vars"] = sv;
+        j["state_args"] = new List<object>(comp.state_args);
+        j["enter_args"] = new List<object>(comp.enter_args);
+        j["parent"] = __SerComp(comp.parent_compartment);
+        return j;
+    }
+
+    private static NoPersistCompartment __DeserComp(System.Text.Json.JsonElement el) {
+        if (el.ValueKind == System.Text.Json.JsonValueKind.Null) return null;
+        var c = new NoPersistCompartment(el.GetProperty("state").GetString());
+        if (el.TryGetProperty("state_vars", out var sv) && sv.ValueKind == System.Text.Json.JsonValueKind.Object) {
+            foreach (var kv in sv.EnumerateObject()) {
+                if (kv.Value.ValueKind == System.Text.Json.JsonValueKind.Number) { if (kv.Value.TryGetInt32(out int __ii)) c.state_vars[kv.Name] = __ii; else if (kv.Value.TryGetInt64(out long __il)) c.state_vars[kv.Name] = __il; else c.state_vars[kv.Name] = kv.Value.GetDouble(); }
+                else if (kv.Value.ValueKind == System.Text.Json.JsonValueKind.String) c.state_vars[kv.Name] = kv.Value.GetString();
+                else c.state_vars[kv.Name] = kv.Value.ToString();
+            }
+        }
+        if (el.TryGetProperty("state_args", out var sa) && sa.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            foreach (var v in sa.EnumerateArray()) c.state_args.Add(__convertJsonValue(v));
+        }
+        if (el.TryGetProperty("enter_args", out var ea) && ea.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            foreach (var v in ea.EnumerateArray()) c.enter_args.Add(__convertJsonValue(v));
+        }
+        if (el.TryGetProperty("parent", out var p) && p.ValueKind != System.Text.Json.JsonValueKind.Null) {
+            c.parent_compartment = __DeserComp(p);
+        }
+        return c;
+    }
+
+    private static object __convertJsonValue(System.Text.Json.JsonElement v) {
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Number) {
+            if (v.TryGetInt32(out int __i)) return __i;
+            if (v.TryGetInt64(out long __l)) return __l;
+            return v.GetDouble();
+        }
+        if (v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString();
+        if (v.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            var __list = new System.Collections.Generic.List<object>();
+            foreach (var __ne in v.EnumerateArray()) __list.Add(__convertJsonValue(__ne));
+            return __list;
+        }
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Object) {
+            var __dict = new System.Collections.Generic.Dictionary<string, object>();
+            foreach (var __prop in v.EnumerateObject()) __dict[__prop.Name] = __convertJsonValue(__prop.Value);
+            return __dict;
+        }
+        return v.ToString();
+    }
+
+    public string snapshot() {
+        if (_context_stack.Count > 0) throw new System.Exception("E700: system not quiescent");
+        var __j = new Dictionary<string, object>();
+        __j["_compartment"] = __SerComp(__compartment);
+        var __stack = new List<object>();
+        foreach (var c in _state_stack) { __stack.Add(__SerComp(c)); }
+        __j["_state_stack"] = __stack;
+        __j["count"] = count;
+        var __opts = new System.Text.Json.JsonSerializerOptions { TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver() };
+        return System.Text.Json.JsonSerializer.Serialize(__j, __opts);
+    }
+
+    public void restore(string json) {
+        var __doc = System.Text.Json.JsonDocument.Parse(json);
+        var __root = __doc.RootElement;
+        this.__compartment = __DeserComp(__root.GetProperty("_compartment"));
+        if (__root.TryGetProperty("_state_stack", out var __stack)) {
+            this._state_stack = new List<NoPersistCompartment>();
+            foreach (var item in __stack.EnumerateArray()) { this._state_stack.Add(__DeserComp(item)); }
+        }
+        if (__root.TryGetProperty("count", out var __count)) { try { this.count = System.Text.Json.JsonSerializer.Deserialize<int>(__count.GetRawText()); } catch { } }
+    }
+}

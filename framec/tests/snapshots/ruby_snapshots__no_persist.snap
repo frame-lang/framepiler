@@ -1,0 +1,273 @@
+---
+source: framec/tests/ruby_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"ruby\")"
+---
+class NoPersistFrameEvent
+    attr_accessor :_message
+    attr_accessor :_parameters
+
+    def initialize(message, parameters = [])
+        @_message = message
+        @_parameters = parameters
+    end
+end
+
+
+class NoPersistFrameContext
+    attr_accessor :_event
+    attr_accessor :_return
+    attr_accessor :_data
+    attr_accessor :_transitioned
+
+    def initialize(event, default_return = nil)
+        @_event = event
+        @_return = default_return
+        @_data = {}
+        @_transitioned = false
+    end
+end
+
+
+class NoPersistCompartment
+    attr_accessor :state
+    attr_accessor :state_args
+    attr_accessor :state_vars
+    attr_accessor :enter_args
+    attr_accessor :exit_args
+    attr_accessor :forward_event
+    attr_accessor :parent_compartment
+
+    def initialize(state, parent_compartment = nil)
+        @state = state
+        @state_args = []
+        @state_vars = {}
+        @enter_args = []
+        @exit_args = []
+        @forward_event = nil
+        @parent_compartment = parent_compartment
+    end
+
+    def copy
+        c = NoPersistCompartment.new(@state, @parent_compartment)
+        c.state_args = @state_args.dup
+        c.state_vars = @state_vars.dup
+        c.enter_args = @enter_args.dup
+        c.exit_args = @exit_args.dup
+        c.forward_event = @forward_event
+        c
+    end
+end
+
+
+class NoPersist
+    attr_accessor :_state_stack
+    attr_accessor :__compartment
+    attr_accessor :__next_compartment
+    attr_accessor :_context_stack
+    attr_accessor :count
+    attr_accessor :cache
+
+    def initialize
+        @_state_stack = []
+        @_context_stack = []
+        @count = 0
+        @cache = -1
+        @__compartment = __prepareEnter("Active", [], [])
+        @__next_compartment = nil
+    end
+
+    def _frame_init
+        __e = NoPersistFrameEvent.new("$>", @__compartment.enter_args)
+        __ctx = NoPersistFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        @_context_stack.pop
+    end
+
+    def self._create
+        c = new
+        c._frame_init()
+        c
+    end
+
+    def self.hsm_chain
+        {
+            "Active" => ["Active"],
+        }
+    end
+    def __prepareEnter(leaf, state_args, enter_args)
+        comp = nil
+        self.class.hsm_chain[leaf].each do |name|
+            new_comp = NoPersistCompartment.new(name)
+            new_comp.state_args = state_args.dup
+            new_comp.enter_args = enter_args.dup
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        end
+        comp
+    end
+
+    def __prepareExit(exit_args)
+        comp = @__compartment
+        while comp != nil
+            comp.exit_args = exit_args.dup
+            comp = comp.parent_compartment
+        end
+    end
+
+    def __kernel(__e)
+        # Route event to current state.
+        __router(__e)
+        # Drain any transitions queued by the handler.
+        while @__next_compartment != nil
+            next_compartment = @__next_compartment
+            @__next_compartment = nil
+            exit_event = NoPersistFrameEvent.new("<$", @__compartment.exit_args)
+            __router(exit_event)
+            @__compartment = next_compartment
+            forward_event = next_compartment.forward_event
+            next_compartment.forward_event = nil
+            if forward_event == nil
+                enter_event = NoPersistFrameEvent.new("$>", @__compartment.enter_args)
+                __router(enter_event)
+            elsif forward_event._message == "$>"
+                __router(forward_event)
+            else
+                enter_event = NoPersistFrameEvent.new("$>", @__compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            end
+            @_context_stack.each { |ctx| ctx._transitioned = true }
+        end
+    end
+
+    def __router(__e)
+        handler_name = "_state_#{@__compartment.state}"
+        if respond_to?(handler_name, true)
+            send(handler_name, __e, @__compartment)
+        end
+    end
+
+    def __transition(next_compartment)
+        @__next_compartment = next_compartment
+    end
+
+    def bump
+        __e = NoPersistFrameEvent.new("bump", [])
+        __ctx = NoPersistFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        return @_context_stack.pop._return
+    end
+
+    def set_cache(v)
+        __e = NoPersistFrameEvent.new("set_cache", [v])
+        __ctx = NoPersistFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        return @_context_stack.pop._return
+    end
+
+    def get_count
+        __e = NoPersistFrameEvent.new("get_count", [])
+        __ctx = NoPersistFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        return @_context_stack.pop._return
+    end
+
+    def get_cache
+        __e = NoPersistFrameEvent.new("get_cache", [])
+        __ctx = NoPersistFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        return @_context_stack.pop._return
+    end
+
+    def _state_Active(__e, compartment)
+        if __e._message == "bump"
+            self._s_Active_hdl_user_bump(__e, compartment)
+            return
+        end
+        if __e._message == "get_cache"
+            self._s_Active_hdl_user_get_cache(__e, compartment)
+            return
+        end
+        if __e._message == "get_count"
+            self._s_Active_hdl_user_get_count(__e, compartment)
+            return
+        end
+        if __e._message == "set_cache"
+            self._s_Active_hdl_user_set_cache(__e, compartment)
+            return
+        end
+    end
+
+    def _s_Active_hdl_user_bump(__e, compartment)
+        self.count = self.count + 1
+    end
+
+    def _s_Active_hdl_user_get_cache(__e, compartment)
+        @_context_stack[@_context_stack.length - 1]._return = self.cache
+    end
+
+    def _s_Active_hdl_user_get_count(__e, compartment)
+        @_context_stack[@_context_stack.length - 1]._return = self.count
+    end
+
+    def _s_Active_hdl_user_set_cache(__e, compartment)
+        v = __e._parameters[0]
+        self.cache = v
+    end
+
+    def __ser_comp(comp)
+        return nil if comp.nil?
+        j = {}
+        j["state"] = comp.state
+        sv = {}
+        comp.state_vars.each { |k, v| sv[k] = v }
+        j["state_vars"] = sv
+        j["state_args"] = comp.state_args
+        j["enter_args"] = comp.enter_args
+        j["parent"] = __ser_comp(comp.parent_compartment)
+        j
+    end
+
+    def __deser_comp(data)
+        return nil if data.nil?
+        c = NoPersistCompartment.new(data["state"])
+        if data["state_vars"]
+          data["state_vars"].each { |k, v| c.state_vars[k] = v }
+        end
+        c.state_args = data["state_args"] if data["state_args"]
+        c.enter_args = data["enter_args"] if data["enter_args"]
+        if data["parent"]
+          c.parent_compartment = __deser_comp(data["parent"])
+        end
+        c
+    end
+
+    def snapshot
+        raise "E700: system not quiescent" unless @_context_stack.empty?
+        j = {}
+        j["_compartment"] = __ser_comp(@__compartment)
+        stack = []
+        @_state_stack.each { |c| stack.push(__ser_comp(c)) }
+        j["_state_stack"] = stack
+        j["count"] = @count
+        JSON.generate(j)
+    end
+
+    def restore(json)
+        _parsed = JSON.parse(json)
+        @_context_stack = []
+        @__next_compartment = nil
+        @__compartment = __deser_comp(_parsed["_compartment"])
+        if _parsed["_state_stack"]
+          @_state_stack = _parsed["_state_stack"].map { |sc| __deser_comp(sc) }
+        else
+          @_state_stack = []
+        end
+        @count = _parsed["count"] if _parsed.key?("count")
+    end
+end

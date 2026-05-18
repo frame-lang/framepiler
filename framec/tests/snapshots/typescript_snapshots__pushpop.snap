@@ -1,0 +1,237 @@
+---
+source: framec/tests/typescript_snapshots.rs
+expression: "compile_fixture(\"05_pushpop\", \"typescript\")"
+---
+class PushPopFrameEvent {
+    public _message: string;
+    public _parameters: any[];
+
+    constructor(message: string, parameters: any[]) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class PushPopFrameContext {
+    public event: PushPopFrameEvent;
+    public _return: any;
+    public _data: Record<string, any>;
+    public _transitioned: boolean;
+
+    constructor(event: PushPopFrameEvent, default_return: any) {
+        this.event = event;
+        this._return = default_return;
+        this._data = {  };
+        this._transitioned = false;
+    }
+}
+
+
+class PushPopCompartment {
+    public state: string;
+    public state_args: any[];
+    public state_vars: Record<string, any>;
+    public enter_args: any[];
+    public exit_args: any[];
+    public forward_event: any;
+    public parent_compartment: PushPopCompartment | null;
+
+    constructor(state: string, parent_compartment: PushPopCompartment | null = null) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = {  };
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    public copy(): PushPopCompartment {
+        const c = new PushPopCompartment(this.state, this.parent_compartment);
+        c.state_args = {...this.state_args};
+        c.state_vars = {...this.state_vars};
+        c.enter_args = {...this.enter_args};
+        c.exit_args = {...this.exit_args};
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+export class PushPop {
+    private _state_stack: Array<any>;
+    private __compartment: PushPopCompartment;
+    private __next_compartment: PushPopCompartment | null;
+    private _context_stack: Array<any>;
+    private pings: i32 = 0;
+    private leaves: i32 = 0;
+
+    constructor() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Idle", [], []);
+        this.__next_compartment = null;
+    }
+
+    _frame_init(): void {
+        const __e = new PushPopFrameEvent("$>", this.__compartment.enter_args);
+        const __ctx = new PushPopFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    static _create(): PushPop {
+        const c = new PushPop();
+        c._frame_init();
+        return c;
+    }
+
+    static readonly _HSM_CHAIN: Record<string, string[]> = {
+        "Idle": ["Idle"],
+        "Nested": ["Nested"],
+    };
+    private __prepareEnter(leaf: string, state_args: any[], enter_args: any[]): PushPopCompartment {
+        let comp: PushPopCompartment | null = null;
+        for (const name of PushPop._HSM_CHAIN[leaf]) {
+            const new_comp = new PushPopCompartment(name);
+            new_comp.state_args = [...state_args];
+            new_comp.enter_args = [...enter_args];
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    private __prepareExit(exit_args: any[]) {
+        let comp: PushPopCompartment | null = this.__compartment;
+        while (comp !== null) {
+            comp.exit_args = [...exit_args];
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private __kernel(__e: PushPopFrameEvent) {
+        // Route event to current state.
+        this.__router(__e);
+        // Drain any transitions queued by the handler.
+        while (this.__next_compartment !== null) {
+            const next_compartment = this.__next_compartment;
+            this.__next_compartment = null;
+            // Exit the current (leaf) state.
+            const exit_event = new PushPopFrameEvent("<$", this.__compartment.exit_args);
+            this.__router(exit_event);
+            // Switch to the new compartment.
+            this.__compartment = next_compartment;
+            // Three-branch forward-event handling.
+            const forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event === null) {
+                // No forwarded event — synthesize a fresh $>.
+                const enter_event = new PushPopFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+            } else if (forward_event._message === "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                this.__router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                const enter_event = new PushPopFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+                this.__router(forward_event);
+            }
+            for (const ctx of this._context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private __router(__e: PushPopFrameEvent) {
+        const handler_name = `_state_${this.__compartment.state}`;
+        const handler = (this as any)[handler_name];
+        if (handler) {
+            handler.call(this, __e, this.__compartment);
+        }
+    }
+
+    private __transition(next_compartment: PushPopCompartment) {
+        this.__next_compartment = next_compartment;
+    }
+
+    public ping() {
+        const __e = new PushPopFrameEvent("ping", []);
+        const __ctx = new PushPopFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    public nest() {
+        const __e = new PushPopFrameEvent("nest", []);
+        const __ctx = new PushPopFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    public unnest() {
+        const __e = new PushPopFrameEvent("unnest", []);
+        const __ctx = new PushPopFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    public leaf() {
+        const __e = new PushPopFrameEvent("leaf", []);
+        const __ctx = new PushPopFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    private _state_Idle(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        if (__e._message === "nest") {
+            this._s_Idle_hdl_user_nest(__e, compartment);
+            return;
+        }
+        if (__e._message === "ping") {
+            this._s_Idle_hdl_user_ping(__e, compartment);
+            return;
+        }
+    }
+
+    private _state_Nested(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        if (__e._message === "leaf") {
+            this._s_Nested_hdl_user_leaf(__e, compartment);
+            return;
+        }
+        if (__e._message === "unnest") {
+            this._s_Nested_hdl_user_unnest(__e, compartment);
+            return;
+        }
+    }
+
+    private _s_Idle_hdl_user_nest(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        this._state_stack.push(this.__compartment);
+        const __compartment = this.__prepareEnter("Nested", [], []);
+        this.__transition(__compartment);
+        return;
+    }
+
+    private _s_Idle_hdl_user_ping(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        self.pings = self.pings + 1
+    }
+
+    private _s_Nested_hdl_user_leaf(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        self.leaves = self.leaves + 1
+    }
+
+    private _s_Nested_hdl_user_unnest(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        const __saved = this._state_stack.pop()!;
+        this.__transition(__saved);
+        return;
+    }
+}

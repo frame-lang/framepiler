@@ -1,0 +1,270 @@
+---
+source: framec/tests/javascript_snapshots.rs
+expression: "compile_fixture(\"12_no_persist\", \"javascript\")"
+---
+export class NoPersistFrameEvent {
+    _message;
+    _parameters;
+
+    constructor(message, parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+export class NoPersistFrameContext {
+    event;
+    _return;
+    _data;
+    _transitioned;
+
+    constructor(event, default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = {  };
+        this._transitioned = false;
+    }
+}
+
+
+export class NoPersistCompartment {
+    state;
+    state_args;
+    state_vars;
+    enter_args;
+    exit_args;
+    forward_event;
+    parent_compartment;
+
+    constructor(state, parent_compartment = null) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = {  };
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    copy() {
+        const c = new NoPersistCompartment(this.state, this.parent_compartment);
+        c.state_args = {...this.state_args};
+        c.state_vars = {...this.state_vars};
+        c.enter_args = {...this.enter_args};
+        c.exit_args = {...this.exit_args};
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+export class NoPersist {
+    _state_stack;
+    __compartment;
+    __next_compartment;
+    _context_stack;
+    count = 0;
+    cache = -1;
+
+    constructor() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Active", [], []);
+        this.__next_compartment = null;
+    }
+
+    _frame_init() {
+        const __e = new NoPersistFrameEvent("$>", this.__compartment.enter_args);
+        const __ctx = new NoPersistFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    static _create() {
+        const c = new NoPersist();
+        c._frame_init();
+        return c;
+    }
+
+    static _HSM_CHAIN = {
+        "Active": ["Active"],
+    };
+    __prepareEnter(leaf, state_args, enter_args) {
+        let comp = null;
+        for (const name of NoPersist._HSM_CHAIN[leaf]) {
+            const new_comp = new NoPersistCompartment(name);
+            new_comp.state_args = [...state_args];
+            new_comp.enter_args = [...enter_args];
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    __prepareExit(exit_args) {
+        let comp = this.__compartment;
+        while (comp !== null) {
+            comp.exit_args = [...exit_args];
+            comp = comp.parent_compartment;
+        }
+    }
+
+    __kernel(__e) {
+        // Route event to current state.
+        this.__router(__e);
+        // Drain any transitions queued by the handler.
+        while (this.__next_compartment !== null) {
+            const next_compartment = this.__next_compartment;
+            this.__next_compartment = null;
+            // Exit the current (leaf) state.
+            const exit_event = new NoPersistFrameEvent("<$", this.__compartment.exit_args);
+            this.__router(exit_event);
+            // Switch to the new compartment.
+            this.__compartment = next_compartment;
+            // Three-branch forward-event handling.
+            const forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event === null) {
+                // No forwarded event — synthesize a fresh $>.
+                const enter_event = new NoPersistFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+            } else if (forward_event._message === "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                this.__router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                const enter_event = new NoPersistFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+                this.__router(forward_event);
+            }
+            for (const ctx of this._context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    __router(__e) {
+        const handler_name = `_state_${this.__compartment.state}`;
+        const handler = this[handler_name];
+        if (handler) {
+            handler.call(this, __e, this.__compartment);
+        }
+    }
+
+    __transition(next_compartment) {
+        this.__next_compartment = next_compartment;
+    }
+
+    bump() {
+        const __e = new NoPersistFrameEvent("bump", []);
+        const __ctx = new NoPersistFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        return this._context_stack.pop()._return;
+    }
+
+    set_cache(v) {
+        const __e = new NoPersistFrameEvent("set_cache", [v]);
+        const __ctx = new NoPersistFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        return this._context_stack.pop()._return;
+    }
+
+    get_count() {
+        const __e = new NoPersistFrameEvent("get_count", []);
+        const __ctx = new NoPersistFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        return this._context_stack.pop()._return;
+    }
+
+    get_cache() {
+        const __e = new NoPersistFrameEvent("get_cache", []);
+        const __ctx = new NoPersistFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        return this._context_stack.pop()._return;
+    }
+
+    _state_Active(__e, compartment) {
+        if (__e._message === "bump") {
+            this._s_Active_hdl_user_bump(__e, compartment);
+            return;
+        }
+        if (__e._message === "get_cache") {
+            this._s_Active_hdl_user_get_cache(__e, compartment);
+            return;
+        }
+        if (__e._message === "get_count") {
+            this._s_Active_hdl_user_get_count(__e, compartment);
+            return;
+        }
+        if (__e._message === "set_cache") {
+            this._s_Active_hdl_user_set_cache(__e, compartment);
+            return;
+        }
+    }
+
+    _s_Active_hdl_user_bump(__e, compartment) {
+        self.count = self.count + 1
+    }
+
+    _s_Active_hdl_user_get_cache(__e, compartment) {
+        this._context_stack[this._context_stack.length - 1]._return = self.cache;
+    }
+
+    _s_Active_hdl_user_get_count(__e, compartment) {
+        this._context_stack[this._context_stack.length - 1]._return = self.count;
+    }
+
+    _s_Active_hdl_user_set_cache(__e, compartment) {
+        const v = __e._parameters[0];
+        self.cache = v
+    }
+
+    snapshot() {
+        if (this._context_stack.length > 0) { throw new Error("E700: system not quiescent"); }
+        const serializeComp = (c) => {
+            if (!c) return null;
+            return {
+                state: c.state,
+                state_args: {...c.state_args},
+                state_vars: {...c.state_vars},
+                enter_args: {...c.enter_args},
+                exit_args: {...c.exit_args},
+                forward_event: c.forward_event,
+                parent_compartment: serializeComp(c.parent_compartment),
+            };
+        };
+        return JSON.stringify({
+            _compartment: serializeComp(this.__compartment),
+            _state_stack: this._state_stack.map((c) => serializeComp(c)),
+            count: this.count,
+        });
+    }
+
+    restore(json) {
+        const deserializeComp = (data) => {
+            if (!data) return null;
+            const comp = new NoPersistCompartment(data.state);
+            comp.state_args = {...(data.state_args || {})};
+            comp.state_vars = {...(data.state_vars || {})};
+            comp.enter_args = {...(data.enter_args || {})};
+            comp.exit_args = {...(data.exit_args || {})};
+            comp.forward_event = data.forward_event;
+            comp.parent_compartment = deserializeComp(data.parent_compartment);
+            return comp;
+        };
+        const _parsed = JSON.parse(json);
+        this.__compartment = deserializeComp(_parsed._compartment);
+        this.__next_compartment = null;
+        this._state_stack = (_parsed._state_stack || []).map((c) => deserializeComp(c));
+        this._context_stack = [];
+        this.count = _parsed.count;
+    }
+}

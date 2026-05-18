@@ -1,0 +1,194 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"06_selfcall\", \"go\")"
+---
+type SelfCallFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type SelfCallFrameContext struct {
+    _event  SelfCallFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type SelfCallCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *SelfCallFrameEvent
+    parentCompartment *SelfCallCompartment
+}
+
+func newSelfCallCompartment(state string) *SelfCallCompartment {
+    return &SelfCallCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *SelfCallCompartment) copy() *SelfCallCompartment {
+    nc := &SelfCallCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type SelfCall struct {
+    _state_stack []*SelfCallCompartment
+    __compartment *SelfCallCompartment
+    __next_compartment *SelfCallCompartment
+    _context_stack []SelfCallFrameContext
+    count int
+}
+
+func NewSelfCall() *SelfCall {
+    s := &SelfCall{}
+    s._state_stack = make([]*SelfCallCompartment, 0)
+    s._context_stack = make([]SelfCallFrameContext, 0)
+    s.count = 0
+    s.__compartment = s.__prepareEnter("Active", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateSelfCall() *SelfCall {
+    c := NewSelfCall()
+    __e := SelfCallFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := SelfCallFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *SelfCall) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Active": {"Active"},
+    }
+}
+func (s *SelfCall) __prepareEnter(leaf string, state_args []any, enter_args []any) *SelfCallCompartment {
+    var comp *SelfCallCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newSelfCallCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *SelfCall) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *SelfCall) __kernel(__e *SelfCallFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &SelfCallFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &SelfCallFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &SelfCallFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *SelfCall) __router(__e *SelfCallFrameEvent) {
+    switch s.__compartment.state {
+    case "Active":
+        s._state_Active(__e, s.__compartment)
+    }
+}
+
+func (s *SelfCall) __transition(next *SelfCallCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *SelfCall) Kick() {
+    __e := SelfCallFrameEvent{_message: "kick", _parameters: []any{}}
+    __ctx := SelfCallFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *SelfCall) Report() int {
+    __e := SelfCallFrameEvent{_message: "report", _parameters: []any{}}
+    __ctx := SelfCallFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    var __result int
+    if __rv := s._context_stack[len(s._context_stack)-1]._return; __rv != nil { __result = __rv.(int) }
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+    return __result
+}
+
+func (s *SelfCall) _state_Active(__e *SelfCallFrameEvent, compartment *SelfCallCompartment) {
+    if __e._message == "kick" {
+        s._s_Active_hdl_user_kick(__e, compartment)
+        return
+    }
+    if __e._message == "report" {
+        s._s_Active_hdl_user_report(__e, compartment)
+        return
+    }
+}
+
+func (s *SelfCall) _s_Active_hdl_user_kick(__e *SelfCallFrameEvent, compartment *SelfCallCompartment) {
+    {
+    self.count = self.count + 1
+    s.Report()
+    if len(s._context_stack) > 0 && s._context_stack[len(s._context_stack)-1]._transitioned { return }
+    }
+}
+
+func (s *SelfCall) _s_Active_hdl_user_report(__e *SelfCallFrameEvent, compartment *SelfCallCompartment) {
+    {
+    s._context_stack[len(s._context_stack)-1]._return = s.count
+    }
+}

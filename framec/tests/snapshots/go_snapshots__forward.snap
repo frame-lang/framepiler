@@ -1,0 +1,226 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"07_forward\", \"go\")"
+---
+type ForwardFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type ForwardFrameContext struct {
+    _event  ForwardFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type ForwardCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *ForwardFrameEvent
+    parentCompartment *ForwardCompartment
+}
+
+func newForwardCompartment(state string) *ForwardCompartment {
+    return &ForwardCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *ForwardCompartment) copy() *ForwardCompartment {
+    nc := &ForwardCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type Forward struct {
+    _state_stack []*ForwardCompartment
+    __compartment *ForwardCompartment
+    __next_compartment *ForwardCompartment
+    _context_stack []ForwardFrameContext
+    starts int
+    middles int
+}
+
+func NewForward() *Forward {
+    s := &Forward{}
+    s._state_stack = make([]*ForwardCompartment, 0)
+    s._context_stack = make([]ForwardFrameContext, 0)
+    s.starts = 0
+    s.middles = 0
+    s.__compartment = s.__prepareEnter("Start", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreateForward() *Forward {
+    c := NewForward()
+    __e := ForwardFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := ForwardFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *Forward) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Start": {"Start"},
+        "Middle": {"Middle"},
+        "End": {"End"},
+    }
+}
+func (s *Forward) __prepareEnter(leaf string, state_args []any, enter_args []any) *ForwardCompartment {
+    var comp *ForwardCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newForwardCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *Forward) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *Forward) __kernel(__e *ForwardFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &ForwardFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &ForwardFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &ForwardFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *Forward) __router(__e *ForwardFrameEvent) {
+    switch s.__compartment.state {
+    case "Start":
+        s._state_Start(__e, s.__compartment)
+    case "Middle":
+        s._state_Middle(__e, s.__compartment)
+    case "End":
+        s._state_End(__e, s.__compartment)
+    }
+}
+
+func (s *Forward) __transition(next *ForwardCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *Forward) Run() {
+    __e := ForwardFrameEvent{_message: "run", _parameters: []any{}}
+    __ctx := ForwardFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *Forward) Finish() {
+    __e := ForwardFrameEvent{_message: "finish", _parameters: []any{}}
+    __ctx := ForwardFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *Forward) _state_Start(__e *ForwardFrameEvent, compartment *ForwardCompartment) {
+    if __e._message == "run" {
+        s._s_Start_hdl_user_run(__e, compartment)
+        return
+    }
+}
+
+func (s *Forward) _state_Middle(__e *ForwardFrameEvent, compartment *ForwardCompartment) {
+    if __e._message == "finish" {
+        s._s_Middle_hdl_user_finish(__e, compartment)
+        return
+    }
+    if __e._message == "run" {
+        s._s_Middle_hdl_user_run(__e, compartment)
+        return
+    }
+}
+
+func (s *Forward) _state_End(__e *ForwardFrameEvent, compartment *ForwardCompartment) {
+    if __e._message == "finish" {
+        s._s_End_hdl_user_finish(__e, compartment)
+        return
+    }
+}
+
+func (s *Forward) _s_Start_hdl_user_run(__e *ForwardFrameEvent, compartment *ForwardCompartment) {
+    {
+    self.starts = self.starts + 1
+    __compartment := s.__prepareEnter("Middle", []any{}, []any{})
+    __compartment.forwardEvent = __e
+    s.__transition(__compartment)
+    return
+    }
+}
+
+func (s *Forward) _s_Middle_hdl_user_finish(__e *ForwardFrameEvent, compartment *ForwardCompartment) {
+    {
+    __compartment := s.__prepareEnter("End", []any{}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}
+
+func (s *Forward) _s_Middle_hdl_user_run(__e *ForwardFrameEvent, compartment *ForwardCompartment) {
+    {
+    self.middles = self.middles + 1
+    }
+}
+
+func (s *Forward) _s_End_hdl_user_finish(__e *ForwardFrameEvent, compartment *ForwardCompartment) {
+}

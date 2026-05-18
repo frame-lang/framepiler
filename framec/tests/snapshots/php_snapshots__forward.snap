@@ -1,0 +1,221 @@
+---
+source: framec/tests/php_snapshots.rs
+expression: "compile_fixture(\"07_forward\", \"php\")"
+---
+<?php
+
+class ForwardFrameEvent {
+    public $_message;
+    public $_parameters;
+
+    public function __construct($message, $parameters = null) {
+        $this->_message = $message;
+        $this->_parameters = $parameters ?? [];
+    }
+}
+
+
+class ForwardFrameContext {
+    public $_event;
+    public $_return;
+    public $_data;
+    public $_transitioned;
+
+    public function __construct($event, $defaultReturn = null) {
+        $this->_event = $event;
+        $this->_return = $defaultReturn;
+        $this->_data = [];
+        $this->_transitioned = false;
+    }
+}
+
+
+class ForwardCompartment {
+    public $state;
+    public $state_args;
+    public $state_vars;
+    public $enter_args;
+    public $exit_args;
+    public $forward_event;
+    public $parent_compartment;
+
+    public function __construct($state, $parent_compartment = null) {
+        $this->state = $state;
+        $this->state_args = [];
+        $this->state_vars = [];
+        $this->enter_args = [];
+        $this->exit_args = [];
+        $this->forward_event = null;
+        $this->parent_compartment = $parent_compartment;
+    }
+
+    public function copy() {
+        $c = new ForwardCompartment($this->state, $this->parent_compartment);
+        $c->state_args = $this->state_args;
+        $c->state_vars = $this->state_vars;
+        $c->enter_args = $this->enter_args;
+        $c->exit_args = $this->exit_args;
+        $c->forward_event = $this->forward_event;
+        return $c;
+    }
+}
+
+
+class Forward {
+    private $_state_stack;
+    private $__compartment;
+    private $__next_compartment;
+    private $_context_stack;
+    public $starts = 0;
+    public $middles = 0;
+
+    public function __construct() {
+        $this->_state_stack = [];
+        $this->_context_stack = [];
+        $this->__compartment = $this->__prepareEnter("Start", [], []);
+        $this->__next_compartment = null;
+    }
+
+    public function _frame_init(): void {
+        $__e = new ForwardFrameEvent("$>", $this->__compartment->enter_args);
+        $__ctx = new ForwardFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        array_pop($this->_context_stack);
+    }
+
+    public static function _create(): self {
+        $c = new self();
+        $c->_frame_init();
+        return $c;
+    }
+
+    public function hsm_chain() {
+        return [
+            "Start" => ["Start"],
+            "Middle" => ["Middle"],
+            "End" => ["End"],
+        ];
+    }
+    private function __prepareEnter($leaf, $state_args, $enter_args) {
+        $comp = null;
+        foreach ($this->hsm_chain()[$leaf] as $name) {
+            $new_comp = new ForwardCompartment($name);
+            $new_comp->state_args = $state_args;
+            $new_comp->enter_args = $enter_args;
+            $new_comp->parent_compartment = $comp;
+            $comp = $new_comp;
+        }
+        return $comp;
+    }
+
+    private function __prepareExit($exit_args) {
+        $comp = $this->__compartment;
+        while ($comp !== null) {
+            $comp->exit_args = $exit_args;
+            $comp = $comp->parent_compartment;
+        }
+    }
+
+    private function __kernel($__e) {
+        // Route event to current state.
+        $this->__router($__e);
+        // Drain any transitions queued by the handler.
+        while ($this->__next_compartment !== null) {
+            $next_compartment = $this->__next_compartment;
+            $this->__next_compartment = null;
+            $exit_event = new ForwardFrameEvent("<$", $this->__compartment->exit_args);
+            $this->__router($exit_event);
+            $this->__compartment = $next_compartment;
+            $forward_event = $next_compartment->forward_event;
+            $next_compartment->forward_event = null;
+            if ($forward_event === null) {
+                $enter_event = new ForwardFrameEvent("$>", $this->__compartment->enter_args);
+                $this->__router($enter_event);
+            } else if ($forward_event->_message === "$>") {
+                $this->__router($forward_event);
+            } else {
+                $enter_event = new ForwardFrameEvent("$>", $this->__compartment->enter_args);
+                $this->__router($enter_event);
+                $this->__router($forward_event);
+            }
+            foreach ($this->_context_stack as $ctx) {
+                $ctx->_transitioned = true;
+            }
+        }
+    }
+
+    private function __router($__e) {
+        $handler_name = "_state_" . $this->__compartment->state;
+        if (method_exists($this, $handler_name)) {
+            $this->$handler_name($__e, $this->__compartment);
+        }
+    }
+
+    private function __transition($next_compartment) {
+        $this->__next_compartment = $next_compartment;
+    }
+
+    public function run() {
+        $__e = new ForwardFrameEvent("run", []);
+        $__ctx = new ForwardFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    public function finish() {
+        $__e = new ForwardFrameEvent("finish", []);
+        $__ctx = new ForwardFrameContext($__e, null);
+        $this->_context_stack[] = $__ctx;
+        $this->__kernel($__e);
+        return array_pop($this->_context_stack)->_return;
+    }
+
+    private function _state_Start($__e, $compartment) {
+        if ($__e->_message == "run") {
+            $this->_s_Start_hdl_user_run($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _state_Middle($__e, $compartment) {
+        if ($__e->_message == "finish") {
+            $this->_s_Middle_hdl_user_finish($__e, $compartment);
+            return;
+        }
+        if ($__e->_message == "run") {
+            $this->_s_Middle_hdl_user_run($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _state_End($__e, $compartment) {
+        if ($__e->_message == "finish") {
+            $this->_s_End_hdl_user_finish($__e, $compartment);
+            return;
+        }
+    }
+
+    private function _s_Start_hdl_user_run($__e, $compartment) {
+        self.starts = self.starts + 1
+        $__compartment = $this->__prepareEnter("Middle", [], []);
+        $__compartment->forward_event = $__e;
+        $this->__transition($__compartment);
+        return;
+    }
+
+    private function _s_Middle_hdl_user_finish($__e, $compartment) {
+        $__compartment = $this->__prepareEnter("End", [], []);
+        $this->__transition($__compartment);
+        return;
+    }
+
+    private function _s_Middle_hdl_user_run($__e, $compartment) {
+        self.middles = self.middles + 1
+    }
+
+    private function _s_End_hdl_user_finish($__e, $compartment) {
+
+    }
+}

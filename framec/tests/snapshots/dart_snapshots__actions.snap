@@ -1,0 +1,202 @@
+---
+source: framec/tests/dart_snapshots.rs
+expression: "compile_fixture(\"10_actions\", \"dart\")"
+---
+class ActionsFrameEvent {
+    late String _message;
+    late List<dynamic> _parameters;
+
+    ActionsFrameEvent(String message, List<dynamic> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class ActionsFrameContext {
+    late ActionsFrameEvent event;
+    dynamic _return;
+    late Map<String, dynamic> _data;
+    late bool _transitioned;
+
+    ActionsFrameContext(ActionsFrameEvent event, dynamic default_return) {
+        this.event = event;
+        this._return = default_return;
+        this._data = <String, dynamic>{};
+        this._transitioned = false;
+    }
+}
+
+
+class ActionsCompartment {
+    late String state;
+    late List<dynamic> state_args;
+    late Map<String, dynamic> state_vars;
+    late List<dynamic> enter_args;
+    late List<dynamic> exit_args;
+    dynamic forward_event;
+    ActionsCompartment? parent_compartment;
+
+    ActionsCompartment(String state, [ActionsCompartment? parent_compartment = null]) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = <String, dynamic>{};
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    ActionsCompartment copy() {
+        final c = ActionsCompartment(this.state, this.parent_compartment);
+        c.state_args = List<dynamic>.from(this.state_args);
+        c.state_vars = Map<String, dynamic>.from(this.state_vars);
+        c.enter_args = List<dynamic>.from(this.enter_args);
+        c.exit_args = List<dynamic>.from(this.exit_args);
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+class Actions {
+    late List<ActionsCompartment> _state_stack;
+    late ActionsCompartment __compartment;
+    ActionsCompartment? __next_compartment;
+    late List<ActionsFrameContext> _context_stack;
+    i32 total = 0;
+
+    Actions() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Counting", [], []);
+        this.__next_compartment = null;
+    }
+
+    void _frame_init() {
+        final __e = ActionsFrameEvent("\$>", __compartment.enter_args);
+        final __ctx = ActionsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    static Actions _create() {
+        final c = Actions();
+        c._frame_init();
+        return c;
+    }
+
+    Map<String, List<String>> hsm_chain() {
+        return {
+            "Counting": ["Counting"],
+        };
+    }
+    ActionsCompartment __prepareEnter(String leaf, List<dynamic> state_args, List<dynamic> enter_args) {
+        ActionsCompartment? comp = null;
+        for (final name in hsm_chain()[leaf]!) {
+            final new_comp = ActionsCompartment(name);
+            new_comp.state_args = List<dynamic>.from(state_args);
+            new_comp.enter_args = List<dynamic>.from(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    void __prepareExit(List<dynamic> exit_args) {
+        ActionsCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = List<dynamic>.from(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    void __kernel(ActionsFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            final next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            final exit_event = ActionsFrameEvent("<\$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            final forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                final enter_event = ActionsFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "\$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                final enter_event = ActionsFrameEvent("\$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (final ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    void __router(ActionsFrameEvent __e) {
+        switch (__compartment.state) {
+            case "Counting":
+                _state_Counting(__e, __compartment);
+                break;
+        }
+    }
+
+    void __transition(ActionsCompartment next_compartment) {
+        __next_compartment = next_compartment;
+    }
+
+    void increment(i32 n) {
+        final __e = ActionsFrameEvent("increment", [n]);
+        final __ctx = ActionsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        _context_stack.removeLast();
+    }
+
+    i32 get_total() {
+        final __e = ActionsFrameEvent("get_total", []);
+        final __ctx = ActionsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(__e);
+        return _context_stack.removeLast()._return;
+    }
+
+    void _state_Counting(ActionsFrameEvent __e, ActionsCompartment compartment) {
+        if (__e._message == "get_total") {
+            this._s_Counting_hdl_user_get_total(__e, compartment);
+            return;
+        }
+        if (__e._message == "increment") {
+            this._s_Counting_hdl_user_increment(__e, compartment);
+            return;
+        }
+    }
+
+    void _s_Counting_hdl_user_get_total(ActionsFrameEvent __e, ActionsCompartment compartment) {
+        this._context_stack[this._context_stack.length - 1]._return = self.total;
+    }
+
+    void _s_Counting_hdl_user_increment(ActionsFrameEvent __e, ActionsCompartment compartment) {
+        final n = __e._parameters[0];
+        _scale(n)
+    }
+
+    void _scale(i32 n) {
+                    self.total = self.total + n * 2
+    }
+}

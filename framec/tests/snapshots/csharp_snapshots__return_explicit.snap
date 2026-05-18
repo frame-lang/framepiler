@@ -1,0 +1,193 @@
+---
+source: framec/tests/csharp_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"csharp\")"
+---
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+class ReturnExplicitFrameEvent {
+    public string _message;
+    public List<object> _parameters;
+
+    public ReturnExplicitFrameEvent(string message) {
+        this._message = message;
+        this._parameters = new List<object>();
+    }
+
+    public ReturnExplicitFrameEvent(string message, List<object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class ReturnExplicitFrameContext {
+    public ReturnExplicitFrameEvent _event;
+    public object? _return;
+    public Dictionary<string, object> _data;
+    public bool _transitioned = false;
+
+    public ReturnExplicitFrameContext(ReturnExplicitFrameEvent ev, object? defaultReturn = null) {
+        this._event = ev;
+        this._return = defaultReturn;
+        this._data = new Dictionary<string, object>();
+        this._transitioned = false;
+    }
+}
+
+class ReturnExplicitCompartment {
+    public string state;
+    public List<object> state_args;
+    public Dictionary<string, object> state_vars;
+    public List<object> enter_args;
+    public List<object> exit_args;
+    public ReturnExplicitFrameEvent? forward_event;
+    public ReturnExplicitCompartment? parent_compartment;
+
+    public ReturnExplicitCompartment(string state) {
+        this.state = state;
+        this.state_args = new List<object>();
+        this.state_vars = new Dictionary<string, object>();
+        this.enter_args = new List<object>();
+        this.exit_args = new List<object>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    public ReturnExplicitCompartment Copy() {
+        ReturnExplicitCompartment c = new ReturnExplicitCompartment(this.state);
+        c.state_args = new List<object>(this.state_args);
+        c.state_vars = new Dictionary<string, object>(this.state_vars);
+        c.enter_args = new List<object>(this.enter_args);
+        c.exit_args = new List<object>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class ReturnExplicit {
+    private List<ReturnExplicitCompartment> _state_stack;
+    private ReturnExplicitCompartment __compartment;
+    private ReturnExplicitCompartment? __next_compartment;
+    private List<ReturnExplicitFrameContext> _context_stack;
+
+    public ReturnExplicit() {
+        _state_stack = new List<ReturnExplicitCompartment>();
+        _context_stack = new List<ReturnExplicitFrameContext>();
+        this.__compartment = __prepareEnter("Judging", new List<object>(), new List<object>());
+        this.__next_compartment = null;
+    }
+
+    public void __frame_init() {
+        ReturnExplicitFrameEvent __e = new ReturnExplicitFrameEvent("$>", __compartment.enter_args);
+        ReturnExplicitFrameContext __ctx = new ReturnExplicitFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(__e);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public static ReturnExplicit __create() {
+        ReturnExplicit c = new ReturnExplicit();
+        c.__frame_init();
+        return c;
+    }
+
+    private Dictionary<string, List<string>> hsm_chain() {
+        return new Dictionary<string, List<string>> {
+            { "Judging", new List<string> { "Judging" } },
+        };
+    }
+    private ReturnExplicitCompartment __prepareEnter(string leaf, List<object> state_args, List<object> enter_args) {
+        ReturnExplicitCompartment? comp = null;
+        foreach (string name in hsm_chain()[leaf]) {
+            ReturnExplicitCompartment new_comp = new ReturnExplicitCompartment(name);
+            new_comp.state_args = new List<object>(state_args);
+            new_comp.enter_args = new List<object>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    private void __prepareExit(List<object> exit_args) {
+        ReturnExplicitCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new List<object>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(ReturnExplicitFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            ReturnExplicitCompartment next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            ReturnExplicitFrameEvent exit_event = new ReturnExplicitFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            ReturnExplicitFrameEvent? forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                ReturnExplicitFrameEvent enter_event = new ReturnExplicitFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                ReturnExplicitFrameEvent enter_event = new ReturnExplicitFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            foreach (var ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(ReturnExplicitFrameEvent __e) {
+        if (__compartment.state == "Judging") {
+            _state_Judging(__e, __compartment);
+        }
+    }
+
+    private void __transition(ReturnExplicitCompartment next) {
+        __next_compartment = next;
+    }
+
+    public string decide(int score) {
+        ReturnExplicitFrameEvent __e = new ReturnExplicitFrameEvent("decide", new List<object> { score });
+        ReturnExplicitFrameContext __ctx = new ReturnExplicitFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        var __result = (string) _context_stack[_context_stack.Count - 1]._return;
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+        return __result;
+    }
+
+    private void _state_Judging(ReturnExplicitFrameEvent __e, ReturnExplicitCompartment compartment) {
+        if (__e._message == "decide") {
+            this._s_Judging_hdl_user_decide(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Judging_hdl_user_decide(ReturnExplicitFrameEvent __e, ReturnExplicitCompartment compartment) {
+        int score = System.Convert.ToInt32(__e._parameters[0]);
+                        if score >= 60 {
+        _context_stack[_context_stack.Count - 1]._return = "pass";
+                            return;
+                        }
+        _context_stack[_context_stack.Count - 1]._return = "fail";
+                        return;
+    }
+}

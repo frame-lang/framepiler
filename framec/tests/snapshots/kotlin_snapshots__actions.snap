@@ -1,0 +1,174 @@
+---
+source: framec/tests/kotlin_snapshots.rs
+expression: "compile_fixture(\"10_actions\", \"kotlin\")"
+---
+class ActionsFrameEvent(val _message: String, val _parameters: MutableList<Any?> = mutableListOf())
+
+class ActionsFrameContext(val _event: ActionsFrameEvent, var _return: Any? = null) {
+    val _data: MutableMap<String, Any?> = mutableMapOf()
+    var _transitioned: Boolean = false
+}
+
+class ActionsCompartment(val state: String) {
+    val state_args: MutableList<Any?> = mutableListOf()
+    val state_vars: MutableMap<String, Any?> = mutableMapOf()
+    val enter_args: MutableList<Any?> = mutableListOf()
+    val exit_args: MutableList<Any?> = mutableListOf()
+    var forward_event: ActionsFrameEvent? = null
+    var parent_compartment: ActionsCompartment? = null
+
+    fun copy(): ActionsCompartment {
+        val c = ActionsCompartment(this.state)
+        c.state_args.addAll(this.state_args)
+        c.state_vars.putAll(this.state_vars)
+        c.enter_args.addAll(this.enter_args)
+        c.exit_args.addAll(this.exit_args)
+        c.forward_event = this.forward_event
+        c.parent_compartment = this.parent_compartment
+        return c
+    }
+}
+
+class Actions {
+    private var _state_stack: MutableList<ActionsCompartment>
+    private var __compartment: ActionsCompartment
+    private var __next_compartment: ActionsCompartment?
+    private var _context_stack: MutableList<ActionsFrameContext>
+    var total: Int = 0
+
+    init {
+        _state_stack = mutableListOf()
+        _context_stack = mutableListOf()
+        this.__compartment = __prepareEnter("Counting", mutableListOf<Any?>(), mutableListOf<Any?>())
+        this.__next_compartment = null
+    }
+
+    fun __frame_init() {
+        val __e = ActionsFrameEvent("$>", __compartment.enter_args)
+        val __ctx = ActionsFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(__e)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    private fun hsm_chain(): Map<String, List<String>> {
+        return mapOf(
+            "Counting" to listOf("Counting"),
+        )
+    }
+    private fun __prepareEnter(leaf: String, state_args: MutableList<Any?>, enter_args: MutableList<Any?>): ActionsCompartment {
+        var comp: ActionsCompartment? = null
+        for (name in hsm_chain()[leaf]!!) {
+            val new_comp = ActionsCompartment(name)
+            new_comp.state_args.addAll(state_args)
+            new_comp.enter_args.addAll(enter_args)
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!!
+    }
+
+    private fun __prepareExit(exit_args: MutableList<Any?>) {
+        var comp: ActionsCompartment? = __compartment
+        while (comp != null) {
+            comp.exit_args.clear()
+            comp.exit_args.addAll(exit_args)
+            comp = comp.parent_compartment
+        }
+    }
+
+    private fun __kernel(__e: ActionsFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            val next_compartment: ActionsCompartment = __next_compartment!!
+            __next_compartment = null
+            // Exit the current (leaf) state.
+            val exit_event = ActionsFrameEvent("<$", __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            val forward_event: ActionsFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = null
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                val enter_event = ActionsFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                val enter_event = ActionsFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            }
+            for (ctx in _context_stack) {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private fun __router(__e: ActionsFrameEvent) {
+        if (__compartment.state == "Counting") {
+            _state_Counting(__e, __compartment)
+        }
+    }
+
+    private fun __transition(next: ActionsCompartment) {
+        __next_compartment = next
+    }
+
+    fun increment(n: Int) {
+        val __e = ActionsFrameEvent("increment", mutableListOf(n))
+        val __ctx = ActionsFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    fun get_total(): Int {
+        val __e = ActionsFrameEvent("get_total", mutableListOf())
+        val __ctx = ActionsFrameContext(__e, 0)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        val __result = _context_stack[_context_stack.size - 1]._return as Int
+        _context_stack.removeAt(_context_stack.size - 1)
+        return __result
+    }
+
+    private fun _state_Counting(__e: ActionsFrameEvent, compartment: ActionsCompartment) {
+        if (__e._message == "get_total") {
+            this._s_Counting_hdl_user_get_total(__e, compartment)
+            return
+        }
+        if (__e._message == "increment") {
+            this._s_Counting_hdl_user_increment(__e, compartment)
+            return
+        }
+    }
+
+    private fun _s_Counting_hdl_user_get_total(__e: ActionsFrameEvent, compartment: ActionsCompartment) {
+        _context_stack[_context_stack.size - 1]._return = self.total
+    }
+
+    private fun _s_Counting_hdl_user_increment(__e: ActionsFrameEvent, compartment: ActionsCompartment) {
+        val n = __e._parameters[0] as Int
+        _scale(n)
+    }
+
+    private fun _scale(n: Int) {
+                    self.total = self.total + n * 2
+    }
+
+    companion object {
+        @JvmStatic fun __create(): Actions {
+            val c = Actions()
+            c.__frame_init()
+            return c
+        }    }
+}

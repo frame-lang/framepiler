@@ -1,0 +1,229 @@
+---
+source: framec/tests/java_snapshots.rs
+expression: "compile_fixture(\"07_forward\", \"java\")"
+---
+class ForwardFrameEvent {
+    String _message;
+    java.util.ArrayList<Object> _parameters;
+
+    ForwardFrameEvent(String message) {
+        this._message = message;
+        this._parameters = new java.util.ArrayList<>();
+    }
+
+    ForwardFrameEvent(String message, java.util.ArrayList<Object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class ForwardFrameContext {
+    ForwardFrameEvent _event;
+    Object _return;
+    java.util.HashMap<String, Object> _data;
+    boolean _transitioned = false;
+
+    ForwardFrameContext(ForwardFrameEvent event, Object defaultReturn) {
+        this._event = event;
+        this._return = defaultReturn;
+        this._data = new java.util.HashMap<>();
+        this._transitioned = false;
+    }
+}
+
+class ForwardCompartment {
+    String state;
+    java.util.ArrayList<Object> state_args;
+    java.util.HashMap<String, Object> state_vars;
+    java.util.ArrayList<Object> enter_args;
+    java.util.ArrayList<Object> exit_args;
+    ForwardFrameEvent forward_event;
+    ForwardCompartment parent_compartment;
+
+    ForwardCompartment(String state) {
+        this.state = state;
+        this.state_args = new java.util.ArrayList<>();
+        this.state_vars = new java.util.HashMap<>();
+        this.enter_args = new java.util.ArrayList<>();
+        this.exit_args = new java.util.ArrayList<>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    ForwardCompartment copy() {
+        ForwardCompartment c = new ForwardCompartment(this.state);
+        c.state_args = new java.util.ArrayList<>(this.state_args);
+        c.state_vars = new java.util.HashMap<>(this.state_vars);
+        c.enter_args = new java.util.ArrayList<>(this.enter_args);
+        c.exit_args = new java.util.ArrayList<>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class Forward {
+    private java.util.ArrayList<ForwardCompartment> _state_stack;
+    private ForwardCompartment __compartment;
+    private ForwardCompartment __next_compartment;
+    private java.util.ArrayList<ForwardFrameContext> _context_stack;
+    public int starts = 0;
+    public int middles = 0;
+
+    public Forward() {
+        _state_stack = new java.util.ArrayList<>();
+        _context_stack = new java.util.ArrayList<>();
+        this.__compartment = __prepareEnter("Start", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        this.__next_compartment = null;
+    }
+
+    public static Forward __create() {
+        Forward c = new Forward();
+        ForwardFrameEvent __e = new ForwardFrameEvent("$>", c.__compartment.enter_args);
+        ForwardFrameContext __ctx = new ForwardFrameContext(__e, null);
+        c._context_stack.add(__ctx);
+        c.__kernel(__e);
+        c._context_stack.remove(c._context_stack.size() - 1);
+        return c;
+    }
+
+    private java.util.HashMap<String, java.util.ArrayList<String>> hsm_chain() {
+        java.util.HashMap<String, java.util.ArrayList<String>> m = new java.util.HashMap<>();
+        m.put("Start", new java.util.ArrayList<>(java.util.Arrays.asList("Start")));
+        m.put("Middle", new java.util.ArrayList<>(java.util.Arrays.asList("Middle")));
+        m.put("End", new java.util.ArrayList<>(java.util.Arrays.asList("End")));
+        return m;
+    }
+    private ForwardCompartment __prepareEnter(String leaf, java.util.ArrayList<Object> state_args, java.util.ArrayList<Object> enter_args) {
+        ForwardCompartment comp = null;
+        for (String name : hsm_chain().get(leaf)) {
+            ForwardCompartment new_comp = new ForwardCompartment(name);
+            new_comp.state_args = new java.util.ArrayList<>(state_args);
+            new_comp.enter_args = new java.util.ArrayList<>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    private void __prepareExit(java.util.ArrayList<Object> exit_args) {
+        ForwardCompartment comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new java.util.ArrayList<>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(ForwardFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            ForwardCompartment next_compartment = __next_compartment;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            ForwardFrameEvent exit_event = new ForwardFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            ForwardFrameEvent forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                ForwardFrameEvent enter_event = new ForwardFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message.equals("$>")) {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                ForwardFrameEvent enter_event = new ForwardFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (ForwardFrameContext ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(ForwardFrameEvent __e) {
+        if (__compartment.state.equals("Start")) {
+            _state_Start(__e, __compartment);
+        } else if (__compartment.state.equals("Middle")) {
+            _state_Middle(__e, __compartment);
+        } else if (__compartment.state.equals("End")) {
+            _state_End(__e, __compartment);
+        }
+    }
+
+    private void __transition(ForwardCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void run() {
+        ForwardFrameEvent __e = new ForwardFrameEvent("run", new java.util.ArrayList<>());
+        ForwardFrameContext __ctx = new ForwardFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void finish() {
+        ForwardFrameEvent __e = new ForwardFrameEvent("finish", new java.util.ArrayList<>());
+        ForwardFrameContext __ctx = new ForwardFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    private void _state_Start(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        if (__e._message.equals("run")) {
+            this._s_Start_hdl_user_run(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Middle(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        if (__e._message.equals("finish")) {
+            this._s_Middle_hdl_user_finish(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("run")) {
+            this._s_Middle_hdl_user_run(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_End(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        if (__e._message.equals("finish")) {
+            this._s_End_hdl_user_finish(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Start_hdl_user_run(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        self.starts = self.starts + 1
+        ForwardCompartment __compartment = __prepareEnter("Middle", new ArrayList<>(), new ArrayList<>());
+        __compartment.forward_event = __e;
+        __transition(__compartment);
+        return;
+    }
+
+    private void _s_Middle_hdl_user_finish(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        ForwardCompartment __compartment = __prepareEnter("End", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        __transition(__compartment);
+        return;
+    }
+
+    private void _s_Middle_hdl_user_run(ForwardFrameEvent __e, ForwardCompartment compartment) {
+        self.middles = self.middles + 1
+    }
+
+    private void _s_End_hdl_user_finish(ForwardFrameEvent __e, ForwardCompartment compartment) {
+
+    }
+}

@@ -1,0 +1,209 @@
+---
+source: framec/tests/csharp_snapshots.rs
+expression: "compile_fixture(\"10_actions\", \"csharp\")"
+---
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+class ActionsFrameEvent {
+    public string _message;
+    public List<object> _parameters;
+
+    public ActionsFrameEvent(string message) {
+        this._message = message;
+        this._parameters = new List<object>();
+    }
+
+    public ActionsFrameEvent(string message, List<object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class ActionsFrameContext {
+    public ActionsFrameEvent _event;
+    public object? _return;
+    public Dictionary<string, object> _data;
+    public bool _transitioned = false;
+
+    public ActionsFrameContext(ActionsFrameEvent ev, object? defaultReturn = null) {
+        this._event = ev;
+        this._return = defaultReturn;
+        this._data = new Dictionary<string, object>();
+        this._transitioned = false;
+    }
+}
+
+class ActionsCompartment {
+    public string state;
+    public List<object> state_args;
+    public Dictionary<string, object> state_vars;
+    public List<object> enter_args;
+    public List<object> exit_args;
+    public ActionsFrameEvent? forward_event;
+    public ActionsCompartment? parent_compartment;
+
+    public ActionsCompartment(string state) {
+        this.state = state;
+        this.state_args = new List<object>();
+        this.state_vars = new Dictionary<string, object>();
+        this.enter_args = new List<object>();
+        this.exit_args = new List<object>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    public ActionsCompartment Copy() {
+        ActionsCompartment c = new ActionsCompartment(this.state);
+        c.state_args = new List<object>(this.state_args);
+        c.state_vars = new Dictionary<string, object>(this.state_vars);
+        c.enter_args = new List<object>(this.enter_args);
+        c.exit_args = new List<object>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class Actions {
+    private List<ActionsCompartment> _state_stack;
+    private ActionsCompartment __compartment;
+    private ActionsCompartment? __next_compartment;
+    private List<ActionsFrameContext> _context_stack;
+    public int total = 0;
+
+    public Actions() {
+        _state_stack = new List<ActionsCompartment>();
+        _context_stack = new List<ActionsFrameContext>();
+        this.__compartment = __prepareEnter("Counting", new List<object>(), new List<object>());
+        this.__next_compartment = null;
+    }
+
+    public void __frame_init() {
+        ActionsFrameEvent __e = new ActionsFrameEvent("$>", __compartment.enter_args);
+        ActionsFrameContext __ctx = new ActionsFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(__e);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public static Actions __create() {
+        Actions c = new Actions();
+        c.__frame_init();
+        return c;
+    }
+
+    private Dictionary<string, List<string>> hsm_chain() {
+        return new Dictionary<string, List<string>> {
+            { "Counting", new List<string> { "Counting" } },
+        };
+    }
+    private ActionsCompartment __prepareEnter(string leaf, List<object> state_args, List<object> enter_args) {
+        ActionsCompartment? comp = null;
+        foreach (string name in hsm_chain()[leaf]) {
+            ActionsCompartment new_comp = new ActionsCompartment(name);
+            new_comp.state_args = new List<object>(state_args);
+            new_comp.enter_args = new List<object>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    private void __prepareExit(List<object> exit_args) {
+        ActionsCompartment? comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new List<object>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(ActionsFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            ActionsCompartment next_compartment = __next_compartment!;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            ActionsFrameEvent exit_event = new ActionsFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            ActionsFrameEvent? forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                ActionsFrameEvent enter_event = new ActionsFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                ActionsFrameEvent enter_event = new ActionsFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            foreach (var ctx in _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(ActionsFrameEvent __e) {
+        if (__compartment.state == "Counting") {
+            _state_Counting(__e, __compartment);
+        }
+    }
+
+    private void __transition(ActionsCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void increment(int n) {
+        ActionsFrameEvent __e = new ActionsFrameEvent("increment", new List<object> { n });
+        ActionsFrameContext __ctx = new ActionsFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+    }
+
+    public int get_total() {
+        ActionsFrameEvent __e = new ActionsFrameEvent("get_total", new List<object>());
+        ActionsFrameContext __ctx = new ActionsFrameContext(__e, null);
+        _context_stack.Add(__ctx);
+        __kernel(_context_stack[_context_stack.Count - 1]._event);
+        var __result = (int) _context_stack[_context_stack.Count - 1]._return;
+        _context_stack.RemoveAt(_context_stack.Count - 1);
+        return __result;
+    }
+
+    private void _state_Counting(ActionsFrameEvent __e, ActionsCompartment compartment) {
+        if (__e._message == "get_total") {
+            this._s_Counting_hdl_user_get_total(__e, compartment);
+            return;
+        }
+        if (__e._message == "increment") {
+            this._s_Counting_hdl_user_increment(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Counting_hdl_user_get_total(ActionsFrameEvent __e, ActionsCompartment compartment) {
+        _context_stack[_context_stack.Count - 1]._return = self.total;
+    }
+
+    private void _s_Counting_hdl_user_increment(ActionsFrameEvent __e, ActionsCompartment compartment) {
+        int n = System.Convert.ToInt32(__e._parameters[0]);
+        _scale(n)
+    }
+
+    private void _scale(int n) {
+                    self.total = self.total + n * 2
+    }
+}

@@ -1,0 +1,175 @@
+---
+source: framec/tests/ruby_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"ruby\")"
+---
+class ReturnExplicitFrameEvent
+    attr_accessor :_message
+    attr_accessor :_parameters
+
+    def initialize(message, parameters = [])
+        @_message = message
+        @_parameters = parameters
+    end
+end
+
+
+class ReturnExplicitFrameContext
+    attr_accessor :_event
+    attr_accessor :_return
+    attr_accessor :_data
+    attr_accessor :_transitioned
+
+    def initialize(event, default_return = nil)
+        @_event = event
+        @_return = default_return
+        @_data = {}
+        @_transitioned = false
+    end
+end
+
+
+class ReturnExplicitCompartment
+    attr_accessor :state
+    attr_accessor :state_args
+    attr_accessor :state_vars
+    attr_accessor :enter_args
+    attr_accessor :exit_args
+    attr_accessor :forward_event
+    attr_accessor :parent_compartment
+
+    def initialize(state, parent_compartment = nil)
+        @state = state
+        @state_args = []
+        @state_vars = {}
+        @enter_args = []
+        @exit_args = []
+        @forward_event = nil
+        @parent_compartment = parent_compartment
+    end
+
+    def copy
+        c = ReturnExplicitCompartment.new(@state, @parent_compartment)
+        c.state_args = @state_args.dup
+        c.state_vars = @state_vars.dup
+        c.enter_args = @enter_args.dup
+        c.exit_args = @exit_args.dup
+        c.forward_event = @forward_event
+        c
+    end
+end
+
+
+class ReturnExplicit
+    attr_accessor :_state_stack
+    attr_accessor :__compartment
+    attr_accessor :__next_compartment
+    attr_accessor :_context_stack
+
+    def initialize
+        @_state_stack = []
+        @_context_stack = []
+        @__compartment = __prepareEnter("Judging", [], [])
+        @__next_compartment = nil
+    end
+
+    def _frame_init
+        __e = ReturnExplicitFrameEvent.new("$>", @__compartment.enter_args)
+        __ctx = ReturnExplicitFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        @_context_stack.pop
+    end
+
+    def self._create
+        c = new
+        c._frame_init()
+        c
+    end
+
+    def self.hsm_chain
+        {
+            "Judging" => ["Judging"],
+        }
+    end
+    def __prepareEnter(leaf, state_args, enter_args)
+        comp = nil
+        self.class.hsm_chain[leaf].each do |name|
+            new_comp = ReturnExplicitCompartment.new(name)
+            new_comp.state_args = state_args.dup
+            new_comp.enter_args = enter_args.dup
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        end
+        comp
+    end
+
+    def __prepareExit(exit_args)
+        comp = @__compartment
+        while comp != nil
+            comp.exit_args = exit_args.dup
+            comp = comp.parent_compartment
+        end
+    end
+
+    def __kernel(__e)
+        # Route event to current state.
+        __router(__e)
+        # Drain any transitions queued by the handler.
+        while @__next_compartment != nil
+            next_compartment = @__next_compartment
+            @__next_compartment = nil
+            exit_event = ReturnExplicitFrameEvent.new("<$", @__compartment.exit_args)
+            __router(exit_event)
+            @__compartment = next_compartment
+            forward_event = next_compartment.forward_event
+            next_compartment.forward_event = nil
+            if forward_event == nil
+                enter_event = ReturnExplicitFrameEvent.new("$>", @__compartment.enter_args)
+                __router(enter_event)
+            elsif forward_event._message == "$>"
+                __router(forward_event)
+            else
+                enter_event = ReturnExplicitFrameEvent.new("$>", @__compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            end
+            @_context_stack.each { |ctx| ctx._transitioned = true }
+        end
+    end
+
+    def __router(__e)
+        handler_name = "_state_#{@__compartment.state}"
+        if respond_to?(handler_name, true)
+            send(handler_name, __e, @__compartment)
+        end
+    end
+
+    def __transition(next_compartment)
+        @__next_compartment = next_compartment
+    end
+
+    def decide(score)
+        __e = ReturnExplicitFrameEvent.new("decide", [score])
+        __ctx = ReturnExplicitFrameContext.new(__e, nil)
+        @_context_stack.push(__ctx)
+        __kernel(__e)
+        return @_context_stack.pop._return
+    end
+
+    def _state_Judging(__e, compartment)
+        if __e._message == "decide"
+            self._s_Judging_hdl_user_decide(__e, compartment)
+            return
+        end
+    end
+
+    def _s_Judging_hdl_user_decide(__e, compartment)
+        score = __e._parameters[0]
+                        if score >= 60 {
+        @_context_stack[@_context_stack.length - 1]._return = "pass"
+                            return
+                        }
+        @_context_stack[@_context_stack.length - 1]._return = "fail"
+                        return
+    end
+end

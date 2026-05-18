@@ -1,0 +1,226 @@
+---
+source: framec/tests/java_snapshots.rs
+expression: "compile_fixture(\"04_state_args\", \"java\")"
+---
+class StateArgsFrameEvent {
+    String _message;
+    java.util.ArrayList<Object> _parameters;
+
+    StateArgsFrameEvent(String message) {
+        this._message = message;
+        this._parameters = new java.util.ArrayList<>();
+    }
+
+    StateArgsFrameEvent(String message, java.util.ArrayList<Object> parameters) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+class StateArgsFrameContext {
+    StateArgsFrameEvent _event;
+    Object _return;
+    java.util.HashMap<String, Object> _data;
+    boolean _transitioned = false;
+
+    StateArgsFrameContext(StateArgsFrameEvent event, Object defaultReturn) {
+        this._event = event;
+        this._return = defaultReturn;
+        this._data = new java.util.HashMap<>();
+        this._transitioned = false;
+    }
+}
+
+class StateArgsCompartment {
+    String state;
+    java.util.ArrayList<Object> state_args;
+    java.util.HashMap<String, Object> state_vars;
+    java.util.ArrayList<Object> enter_args;
+    java.util.ArrayList<Object> exit_args;
+    StateArgsFrameEvent forward_event;
+    StateArgsCompartment parent_compartment;
+
+    StateArgsCompartment(String state) {
+        this.state = state;
+        this.state_args = new java.util.ArrayList<>();
+        this.state_vars = new java.util.HashMap<>();
+        this.enter_args = new java.util.ArrayList<>();
+        this.exit_args = new java.util.ArrayList<>();
+        this.forward_event = null;
+        this.parent_compartment = null;
+    }
+
+    StateArgsCompartment copy() {
+        StateArgsCompartment c = new StateArgsCompartment(this.state);
+        c.state_args = new java.util.ArrayList<>(this.state_args);
+        c.state_vars = new java.util.HashMap<>(this.state_vars);
+        c.enter_args = new java.util.ArrayList<>(this.enter_args);
+        c.exit_args = new java.util.ArrayList<>(this.exit_args);
+        c.forward_event = this.forward_event;
+        c.parent_compartment = this.parent_compartment;
+        return c;
+    }
+}
+
+public class StateArgs {
+    private java.util.ArrayList<StateArgsCompartment> _state_stack;
+    private StateArgsCompartment __compartment;
+    private StateArgsCompartment __next_compartment;
+    private java.util.ArrayList<StateArgsFrameContext> _context_stack;
+
+    public StateArgs() {
+        _state_stack = new java.util.ArrayList<>();
+        _context_stack = new java.util.ArrayList<>();
+        this.__compartment = __prepareEnter("Idle", new java.util.ArrayList<>(), new java.util.ArrayList<>());
+        this.__next_compartment = null;
+    }
+
+    public static StateArgs __create() {
+        StateArgs c = new StateArgs();
+        StateArgsFrameEvent __e = new StateArgsFrameEvent("$>", c.__compartment.enter_args);
+        StateArgsFrameContext __ctx = new StateArgsFrameContext(__e, null);
+        c._context_stack.add(__ctx);
+        c.__kernel(__e);
+        c._context_stack.remove(c._context_stack.size() - 1);
+        return c;
+    }
+
+    private java.util.HashMap<String, java.util.ArrayList<String>> hsm_chain() {
+        java.util.HashMap<String, java.util.ArrayList<String>> m = new java.util.HashMap<>();
+        m.put("Idle", new java.util.ArrayList<>(java.util.Arrays.asList("Idle")));
+        m.put("Holding", new java.util.ArrayList<>(java.util.Arrays.asList("Holding")));
+        return m;
+    }
+    private StateArgsCompartment __prepareEnter(String leaf, java.util.ArrayList<Object> state_args, java.util.ArrayList<Object> enter_args) {
+        StateArgsCompartment comp = null;
+        for (String name : hsm_chain().get(leaf)) {
+            StateArgsCompartment new_comp = new StateArgsCompartment(name);
+            new_comp.state_args = new java.util.ArrayList<>(state_args);
+            new_comp.enter_args = new java.util.ArrayList<>(enter_args);
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp;
+    }
+
+    private void __prepareExit(java.util.ArrayList<Object> exit_args) {
+        StateArgsCompartment comp = __compartment;
+        while (comp != null) {
+            comp.exit_args = new java.util.ArrayList<>(exit_args);
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private void __kernel(StateArgsFrameEvent __e) {
+        // Route event to current state.
+        __router(__e);
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            StateArgsCompartment next_compartment = __next_compartment;
+            __next_compartment = null;
+            // Exit the current (leaf) state.
+            StateArgsFrameEvent exit_event = new StateArgsFrameEvent("<$", __compartment.exit_args);
+            __router(exit_event);
+            // Switch to the new compartment.
+            __compartment = next_compartment;
+            // Three-branch forward-event handling.
+            StateArgsFrameEvent forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                StateArgsFrameEvent enter_event = new StateArgsFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+            } else if (forward_event._message.equals("$>")) {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                StateArgsFrameEvent enter_event = new StateArgsFrameEvent("$>", __compartment.enter_args);
+                __router(enter_event);
+                __router(forward_event);
+            }
+            for (StateArgsFrameContext ctx : _context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private void __router(StateArgsFrameEvent __e) {
+        if (__compartment.state.equals("Idle")) {
+            _state_Idle(__e, __compartment);
+        } else if (__compartment.state.equals("Holding")) {
+            _state_Holding(__e, __compartment);
+        }
+    }
+
+    private void __transition(StateArgsCompartment next) {
+        __next_compartment = next;
+    }
+
+    public void load(int initial) {
+        StateArgsFrameEvent __e = new StateArgsFrameEvent("load", new java.util.ArrayList<>(java.util.Arrays.asList(initial)));
+        StateArgsFrameContext __ctx = new StateArgsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public void adjust(int delta) {
+        StateArgsFrameEvent __e = new StateArgsFrameEvent("adjust", new java.util.ArrayList<>(java.util.Arrays.asList(delta)));
+        StateArgsFrameContext __ctx = new StateArgsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        _context_stack.remove(_context_stack.size() - 1);
+    }
+
+    public int peek() {
+        StateArgsFrameEvent __e = new StateArgsFrameEvent("peek", new java.util.ArrayList<>());
+        StateArgsFrameContext __ctx = new StateArgsFrameContext(__e, null);
+        _context_stack.add(__ctx);
+        __kernel(_context_stack.get(_context_stack.size() - 1)._event);
+        int __result = (int) _context_stack.get(_context_stack.size() - 1)._return;
+        _context_stack.remove(_context_stack.size() - 1);
+        return __result;
+    }
+
+    private void _state_Idle(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        if (__e._message.equals("load")) {
+            this._s_Idle_hdl_user_load(__e, compartment);
+            return;
+        }
+    }
+
+    private void _state_Holding(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        int value = ((Number) __compartment.state_args.get(0)).intValue();
+        if (__e._message.equals("adjust")) {
+            this._s_Holding_hdl_user_adjust(__e, compartment);
+            return;
+        }
+        if (__e._message.equals("peek")) {
+            this._s_Holding_hdl_user_peek(__e, compartment);
+            return;
+        }
+    }
+
+    private void _s_Idle_hdl_user_load(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        int initial = ((Number) __e._parameters.get(0)).intValue();
+        StateArgsCompartment __compartment = __prepareEnter("Holding", new java.util.ArrayList<>(java.util.Arrays.asList(initial)), new java.util.ArrayList<>());
+        __transition(__compartment);
+        return;
+    }
+
+    private void _s_Holding_hdl_user_adjust(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        int value = ((Number) compartment.state_args.get(0)).intValue();
+        int delta = ((Number) __e._parameters.get(0)).intValue();
+        StateArgsCompartment __compartment = __prepareEnter("Holding", new java.util.ArrayList<>(java.util.Arrays.asList(value + delta)), new java.util.ArrayList<>());
+        __transition(__compartment);
+        return;
+    }
+
+    private void _s_Holding_hdl_user_peek(StateArgsFrameEvent __e, StateArgsCompartment compartment) {
+        int value = ((Number) compartment.state_args.get(0)).intValue();
+        _context_stack.get(_context_stack.size() - 1)._return = value;
+    }
+}

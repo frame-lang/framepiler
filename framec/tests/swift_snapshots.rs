@@ -22,3 +22,48 @@ fn hsm() {
 fn persist() {
     insta::assert_snapshot!(compile_fixture("03_persist", "swift"));
 }
+
+#[test]
+fn state_args() {
+    insta::assert_snapshot!(compile_fixture("04_state_args", "swift"));
+}
+
+#[test]
+fn pushpop() {
+    insta::assert_snapshot!(compile_fixture("05_pushpop", "swift"));
+}
+
+#[test]
+fn selfcall() {
+    insta::assert_snapshot!(compile_fixture("06_selfcall", "swift"));
+}
+
+#[test]
+fn forward() {
+    insta::assert_snapshot!(compile_fixture("07_forward", "swift"));
+}
+
+#[test]
+fn lifecycle() {
+    insta::assert_snapshot!(compile_fixture("08_lifecycle", "swift"));
+}
+
+#[test]
+fn return_explicit() {
+    insta::assert_snapshot!(compile_fixture("09_return_explicit", "swift"));
+}
+
+#[test]
+fn actions() {
+    insta::assert_snapshot!(compile_fixture("10_actions", "swift"));
+}
+
+#[test]
+fn consts() {
+    insta::assert_snapshot!(compile_fixture("11_consts", "swift"));
+}
+
+#[test]
+fn no_persist() {
+    insta::assert_snapshot!(compile_fixture("12_no_persist", "swift"));
+}

@@ -1,0 +1,171 @@
+---
+source: framec/tests/kotlin_snapshots.rs
+expression: "compile_fixture(\"06_selfcall\", \"kotlin\")"
+---
+class SelfCallFrameEvent(val _message: String, val _parameters: MutableList<Any?> = mutableListOf())
+
+class SelfCallFrameContext(val _event: SelfCallFrameEvent, var _return: Any? = null) {
+    val _data: MutableMap<String, Any?> = mutableMapOf()
+    var _transitioned: Boolean = false
+}
+
+class SelfCallCompartment(val state: String) {
+    val state_args: MutableList<Any?> = mutableListOf()
+    val state_vars: MutableMap<String, Any?> = mutableMapOf()
+    val enter_args: MutableList<Any?> = mutableListOf()
+    val exit_args: MutableList<Any?> = mutableListOf()
+    var forward_event: SelfCallFrameEvent? = null
+    var parent_compartment: SelfCallCompartment? = null
+
+    fun copy(): SelfCallCompartment {
+        val c = SelfCallCompartment(this.state)
+        c.state_args.addAll(this.state_args)
+        c.state_vars.putAll(this.state_vars)
+        c.enter_args.addAll(this.enter_args)
+        c.exit_args.addAll(this.exit_args)
+        c.forward_event = this.forward_event
+        c.parent_compartment = this.parent_compartment
+        return c
+    }
+}
+
+class SelfCall {
+    private var _state_stack: MutableList<SelfCallCompartment>
+    private var __compartment: SelfCallCompartment
+    private var __next_compartment: SelfCallCompartment?
+    private var _context_stack: MutableList<SelfCallFrameContext>
+    var count: Int = 0
+
+    init {
+        _state_stack = mutableListOf()
+        _context_stack = mutableListOf()
+        this.__compartment = __prepareEnter("Active", mutableListOf<Any?>(), mutableListOf<Any?>())
+        this.__next_compartment = null
+    }
+
+    fun __frame_init() {
+        val __e = SelfCallFrameEvent("$>", __compartment.enter_args)
+        val __ctx = SelfCallFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(__e)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    private fun hsm_chain(): Map<String, List<String>> {
+        return mapOf(
+            "Active" to listOf("Active"),
+        )
+    }
+    private fun __prepareEnter(leaf: String, state_args: MutableList<Any?>, enter_args: MutableList<Any?>): SelfCallCompartment {
+        var comp: SelfCallCompartment? = null
+        for (name in hsm_chain()[leaf]!!) {
+            val new_comp = SelfCallCompartment(name)
+            new_comp.state_args.addAll(state_args)
+            new_comp.enter_args.addAll(enter_args)
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!!
+    }
+
+    private fun __prepareExit(exit_args: MutableList<Any?>) {
+        var comp: SelfCallCompartment? = __compartment
+        while (comp != null) {
+            comp.exit_args.clear()
+            comp.exit_args.addAll(exit_args)
+            comp = comp.parent_compartment
+        }
+    }
+
+    private fun __kernel(__e: SelfCallFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            val next_compartment: SelfCallCompartment = __next_compartment!!
+            __next_compartment = null
+            // Exit the current (leaf) state.
+            val exit_event = SelfCallFrameEvent("<$", __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            val forward_event: SelfCallFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = null
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                val enter_event = SelfCallFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                val enter_event = SelfCallFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            }
+            for (ctx in _context_stack) {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private fun __router(__e: SelfCallFrameEvent) {
+        if (__compartment.state == "Active") {
+            _state_Active(__e, __compartment)
+        }
+    }
+
+    private fun __transition(next: SelfCallCompartment) {
+        __next_compartment = next
+    }
+
+    fun kick() {
+        val __e = SelfCallFrameEvent("kick", mutableListOf())
+        val __ctx = SelfCallFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    fun report(): Int {
+        val __e = SelfCallFrameEvent("report", mutableListOf())
+        val __ctx = SelfCallFrameContext(__e, 0)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        val __result = _context_stack[_context_stack.size - 1]._return as Int
+        _context_stack.removeAt(_context_stack.size - 1)
+        return __result
+    }
+
+    private fun _state_Active(__e: SelfCallFrameEvent, compartment: SelfCallCompartment) {
+        if (__e._message == "kick") {
+            this._s_Active_hdl_user_kick(__e, compartment)
+            return
+        }
+        if (__e._message == "report") {
+            this._s_Active_hdl_user_report(__e, compartment)
+            return
+        }
+    }
+
+    private fun _s_Active_hdl_user_kick(__e: SelfCallFrameEvent, compartment: SelfCallCompartment) {
+        self.count = self.count + 1
+        this.report()
+        if (_context_stack.isNotEmpty() && _context_stack[_context_stack.size - 1]._transitioned) return
+    }
+
+    private fun _s_Active_hdl_user_report(__e: SelfCallFrameEvent, compartment: SelfCallCompartment) {
+        _context_stack[_context_stack.size - 1]._return = self.count
+    }
+
+    companion object {
+        @JvmStatic fun __create(): SelfCall {
+            val c = SelfCall()
+            c.__frame_init()
+            return c
+        }    }
+}

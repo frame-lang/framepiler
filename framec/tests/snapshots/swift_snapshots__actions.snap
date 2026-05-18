@@ -1,0 +1,193 @@
+---
+source: framec/tests/swift_snapshots.rs
+expression: "compile_fixture(\"10_actions\", \"swift\")"
+---
+import Foundation
+
+class ActionsFrameEvent {
+    var _message: String
+    var _parameters: [Any]
+
+    init(message: String, parameters: [Any] = []) {
+        self._message = message
+        self._parameters = parameters
+    }
+}
+
+class ActionsFrameContext {
+    var _event: ActionsFrameEvent
+    var _return: Any?
+    var _data: [String: Any] = [:]
+    var _transitioned: Bool = false
+
+    init(event: ActionsFrameEvent, defaultReturn: Any? = nil) {
+        self._event = event
+        self._return = defaultReturn
+    }
+}
+
+class ActionsCompartment {
+    var state: String
+    var state_args: [Any] = []
+    var state_vars: [String: Any] = [:]
+    var enter_args: [Any] = []
+    var exit_args: [Any] = []
+    var forward_event: ActionsFrameEvent?
+    var parent_compartment: ActionsCompartment?
+
+    init(state: String) {
+        self.state = state
+    }
+
+    func copy() -> ActionsCompartment {
+        let c = ActionsCompartment(state: self.state)
+        c.state_args = self.state_args
+        c.state_vars = self.state_vars
+        c.enter_args = self.enter_args
+        c.exit_args = self.exit_args
+        c.forward_event = self.forward_event
+        c.parent_compartment = self.parent_compartment
+        return c
+    }
+}
+
+public class Actions {
+    private var _state_stack: [ActionsCompartment] = []
+    private var __compartment: ActionsCompartment
+    private var __next_compartment: ActionsCompartment? = nil
+    private var _context_stack: [ActionsFrameContext] = []
+    public var total: Int = 0
+
+    init() {
+        _state_stack = []
+        _context_stack = []
+        self.__compartment = Actions.__prepareEnter("Counting", [], [])
+        self.__next_compartment = nil
+    }
+
+    func __frame_init() {
+        let __e = ActionsFrameEvent(message: "$>", parameters: __compartment.enter_args)
+        let __ctx = ActionsFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(__e)
+        _context_stack.removeLast()
+    }
+
+    static func __create() -> Actions {
+        let c = Actions()
+        c.__frame_init()
+        return c
+    }
+
+    private static func hsm_chain() -> [String: [String]] {
+        return [
+            "Counting": ["Counting"],
+        ]
+    }
+    private static func __prepareEnter(_ leaf: String, _ state_args: [Any], _ enter_args: [Any]) -> ActionsCompartment {
+        var comp: ActionsCompartment? = nil
+        for name in Actions.hsm_chain()[leaf]! {
+            let new_comp = ActionsCompartment(state: name)
+            new_comp.state_args = state_args
+            new_comp.enter_args = enter_args
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!
+    }
+    private func __prepareExit(_ exit_args: [Any]) {
+        var comp: ActionsCompartment? = __compartment
+        while comp != nil {
+            comp!.exit_args = exit_args
+            comp = comp!.parent_compartment
+        }
+    }
+
+    private func __kernel(_ __e: ActionsFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while __next_compartment != nil {
+            let next_compartment: ActionsCompartment = __next_compartment!
+            __next_compartment = nil
+            // Exit the current (leaf) state.
+            let exit_event = ActionsFrameEvent(message: "<$", parameters: __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            let forward_event: ActionsFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = nil
+            if forward_event == nil {
+                // No forwarded event — synthesize a fresh $>.
+                let enter_event = ActionsFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+            } else if forward_event!._message == "$>" {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event!)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                let enter_event = ActionsFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event!)
+            }
+            for ctx in _context_stack {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private func __router(_ __e: ActionsFrameEvent) {
+        if __compartment.state == "Counting" {
+            _state_Counting(__e, __compartment)
+        }
+    }
+
+    private func __transition(_ next: ActionsCompartment) {
+        __next_compartment = next
+    }
+
+    public func increment(_ n: Int) {
+        let __e = ActionsFrameEvent(message: "increment", parameters: [n])
+        let __ctx = ActionsFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    public func get_total() -> Int {
+        let __e = ActionsFrameEvent(message: "get_total", parameters: [])
+        let __ctx = ActionsFrameContext(event: __e, defaultReturn: 0)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        let __result = _context_stack[_context_stack.count - 1]._return as! Int
+        _context_stack.removeLast()
+        return __result
+    }
+
+    private func _state_Counting(_ __e: ActionsFrameEvent, _ compartment: ActionsCompartment) {
+        if __e._message == "get_total" {
+            self._s_Counting_hdl_user_get_total(__e, compartment)
+            return
+        }
+        if __e._message == "increment" {
+            self._s_Counting_hdl_user_increment(__e, compartment)
+            return
+        }
+    }
+
+    private func _s_Counting_hdl_user_get_total(_ __e: ActionsFrameEvent, _ compartment: ActionsCompartment) {
+        _context_stack[_context_stack.count - 1]._return = self.total
+    }
+
+    private func _s_Counting_hdl_user_increment(_ __e: ActionsFrameEvent, _ compartment: ActionsCompartment) {
+        let n = __e._parameters[0] as! Int
+        _scale(n)
+    }
+
+    private func _scale(_ n: Int) {
+                    self.total = self.total + n * 2
+    }
+}

@@ -1,0 +1,249 @@
+---
+source: framec/tests/rust_snapshots.rs
+expression: "compile_fixture(\"09_return_explicit\", \"rust\")"
+---
+#[derive(Clone, Debug)]
+#[allow(dead_code, non_camel_case_types)]
+enum ReturnExplicitFrameEvent {
+    Decide { score: i32 },
+    FrameEnter { args: Vec<String> },
+    FrameExit { args: Vec<String> },
+}
+
+#[derive(Clone)]
+#[allow(dead_code, non_camel_case_types)]
+enum ReturnExplicitFrameReturn {
+    Decide(String),
+    _Lifecycle(std::rc::Rc<dyn std::any::Any>),
+}
+
+#[allow(dead_code)]
+impl ReturnExplicitFrameEvent {
+    fn name(&self) -> &'static str {
+        match self {
+            ReturnExplicitFrameEvent::Decide { .. } => "decide",
+            ReturnExplicitFrameEvent::FrameEnter { .. } => "$>",
+            ReturnExplicitFrameEvent::FrameExit { .. } => "<$",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum ReturnExplicitFrameValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    List(Vec<Self>),
+    Dict(std::collections::HashMap<String, Self>),
+}
+
+#[allow(dead_code)]
+struct ReturnExplicitFrameContext {
+    event: std::rc::Rc<ReturnExplicitFrameEvent>,
+    _return: Option<ReturnExplicitFrameReturn>,
+    _data: std::collections::HashMap<String, ReturnExplicitFrameValue>,
+    _transitioned: bool,
+}
+
+impl ReturnExplicitFrameContext {
+    fn new(event: std::rc::Rc<ReturnExplicitFrameEvent>, default_return: Option<ReturnExplicitFrameReturn>) -> Self {
+        Self {
+            event,
+            _return: default_return,
+            _data: std::collections::HashMap::new(),
+            _transitioned: false,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum ReturnExplicitStateContext {
+    Judging,
+    Empty,
+}
+
+impl Default for ReturnExplicitStateContext {
+    fn default() -> Self {
+        ReturnExplicitStateContext::Judging
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+struct ReturnExplicitCompartment {
+    state: String,
+    state_context: ReturnExplicitStateContext,
+    enter_args: Vec<String>,
+    exit_args: Vec<String>,
+    forward_event: Option<ReturnExplicitFrameEvent>,
+    parent_compartment: Option<Box<ReturnExplicitCompartment>>,
+}
+
+impl ReturnExplicitCompartment {
+    fn new(state: &str) -> Self {
+        let state_context = match state {
+            "Judging" => ReturnExplicitStateContext::Judging,
+            _ => ReturnExplicitStateContext::Empty,
+        };
+        Self {
+            state: state.to_string(),
+            state_context,
+            enter_args: Vec::new(),
+            exit_args: Vec::new(),
+            forward_event: None,
+            parent_compartment: None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub struct ReturnExplicit {
+    _state_stack: Vec<ReturnExplicitCompartment>,
+    __compartment: ReturnExplicitCompartment,
+    __next_compartment: Option<ReturnExplicitCompartment>,
+    _context_stack: Vec<ReturnExplicitFrameContext>,
+}
+
+#[allow(non_snake_case)]
+impl ReturnExplicit {
+    pub fn new() -> Self {
+        Self {
+            _state_stack: Vec::new(),
+            _context_stack: Vec::new(),
+            __compartment: ReturnExplicitCompartment::new("Judging"),
+            __next_compartment: None,
+        }
+    }
+
+    pub fn __create() -> Self {
+        let mut c = Self::new();
+        c.__compartment = c.__prepareEnter("Judging", vec![]);
+        let __e = std::rc::Rc::new(ReturnExplicitFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = ReturnExplicitFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c._context_stack.push(__ctx);
+        c.__kernel(&__e);
+        c._context_stack.pop();
+        c
+    }
+
+    fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
+        match leaf {
+            "Judging" => &["Judging"],
+            _ => &[],
+        }
+    }
+
+    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> ReturnExplicitCompartment {
+        let chain = self.__hsm_chain(leaf);
+        let mut comp: Option<ReturnExplicitCompartment> = None;
+        for name in chain.iter() {
+            let mut new_comp = ReturnExplicitCompartment::new(name);
+            new_comp.enter_args = enter_args.clone();
+            if let Some(parent) = comp.take() {
+                new_comp.parent_compartment = Some(Box::new(parent));
+            }
+            comp = Some(new_comp);
+        }
+        comp.expect("chain must contain at least the leaf state")
+    }
+
+    fn __prepareExit(&mut self, exit_args: Vec<String>) {
+        self.__compartment.exit_args = exit_args.clone();
+        let mut cursor = self.__compartment.parent_compartment.as_deref_mut();
+        while let Some(c) = cursor {
+            c.exit_args = exit_args.clone();
+            cursor = c.parent_compartment.as_deref_mut();
+        }
+    }
+
+    fn __kernel(&mut self, __e: &std::rc::Rc<ReturnExplicitFrameEvent>) {
+        // Route event to current state.
+        self.__router(__e);
+        // Drain any transitions queued by the handler.
+        while self.__next_compartment.is_some() {
+            let next_compartment = self.__next_compartment.take().expect("invariant: while-loop guard checked is_some()");
+            // Exit the current (leaf) state.
+            let exit_args = self.__compartment.exit_args.clone();
+            let exit_event = std::rc::Rc::new(ReturnExplicitFrameEvent::FrameExit { args: exit_args });
+            self.__router(&exit_event);
+            // Switch to the new compartment.
+            self.__compartment = next_compartment;
+            // Three-branch forward-event handling (RFC-0025 Track B.1: forward
+            // event is matched on enum variant; $> recognition is now a
+            // structural match, not a string compare).
+            match self.__compartment.forward_event.take() {
+                None => {
+                    // No forwarded event — synthesize a fresh $>.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(ReturnExplicitFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                }
+                Some(fwd) if matches!(fwd, ReturnExplicitFrameEvent::FrameEnter { .. }) => {
+                    // Forwarded event IS $> — dispatch directly so the
+                    // destination's $> handler receives the caller's payload.
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+                Some(fwd) => {
+                    // Forwarded event is not $> — initialize the destination
+                    // with a fresh $>, then dispatch the forward.
+                    let enter_args = self.__compartment.enter_args.clone();
+                    let enter_event = std::rc::Rc::new(ReturnExplicitFrameEvent::FrameEnter { args: enter_args });
+                    self.__router(&enter_event);
+                    let fwd_rc = std::rc::Rc::new(fwd);
+                    self.__router(&fwd_rc);
+                }
+            }
+            for ctx in self._context_stack.iter_mut() {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    fn __router(&mut self, __e: &std::rc::Rc<ReturnExplicitFrameEvent>) {
+        let __ev: &ReturnExplicitFrameEvent = &**__e;
+        match self.__compartment.state.as_str() {
+            "Judging" => self._state_Judging(__ev),
+            _ => {}
+        }
+    }
+
+    fn __transition(&mut self, next_compartment: ReturnExplicitCompartment) {
+        self.__next_compartment = Some(next_compartment);
+    }
+
+    pub fn decide(&mut self, score: i32) -> String {
+        let __e = std::rc::Rc::new(ReturnExplicitFrameEvent::Decide { score: score.clone() });
+        let mut __ctx = ReturnExplicitFrameContext::new(std::rc::Rc::clone(&__e), None);
+        self._context_stack.push(__ctx);
+        self.__kernel(&__e);
+        let __ctx = self._context_stack.pop().expect("invariant: handler must have pushed a context before reading return");
+        match __ctx._return {
+            Some(ReturnExplicitFrameReturn::Decide(v)) => v,
+            Some(ReturnExplicitFrameReturn::_Lifecycle(v)) => v.downcast_ref::<String>().cloned().unwrap_or_default(),
+            _ => Default::default(),
+        }
+    }
+
+    fn _state_Judging(&mut self, __e: &ReturnExplicitFrameEvent) {
+        match __e {
+            ReturnExplicitFrameEvent::Decide { score, .. } => {
+                self._s_Judging_hdl_user_decide(__e, *score);
+            }
+            _ => {}
+        }
+    }
+
+    fn _s_Judging_hdl_user_decide(&mut self, __e: &ReturnExplicitFrameEvent, score: i32) {
+                        if score >= 60 {
+        let __return_val = ReturnExplicitFrameReturn::Decide(String::from("pass"));
+                            if let Some(ctx) = self._context_stack.last_mut() { ctx._return = Some(__return_val); }
+                            return;
+                        }
+        let __return_val = ReturnExplicitFrameReturn::Decide(String::from("fail"));
+                        if let Some(ctx) = self._context_stack.last_mut() { ctx._return = Some(__return_val); }
+                        return;
+    }
+}

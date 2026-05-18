@@ -1,0 +1,239 @@
+---
+source: framec/tests/go_snapshots.rs
+expression: "compile_fixture(\"05_pushpop\", \"go\")"
+---
+type PushPopFrameEvent struct {
+    _message    string
+    _parameters []any
+}
+
+type PushPopFrameContext struct {
+    _event  PushPopFrameEvent
+    _return       any
+    _data         map[string]any
+    _transitioned bool
+}
+
+type PushPopCompartment struct {
+    state            string
+    stateArgs        []any
+    stateVars        map[string]any
+    enterArgs        []any
+    exitArgs         []any
+    forwardEvent     *PushPopFrameEvent
+    parentCompartment *PushPopCompartment
+}
+
+func newPushPopCompartment(state string) *PushPopCompartment {
+    return &PushPopCompartment{
+        state:    state,
+        stateArgs: []any{},
+        stateVars: make(map[string]any),
+        enterArgs: []any{},
+        exitArgs:  []any{},
+    }
+}
+
+func (c *PushPopCompartment) copy() *PushPopCompartment {
+    nc := &PushPopCompartment{
+        state: c.state,
+        stateArgs: append([]any{}, c.stateArgs...),
+        stateVars: make(map[string]any),
+        enterArgs: append([]any{}, c.enterArgs...),
+        exitArgs:  append([]any{}, c.exitArgs...),
+        forwardEvent:     c.forwardEvent,
+        parentCompartment: c.parentCompartment,
+    }
+    for k, v := range c.stateVars { nc.stateVars[k] = v }
+    return nc
+}
+
+type PushPop struct {
+    _state_stack []*PushPopCompartment
+    __compartment *PushPopCompartment
+    __next_compartment *PushPopCompartment
+    _context_stack []PushPopFrameContext
+    pings int
+    leaves int
+}
+
+func NewPushPop() *PushPop {
+    s := &PushPop{}
+    s._state_stack = make([]*PushPopCompartment, 0)
+    s._context_stack = make([]PushPopFrameContext, 0)
+    s.pings = 0
+    s.leaves = 0
+    s.__compartment = s.__prepareEnter("Idle", []any{}, []any{})
+    s.__next_compartment = nil
+    return s
+}
+
+func CreatePushPop() *PushPop {
+    c := NewPushPop()
+    __e := PushPopFrameEvent{_message: "$>", _parameters: c.__compartment.enterArgs}
+    __ctx := PushPopFrameContext{_event: __e, _data: make(map[string]any)}
+    c._context_stack = append(c._context_stack, __ctx)
+    c.__kernel(&c._context_stack[len(c._context_stack)-1]._event)
+    c._context_stack = c._context_stack[:len(c._context_stack)-1]
+    return c
+}
+
+func (s *PushPop) hsm_chain() map[string][]string {
+    return map[string][]string{
+        "Idle": {"Idle"},
+        "Nested": {"Nested"},
+    }
+}
+func (s *PushPop) __prepareEnter(leaf string, state_args []any, enter_args []any) *PushPopCompartment {
+    var comp *PushPopCompartment = nil
+    for _, name := range s.hsm_chain()[leaf] {
+        new_comp := newPushPopCompartment(name)
+        new_comp.stateArgs = append([]any{}, state_args...)
+        new_comp.enterArgs = append([]any{}, enter_args...)
+        new_comp.parentCompartment = comp
+        comp = new_comp
+    }
+    return comp
+}
+
+func (s *PushPop) __prepareExit(exit_args []any) {
+    comp := s.__compartment
+    for comp != nil {
+        comp.exitArgs = append([]any{}, exit_args...)
+        comp = comp.parentCompartment
+    }
+    _ = comp
+}
+
+func (s *PushPop) __kernel(__e *PushPopFrameEvent) {
+    // Route event to current state.
+    s.__router(__e)
+    // Drain any transitions queued by the handler.
+    for s.__next_compartment != nil {
+        next_compartment := s.__next_compartment
+        s.__next_compartment = nil
+        // Exit the current (leaf) state.
+        exit_event := &PushPopFrameEvent{_message: "<$", _parameters: s.__compartment.exitArgs}
+        s.__router(exit_event)
+        // Switch to the new compartment.
+        s.__compartment = next_compartment
+        // Three-branch forward-event handling.
+        forward_event := next_compartment.forwardEvent
+        next_compartment.forwardEvent = nil
+        if forward_event == nil {
+            // No forwarded event — synthesize a fresh $>.
+            enter_event := &PushPopFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+        } else if forward_event._message == "$>" {
+            // Forwarded event IS $> — dispatch directly so the
+            // destination's $> handler receives the caller's payload.
+            s.__router(forward_event)
+        } else {
+            // Forwarded event is not $> — initialize the destination
+            // with a fresh $>, then dispatch the forward.
+            enter_event := &PushPopFrameEvent{_message: "$>", _parameters: s.__compartment.enterArgs}
+            s.__router(enter_event)
+            s.__router(forward_event)
+        }
+        for i := range s._context_stack {
+            s._context_stack[i]._transitioned = true
+        }
+    }
+}
+
+func (s *PushPop) __router(__e *PushPopFrameEvent) {
+    switch s.__compartment.state {
+    case "Idle":
+        s._state_Idle(__e, s.__compartment)
+    case "Nested":
+        s._state_Nested(__e, s.__compartment)
+    }
+}
+
+func (s *PushPop) __transition(next *PushPopCompartment) {
+    s.__next_compartment = next
+}
+
+func (s *PushPop) Ping() {
+    __e := PushPopFrameEvent{_message: "ping", _parameters: []any{}}
+    __ctx := PushPopFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *PushPop) Nest() {
+    __e := PushPopFrameEvent{_message: "nest", _parameters: []any{}}
+    __ctx := PushPopFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *PushPop) Unnest() {
+    __e := PushPopFrameEvent{_message: "unnest", _parameters: []any{}}
+    __ctx := PushPopFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *PushPop) Leaf() {
+    __e := PushPopFrameEvent{_message: "leaf", _parameters: []any{}}
+    __ctx := PushPopFrameContext{_event: __e, _data: make(map[string]any)}
+    s._context_stack = append(s._context_stack, __ctx)
+    s.__kernel(&s._context_stack[len(s._context_stack)-1]._event)
+    s._context_stack = s._context_stack[:len(s._context_stack)-1]
+}
+
+func (s *PushPop) _state_Idle(__e *PushPopFrameEvent, compartment *PushPopCompartment) {
+    if __e._message == "nest" {
+        s._s_Idle_hdl_user_nest(__e, compartment)
+        return
+    }
+    if __e._message == "ping" {
+        s._s_Idle_hdl_user_ping(__e, compartment)
+        return
+    }
+}
+
+func (s *PushPop) _state_Nested(__e *PushPopFrameEvent, compartment *PushPopCompartment) {
+    if __e._message == "leaf" {
+        s._s_Nested_hdl_user_leaf(__e, compartment)
+        return
+    }
+    if __e._message == "unnest" {
+        s._s_Nested_hdl_user_unnest(__e, compartment)
+        return
+    }
+}
+
+func (s *PushPop) _s_Idle_hdl_user_nest(__e *PushPopFrameEvent, compartment *PushPopCompartment) {
+    {
+    s._state_stack = append(s._state_stack, s.__compartment)
+    __compartment := s.__prepareEnter("Nested", []any{}, []any{})
+    s.__transition(__compartment)
+    return
+    }
+}
+
+func (s *PushPop) _s_Idle_hdl_user_ping(__e *PushPopFrameEvent, compartment *PushPopCompartment) {
+    {
+    self.pings = self.pings + 1
+    }
+}
+
+func (s *PushPop) _s_Nested_hdl_user_leaf(__e *PushPopFrameEvent, compartment *PushPopCompartment) {
+    {
+    self.leaves = self.leaves + 1
+    }
+}
+
+func (s *PushPop) _s_Nested_hdl_user_unnest(__e *PushPopFrameEvent, compartment *PushPopCompartment) {
+    {
+    __saved := s._state_stack[len(s._state_stack)-1]
+    s._state_stack = s._state_stack[:len(s._state_stack)-1]
+    s.__transition(__saved)
+    return
+    }
+}

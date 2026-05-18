@@ -1,0 +1,195 @@
+---
+source: framec/tests/swift_snapshots.rs
+expression: "compile_fixture(\"11_consts\", \"swift\")"
+---
+import Foundation
+
+class ConstsFrameEvent {
+    var _message: String
+    var _parameters: [Any]
+
+    init(message: String, parameters: [Any] = []) {
+        self._message = message
+        self._parameters = parameters
+    }
+}
+
+class ConstsFrameContext {
+    var _event: ConstsFrameEvent
+    var _return: Any?
+    var _data: [String: Any] = [:]
+    var _transitioned: Bool = false
+
+    init(event: ConstsFrameEvent, defaultReturn: Any? = nil) {
+        self._event = event
+        self._return = defaultReturn
+    }
+}
+
+class ConstsCompartment {
+    var state: String
+    var state_args: [Any] = []
+    var state_vars: [String: Any] = [:]
+    var enter_args: [Any] = []
+    var exit_args: [Any] = []
+    var forward_event: ConstsFrameEvent?
+    var parent_compartment: ConstsCompartment?
+
+    init(state: String) {
+        self.state = state
+    }
+
+    func copy() -> ConstsCompartment {
+        let c = ConstsCompartment(state: self.state)
+        c.state_args = self.state_args
+        c.state_vars = self.state_vars
+        c.enter_args = self.enter_args
+        c.exit_args = self.exit_args
+        c.forward_event = self.forward_event
+        c.parent_compartment = self.parent_compartment
+        return c
+    }
+}
+
+public class Consts {
+    private var _state_stack: [ConstsCompartment] = []
+    private var __compartment: ConstsCompartment
+    private var __next_compartment: ConstsCompartment? = nil
+    private var _context_stack: [ConstsFrameContext] = []
+    public var step: Int = 5
+    public var limit: Int = 20
+    public var count: Int = 0
+
+    init() {
+        _state_stack = []
+        _context_stack = []
+        self.__compartment = Consts.__prepareEnter("Running", [], [])
+        self.__next_compartment = nil
+    }
+
+    func __frame_init(_ step: Int, _ limit: Int) {
+        self.step = step
+        self.limit = limit
+        let __e = ConstsFrameEvent(message: "$>", parameters: __compartment.enter_args)
+        let __ctx = ConstsFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(__e)
+        _context_stack.removeLast()
+    }
+
+    static func __create(_ step: Int, _ limit: Int) -> Consts {
+        let c = Consts()
+        c.__frame_init(step, limit)
+        return c
+    }
+
+    private static func hsm_chain() -> [String: [String]] {
+        return [
+            "Running": ["Running"],
+        ]
+    }
+    private static func __prepareEnter(_ leaf: String, _ state_args: [Any], _ enter_args: [Any]) -> ConstsCompartment {
+        var comp: ConstsCompartment? = nil
+        for name in Consts.hsm_chain()[leaf]! {
+            let new_comp = ConstsCompartment(state: name)
+            new_comp.state_args = state_args
+            new_comp.enter_args = enter_args
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!
+    }
+    private func __prepareExit(_ exit_args: [Any]) {
+        var comp: ConstsCompartment? = __compartment
+        while comp != nil {
+            comp!.exit_args = exit_args
+            comp = comp!.parent_compartment
+        }
+    }
+
+    private func __kernel(_ __e: ConstsFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while __next_compartment != nil {
+            let next_compartment: ConstsCompartment = __next_compartment!
+            __next_compartment = nil
+            // Exit the current (leaf) state.
+            let exit_event = ConstsFrameEvent(message: "<$", parameters: __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            let forward_event: ConstsFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = nil
+            if forward_event == nil {
+                // No forwarded event — synthesize a fresh $>.
+                let enter_event = ConstsFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+            } else if forward_event!._message == "$>" {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event!)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                let enter_event = ConstsFrameEvent(message: "$>", parameters: __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event!)
+            }
+            for ctx in _context_stack {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private func __router(_ __e: ConstsFrameEvent) {
+        if __compartment.state == "Running" {
+            _state_Running(__e, __compartment)
+        }
+    }
+
+    private func __transition(_ next: ConstsCompartment) {
+        __next_compartment = next
+    }
+
+    public func tick() {
+        let __e = ConstsFrameEvent(message: "tick", parameters: [])
+        let __ctx = ConstsFrameContext(event: __e)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        _context_stack.removeLast()
+    }
+
+    public func get_count() -> Int {
+        let __e = ConstsFrameEvent(message: "get_count", parameters: [])
+        let __ctx = ConstsFrameContext(event: __e, defaultReturn: 0)
+        _context_stack.append(__ctx)
+        __kernel(_context_stack[_context_stack.count - 1]._event)
+        let __result = _context_stack[_context_stack.count - 1]._return as! Int
+        _context_stack.removeLast()
+        return __result
+    }
+
+    private func _state_Running(_ __e: ConstsFrameEvent, _ compartment: ConstsCompartment) {
+        if __e._message == "get_count" {
+            self._s_Running_hdl_user_get_count(__e, compartment)
+            return
+        }
+        if __e._message == "tick" {
+            self._s_Running_hdl_user_tick(__e, compartment)
+            return
+        }
+    }
+
+    private func _s_Running_hdl_user_get_count(_ __e: ConstsFrameEvent, _ compartment: ConstsCompartment) {
+        _context_stack[_context_stack.count - 1]._return = self.count
+    }
+
+    private func _s_Running_hdl_user_tick(_ __e: ConstsFrameEvent, _ compartment: ConstsCompartment) {
+        self.count = self.count + self.step
+        if self.count >= self.limit {
+            self.count = 0
+        }
+    }
+}

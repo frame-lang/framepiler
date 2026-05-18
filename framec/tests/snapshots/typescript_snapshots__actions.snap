@@ -1,0 +1,200 @@
+---
+source: framec/tests/typescript_snapshots.rs
+expression: "compile_fixture(\"10_actions\", \"typescript\")"
+---
+class ActionsFrameEvent {
+    public _message: string;
+    public _parameters: any[];
+
+    constructor(message: string, parameters: any[]) {
+        this._message = message;
+        this._parameters = parameters;
+    }
+}
+
+
+class ActionsFrameContext {
+    public event: ActionsFrameEvent;
+    public _return: any;
+    public _data: Record<string, any>;
+    public _transitioned: boolean;
+
+    constructor(event: ActionsFrameEvent, default_return: any) {
+        this.event = event;
+        this._return = default_return;
+        this._data = {  };
+        this._transitioned = false;
+    }
+}
+
+
+class ActionsCompartment {
+    public state: string;
+    public state_args: any[];
+    public state_vars: Record<string, any>;
+    public enter_args: any[];
+    public exit_args: any[];
+    public forward_event: any;
+    public parent_compartment: ActionsCompartment | null;
+
+    constructor(state: string, parent_compartment: ActionsCompartment | null = null) {
+        this.state = state;
+        this.state_args = [];
+        this.state_vars = {  };
+        this.enter_args = [];
+        this.exit_args = [];
+        this.forward_event = null;
+        this.parent_compartment = parent_compartment;
+    }
+
+    public copy(): ActionsCompartment {
+        const c = new ActionsCompartment(this.state, this.parent_compartment);
+        c.state_args = {...this.state_args};
+        c.state_vars = {...this.state_vars};
+        c.enter_args = {...this.enter_args};
+        c.exit_args = {...this.exit_args};
+        c.forward_event = this.forward_event;
+        return c;
+    }
+}
+
+
+export class Actions {
+    private _state_stack: Array<any>;
+    private __compartment: ActionsCompartment;
+    private __next_compartment: ActionsCompartment | null;
+    private _context_stack: Array<any>;
+    private total: i32 = 0;
+
+    constructor() {
+        this._state_stack = [];
+        this._context_stack = [];
+        this.__compartment = this.__prepareEnter("Counting", [], []);
+        this.__next_compartment = null;
+    }
+
+    _frame_init(): void {
+        const __e = new ActionsFrameEvent("$>", this.__compartment.enter_args);
+        const __ctx = new ActionsFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    static _create(): Actions {
+        const c = new Actions();
+        c._frame_init();
+        return c;
+    }
+
+    static readonly _HSM_CHAIN: Record<string, string[]> = {
+        "Counting": ["Counting"],
+    };
+    private __prepareEnter(leaf: string, state_args: any[], enter_args: any[]): ActionsCompartment {
+        let comp: ActionsCompartment | null = null;
+        for (const name of Actions._HSM_CHAIN[leaf]) {
+            const new_comp = new ActionsCompartment(name);
+            new_comp.state_args = [...state_args];
+            new_comp.enter_args = [...enter_args];
+            new_comp.parent_compartment = comp;
+            comp = new_comp;
+        }
+        return comp!;
+    }
+
+    private __prepareExit(exit_args: any[]) {
+        let comp: ActionsCompartment | null = this.__compartment;
+        while (comp !== null) {
+            comp.exit_args = [...exit_args];
+            comp = comp.parent_compartment;
+        }
+    }
+
+    private __kernel(__e: ActionsFrameEvent) {
+        // Route event to current state.
+        this.__router(__e);
+        // Drain any transitions queued by the handler.
+        while (this.__next_compartment !== null) {
+            const next_compartment = this.__next_compartment;
+            this.__next_compartment = null;
+            // Exit the current (leaf) state.
+            const exit_event = new ActionsFrameEvent("<$", this.__compartment.exit_args);
+            this.__router(exit_event);
+            // Switch to the new compartment.
+            this.__compartment = next_compartment;
+            // Three-branch forward-event handling.
+            const forward_event = next_compartment.forward_event;
+            next_compartment.forward_event = null;
+            if (forward_event === null) {
+                // No forwarded event — synthesize a fresh $>.
+                const enter_event = new ActionsFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+            } else if (forward_event._message === "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                this.__router(forward_event);
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                const enter_event = new ActionsFrameEvent("$>", this.__compartment.enter_args);
+                this.__router(enter_event);
+                this.__router(forward_event);
+            }
+            for (const ctx of this._context_stack) {
+                ctx._transitioned = true;
+            }
+        }
+    }
+
+    private __router(__e: ActionsFrameEvent) {
+        const handler_name = `_state_${this.__compartment.state}`;
+        const handler = (this as any)[handler_name];
+        if (handler) {
+            handler.call(this, __e, this.__compartment);
+        }
+    }
+
+    private __transition(next_compartment: ActionsCompartment) {
+        this.__next_compartment = next_compartment;
+    }
+
+    public increment(n: i32) {
+        const __e = new ActionsFrameEvent("increment", [n]);
+        const __ctx = new ActionsFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        this._context_stack.pop();
+    }
+
+    public get_total(): i32 {
+        const __e = new ActionsFrameEvent("get_total", []);
+        const __ctx = new ActionsFrameContext(__e, null);
+        this._context_stack.push(__ctx);
+        this.__kernel(__e);
+        return this._context_stack.pop()!._return;
+    }
+
+    private _state_Counting(__e: ActionsFrameEvent, compartment: ActionsCompartment) {
+        if (__e._message === "get_total") {
+            this._s_Counting_hdl_user_get_total(__e, compartment);
+            return;
+        }
+        if (__e._message === "increment") {
+            this._s_Counting_hdl_user_increment(__e, compartment);
+            return;
+        }
+    }
+
+    private _s_Counting_hdl_user_get_total(__e: ActionsFrameEvent, compartment: ActionsCompartment) {
+        this._context_stack[this._context_stack.length - 1]._return = self.total;
+    }
+
+    private _s_Counting_hdl_user_increment(__e: ActionsFrameEvent, compartment: ActionsCompartment) {
+        const n = __e._parameters[0];
+        _scale(n)
+    }
+
+    private _scale(n: i32) {
+                    self.total = self.total + n * 2
+    }
+}

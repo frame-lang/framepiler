@@ -1,0 +1,211 @@
+---
+source: framec/tests/kotlin_snapshots.rs
+expression: "compile_fixture(\"05_pushpop\", \"kotlin\")"
+---
+class PushPopFrameEvent(val _message: String, val _parameters: MutableList<Any?> = mutableListOf())
+
+class PushPopFrameContext(val _event: PushPopFrameEvent, var _return: Any? = null) {
+    val _data: MutableMap<String, Any?> = mutableMapOf()
+    var _transitioned: Boolean = false
+}
+
+class PushPopCompartment(val state: String) {
+    val state_args: MutableList<Any?> = mutableListOf()
+    val state_vars: MutableMap<String, Any?> = mutableMapOf()
+    val enter_args: MutableList<Any?> = mutableListOf()
+    val exit_args: MutableList<Any?> = mutableListOf()
+    var forward_event: PushPopFrameEvent? = null
+    var parent_compartment: PushPopCompartment? = null
+
+    fun copy(): PushPopCompartment {
+        val c = PushPopCompartment(this.state)
+        c.state_args.addAll(this.state_args)
+        c.state_vars.putAll(this.state_vars)
+        c.enter_args.addAll(this.enter_args)
+        c.exit_args.addAll(this.exit_args)
+        c.forward_event = this.forward_event
+        c.parent_compartment = this.parent_compartment
+        return c
+    }
+}
+
+class PushPop {
+    private var _state_stack: MutableList<PushPopCompartment>
+    private var __compartment: PushPopCompartment
+    private var __next_compartment: PushPopCompartment?
+    private var _context_stack: MutableList<PushPopFrameContext>
+    var pings: Int = 0
+    var leaves: Int = 0
+
+    init {
+        _state_stack = mutableListOf()
+        _context_stack = mutableListOf()
+        this.__compartment = __prepareEnter("Idle", mutableListOf<Any?>(), mutableListOf<Any?>())
+        this.__next_compartment = null
+    }
+
+    fun __frame_init() {
+        val __e = PushPopFrameEvent("$>", __compartment.enter_args)
+        val __ctx = PushPopFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(__e)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    private fun hsm_chain(): Map<String, List<String>> {
+        return mapOf(
+            "Idle" to listOf("Idle"),
+            "Nested" to listOf("Nested"),
+        )
+    }
+    private fun __prepareEnter(leaf: String, state_args: MutableList<Any?>, enter_args: MutableList<Any?>): PushPopCompartment {
+        var comp: PushPopCompartment? = null
+        for (name in hsm_chain()[leaf]!!) {
+            val new_comp = PushPopCompartment(name)
+            new_comp.state_args.addAll(state_args)
+            new_comp.enter_args.addAll(enter_args)
+            new_comp.parent_compartment = comp
+            comp = new_comp
+        }
+        return comp!!
+    }
+
+    private fun __prepareExit(exit_args: MutableList<Any?>) {
+        var comp: PushPopCompartment? = __compartment
+        while (comp != null) {
+            comp.exit_args.clear()
+            comp.exit_args.addAll(exit_args)
+            comp = comp.parent_compartment
+        }
+    }
+
+    private fun __kernel(__e: PushPopFrameEvent) {
+        // Route event to current state.
+        __router(__e)
+        // Drain any transitions queued by the handler.
+        while (__next_compartment != null) {
+            val next_compartment: PushPopCompartment = __next_compartment!!
+            __next_compartment = null
+            // Exit the current (leaf) state.
+            val exit_event = PushPopFrameEvent("<$", __compartment.exit_args)
+            __router(exit_event)
+            // Switch to the new compartment.
+            __compartment = next_compartment
+            // Three-branch forward-event handling.
+            val forward_event: PushPopFrameEvent? = next_compartment.forward_event
+            next_compartment.forward_event = null
+            if (forward_event == null) {
+                // No forwarded event — synthesize a fresh $>.
+                val enter_event = PushPopFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+            } else if (forward_event._message == "$>") {
+                // Forwarded event IS $> — dispatch directly so the
+                // destination's $> handler receives the caller's payload.
+                __router(forward_event)
+            } else {
+                // Forwarded event is not $> — initialize the destination
+                // with a fresh $>, then dispatch the forward.
+                val enter_event = PushPopFrameEvent("$>", __compartment.enter_args)
+                __router(enter_event)
+                __router(forward_event)
+            }
+            for (ctx in _context_stack) {
+                ctx._transitioned = true
+            }
+        }
+    }
+
+    private fun __router(__e: PushPopFrameEvent) {
+        if (__compartment.state == "Idle") {
+            _state_Idle(__e, __compartment)
+        } else if (__compartment.state == "Nested") {
+            _state_Nested(__e, __compartment)
+        }
+    }
+
+    private fun __transition(next: PushPopCompartment) {
+        __next_compartment = next
+    }
+
+    fun ping() {
+        val __e = PushPopFrameEvent("ping", mutableListOf())
+        val __ctx = PushPopFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    fun nest() {
+        val __e = PushPopFrameEvent("nest", mutableListOf())
+        val __ctx = PushPopFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    fun unnest() {
+        val __e = PushPopFrameEvent("unnest", mutableListOf())
+        val __ctx = PushPopFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    fun leaf() {
+        val __e = PushPopFrameEvent("leaf", mutableListOf())
+        val __ctx = PushPopFrameContext(__e, null)
+        _context_stack.add(__ctx)
+        __kernel(_context_stack[_context_stack.size - 1]._event)
+        _context_stack.removeAt(_context_stack.size - 1)
+    }
+
+    private fun _state_Idle(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        if (__e._message == "nest") {
+            this._s_Idle_hdl_user_nest(__e, compartment)
+            return
+        }
+        if (__e._message == "ping") {
+            this._s_Idle_hdl_user_ping(__e, compartment)
+            return
+        }
+    }
+
+    private fun _state_Nested(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        if (__e._message == "leaf") {
+            this._s_Nested_hdl_user_leaf(__e, compartment)
+            return
+        }
+        if (__e._message == "unnest") {
+            this._s_Nested_hdl_user_unnest(__e, compartment)
+            return
+        }
+    }
+
+    private fun _s_Idle_hdl_user_nest(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        _state_stack.add(__compartment)
+        val __compartment = __prepareEnter("Nested", mutableListOf<Any?>(), mutableListOf<Any?>())
+        __transition(__compartment)
+        return
+    }
+
+    private fun _s_Idle_hdl_user_ping(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        self.pings = self.pings + 1
+    }
+
+    private fun _s_Nested_hdl_user_leaf(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        self.leaves = self.leaves + 1
+    }
+
+    private fun _s_Nested_hdl_user_unnest(__e: PushPopFrameEvent, compartment: PushPopCompartment) {
+        val __saved = _state_stack.removeAt(_state_stack.size - 1)
+        __transition(__saved)
+        return
+    }
+
+    companion object {
+        @JvmStatic fun __create(): PushPop {
+            val c = PushPop()
+            c.__frame_init()
+            return c
+        }    }
+}
