@@ -31,7 +31,7 @@ impl CounterFrameEvent {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 enum CounterFrameValue {
     Int(i64),
     Float(f64),
@@ -41,7 +41,7 @@ enum CounterFrameValue {
     Dict(std::collections::HashMap<String, Self>),
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 struct CounterFrameContext {
     event: std::rc::Rc<CounterFrameEvent>,
     _return: Option<CounterFrameReturn>,
@@ -60,6 +60,7 @@ impl CounterFrameContext {
     }
 }
 
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 enum CounterStateContext {
     Counting,
@@ -72,7 +73,7 @@ impl Default for CounterStateContext {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 struct CounterCompartment {
     state: String,

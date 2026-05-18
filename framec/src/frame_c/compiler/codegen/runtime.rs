@@ -1253,7 +1253,7 @@ fn generate_rust_runtime_types(
     // The 6 variants cover the Frame v4 base type set; List and
     // Dict recurse for nested values.
     code.push_str("#[derive(Clone, Debug)]\n");
-    code.push_str("#[allow(dead_code)]\n");
+    code.push_str("#[allow(dead_code, non_camel_case_types)]\n");
     code.push_str(&format!("enum {}FrameValue {{\n", system_name));
     code.push_str("    Int(i64),\n");
     code.push_str("    Float(f64),\n");
@@ -1270,7 +1270,7 @@ fn generate_rust_runtime_types(
     // (typed enum) instead of `Option<Box<dyn Any>>`.
     // RFC-0025 Track B.3: `_data` is `HashMap<String, <System>FrameValue>`
     // (value enum) instead of `HashMap<String, Box<dyn Any>>`.
-    code.push_str("#[allow(dead_code)]\n");
+    code.push_str("#[allow(dead_code, non_camel_case_types)]\n");
     code.push_str(&format!("struct {}FrameContext {{\n", system_name));
     code.push_str(&format!(
         "    event: std::rc::Rc<{}FrameEvent>,\n",
@@ -1367,7 +1367,7 @@ fn generate_rust_runtime_types(
     // A state has a context variant if it declares EITHER state vars or
     // state params. The variant carries the state's `XContext` struct.
     code.push_str(&format!(
-        "#[derive(Clone)]\nenum {}StateContext {{\n",
+        "#[allow(dead_code, non_camel_case_types)]\n#[derive(Clone)]\nenum {}StateContext {{\n",
         system_name
     ));
     if let Some(ref machine) = system.machine {
@@ -1408,7 +1408,7 @@ fn generate_rust_runtime_types(
 
     // Generate Compartment struct
     code.push_str(&format!(
-        "#[allow(dead_code)]\n#[derive(Clone)]\nstruct {}Compartment {{\n",
+        "#[allow(dead_code, non_camel_case_types)]\n#[derive(Clone)]\nstruct {}Compartment {{\n",
         system_name
     ));
     code.push_str("    state: String,\n");

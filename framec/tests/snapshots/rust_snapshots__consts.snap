@@ -31,7 +31,7 @@ impl ConstsFrameEvent {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 enum ConstsFrameValue {
     Int(i64),
     Float(f64),
@@ -41,7 +41,7 @@ enum ConstsFrameValue {
     Dict(std::collections::HashMap<String, Self>),
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 struct ConstsFrameContext {
     event: std::rc::Rc<ConstsFrameEvent>,
     _return: Option<ConstsFrameReturn>,
@@ -60,6 +60,7 @@ impl ConstsFrameContext {
     }
 }
 
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 enum ConstsStateContext {
     Running,
@@ -72,7 +73,7 @@ impl Default for ConstsStateContext {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 struct ConstsCompartment {
     state: String,

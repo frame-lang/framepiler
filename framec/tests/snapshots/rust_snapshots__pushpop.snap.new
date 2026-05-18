@@ -1,37 +1,42 @@
 ---
 source: framec/tests/rust_snapshots.rs
-expression: "compile_fixture(\"07_forward\", \"rust\")"
+assertion_line: 33
+expression: "compile_fixture(\"05_pushpop\", \"rust\")"
 ---
 #[derive(Clone, Debug)]
 #[allow(dead_code, non_camel_case_types)]
-enum ForwardFrameEvent {
-    Run {  },
-    Finish {  },
+enum PushPopFrameEvent {
+    Ping {  },
+    Nest {  },
+    Unnest {  },
+    Leaf {  },
     FrameEnter { args: Vec<String> },
     FrameExit { args: Vec<String> },
 }
 
 #[derive(Clone)]
 #[allow(dead_code, non_camel_case_types)]
-enum ForwardFrameReturn {
+enum PushPopFrameReturn {
     _Lifecycle(std::rc::Rc<dyn std::any::Any>),
 }
 
 #[allow(dead_code)]
-impl ForwardFrameEvent {
+impl PushPopFrameEvent {
     fn name(&self) -> &'static str {
         match self {
-            ForwardFrameEvent::Run { .. } => "run",
-            ForwardFrameEvent::Finish { .. } => "finish",
-            ForwardFrameEvent::FrameEnter { .. } => "$>",
-            ForwardFrameEvent::FrameExit { .. } => "<$",
+            PushPopFrameEvent::Ping { .. } => "ping",
+            PushPopFrameEvent::Nest { .. } => "nest",
+            PushPopFrameEvent::Unnest { .. } => "unnest",
+            PushPopFrameEvent::Leaf { .. } => "leaf",
+            PushPopFrameEvent::FrameEnter { .. } => "$>",
+            PushPopFrameEvent::FrameExit { .. } => "<$",
         }
     }
 }
 
 #[derive(Clone, Debug)]
 #[allow(dead_code, non_camel_case_types)]
-enum ForwardFrameValue {
+enum PushPopFrameValue {
     Int(i64),
     Float(f64),
     Bool(bool),
@@ -41,15 +46,15 @@ enum ForwardFrameValue {
 }
 
 #[allow(dead_code, non_camel_case_types)]
-struct ForwardFrameContext {
-    event: std::rc::Rc<ForwardFrameEvent>,
-    _return: Option<ForwardFrameReturn>,
-    _data: std::collections::HashMap<String, ForwardFrameValue>,
+struct PushPopFrameContext {
+    event: std::rc::Rc<PushPopFrameEvent>,
+    _return: Option<PushPopFrameReturn>,
+    _data: std::collections::HashMap<String, PushPopFrameValue>,
     _transitioned: bool,
 }
 
-impl ForwardFrameContext {
-    fn new(event: std::rc::Rc<ForwardFrameEvent>, default_return: Option<ForwardFrameReturn>) -> Self {
+impl PushPopFrameContext {
+    fn new(event: std::rc::Rc<PushPopFrameEvent>, default_return: Option<PushPopFrameReturn>) -> Self {
         Self {
             event,
             _return: default_return,
@@ -61,37 +66,35 @@ impl ForwardFrameContext {
 
 #[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
-enum ForwardStateContext {
-    Start,
-    Middle,
-    End,
+enum PushPopStateContext {
+    Idle,
+    Nested,
     Empty,
 }
 
-impl Default for ForwardStateContext {
+impl Default for PushPopStateContext {
     fn default() -> Self {
-        ForwardStateContext::Start
+        PushPopStateContext::Idle
     }
 }
 
 #[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
-struct ForwardCompartment {
+struct PushPopCompartment {
     state: String,
-    state_context: ForwardStateContext,
+    state_context: PushPopStateContext,
     enter_args: Vec<String>,
     exit_args: Vec<String>,
-    forward_event: Option<ForwardFrameEvent>,
-    parent_compartment: Option<Box<ForwardCompartment>>,
+    forward_event: Option<PushPopFrameEvent>,
+    parent_compartment: Option<Box<PushPopCompartment>>,
 }
 
-impl ForwardCompartment {
+impl PushPopCompartment {
     fn new(state: &str) -> Self {
         let state_context = match state {
-            "Start" => ForwardStateContext::Start,
-            "Middle" => ForwardStateContext::Middle,
-            "End" => ForwardStateContext::End,
-            _ => ForwardStateContext::Empty,
+            "Idle" => PushPopStateContext::Idle,
+            "Nested" => PushPopStateContext::Nested,
+            _ => PushPopStateContext::Empty,
         };
         Self {
             state: state.to_string(),
@@ -105,33 +108,33 @@ impl ForwardCompartment {
 }
 
 #[allow(dead_code)]
-pub struct Forward {
-    _state_stack: Vec<ForwardCompartment>,
-    __compartment: ForwardCompartment,
-    __next_compartment: Option<ForwardCompartment>,
-    _context_stack: Vec<ForwardFrameContext>,
-    pub starts: i32,
-    pub middles: i32,
+pub struct PushPop {
+    _state_stack: Vec<PushPopCompartment>,
+    __compartment: PushPopCompartment,
+    __next_compartment: Option<PushPopCompartment>,
+    _context_stack: Vec<PushPopFrameContext>,
+    pub pings: i32,
+    pub leaves: i32,
 }
 
 #[allow(non_snake_case)]
-impl Forward {
+impl PushPop {
     pub fn new() -> Self {
         Self {
             _state_stack: Vec::new(),
             _context_stack: Vec::new(),
-            starts: 0,
-            middles: 0,
-            __compartment: ForwardCompartment::new("Start"),
+            pings: 0,
+            leaves: 0,
+            __compartment: PushPopCompartment::new("Idle"),
             __next_compartment: None,
         }
     }
 
     pub fn __create() -> Self {
         let mut c = Self::new();
-        c.__compartment = c.__prepareEnter("Start", vec![]);
-        let __e = std::rc::Rc::new(ForwardFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
-        let __ctx = ForwardFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c.__compartment = c.__prepareEnter("Idle", vec![]);
+        let __e = std::rc::Rc::new(PushPopFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = PushPopFrameContext::new(std::rc::Rc::clone(&__e), None);
         c._context_stack.push(__ctx);
         c.__kernel(&__e);
         c._context_stack.pop();
@@ -140,18 +143,17 @@ impl Forward {
 
     fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
         match leaf {
-            "Start" => &["Start"],
-            "Middle" => &["Middle"],
-            "End" => &["End"],
+            "Idle" => &["Idle"],
+            "Nested" => &["Nested"],
             _ => &[],
         }
     }
 
-    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> ForwardCompartment {
+    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> PushPopCompartment {
         let chain = self.__hsm_chain(leaf);
-        let mut comp: Option<ForwardCompartment> = None;
+        let mut comp: Option<PushPopCompartment> = None;
         for name in chain.iter() {
-            let mut new_comp = ForwardCompartment::new(name);
+            let mut new_comp = PushPopCompartment::new(name);
             new_comp.enter_args = enter_args.clone();
             if let Some(parent) = comp.take() {
                 new_comp.parent_compartment = Some(Box::new(parent));
@@ -170,7 +172,7 @@ impl Forward {
         }
     }
 
-    fn __kernel(&mut self, __e: &std::rc::Rc<ForwardFrameEvent>) {
+    fn __kernel(&mut self, __e: &std::rc::Rc<PushPopFrameEvent>) {
         // Route event to current state.
         self.__router(__e);
         // Drain any transitions queued by the handler.
@@ -178,7 +180,7 @@ impl Forward {
             let next_compartment = self.__next_compartment.take().expect("invariant: while-loop guard checked is_some()");
             // Exit the current (leaf) state.
             let exit_args = self.__compartment.exit_args.clone();
-            let exit_event = std::rc::Rc::new(ForwardFrameEvent::FrameExit { args: exit_args });
+            let exit_event = std::rc::Rc::new(PushPopFrameEvent::FrameExit { args: exit_args });
             self.__router(&exit_event);
             // Switch to the new compartment.
             self.__compartment = next_compartment;
@@ -189,10 +191,10 @@ impl Forward {
                 None => {
                     // No forwarded event — synthesize a fresh $>.
                     let enter_args = self.__compartment.enter_args.clone();
-                    let enter_event = std::rc::Rc::new(ForwardFrameEvent::FrameEnter { args: enter_args });
+                    let enter_event = std::rc::Rc::new(PushPopFrameEvent::FrameEnter { args: enter_args });
                     self.__router(&enter_event);
                 }
-                Some(fwd) if matches!(fwd, ForwardFrameEvent::FrameEnter { .. }) => {
+                Some(fwd) if matches!(fwd, PushPopFrameEvent::FrameEnter { .. }) => {
                     // Forwarded event IS $> — dispatch directly so the
                     // destination's $> handler receives the caller's payload.
                     let fwd_rc = std::rc::Rc::new(fwd);
@@ -202,7 +204,7 @@ impl Forward {
                     // Forwarded event is not $> — initialize the destination
                     // with a fresh $>, then dispatch the forward.
                     let enter_args = self.__compartment.enter_args.clone();
-                    let enter_event = std::rc::Rc::new(ForwardFrameEvent::FrameEnter { args: enter_args });
+                    let enter_event = std::rc::Rc::new(PushPopFrameEvent::FrameEnter { args: enter_args });
                     self.__router(&enter_event);
                     let fwd_rc = std::rc::Rc::new(fwd);
                     self.__router(&fwd_rc);
@@ -214,77 +216,85 @@ impl Forward {
         }
     }
 
-    fn __router(&mut self, __e: &std::rc::Rc<ForwardFrameEvent>) {
-        let __ev: &ForwardFrameEvent = __e;
+    fn __router(&mut self, __e: &std::rc::Rc<PushPopFrameEvent>) {
+        let __ev: &PushPopFrameEvent = __e;
         match self.__compartment.state.as_str() {
-            "Start" => self._state_Start(__ev),
-            "Middle" => self._state_Middle(__ev),
-            "End" => self._state_End(__ev),
+            "Idle" => self._state_Idle(__ev),
+            "Nested" => self._state_Nested(__ev),
             _ => {}
         }
     }
 
-    fn __transition(&mut self, next_compartment: ForwardCompartment) {
+    fn __transition(&mut self, next_compartment: PushPopCompartment) {
         self.__next_compartment = Some(next_compartment);
     }
 
-    pub fn run(&mut self) {
-        let __e = std::rc::Rc::new(ForwardFrameEvent::Run {});
-        let mut __ctx = ForwardFrameContext::new(std::rc::Rc::clone(&__e), None);
+    pub fn ping(&mut self) {
+        let __e = std::rc::Rc::new(PushPopFrameEvent::Ping {});
+        let mut __ctx = PushPopFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
         self.__kernel(&__e);
         self._context_stack.pop();
     }
 
-    pub fn finish(&mut self) {
-        let __e = std::rc::Rc::new(ForwardFrameEvent::Finish {});
-        let mut __ctx = ForwardFrameContext::new(std::rc::Rc::clone(&__e), None);
+    pub fn nest(&mut self) {
+        let __e = std::rc::Rc::new(PushPopFrameEvent::Nest {});
+        let mut __ctx = PushPopFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
         self.__kernel(&__e);
         self._context_stack.pop();
     }
 
-    fn _state_Start(&mut self, __e: &ForwardFrameEvent) {
+    pub fn unnest(&mut self) {
+        let __e = std::rc::Rc::new(PushPopFrameEvent::Unnest {});
+        let mut __ctx = PushPopFrameContext::new(std::rc::Rc::clone(&__e), None);
+        self._context_stack.push(__ctx);
+        self.__kernel(&__e);
+        self._context_stack.pop();
+    }
+
+    pub fn leaf(&mut self) {
+        let __e = std::rc::Rc::new(PushPopFrameEvent::Leaf {});
+        let mut __ctx = PushPopFrameContext::new(std::rc::Rc::clone(&__e), None);
+        self._context_stack.push(__ctx);
+        self.__kernel(&__e);
+        self._context_stack.pop();
+    }
+
+    fn _state_Idle(&mut self, __e: &PushPopFrameEvent) {
         match __e {
-            ForwardFrameEvent::Run { .. } => { self._s_Start_hdl_user_run(__e); }
+            PushPopFrameEvent::Nest { .. } => { self._s_Idle_hdl_user_nest(__e); }
+            PushPopFrameEvent::Ping { .. } => { self._s_Idle_hdl_user_ping(__e); }
             _ => {}
         }
     }
 
-    fn _state_Middle(&mut self, __e: &ForwardFrameEvent) {
+    fn _state_Nested(&mut self, __e: &PushPopFrameEvent) {
         match __e {
-            ForwardFrameEvent::Finish { .. } => { self._s_Middle_hdl_user_finish(__e); }
-            ForwardFrameEvent::Run { .. } => { self._s_Middle_hdl_user_run(__e); }
+            PushPopFrameEvent::Leaf { .. } => { self._s_Nested_hdl_user_leaf(__e); }
+            PushPopFrameEvent::Unnest { .. } => { self._s_Nested_hdl_user_unnest(__e); }
             _ => {}
         }
     }
 
-    fn _state_End(&mut self, __e: &ForwardFrameEvent) {
-        match __e {
-            ForwardFrameEvent::Finish { .. } => { self._s_End_hdl_user_finish(__e); }
-            _ => {}
-        }
-    }
-
-    fn _s_Start_hdl_user_run(&mut self, __e: &ForwardFrameEvent) {
-        self.starts = self.starts + 1
-        let mut __compartment = self.__prepareEnter("Middle", Vec::new());
-        __compartment.forward_event = Some(__e.clone());
+    fn _s_Idle_hdl_user_nest(&mut self, __e: &PushPopFrameEvent) {
+        self._state_stack.push(self.__compartment.clone());
+        let mut __compartment = self.__prepareEnter("Nested", vec![]);
         self.__transition(__compartment);
         return;
     }
 
-    fn _s_Middle_hdl_user_finish(&mut self, __e: &ForwardFrameEvent) {
-        let mut __compartment = self.__prepareEnter("End", vec![]);
-        self.__transition(__compartment);
+    fn _s_Idle_hdl_user_ping(&mut self, __e: &PushPopFrameEvent) {
+        self.pings = self.pings + 1;
+    }
+
+    fn _s_Nested_hdl_user_leaf(&mut self, __e: &PushPopFrameEvent) {
+        self.leaves = self.leaves + 1;
+    }
+
+    fn _s_Nested_hdl_user_unnest(&mut self, __e: &PushPopFrameEvent) {
+        let mut __popped = self._state_stack.pop().expect("invariant: pop$ must follow push$");
+        self.__transition(__popped);
         return;
-    }
-
-    fn _s_Middle_hdl_user_run(&mut self, __e: &ForwardFrameEvent) {
-        self.middles = self.middles + 1;
-    }
-
-    fn _s_End_hdl_user_finish(&mut self, __e: &ForwardFrameEvent) {
-;
     }
 }

@@ -31,7 +31,7 @@ impl SelfCallFrameEvent {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 enum SelfCallFrameValue {
     Int(i64),
     Float(f64),
@@ -41,7 +41,7 @@ enum SelfCallFrameValue {
     Dict(std::collections::HashMap<String, Self>),
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 struct SelfCallFrameContext {
     event: std::rc::Rc<SelfCallFrameEvent>,
     _return: Option<SelfCallFrameReturn>,
@@ -60,6 +60,7 @@ impl SelfCallFrameContext {
     }
 }
 
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 enum SelfCallStateContext {
     Active,
@@ -72,7 +73,7 @@ impl Default for SelfCallStateContext {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 struct SelfCallCompartment {
     state: String,

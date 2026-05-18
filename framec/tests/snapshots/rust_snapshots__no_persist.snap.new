@@ -1,5 +1,6 @@
 ---
 source: framec/tests/rust_snapshots.rs
+assertion_line: 68
 expression: "compile_fixture(\"12_no_persist\", \"rust\")"
 ---
 #[derive(Clone, Debug)]

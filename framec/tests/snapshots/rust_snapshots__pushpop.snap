@@ -34,7 +34,7 @@ impl PushPopFrameEvent {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 enum PushPopFrameValue {
     Int(i64),
     Float(f64),
@@ -44,7 +44,7 @@ enum PushPopFrameValue {
     Dict(std::collections::HashMap<String, Self>),
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 struct PushPopFrameContext {
     event: std::rc::Rc<PushPopFrameEvent>,
     _return: Option<PushPopFrameReturn>,
@@ -63,6 +63,7 @@ impl PushPopFrameContext {
     }
 }
 
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 enum PushPopStateContext {
     Idle,
@@ -76,7 +77,7 @@ impl Default for PushPopStateContext {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 struct PushPopCompartment {
     state: String,

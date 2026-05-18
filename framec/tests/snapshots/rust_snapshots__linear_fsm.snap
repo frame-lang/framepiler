@@ -32,7 +32,7 @@ impl LinearFsmFrameEvent {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 enum LinearFsmFrameValue {
     Int(i64),
     Float(f64),
@@ -42,7 +42,7 @@ enum LinearFsmFrameValue {
     Dict(std::collections::HashMap<String, Self>),
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 struct LinearFsmFrameContext {
     event: std::rc::Rc<LinearFsmFrameEvent>,
     _return: Option<LinearFsmFrameReturn>,
@@ -61,6 +61,7 @@ impl LinearFsmFrameContext {
     }
 }
 
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 enum LinearFsmStateContext {
     Idle,
@@ -75,7 +76,7 @@ impl Default for LinearFsmStateContext {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 struct LinearFsmCompartment {
     state: String,

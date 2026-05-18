@@ -30,7 +30,7 @@ impl LifecycleFrameEvent {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 enum LifecycleFrameValue {
     Int(i64),
     Float(f64),
@@ -40,7 +40,7 @@ enum LifecycleFrameValue {
     Dict(std::collections::HashMap<String, Self>),
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 struct LifecycleFrameContext {
     event: std::rc::Rc<LifecycleFrameEvent>,
     _return: Option<LifecycleFrameReturn>,
@@ -59,6 +59,7 @@ impl LifecycleFrameContext {
     }
 }
 
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 enum LifecycleStateContext {
     Idle,
@@ -72,7 +73,7 @@ impl Default for LifecycleStateContext {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
 struct LifecycleCompartment {
     state: String,

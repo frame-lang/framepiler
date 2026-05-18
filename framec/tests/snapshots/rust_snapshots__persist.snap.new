@@ -1,43 +1,39 @@
 ---
 source: framec/tests/rust_snapshots.rs
-expression: "compile_fixture(\"12_no_persist\", \"rust\")"
+assertion_line: 23
+expression: "compile_fixture(\"03_persist\", \"rust\")"
 ---
 #[derive(Clone, Debug)]
 #[allow(dead_code, non_camel_case_types)]
-enum NoPersistFrameEvent {
-    Bump {  },
-    SetCache { v: i32 },
-    GetCount {  },
-    GetCache {  },
+enum CounterFrameEvent {
+    Increment { by: i32 },
+    Value {  },
     FrameEnter { args: Vec<String> },
     FrameExit { args: Vec<String> },
 }
 
 #[derive(Clone)]
 #[allow(dead_code, non_camel_case_types)]
-enum NoPersistFrameReturn {
-    GetCache(i32),
-    GetCount(i32),
+enum CounterFrameReturn {
+    Value(i32),
     _Lifecycle(std::rc::Rc<dyn std::any::Any>),
 }
 
 #[allow(dead_code)]
-impl NoPersistFrameEvent {
+impl CounterFrameEvent {
     fn name(&self) -> &'static str {
         match self {
-            NoPersistFrameEvent::Bump { .. } => "bump",
-            NoPersistFrameEvent::SetCache { .. } => "set_cache",
-            NoPersistFrameEvent::GetCount { .. } => "get_count",
-            NoPersistFrameEvent::GetCache { .. } => "get_cache",
-            NoPersistFrameEvent::FrameEnter { .. } => "$>",
-            NoPersistFrameEvent::FrameExit { .. } => "<$",
+            CounterFrameEvent::Increment { .. } => "increment",
+            CounterFrameEvent::Value { .. } => "value",
+            CounterFrameEvent::FrameEnter { .. } => "$>",
+            CounterFrameEvent::FrameExit { .. } => "<$",
         }
     }
 }
 
 #[derive(Clone, Debug)]
 #[allow(dead_code, non_camel_case_types)]
-enum NoPersistFrameValue {
+enum CounterFrameValue {
     Int(i64),
     Float(f64),
     Bool(bool),
@@ -47,15 +43,15 @@ enum NoPersistFrameValue {
 }
 
 #[allow(dead_code, non_camel_case_types)]
-struct NoPersistFrameContext {
-    event: std::rc::Rc<NoPersistFrameEvent>,
-    _return: Option<NoPersistFrameReturn>,
-    _data: std::collections::HashMap<String, NoPersistFrameValue>,
+struct CounterFrameContext {
+    event: std::rc::Rc<CounterFrameEvent>,
+    _return: Option<CounterFrameReturn>,
+    _data: std::collections::HashMap<String, CounterFrameValue>,
     _transitioned: bool,
 }
 
-impl NoPersistFrameContext {
-    fn new(event: std::rc::Rc<NoPersistFrameEvent>, default_return: Option<NoPersistFrameReturn>) -> Self {
+impl CounterFrameContext {
+    fn new(event: std::rc::Rc<CounterFrameEvent>, default_return: Option<CounterFrameReturn>) -> Self {
         Self {
             event,
             _return: default_return,
@@ -67,33 +63,33 @@ impl NoPersistFrameContext {
 
 #[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
-enum NoPersistStateContext {
-    Active,
+enum CounterStateContext {
+    Counting,
     Empty,
 }
 
-impl Default for NoPersistStateContext {
+impl Default for CounterStateContext {
     fn default() -> Self {
-        NoPersistStateContext::Active
+        CounterStateContext::Counting
     }
 }
 
 #[allow(dead_code, non_camel_case_types)]
 #[derive(Clone)]
-struct NoPersistCompartment {
+struct CounterCompartment {
     state: String,
-    state_context: NoPersistStateContext,
+    state_context: CounterStateContext,
     enter_args: Vec<String>,
     exit_args: Vec<String>,
-    forward_event: Option<NoPersistFrameEvent>,
-    parent_compartment: Option<Box<NoPersistCompartment>>,
+    forward_event: Option<CounterFrameEvent>,
+    parent_compartment: Option<Box<CounterCompartment>>,
 }
 
-impl NoPersistCompartment {
+impl CounterCompartment {
     fn new(state: &str) -> Self {
         let state_context = match state {
-            "Active" => NoPersistStateContext::Active,
-            _ => NoPersistStateContext::Empty,
+            "Counting" => CounterStateContext::Counting,
+            _ => CounterStateContext::Empty,
         };
         Self {
             state: state.to_string(),
@@ -107,33 +103,31 @@ impl NoPersistCompartment {
 }
 
 #[allow(dead_code)]
-pub struct NoPersist {
-    _state_stack: Vec<NoPersistCompartment>,
-    __compartment: NoPersistCompartment,
-    __next_compartment: Option<NoPersistCompartment>,
-    _context_stack: Vec<NoPersistFrameContext>,
+pub struct Counter {
+    _state_stack: Vec<CounterCompartment>,
+    __compartment: CounterCompartment,
+    __next_compartment: Option<CounterCompartment>,
+    _context_stack: Vec<CounterFrameContext>,
     pub count: i32,
-    pub cache: i32,
 }
 
 #[allow(non_snake_case)]
-impl NoPersist {
+impl Counter {
     pub fn new() -> Self {
         Self {
             _state_stack: Vec::new(),
             _context_stack: Vec::new(),
             count: 0,
-            cache: -1,
-            __compartment: NoPersistCompartment::new("Active"),
+            __compartment: CounterCompartment::new("Counting"),
             __next_compartment: None,
         }
     }
 
     pub fn __create() -> Self {
         let mut c = Self::new();
-        c.__compartment = c.__prepareEnter("Active", vec![]);
-        let __e = std::rc::Rc::new(NoPersistFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
-        let __ctx = NoPersistFrameContext::new(std::rc::Rc::clone(&__e), None);
+        c.__compartment = c.__prepareEnter("Counting", vec![]);
+        let __e = std::rc::Rc::new(CounterFrameEvent::FrameEnter { args: c.__compartment.enter_args.clone() });
+        let __ctx = CounterFrameContext::new(std::rc::Rc::clone(&__e), None);
         c._context_stack.push(__ctx);
         c.__kernel(&__e);
         c._context_stack.pop();
@@ -142,16 +136,16 @@ impl NoPersist {
 
     fn __hsm_chain(&mut self, leaf: &str) -> &'static [&'static str] {
         match leaf {
-            "Active" => &["Active"],
+            "Counting" => &["Counting"],
             _ => &[],
         }
     }
 
-    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> NoPersistCompartment {
+    fn __prepareEnter(&mut self, leaf: &str, enter_args: Vec<String>) -> CounterCompartment {
         let chain = self.__hsm_chain(leaf);
-        let mut comp: Option<NoPersistCompartment> = None;
+        let mut comp: Option<CounterCompartment> = None;
         for name in chain.iter() {
-            let mut new_comp = NoPersistCompartment::new(name);
+            let mut new_comp = CounterCompartment::new(name);
             new_comp.enter_args = enter_args.clone();
             if let Some(parent) = comp.take() {
                 new_comp.parent_compartment = Some(Box::new(parent));
@@ -170,7 +164,7 @@ impl NoPersist {
         }
     }
 
-    fn __kernel(&mut self, __e: &std::rc::Rc<NoPersistFrameEvent>) {
+    fn __kernel(&mut self, __e: &std::rc::Rc<CounterFrameEvent>) {
         // Route event to current state.
         self.__router(__e);
         // Drain any transitions queued by the handler.
@@ -178,7 +172,7 @@ impl NoPersist {
             let next_compartment = self.__next_compartment.take().expect("invariant: while-loop guard checked is_some()");
             // Exit the current (leaf) state.
             let exit_args = self.__compartment.exit_args.clone();
-            let exit_event = std::rc::Rc::new(NoPersistFrameEvent::FrameExit { args: exit_args });
+            let exit_event = std::rc::Rc::new(CounterFrameEvent::FrameExit { args: exit_args });
             self.__router(&exit_event);
             // Switch to the new compartment.
             self.__compartment = next_compartment;
@@ -189,10 +183,10 @@ impl NoPersist {
                 None => {
                     // No forwarded event — synthesize a fresh $>.
                     let enter_args = self.__compartment.enter_args.clone();
-                    let enter_event = std::rc::Rc::new(NoPersistFrameEvent::FrameEnter { args: enter_args });
+                    let enter_event = std::rc::Rc::new(CounterFrameEvent::FrameEnter { args: enter_args });
                     self.__router(&enter_event);
                 }
-                Some(fwd) if matches!(fwd, NoPersistFrameEvent::FrameEnter { .. }) => {
+                Some(fwd) if matches!(fwd, CounterFrameEvent::FrameEnter { .. }) => {
                     // Forwarded event IS $> — dispatch directly so the
                     // destination's $> handler receives the caller's payload.
                     let fwd_rc = std::rc::Rc::new(fwd);
@@ -202,7 +196,7 @@ impl NoPersist {
                     // Forwarded event is not $> — initialize the destination
                     // with a fresh $>, then dispatch the forward.
                     let enter_args = self.__compartment.enter_args.clone();
-                    let enter_event = std::rc::Rc::new(NoPersistFrameEvent::FrameEnter { args: enter_args });
+                    let enter_event = std::rc::Rc::new(CounterFrameEvent::FrameEnter { args: enter_args });
                     self.__router(&enter_event);
                     let fwd_rc = std::rc::Rc::new(fwd);
                     self.__router(&fwd_rc);
@@ -214,99 +208,68 @@ impl NoPersist {
         }
     }
 
-    fn __router(&mut self, __e: &std::rc::Rc<NoPersistFrameEvent>) {
-        let __ev: &NoPersistFrameEvent = __e;
+    fn __router(&mut self, __e: &std::rc::Rc<CounterFrameEvent>) {
+        let __ev: &CounterFrameEvent = __e;
         match self.__compartment.state.as_str() {
-            "Active" => self._state_Active(__ev),
+            "Counting" => self._state_Counting(__ev),
             _ => {}
         }
     }
 
-    fn __transition(&mut self, next_compartment: NoPersistCompartment) {
+    fn __transition(&mut self, next_compartment: CounterCompartment) {
         self.__next_compartment = Some(next_compartment);
     }
 
-    pub fn bump(&mut self) {
-        let __e = std::rc::Rc::new(NoPersistFrameEvent::Bump {});
-        let mut __ctx = NoPersistFrameContext::new(std::rc::Rc::clone(&__e), None);
+    pub fn increment(&mut self, by: i32) {
+        let __e = std::rc::Rc::new(CounterFrameEvent::Increment { by: by.clone() });
+        let mut __ctx = CounterFrameContext::new(std::rc::Rc::clone(&__e), None);
         self._context_stack.push(__ctx);
         self.__kernel(&__e);
         self._context_stack.pop();
     }
 
-    pub fn set_cache(&mut self, v: i32) {
-        let __e = std::rc::Rc::new(NoPersistFrameEvent::SetCache { v: v.clone() });
-        let mut __ctx = NoPersistFrameContext::new(std::rc::Rc::clone(&__e), None);
-        self._context_stack.push(__ctx);
-        self.__kernel(&__e);
-        self._context_stack.pop();
-    }
-
-    pub fn get_count(&mut self) -> i32 {
-        let __e = std::rc::Rc::new(NoPersistFrameEvent::GetCount {});
-        let mut __ctx = NoPersistFrameContext::new(std::rc::Rc::clone(&__e), None);
+    pub fn value(&mut self) -> i32 {
+        let __e = std::rc::Rc::new(CounterFrameEvent::Value {});
+        let mut __ctx = CounterFrameContext::new(std::rc::Rc::clone(&__e), None);
+        __ctx._return = Some(CounterFrameReturn::Value(0));
         self._context_stack.push(__ctx);
         self.__kernel(&__e);
         let __ctx = self._context_stack.pop().expect("invariant: handler must have pushed a context before reading return");
         match __ctx._return {
-            Some(NoPersistFrameReturn::GetCount(v)) => v,
-            Some(NoPersistFrameReturn::_Lifecycle(v)) => v.downcast_ref::<i32>().cloned().unwrap_or_default(),
+            Some(CounterFrameReturn::Value(v)) => v,
+            Some(CounterFrameReturn::_Lifecycle(v)) => v.downcast_ref::<i32>().cloned().unwrap_or_default(),
             _ => Default::default(),
         }
     }
 
-    pub fn get_cache(&mut self) -> i32 {
-        let __e = std::rc::Rc::new(NoPersistFrameEvent::GetCache {});
-        let mut __ctx = NoPersistFrameContext::new(std::rc::Rc::clone(&__e), None);
-        self._context_stack.push(__ctx);
-        self.__kernel(&__e);
-        let __ctx = self._context_stack.pop().expect("invariant: handler must have pushed a context before reading return");
-        match __ctx._return {
-            Some(NoPersistFrameReturn::GetCache(v)) => v,
-            Some(NoPersistFrameReturn::_Lifecycle(v)) => v.downcast_ref::<i32>().cloned().unwrap_or_default(),
-            _ => Default::default(),
-        }
-    }
-
-    fn _state_Active(&mut self, __e: &NoPersistFrameEvent) {
+    fn _state_Counting(&mut self, __e: &CounterFrameEvent) {
         match __e {
-            NoPersistFrameEvent::Bump { .. } => { self._s_Active_hdl_user_bump(__e); }
-            NoPersistFrameEvent::GetCache { .. } => { self._s_Active_hdl_user_get_cache(__e); }
-            NoPersistFrameEvent::GetCount { .. } => { self._s_Active_hdl_user_get_count(__e); }
-            NoPersistFrameEvent::SetCache { v, .. } => {
-                self._s_Active_hdl_user_set_cache(__e, *v);
+            CounterFrameEvent::Increment { by, .. } => {
+                self._s_Counting_hdl_user_increment(__e, *by);
             }
+            CounterFrameEvent::Value { .. } => { self._s_Counting_hdl_user_value(__e); }
             _ => {}
         }
     }
 
-    fn _s_Active_hdl_user_bump(&mut self, __e: &NoPersistFrameEvent) {
-        self.count = self.count + 1;
+    fn _s_Counting_hdl_user_increment(&mut self, __e: &CounterFrameEvent, by: i32) {
+        self.count = self.count + by;
     }
 
-    fn _s_Active_hdl_user_get_cache(&mut self, __e: &NoPersistFrameEvent) {
-        let __return_val = NoPersistFrameReturn::GetCache(self.cache);
-         if let Some(ctx) = self._context_stack.last_mut() { ctx._return = Some(__return_val); }
-    }
-
-    fn _s_Active_hdl_user_get_count(&mut self, __e: &NoPersistFrameEvent) {
-        let __return_val = NoPersistFrameReturn::GetCount(self.count);
-         if let Some(ctx) = self._context_stack.last_mut() { ctx._return = Some(__return_val); }
-    }
-
-    fn _s_Active_hdl_user_set_cache(&mut self, __e: &NoPersistFrameEvent, v: i32) {
-        self.cache = v;
+    fn _s_Counting_hdl_user_value(&mut self, __e: &CounterFrameEvent) {
+        let __return_val = CounterFrameReturn::Value(self.count);
+                        if let Some(ctx) = self._context_stack.last_mut() { ctx._return = Some(__return_val); }
     }
 
     pub fn snapshot(&mut self) -> String {
         if !self._context_stack.is_empty() { panic!("E700: system not quiescent"); }
-        fn serialize_state_context(ctx: &NoPersistStateContext) -> serde_json::Value {
+        fn serialize_state_context(ctx: &CounterStateContext) -> serde_json::Value {
             match ctx {
-                NoPersistStateContext::Active => serde_json::json!({}),
-                NoPersistStateContext::Empty => serde_json::json!({}),
+                CounterStateContext::Counting => serde_json::json!({}),
+                CounterStateContext::Empty => serde_json::json!({}),
             }
         }
-        fn serialize_comp(comp: &NoPersistCompartment) -> serde_json::Value {
+        fn serialize_comp(comp: &CounterCompartment) -> serde_json::Value {
             let parent = match &comp.parent_compartment {
                 Some(p) => serialize_comp(p),
                 None => serde_json::Value::Null,
@@ -331,15 +294,15 @@ impl NoPersist {
     pub fn restore(&mut self, json: String) {
         let __json_str: &str = &json;
         let data: serde_json::Value = serde_json::from_str(__json_str).expect("E950: persist load — input is not valid JSON");
-        fn deserialize_state_context(state: &str, data: &serde_json::Value) -> NoPersistStateContext {
+        fn deserialize_state_context(state: &str, data: &serde_json::Value) -> CounterStateContext {
             match state {
-                "Active" => NoPersistStateContext::Active,
-                _ => NoPersistStateContext::Empty,
+                "Counting" => CounterStateContext::Counting,
+                _ => CounterStateContext::Empty,
             }
         }
-        fn deserialize_comp(data: &serde_json::Value) -> NoPersistCompartment {
+        fn deserialize_comp(data: &serde_json::Value) -> CounterCompartment {
             let state = data["state"].as_str().expect("E951: persist load — compartment missing string \"state\" field");
-            let mut comp = NoPersistCompartment::new(state);
+            let mut comp = CounterCompartment::new(state);
             let ctx_data = &data["state_context"];
             if !ctx_data.is_null() {
                 comp.state_context = deserialize_state_context(state, ctx_data);
@@ -349,7 +312,7 @@ impl NoPersist {
             }
             comp
         }
-        let stack: Vec<NoPersistCompartment> = data["_state_stack"].as_array()
+        let stack: Vec<CounterCompartment> = data["_state_stack"].as_array()
             .map(|arr| arr.iter()
                 .map(|v| deserialize_comp(v))
                 .collect())

@@ -1,5 +1,6 @@
 ---
 source: framec/tests/rust_snapshots.rs
+assertion_line: 53
 expression: "compile_fixture(\"09_return_explicit\", \"rust\")"
 ---
 #[derive(Clone, Debug)]
