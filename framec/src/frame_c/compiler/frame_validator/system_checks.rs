@@ -370,15 +370,37 @@ impl FrameValidator {
             // across dynamic-typed targets where the pattern is benign.
             if !returns_value && matches!(target, crate::frame_c::visitors::TargetLanguage::Rust) {
                 for r in scan_result.regions.iter() {
-                    if let Region::FrameSegment { kind: k, .. } = r {
-                        if matches!(
+                    if let Region::FrameSegment {
+                        kind: k,
+                        metadata: m,
+                        ..
+                    } = r
+                    {
+                        // Three syntactic shapes all write to `_return`:
+                        //   1. `@@:(expr)` — concise (ContextReturnExpr)
+                        //   2. `@@:return(expr)` — call form (ReturnCall)
+                        //   3. `@@:return = expr;` — assignment form
+                        //      (ContextReturn with assign_expr = Some)
+                        // All three need E606 on Rust when the interface
+                        // method is void — the per-event return enum has
+                        // no variant to write into.
+                        let assigns_return = matches!(
                             k,
                             FrameSegmentKind::ContextReturnExpr | FrameSegmentKind::ReturnCall
-                        ) {
+                        ) || matches!(
+                            (k, m),
+                            (
+                                FrameSegmentKind::ContextReturn,
+                                SegmentMetadata::ContextReturn {
+                                    assign_expr: Some(_)
+                                }
+                            )
+                        );
+                        if assigns_return {
                             self.errors.push(ValidationError::new(
                                 "E606",
                                 format!(
-                                    "`@@:(value)` in {}/{} — interface method `{}` is void on the Rust target, so writing to `_return` has no observable effect (and Track B's per-event return enum has no variant for it). Remove the `@@:(value)` (or add a return type to `{}` in the interface).",
+                                    "`@@:(value)` or `@@:return = value` in {}/{} — interface method `{}` is void on the Rust target, so writing to `_return` has no observable effect (and Track B's per-event return enum has no variant for it). Remove the `@@:(value)` / `@@:return = value` (or add a return type to `{}` in the interface).",
                                     scope_outer, scope_inner, scope_inner, scope_inner
                                 ),
                             ));
